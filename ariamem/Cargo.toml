@@ -1,0 +1,35 @@
+[package]
+name = "ariamem"
+version = "0.1.0"
+edition = "2024"
+authors = ["ARIA Team"]
+description = "Hybrid memory engine for AI agents"
+license = "MIT"
+repository = "https://github.com/aria-project/ariamem"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1.0", features = ["full"] }
+clap = { version = "4.0", features = ["derive"] }
+async-trait = "0.1"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+model2vec = "0.3"
+ndarray = "0.16"
+
+[dev-dependencies]
+tempfile = "3.0"
+
+[[bin]]
+name = "ariamem"
+path = "src/main.rs"
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
