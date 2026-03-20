@@ -176,6 +176,14 @@ async fn handle_request<S: Storage, E: Embedder>(
                             "type": "object",
                             "properties": {}
                         }
+                    },
+                    {
+                        "name": "get_stats",
+                        "description": "Returns statistics about the memory engine.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {}
+                        }
                     }
                 ]
             })),
@@ -277,6 +285,20 @@ async fn handle_tool_call<S: Storage, E: Embedder>(
         "get_skills" => {
             let skill_content = include_str!("../../ARIA-SKILL.md");
             make_tool_result(id, skill_content.to_string())
+        }
+        "get_stats" => {
+            match engine.count() {
+                Ok(count) => {
+                    let mut stats = format!("Total Memories: {}\n", count);
+                    for mt in [MemoryType::World, MemoryType::Experience, MemoryType::Opinion, MemoryType::Observation] {
+                        if let Ok(mems) = engine.list_by_type(mt) {
+                            stats.push_str(&format!("  {:?}: {}\n", mt, mems.len()));
+                        }
+                    }
+                    make_tool_result(id, stats)
+                },
+                Err(e) => make_tool_error(id, format!("Failed to get stats: {}", e)),
+            }
         }
         _ => make_error(id, -32601, "Tool not found"),
     }

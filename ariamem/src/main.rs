@@ -1,5 +1,5 @@
 use ariamem::{
-    Config, Embedder, Memory, MemoryEngine, MemoryType, Model2VecEmbedder, RelationType, SqliteStorage,
+    Config, Embedder, Memory, MemoryEngine, MemoryType, Model2VecEmbedder, RelationType, SqliteStorage, Edge, Storage, core::MemoryQuery
 };
 use ariamem::api::mcp::{start_mcp_server, start_mcp_http_server};
 use clap::{Parser, Subcommand};
@@ -71,49 +71,29 @@ fn create_engine(
     cli_db: Option<&PathBuf>,
     cli_model: Option<&String>,
 ) -> Arc<MemoryEngine<SqliteStorage, Model2VecEmbedder>> {
-    let db_path = cli_db.cloned().unwrap_or_else(|| config.get_db_path());
-    let storage = SqliteStorage::new(db_path.to_str().unwrap()).expect("Failed to open storage");
+    let storage = create_storage(config, cli_db);
 
     let is_serve = std::env::args().any(|arg| arg == "serve");
     
-    // 1. Determine model identifier (path or name)
-    let model_path = config.get_model_path();
-    let model_name = &config.embedder.model2vec.model_name;
-    
-    let model_to_load = if let Some(cli_m) = cli_model {
+    // Determine primary model to try
+    let primary_model = if let Some(cli_m) = cli_model {
         cli_m.clone()
-    } else if model_path.exists() && model_path.join("model.safetensors").exists() {
-        model_path.to_string_lossy().to_string()
     } else {
-        // Prepend author if it's one of our defaults
-        if model_name == "bge-micro-v2" {
-            format!("TaylorAI/{}", model_name)
-        } else if model_name.contains("potion") || model_name.contains("bge") {
-            format!("minishlab/{}", model_name)
+        let model_path = config.get_model_path();
+
+        if model_path.exists() && model_path.join("model.safetensors").exists() {
+            model_path.to_string_lossy().to_string()
         } else {
-            model_name.clone()
+            config.embedder.model2vec.model_name.clone()
         }
     };
+
     if !is_serve {
-        eprintln!("Loading Model2Vec model: {}...", model_to_load);
+        eprintln!("Loading Model2Vec model: {}...", primary_model);
     }
-    
-    let embedder = match Model2VecEmbedder::from_hub(&model_to_load) {
-        Ok(e) => e,
-        Err(e) => {
-            // If the primary model fails (like the 401 on bge-micro), 
-            // fallback to the ultra-reliable and lightweight potion model.
-            if model_to_load.contains("bge-micro") {
-                if !is_serve {
-                    eprintln!("⚠ Primary model '{}' failed: {}. Falling back to 'minishlab/potion-base-32M'...", model_to_load, e);
-                }
-                Model2VecEmbedder::from_hub("minishlab/potion-base-32M")
-                    .expect("Critical error: Even fallback model failed to load. Check your internet connection.")
-            } else {
-                panic!("Failed to load Model2Vec model '{}': {}. Make sure you have an internet connection.", model_to_load, e);
-            }
-        }
-    };
+
+    let embedder = Model2VecEmbedder::from_hub(&primary_model)
+        .expect("Failed to load Model2Vec model. Make sure you have an internet connection.");
 
     let dim = embedder.dimension();
     
@@ -122,6 +102,43 @@ fn create_engine(
     }
 
     Arc::new(MemoryEngine::new(storage, embedder, dim))
+}
+
+fn create_storage(config: &Config, cli_db: Option<&PathBuf>) -> SqliteStorage {
+    let db_path = cli_db.cloned().unwrap_or_else(|| config.get_db_path());
+    SqliteStorage::new(db_path.to_str().unwrap()).expect("Failed to open storage")
+}
+
+fn call_mcp_tool(tool_name: &str, arguments: serde_json::Value) -> Option<String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_millis(1500)) // Fast timeout
+        .build()
+        .ok()?;
+
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "cli",
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": arguments
+        }
+    });
+
+    let response = client.post("http://localhost:8080/mcp")
+        .json(&request)
+        .send()
+        .ok()?;
+
+    if response.status().is_success() {
+        let json: serde_json::Value = response.json().ok()?;
+        if let Some(content) = json["result"]["content"].as_array() {
+            if let Some(text) = content[0]["text"].as_str() {
+                return Some(text.to_string());
+            }
+        }
+    }
+    None
 }
 
 #[tokio::main]
@@ -133,9 +150,7 @@ async fn main() {
 
     match &cli.command {
         Commands::Serve { port } => {
-            // Suppress standard Config::load stdout printing by using eprintln or just accepting we might need to redirect
             let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
-            
             if let Some(p) = port {
                 if let Err(e) = start_mcp_http_server(engine, *p).await {
                     eprintln!("MCP HTTP Server Error: {}", e);
@@ -149,14 +164,24 @@ async fn main() {
         Commands::Init => {
             let db_path = cli.database.clone().unwrap_or_else(|| config.get_db_path());
             println!("Initializing AriaMem at: {:?}", db_path);
-            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
-            println!("✓ Initialized! Memories: {}", engine.count().unwrap_or(0));
+            let _ = create_storage(&config, cli.database.as_ref());
+            println!("✓ Initialized!");
         }
 
         Commands::Store {
             content,
             memory_type,
         } => {
+            // Try calling the background service first for instant response
+            if let Some(response) = call_mcp_tool("store_memory", serde_json::json!({
+                "content": content,
+                "type": memory_type
+            })) {
+                println!("✓ (via service) {}", response);
+                return;
+            }
+
+            // Fallback to local loading if service is down
             let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
             let mem_type = match memory_type.to_lowercase().as_str() {
                 "experience" => MemoryType::Experience,
@@ -174,37 +199,34 @@ async fn main() {
         }
 
         Commands::Get { id } => {
-            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
+            let storage = create_storage(&config, cli.database.as_ref());
             let uuid = uuid::Uuid::parse_str(id).expect("Invalid UUID");
 
-            match engine.get(&uuid) {
+            match storage.load_memory(&uuid) {
                 Ok(m) => {
                     println!("ID: {}", m.id);
                     println!("Type: {:?}", m.memory_type);
                     println!("Content: {}", m.content);
                     println!("Accesses: {}", m.access_count);
                 }
-                Err(e) => eprintln!("✗ Error: {}", e),
+                Err(_) => eprintln!("✗ Memory not found"),
             }
         }
 
         Commands::List { memory_type, limit } => {
-            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
+            let storage = create_storage(&config, cli.database.as_ref());
 
-            let results = match memory_type {
-                Some(t) => {
-                    let mt = match t.to_lowercase().as_str() {
-                        "experience" => MemoryType::Experience,
-                        "opinion" => MemoryType::Opinion,
-                        "observation" => MemoryType::Observation,
-                        _ => MemoryType::World,
-                    };
-                    engine.list_by_type(mt)
-                }
-                None => engine.all_memories(),
+            let query = MemoryQuery {
+                memory_type: memory_type.as_ref().map(|t| match t.to_lowercase().as_str() {
+                    "experience" => MemoryType::Experience,
+                    "opinion" => MemoryType::Opinion,
+                    "observation" => MemoryType::Observation,
+                    _ => MemoryType::World,
+                }),
+                ..Default::default()
             };
 
-            if let Ok(memories) = results {
+            if let Ok(memories) = storage.list_memories(&query) {
                 println!("{} memories:", memories.len());
                 for (i, m) in memories.iter().take(*limit).enumerate() {
                     println!(
@@ -218,6 +240,16 @@ async fn main() {
         }
 
         Commands::Search { query, limit } => {
+            // Try calling the background service first for instant response
+            if let Some(response) = call_mcp_tool("search_memory", serde_json::json!({
+                "query": query,
+                "limit": limit
+            })) {
+                println!("Results (via service):\n{}", response);
+                return;
+            }
+
+            // Fallback to local loading
             let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
 
             match engine.search_by_text(query, *limit) {
@@ -237,20 +269,30 @@ async fn main() {
         }
 
         Commands::Delete { id } => {
-            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
+            let storage = create_storage(&config, cli.database.as_ref());
             let uuid = uuid::Uuid::parse_str(id).expect("Invalid UUID");
 
-            match engine.delete(&uuid) {
+            match storage.delete_memory(&uuid) {
                 Ok(_) => println!("✓ Deleted!"),
                 Err(e) => eprintln!("✗ Error: {}", e),
             }
         }
 
         Commands::Stats => {
-            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
+            // Try calling the background service first
+            if let Some(response) = call_mcp_tool("get_stats", serde_json::json!({})) {
+                println!("AriaMem Service Status:\n{}", response);
+                return;
+            }
+
+            // Fallback to direct DB access
+            let storage = create_storage(&config, cli.database.as_ref());
             let db_path = cli.database.clone().unwrap_or_else(|| config.get_db_path());
-            println!("Stats - {:?}", db_path);
-            println!("Total: {}", engine.count().unwrap_or(0));
+            println!("Stats (direct DB access) - {:?}", db_path);
+            
+            if let Ok(count) = storage.count_memories() {
+                println!("Total: {}", count);
+            }
 
             for (name, mt) in [
                 ("World", MemoryType::World),
@@ -258,7 +300,8 @@ async fn main() {
                 ("Opinion", MemoryType::Opinion),
                 ("Observation", MemoryType::Observation),
             ] {
-                if let Ok(memories) = engine.list_by_type(mt) {
+                let query = MemoryQuery { memory_type: Some(mt), ..Default::default() };
+                if let Ok(memories) = storage.list_memories(&query) {
                     println!("  {}: {}", name, memories.len());
                 }
             }
@@ -269,7 +312,7 @@ async fn main() {
             target,
             relation,
         } => {
-            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
+            let storage = create_storage(&config, cli.database.as_ref());
             let rel_type = match relation.to_lowercase().as_str() {
                 "temporal" => RelationType::Temporal,
                 "entity" => RelationType::Entity,
@@ -278,25 +321,27 @@ async fn main() {
                 _ => RelationType::Related,
             };
 
-            match engine.store_with_edge(
-                Memory::new(source.clone(), MemoryType::World),
-                Memory::new(target.clone(), MemoryType::World),
-                rel_type,
-            ) {
-                Ok((_, _edge, _)) => println!("✓ Linked! {} → {}", source, target),
+            let source_id = uuid::Uuid::parse_str(source).unwrap_or(uuid::Uuid::new_v4());
+            let target_id = uuid::Uuid::parse_str(target).unwrap_or(uuid::Uuid::new_v4());
+            let edge = Edge::new(source_id, target_id, rel_type);
+
+            match storage.save_edge(&edge) {
+                Ok(_) => println!("✓ Linked! {} → {}", source, target),
                 Err(e) => eprintln!("✗ Error: {}", e),
             }
         }
 
         Commands::Related { id } => {
-            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
+            let storage = create_storage(&config, cli.database.as_ref());
             let uuid = uuid::Uuid::parse_str(id).expect("Invalid UUID");
 
-            match engine.get_related(&uuid) {
-                Ok(related) => {
-                    println!("{} related:", related.len());
-                    for (_, m) in related {
-                        println!("  • {}", truncate(&m.content, 60));
+            match storage.query_edges(&uuid) {
+                Ok(edges) => {
+                    println!("{} related edges:", edges.len());
+                    for edge in edges {
+                        if let Ok(m) = storage.load_memory(&edge.target_id) {
+                            println!("  • [{:?}] {}", edge.relation_type, truncate(&m.content, 60));
+                        }
                     }
                 }
                 Err(e) => eprintln!("✗ Error: {}", e),

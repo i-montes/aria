@@ -21,6 +21,11 @@ if (-not (Get-Command "cargo" -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
+Write-Host "`nStep 1.5: Stopping existing Aria processes..."
+taskkill /F /IM aria.exe /T 2>$null
+taskkill /F /IM ariamem.exe /T 2>$null
+Start-Sleep -Seconds 1
+
 Write-Host "`nStep 2: Installing Aria CLI globally..."
 try {
     cargo install --path aria-cli --force

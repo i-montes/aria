@@ -70,14 +70,9 @@ fn detect_gpu() -> bool {
 
 impl Default for Config {
     fn default() -> Self {
-        let has_gpu = detect_gpu();
-        let (model_name, model_path) = if has_gpu {
-            // High-performance micro model from TaylorAI
-            ("bge-micro-v2".to_string(), "models/bge-micro-v2".to_string())
-        } else {
-            // Ultra-lightweight potion model for CPU
-            ("potion-base-32M".to_string(), "models/potion-base-32M".to_string())
-        };
+        // Standardize on the ultra-lightweight potion model for reliability
+        let model_name = "minishlab/potion-base-32M".to_string();
+        let model_path = "models/potion-base-32M".to_string();
 
         Self {
             system: SystemConfig {

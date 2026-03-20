@@ -22,7 +22,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1.0", features = ["full", "io-std", "io-util", "macros", "rt-multi-thread"] }
 clap = { version = "4.0", features = ["derive"] }
 async-trait = "0.1"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"], default-features = false }
 model2vec = "0.3"
 ndarray = "0.16"
 directories = "5.0"
