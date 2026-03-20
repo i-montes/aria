@@ -1,4 +1,5 @@
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Error, Debug)]
 pub enum IndexError {
@@ -9,14 +10,14 @@ pub enum IndexError {
 pub type Result<T> = std::result::Result<T, IndexError>;
 
 pub trait VectorIndex: Send + Sync {
-    fn add(&mut self, id: u64, vector: &[f32]) -> Result<()>;
-    fn remove(&mut self, id: u64) -> Result<()>;
+    fn add(&self, id: Uuid, vector: &[f32]) -> Result<()>;
+    fn remove(&self, id: Uuid) -> Result<()>;
     fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>>;
     fn dimension(&self) -> usize;
 }
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
-    pub id: u64,
+    pub id: Uuid,
     pub score: f32,
 }

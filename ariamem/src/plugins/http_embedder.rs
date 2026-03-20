@@ -1,14 +1,14 @@
 use crate::plugins::{Embedder, EmbedderError};
 use serde::{Deserialize, Serialize};
+use dashmap::DashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 pub struct HttpEmbedder {
     url: String,
     model: String,
     dimension: usize,
     client: reqwest::Client,
-    cache: Arc<RwLock<std::collections::HashMap<String, Vec<f32>>>>,
+    cache: Arc<DashMap<String, Vec<f32>>>,
 }
 
 #[derive(Serialize)]
@@ -30,7 +30,7 @@ impl HttpEmbedder {
             model,
             dimension,
             client: reqwest::Client::new(),
-            cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            cache: Arc::new(DashMap::new()),
         }
     }
 
@@ -92,11 +92,8 @@ impl HttpEmbedder {
     async fn embed_async(&self, text: &str) -> Result<Vec<f32>, EmbedderError> {
         let cache_key = text.to_string();
         
-        {
-            let cache = self.cache.read().await;
-            if let Some(cached) = cache.get(&cache_key) {
-                return Ok(cached.clone());
-            }
+        if let Some(cached) = self.cache.get(&cache_key) {
+            return Ok(cached.clone());
         }
         
         let request = EmbedRequest {
@@ -127,9 +124,8 @@ impl HttpEmbedder {
             .map(|v| v.as_f64().unwrap_or(0.0) as f32)
             .collect();
         
-        let mut cache = self.cache.write().await;
-        if cache.len() < 10000 {
-            cache.insert(cache_key, embedding.clone());
+        if self.cache.len() < 10000 {
+            self.cache.insert(cache_key, embedding.clone());
         }
         
         Ok(embedding)

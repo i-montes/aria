@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "aria-cli",
+    "ariamem"
+, "hf_diag"]
+resolver = "2"

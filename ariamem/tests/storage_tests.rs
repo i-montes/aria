@@ -213,3 +213,30 @@ fn test_memory_engine_count() {
 
     assert_eq!(engine.count().unwrap(), 1);
 }
+
+#[test]
+fn test_memory_engine_graph_boost() {
+    let storage = SqliteStorage::in_memory().unwrap();
+    let embedder = WordCountEmbedder::new(384);
+    let engine = MemoryEngine::new(storage, embedder, 384);
+
+    let root_memory = Memory::new("rust memory engine".to_string(), MemoryType::World);
+    let leaf_memory = Memory::new("safety and performance guarantees".to_string(), MemoryType::World);
+
+    let (_, _, leaf) = engine.store_with_edge(root_memory, leaf_memory, RelationType::WorksOn).unwrap();
+
+    let results = engine.search_by_text("rust", 5).unwrap();
+
+    println!("Total results: {}", results.len());
+    for res in &results {
+        println!("Result: ID={}, Content='{}', Score={}, Relevance={}", res.memory.id, res.memory.content, res.score, res.relevance_score);
+    }
+
+    let leaf_result = results.iter().find(|r| r.memory.id == leaf.id);
+    
+    assert!(leaf_result.is_some(), "Graph spreading activation should pull the leaf node into results");
+    
+    if let Some(res) = leaf_result {
+        assert!(res.relevance_score > 0.0, "The relevance score must have been boosted by the graph edge");
+    }
+}

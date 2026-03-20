@@ -1,11 +1,10 @@
 use ariamem::{
-    Embedder, Memory, MemoryEngine, MemoryType, Model2VecEmbedder, RelationType, SqliteStorage,
+    Config, Embedder, Memory, MemoryEngine, MemoryType, Model2VecEmbedder, RelationType, SqliteStorage,
 };
+use ariamem::api::mcp::{start_mcp_server, start_mcp_http_server};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
-
-const DEFAULT_MODEL: &str = "/root/.local/share/ariamem/models/potion-base-32M";
 
 #[derive(Parser)]
 #[command(name = "ariamem")]
@@ -14,11 +13,11 @@ const DEFAULT_MODEL: &str = "/root/.local/share/ariamem/models/potion-base-32M";
     version = "0.1.0"
 )]
 struct Cli {
-    #[arg(short, long, default_value = "ariamem.db")]
-    database: PathBuf,
+    #[arg(short, long)]
+    database: Option<PathBuf>,
 
-    #[arg(short, long, default_value = DEFAULT_MODEL)]
-    model: String,
+    #[arg(short, long)]
+    model: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -27,10 +26,14 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Init,
+    Serve {
+        #[arg(short, long)]
+        port: Option<u16>,
+    },
     Store {
         #[arg(short, long)]
         content: String,
-        #[arg(short, long, default_value = "world")]
+        #[arg(short = 'm', long, default_value = "world")]
         memory_type: String,
     },
     Get {
@@ -64,28 +67,90 @@ enum Commands {
 }
 
 fn create_engine(
-    db_path: &PathBuf,
-    model_path: &str,
+    config: &Config,
+    cli_db: Option<&PathBuf>,
+    cli_model: Option<&String>,
 ) -> Arc<MemoryEngine<SqliteStorage, Model2VecEmbedder>> {
+    let db_path = cli_db.cloned().unwrap_or_else(|| config.get_db_path());
     let storage = SqliteStorage::new(db_path.to_str().unwrap()).expect("Failed to open storage");
 
-    println!("Loading Model2Vec model: {}...", model_path);
-    let embedder = Model2VecEmbedder::from_hub(model_path)
-        .expect("Failed to load Model2Vec model. Make sure you have an internet connection.");
+    let is_serve = std::env::args().any(|arg| arg == "serve");
+    
+    // 1. Determine model identifier (path or name)
+    let model_path = config.get_model_path();
+    let model_name = &config.embedder.model2vec.model_name;
+    
+    let model_to_load = if let Some(cli_m) = cli_model {
+        cli_m.clone()
+    } else if model_path.exists() && model_path.join("model.safetensors").exists() {
+        model_path.to_string_lossy().to_string()
+    } else {
+        // Prepend author if it's one of our defaults
+        if model_name == "bge-micro-v2" {
+            format!("TaylorAI/{}", model_name)
+        } else if model_name.contains("potion") || model_name.contains("bge") {
+            format!("minishlab/{}", model_name)
+        } else {
+            model_name.clone()
+        }
+    }
+    };
+    if !is_serve {
+        eprintln!("Loading Model2Vec model: {}...", model_to_load);
+    }
+    
+    let embedder = match Model2VecEmbedder::from_hub(&model_to_load) {
+        Ok(e) => e,
+        Err(e) => {
+            // If the primary model fails (like the 401 on bge-micro), 
+            // fallback to the ultra-reliable and lightweight potion model.
+            if model_to_load.contains("bge-micro") {
+                if !is_serve {
+                    eprintln!("⚠ Primary model '{}' failed: {}. Falling back to 'minishlab/potion-base-32M'...", model_to_load, e);
+                }
+                Model2VecEmbedder::from_hub("minishlab/potion-base-32M")
+                    .expect("Critical error: Even fallback model failed to load. Check your internet connection.")
+            } else {
+                panic!("Failed to load Model2Vec model '{}': {}. Make sure you have an internet connection.", model_to_load, e);
+            }
+        }
+    };
 
     let dim = embedder.dimension();
-    println!("✓ Model loaded! Dimension: {}", dim);
+    
+    if !is_serve {
+        eprintln!("✓ Model loaded! Dimension: {}", dim);
+    }
 
     Arc::new(MemoryEngine::new(storage, embedder, dim))
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
+    
+    // Load configuration, create default if not found
+    let config = Config::load().expect("Failed to load or create configuration");
 
     match &cli.command {
+        Commands::Serve { port } => {
+            // Suppress standard Config::load stdout printing by using eprintln or just accepting we might need to redirect
+            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
+            
+            if let Some(p) = port {
+                if let Err(e) = start_mcp_http_server(engine, *p).await {
+                    eprintln!("MCP HTTP Server Error: {}", e);
+                }
+            } else {
+                if let Err(e) = start_mcp_server(engine).await {
+                    eprintln!("MCP Stdio Server Error: {}", e);
+                }
+            }
+        }
         Commands::Init => {
-            println!("Initializing AriaMem at: {:?}", cli.database);
-            let engine = create_engine(&cli.database, &cli.model);
+            let db_path = cli.database.clone().unwrap_or_else(|| config.get_db_path());
+            println!("Initializing AriaMem at: {:?}", db_path);
+            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
             println!("✓ Initialized! Memories: {}", engine.count().unwrap_or(0));
         }
 
@@ -93,7 +158,7 @@ fn main() {
             content,
             memory_type,
         } => {
-            let engine = create_engine(&cli.database, &cli.model);
+            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
             let mem_type = match memory_type.to_lowercase().as_str() {
                 "experience" => MemoryType::Experience,
                 "opinion" => MemoryType::Opinion,
@@ -110,7 +175,7 @@ fn main() {
         }
 
         Commands::Get { id } => {
-            let engine = create_engine(&cli.database, &cli.model);
+            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
             let uuid = uuid::Uuid::parse_str(id).expect("Invalid UUID");
 
             match engine.get(&uuid) {
@@ -125,7 +190,7 @@ fn main() {
         }
 
         Commands::List { memory_type, limit } => {
-            let engine = create_engine(&cli.database, &cli.model);
+            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
 
             let results = match memory_type {
                 Some(t) => {
@@ -154,7 +219,7 @@ fn main() {
         }
 
         Commands::Search { query, limit } => {
-            let engine = create_engine(&cli.database, &cli.model);
+            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
 
             match engine.search_by_text(query, *limit) {
                 Ok(results) => {
@@ -173,7 +238,7 @@ fn main() {
         }
 
         Commands::Delete { id } => {
-            let engine = create_engine(&cli.database, &cli.model);
+            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
             let uuid = uuid::Uuid::parse_str(id).expect("Invalid UUID");
 
             match engine.delete(&uuid) {
@@ -183,8 +248,9 @@ fn main() {
         }
 
         Commands::Stats => {
-            let engine = create_engine(&cli.database, &cli.model);
-            println!("Stats - {:?}", cli.database);
+            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
+            let db_path = cli.database.clone().unwrap_or_else(|| config.get_db_path());
+            println!("Stats - {:?}", db_path);
             println!("Total: {}", engine.count().unwrap_or(0));
 
             for (name, mt) in [
@@ -204,7 +270,7 @@ fn main() {
             target,
             relation,
         } => {
-            let engine = create_engine(&cli.database, &cli.model);
+            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
             let rel_type = match relation.to_lowercase().as_str() {
                 "temporal" => RelationType::Temporal,
                 "entity" => RelationType::Entity,
@@ -224,7 +290,7 @@ fn main() {
         }
 
         Commands::Related { id } => {
-            let engine = create_engine(&cli.database, &cli.model);
+            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
             let uuid = uuid::Uuid::parse_str(id).expect("Invalid UUID");
 
             match engine.get_related(&uuid) {

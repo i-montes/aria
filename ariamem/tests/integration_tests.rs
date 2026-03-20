@@ -1,6 +1,7 @@
 use ariamem::core::{Memory, Edge, MemoryType, RelationType, TemporalMetadata};
 use ariamem::relevance::calculate_relevance;
 use ariamem::vector::{NaiveIndex, VectorIndex};
+use uuid::Uuid;
 
 #[test]
 fn test_memory_creation() {
@@ -99,15 +100,18 @@ fn test_calculate_relevance_accessed_memory() {
 
 #[test]
 fn test_naive_vector_index() {
-    let mut index = NaiveIndex::new(4);
+    let index = NaiveIndex::new(4);
     
-    index.add(1, &[0.1, 0.2, 0.3, 0.4]).unwrap();
-    index.add(2, &[0.4, 0.3, 0.2, 0.1]).unwrap();
+    let id1 = Uuid::new_v4();
+    let id2 = Uuid::new_v4();
+    
+    index.add(id1, &[0.1, 0.2, 0.3, 0.4]).unwrap();
+    index.add(id2, &[0.4, 0.3, 0.2, 0.1]).unwrap();
     
     let results = index.search(&[0.1, 0.2, 0.3, 0.4], 2).unwrap();
     
     assert_eq!(results.len(), 2);
-    assert_eq!(results[0].id, 1);
+    assert_eq!(results[0].id, id1);
 }
 
 #[test]

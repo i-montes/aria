@@ -1,31 +1,41 @@
-use rusqlite::{Connection, params, Row};
+use rusqlite::{params, Row};
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
 use std::collections::HashMap;
-use std::sync::Mutex;
 
 use crate::core::{Memory, Edge, MemoryType, RelationType, TemporalMetadata};
 use crate::plugins::Storage;
 
 pub struct SqliteStorage {
-    conn: Mutex<Connection>,
+    pool: Pool<SqliteConnectionManager>,
 }
 
 impl SqliteStorage {
     pub fn new(path: &str) -> Result<Self, rusqlite::Error> {
-        let conn = Connection::open(path)?;
-        let storage = Self { conn: Mutex::new(conn) };
+        let manager = SqliteConnectionManager::file(path);
+        let pool = r2d2::Pool::builder()
+            .max_size(15)
+            .build(manager)
+            .map_err(|_| rusqlite::Error::InvalidPath(std::path::PathBuf::from(path)))?;
+            
+        let storage = Self { pool };
         storage.init_schema()?;
         Ok(storage)
     }
 
     pub fn in_memory() -> Result<Self, rusqlite::Error> {
-        let conn = Connection::open_in_memory()?;
-        let storage = Self { conn: Mutex::new(conn) };
+        let manager = SqliteConnectionManager::memory();
+        let pool = r2d2::Pool::builder().max_size(1).build(manager).unwrap();
+        
+        let storage = Self { pool };
         storage.init_schema()?;
         Ok(storage)
     }
 
     fn init_schema(&self) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.get().map_err(|_| rusqlite::Error::QueryReturnedNoRows)?;
+        
+        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         
         conn.execute(
             "CREATE TABLE IF NOT EXISTS memories (
@@ -167,7 +177,7 @@ impl SqliteStorage {
 
 impl Storage for SqliteStorage {
     fn save_memory(&self, memory: &Memory) -> Result<(), crate::plugins::StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
         let metadata_json = serde_json::to_string(&memory.metadata)
             .map_err(|e| crate::plugins::StorageError::Serialization(e.to_string()))?;
@@ -197,7 +207,7 @@ impl Storage for SqliteStorage {
     }
 
     fn load_memory(&self, id: &uuid::Uuid) -> Result<Memory, crate::plugins::StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
         let mut stmt = conn.prepare(
             "SELECT id, memory_type, content, embedding, occurrence_start, occurrence_end, mention_time, metadata, confidence, access_count, last_accessed
@@ -212,7 +222,7 @@ impl Storage for SqliteStorage {
     }
 
     fn update_memory(&self, memory: &Memory) -> Result<(), crate::plugins::StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
         let metadata_json = serde_json::to_string(&memory.metadata)
             .map_err(|e| crate::plugins::StorageError::Serialization(e.to_string()))?;
@@ -242,7 +252,7 @@ impl Storage for SqliteStorage {
     }
 
     fn delete_memory(&self, id: &uuid::Uuid) -> Result<(), crate::plugins::StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
         conn.execute("DELETE FROM memories WHERE id = ?1", params![id.to_string()])
             .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
@@ -251,7 +261,7 @@ impl Storage for SqliteStorage {
     }
 
     fn list_memories(&self, query: &crate::core::MemoryQuery) -> Result<Vec<Memory>, crate::plugins::StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
         let mut result = Vec::new();
         
@@ -292,7 +302,7 @@ impl Storage for SqliteStorage {
     }
 
     fn count_memories(&self) -> Result<usize, crate::plugins::StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM memories",
@@ -304,7 +314,7 @@ impl Storage for SqliteStorage {
     }
 
     fn save_edge(&self, edge: &Edge) -> Result<(), crate::plugins::StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
         let metadata_json = serde_json::to_string(&edge.metadata)
             .map_err(|e| crate::plugins::StorageError::Serialization(e.to_string()))?;
@@ -326,7 +336,7 @@ impl Storage for SqliteStorage {
     }
 
     fn load_edge(&self, id: &uuid::Uuid) -> Result<Edge, crate::plugins::StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
         let mut stmt = conn.prepare(
             "SELECT id, source_id, target_id, relation_type, weight, metadata FROM edges WHERE id = ?1"
@@ -356,7 +366,7 @@ impl Storage for SqliteStorage {
     }
 
     fn delete_edge(&self, id: &uuid::Uuid) -> Result<(), crate::plugins::StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
         conn.execute("DELETE FROM edges WHERE id = ?1", params![id.to_string()])
             .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
@@ -365,7 +375,7 @@ impl Storage for SqliteStorage {
     }
 
     fn query_edges(&self, source_id: &uuid::Uuid) -> Result<Vec<Edge>, crate::plugins::StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
         let mut stmt = conn.prepare(
             "SELECT id, source_id, target_id, relation_type, weight, metadata FROM edges WHERE source_id = ?1"
@@ -402,7 +412,7 @@ impl Storage for SqliteStorage {
     }
 
     fn query_edges_by_target(&self, target_id: &uuid::Uuid) -> Result<Vec<Edge>, crate::plugins::StorageError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
         let mut stmt = conn.prepare(
             "SELECT id, source_id, target_id, relation_type, weight, metadata FROM edges WHERE target_id = ?1"

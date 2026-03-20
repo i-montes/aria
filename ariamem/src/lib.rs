@@ -1,3 +1,4 @@
+pub mod config;
 pub mod core;
 pub mod plugins;
 pub mod storage;
@@ -7,6 +8,7 @@ pub mod retrieval;
 pub mod extraction;
 pub mod api;
 
+pub use config::Config;
 pub use core::{Memory, Edge, MemoryType, RelationType, MemoryQuery, TemporalMetadata};
 pub use plugins::{Storage, Embedder, TfIdfEmbedder, WordCountEmbedder, HttpEmbedder, Model2VecEmbedder};
 pub use storage::SqliteStorage;

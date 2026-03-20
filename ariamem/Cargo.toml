@@ -9,6 +9,9 @@ repository = "https://github.com/aria-project/ariamem"
 
 [dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+dashmap = "6.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
@@ -16,12 +19,20 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.0", features = ["full", "io-std", "io-util", "macros", "rt-multi-thread"] }
 clap = { version = "4.0", features = ["derive"] }
 async-trait = "0.1"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 model2vec = "0.3"
 ndarray = "0.16"
+directories = "5.0"
+hnsw = "0.10"
+rand = "0.8"
+rand_pcg = "0.3"
+rand_core = "0.6"
+space = "0.14.2"
+hf-hub = "0.5.0"
+axum = "0.8.8"
 
 [dev-dependencies]
 tempfile = "3.0"

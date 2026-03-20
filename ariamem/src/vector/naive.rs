@@ -1,16 +1,17 @@
 use crate::vector::index::{VectorIndex, SearchResult, Result, IndexError};
-use std::collections::HashMap;
+use uuid::Uuid;
+use dashmap::DashMap;
 
 pub struct NaiveIndex {
     dimension: usize,
-    vectors: HashMap<u64, Vec<f32>>,
+    vectors: DashMap<Uuid, Vec<f32>>,
 }
 
 impl NaiveIndex {
     pub fn new(dimension: usize) -> Self {
         Self {
             dimension,
-            vectors: HashMap::new(),
+            vectors: DashMap::new(),
         }
     }
 
@@ -28,7 +29,7 @@ impl NaiveIndex {
 }
 
 impl VectorIndex for NaiveIndex {
-    fn add(&mut self, id: u64, vector: &[f32]) -> Result<()> {
+    fn add(&self, id: Uuid, vector: &[f32]) -> Result<()> {
         if vector.len() != self.dimension {
             return Err(IndexError::Index(format!(
                 "Dimension mismatch: expected {}, got {}",
@@ -40,7 +41,7 @@ impl VectorIndex for NaiveIndex {
         Ok(())
     }
 
-    fn remove(&mut self, id: u64) -> Result<()> {
+    fn remove(&self, id: Uuid) -> Result<()> {
         self.vectors.remove(&id);
         Ok(())
     }
@@ -48,9 +49,9 @@ impl VectorIndex for NaiveIndex {
     fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         let mut results: Vec<SearchResult> = self.vectors
             .iter()
-            .map(|(id, vector)| {
-                let score = Self::cosine_similarity(query, vector);
-                SearchResult { id: *id, score }
+            .map(|entry| {
+                let score = Self::cosine_similarity(query, entry.value());
+                SearchResult { id: *entry.key(), score }
             })
             .collect();
         
