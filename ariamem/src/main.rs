@@ -93,7 +93,6 @@ fn create_engine(
         } else {
             model_name.clone()
         }
-    }
     };
     if !is_serve {
         eprintln!("Loading Model2Vec model: {}...", model_to_load);
