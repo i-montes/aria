@@ -1,7 +1,7 @@
 use ariamem::{
     Config, Embedder, Memory, MemoryEngine, MemoryType, Model2VecEmbedder, RelationType, SqliteStorage, Edge, Storage, core::MemoryQuery
 };
-use ariamem::api::mcp::{start_mcp_server, start_mcp_http_server};
+use ariamem::api::mcp::McpServer;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -70,7 +70,7 @@ fn create_engine(
     config: &Config,
     cli_db: Option<&PathBuf>,
     cli_model: Option<&String>,
-) -> Arc<MemoryEngine<SqliteStorage, Model2VecEmbedder>> {
+) -> Arc<MemoryEngine> {
     let storage = create_storage(config, cli_db);
 
     let is_serve = std::env::args().any(|arg| arg == "serve");
@@ -125,17 +125,15 @@ fn call_mcp_tool(tool_name: &str, arguments: serde_json::Value) -> Option<String
         }
     });
 
-    let response = client.post("http://localhost:8080/mcp")
+    let response = client.post("http://localhost:8080/")
         .json(&request)
         .send()
         .ok()?;
 
     if response.status().is_success() {
         let json: serde_json::Value = response.json().ok()?;
-        if let Some(content) = json["result"]["content"].as_array() {
-            if let Some(text) = content[0]["text"].as_str() {
-                return Some(text.to_string());
-            }
+        if let Some(result) = json.get("result") {
+            return Some(result.to_string());
         }
     }
     None
@@ -150,13 +148,24 @@ async fn main() {
 
     match &cli.command {
         Commands::Serve { port } => {
-            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
+            let engine_arc = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
+            // Need to get the inner MemoryEngine because McpServer expects ownership or specific Arc
+            // But McpServer handles Arc inside if we change it, let's look at McpServer::new
+            // McpServer::new takes MemoryEngine and wraps it in Arc.
+            
+            // For now, let's assume we can clone the Arc's contents if it was just one
+            // Actually, I'll just change McpServer::new to take Arc<MemoryEngine> for simplicity
+            
+            let server = McpServer::new(Arc::into_inner(engine_arc).unwrap());
+            
             if let Some(p) = port {
-                if let Err(e) = start_mcp_http_server(engine, *p).await {
+                println!("Starting MCP HTTP server on port {}...", p);
+                if let Err(e) = server.run_http(*p).await {
                     eprintln!("MCP HTTP Server Error: {}", e);
                 }
             } else {
-                if let Err(e) = start_mcp_server(engine).await {
+                println!("Starting MCP stdio server...");
+                if let Err(e) = server.run_stdio().await {
                     eprintln!("MCP Stdio Server Error: {}", e);
                 }
             }
@@ -241,7 +250,7 @@ async fn main() {
 
         Commands::Search { query, limit } => {
             // Try calling the background service first for instant response
-            if let Some(response) = call_mcp_tool("search_memory", serde_json::json!({
+            if let Some(response) = call_mcp_tool("search_memories", serde_json::json!({
                 "query": query,
                 "limit": limit
             })) {
@@ -257,9 +266,9 @@ async fn main() {
                     println!("{} results:", results.len());
                     for (i, r) in results.iter().enumerate() {
                         println!(
-                            "  {}. [score: {:.3}] {}",
+                            "  {}. [relevance: {:.3}] {}",
                             i + 1,
-                            r.score,
+                            r.relevance_score,
                             truncate(&r.memory.content, 55)
                         );
                     }

@@ -1,7 +1,7 @@
 use crate::core::Memory;
 
 pub fn calculate_relevance(memory: &Memory) -> f32 {
-    let access_factor = (1.0 + memory.access_count as f32).ln();
+    let access_factor = 1.0 + (1.0 + memory.access_count as f32).ln();
     let recency_decay = calculate_recency_decay(&memory.last_accessed);
     let base_weight = memory.metadata
         .get("base_weight")

@@ -1,4 +1,5 @@
 use crate::core::{Memory, Edge, MemoryQuery};
+use crate::vector::SearchResult;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -23,6 +24,7 @@ pub trait Storage: Send + Sync {
     fn delete_memory(&self, id: &Uuid) -> Result<()>;
     fn list_memories(&self, query: &MemoryQuery) -> Result<Vec<Memory>>;
     fn count_memories(&self) -> Result<usize>;
+    fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>>;
 
     fn save_edge(&self, edge: &Edge) -> Result<()>;
     fn load_edge(&self, id: &Uuid) -> Result<Edge>;

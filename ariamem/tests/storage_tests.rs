@@ -51,6 +51,35 @@ fn test_sqlite_storage_delete_memory() {
 }
 
 #[test]
+fn test_sqlite_storage_delete_memory_cascade() {
+    let storage = SqliteStorage::in_memory().unwrap();
+
+    let source = Memory::new("Source".to_string(), MemoryType::World);
+    let target = Memory::new("Target".to_string(), MemoryType::World);
+
+    storage.save_memory(&source).unwrap();
+    storage.save_memory(&target).unwrap();
+
+    let edge = Edge::new(source.id, target.id, RelationType::Semantic);
+    storage.save_edge(&edge).unwrap();
+
+    // Verify edge exists
+    let edges = storage.query_edges(&source.id).unwrap();
+    assert_eq!(edges.len(), 1);
+
+    // Delete source memory
+    storage.delete_memory(&source.id).unwrap();
+
+    // Verify edge is gone
+    let edges = storage.query_edges(&source.id).unwrap();
+    assert_eq!(edges.len(), 0);
+    
+    // Also check from target side if we had such query (we have query_edges_by_target)
+    let edges_target = storage.query_edges_by_target(&target.id).unwrap();
+    assert_eq!(edges_target.len(), 0);
+}
+
+#[test]
 fn test_sqlite_storage_save_and_load_edge() {
     let storage = SqliteStorage::in_memory().unwrap();
 

@@ -1,4 +1,4 @@
-use rusqlite::{params, Row};
+use rusqlite::{params, Row, ToSql};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use std::collections::HashMap;
@@ -8,6 +8,7 @@ use crate::plugins::Storage;
 
 pub struct SqliteStorage {
     pool: Pool<SqliteConnectionManager>,
+    _master_conn: Option<std::sync::Mutex<rusqlite::Connection>>, // Keep in-memory DB alive
 }
 
 impl SqliteStorage {
@@ -18,28 +19,39 @@ impl SqliteStorage {
             .build(manager)
             .map_err(|_| rusqlite::Error::InvalidPath(std::path::PathBuf::from(path)))?;
             
-        let storage = Self { pool };
+        let storage = Self { pool, _master_conn: None };
         storage.init_schema()?;
         Ok(storage)
     }
 
     pub fn in_memory() -> Result<Self, rusqlite::Error> {
-        let manager = SqliteConnectionManager::memory();
-        let pool = r2d2::Pool::builder().max_size(1).build(manager).unwrap();
+        let temp_dir = std::env::temp_dir();
+        let db_path = temp_dir.join(format!("ariamem_{}.db", uuid::Uuid::new_v4()));
+        let path_str = db_path.to_str().unwrap();
         
-        let storage = Self { pool };
+        let manager = SqliteConnectionManager::file(path_str);
+        let pool = r2d2::Pool::builder()
+            .max_size(5)
+            .build(manager)
+            .unwrap();
+        
+        let storage = Self { pool, _master_conn: None };
         storage.init_schema()?;
         Ok(storage)
     }
 
     fn init_schema(&self) -> Result<(), rusqlite::Error> {
         let conn = self.pool.get().map_err(|_| rusqlite::Error::QueryReturnedNoRows)?;
-        
+        self.init_schema_on_conn(&conn)
+    }
+
+    fn init_schema_on_conn(&self, conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         
         conn.execute(
             "CREATE TABLE IF NOT EXISTS memories (
-                id TEXT PRIMARY KEY,
+                rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT NOT NULL,
                 memory_type TEXT NOT NULL,
                 content TEXT NOT NULL,
                 embedding TEXT,
@@ -54,6 +66,8 @@ impl SqliteStorage {
             [],
         )?;
 
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_id ON memories(id)", [])?;
+
         conn.execute(
             "CREATE TABLE IF NOT EXISTS edges (
                 id TEXT PRIMARY KEY,
@@ -66,20 +80,34 @@ impl SqliteStorage {
             [],
         )?;
 
+        // FTS5 Virtual Table
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type)",
+            "CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                content,
+                content_id UNINDEXED,
+                content='memories',
+                tokenize='unicode61'
+            )",
             [],
         )?;
 
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id)",
-            [],
+        // Triggers
+        conn.execute_batch(
+            "CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+                INSERT INTO memories_fts(rowid, content, content_id) VALUES (new.rowid, new.content, new.id);
+            END;
+            CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, content, content_id) VALUES('delete', old.rowid, old.content, old.id);
+            END;
+            CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, content, content_id) VALUES('delete', old.rowid, old.content, old.id);
+                INSERT INTO memories_fts(rowid, content, content_id) VALUES (new.rowid, new.content, new.id);
+            END;"
         )?;
 
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id)",
-            [],
-        )?;
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type)", [])?;
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id)", [])?;
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id)", [])?;
 
         Ok(())
     }
@@ -125,17 +153,17 @@ impl SqliteStorage {
     }
 
     fn row_to_memory(row: &Row) -> rusqlite::Result<Memory> {
-        let id_str: String = row.get(0)?;
-        let memory_type_str: String = row.get(1)?;
-        let content: String = row.get(2)?;
-        let embedding_json: String = row.get(3)?;
-        let occurrence_start_str: String = row.get(4)?;
-        let occurrence_end_str: Option<String> = row.get(5)?;
-        let mention_time_str: String = row.get(6)?;
-        let metadata_json: String = row.get(7)?;
-        let confidence: Option<f32> = row.get(8)?;
-        let access_count: u32 = row.get(9)?;
-        let last_accessed_str: Option<String> = row.get(10)?;
+        let id_str: String = row.get(1)?; 
+        let memory_type_str: String = row.get(2)?;
+        let content: String = row.get(3)?;
+        let embedding_json: String = row.get(4)?;
+        let occurrence_start_str: String = row.get(5)?;
+        let occurrence_end_str: Option<String> = row.get(6)?;
+        let mention_time_str: String = row.get(7)?;
+        let metadata_json: String = row.get(8)?;
+        let confidence: Option<f32> = row.get(9)?;
+        let access_count: u32 = row.get(10)?;
+        let last_accessed_str: Option<String> = row.get(11)?;
 
         let embedding: Vec<f32> = serde_json::from_str(&embedding_json).unwrap_or_default();
         let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
@@ -148,9 +176,11 @@ impl SqliteStorage {
                 .map(|dt| dt.with_timezone(&chrono::Utc))
                 .ok()
         });
-        let mention_time = chrono::DateTime::parse_from_rfc3339(&mention_time_str)
-            .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(|_| chrono::Utc::now());
+        let mention_time = mention_time_str.parse::<chrono::DateTime<chrono::Utc>>().unwrap_or_else(|_| {
+             chrono::DateTime::parse_from_rfc3339(&mention_time_str)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now())
+        });
         let last_accessed = last_accessed_str.and_then(|s| {
             chrono::DateTime::parse_from_rfc3339(&s)
                 .map(|dt| dt.with_timezone(&chrono::Utc))
@@ -203,6 +233,12 @@ impl Storage for SqliteStorage {
             ],
         ).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
 
+        let row_id = conn.last_insert_rowid();
+        let _ = conn.execute(
+            "INSERT INTO memories_fts(rowid, content, content_id) VALUES (?1, ?2, ?3)",
+            params![row_id, memory.content, memory.id.to_string()],
+        );
+
         Ok(())
     }
 
@@ -210,7 +246,7 @@ impl Storage for SqliteStorage {
         let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
         let mut stmt = conn.prepare(
-            "SELECT id, memory_type, content, embedding, occurrence_start, occurrence_end, mention_time, metadata, confidence, access_count, last_accessed
+            "SELECT rowid, id, memory_type, content, embedding, occurrence_start, occurrence_end, mention_time, metadata, confidence, access_count, last_accessed
              FROM memories WHERE id = ?1"
         ).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
 
@@ -254,6 +290,9 @@ impl Storage for SqliteStorage {
     fn delete_memory(&self, id: &uuid::Uuid) -> Result<(), crate::plugins::StorageError> {
         let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
+        conn.execute("DELETE FROM edges WHERE source_id = ?1 OR target_id = ?1", params![id.to_string()])
+            .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+
         conn.execute("DELETE FROM memories WHERE id = ?1", params![id.to_string()])
             .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
 
@@ -263,85 +302,93 @@ impl Storage for SqliteStorage {
     fn list_memories(&self, query: &crate::core::MemoryQuery) -> Result<Vec<Memory>, crate::plugins::StorageError> {
         let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
-        let mut result = Vec::new();
+        let mut sql = "SELECT rowid, id, memory_type, content, embedding, occurrence_start, occurrence_end, mention_time, metadata, confidence, access_count, last_accessed FROM memories".to_string();
         
-        match query.memory_type {
-            Some(mem_type) => {
-                let sql = "SELECT id, memory_type, content, embedding, occurrence_start, occurrence_end, mention_time, metadata, confidence, access_count, last_accessed FROM memories WHERE memory_type = ?1";
-                let mut stmt = conn.prepare(sql)
-                    .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-                
-                let rows = stmt.query_map([Self::memory_type_to_string(&mem_type)], |row| {
-                    Self::row_to_memory(row)
-                }).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-                
-                for row in rows {
-                    if let Ok(m) = row {
-                        result.push(m);
-                    }
-                }
-            }
-            None => {
-                let sql = "SELECT id, memory_type, content, embedding, occurrence_start, occurrence_end, mention_time, metadata, confidence, access_count, last_accessed FROM memories";
-                let mut stmt = conn.prepare(sql)
-                    .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-                
-                let rows = stmt.query_map([], |row| {
-                    Self::row_to_memory(row)
-                }).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-                
-                for row in rows {
-                    if let Ok(m) = row {
-                        result.push(m);
-                    }
-                }
-            }
+        let mut params_vec: Vec<Box<dyn ToSql>> = Vec::new();
+        if let Some(mt) = query.memory_type {
+            sql.push_str(" WHERE memory_type = ?1");
+            params_vec.push(Box::new(Self::memory_type_to_string(&mt).to_string()));
         }
 
+        let mut stmt = conn.prepare(&sql)
+            .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+        
+        let rows = stmt.query_map(rusqlite::params_from_iter(params_vec.iter().map(|p| p.as_ref())), |row| {
+            Self::row_to_memory(row)
+        }).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+        
+        let mut result = Vec::new();
+        for row in rows {
+            if let Ok(m) = row {
+                result.push(m);
+            }
+        }
         Ok(result)
     }
 
     fn count_memories(&self) -> Result<usize, crate::plugins::StorageError> {
         let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0)).unwrap_or(0);
+        Ok(count as usize)
+    }
+
+    fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<crate::vector::SearchResult>, crate::plugins::StorageError> {
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM memories",
-            [],
-            |row| row.get(0),
+        let mut stmt = conn.prepare(
+            "SELECT content_id, rank FROM memories_fts WHERE memories_fts MATCH ?1 ORDER BY rank ASC LIMIT ?2"
         ).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
 
-        Ok(count as usize)
+        let rows = stmt.query_map(params![query, limit], |row| {
+            let id_str: String = row.get(0)?;
+            let rank: f32 = row.get(1)?;
+            Ok(crate::vector::SearchResult {
+                id: uuid::Uuid::parse_str(&id_str).unwrap_or_else(|_| uuid::Uuid::new_v4()),
+                score: rank,
+            })
+        }).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            if let Ok(res) = row {
+                results.push(res);
+            }
+        }
+
+        if results.is_empty() {
+            let mut stmt = conn.prepare("SELECT id FROM memories WHERE content LIKE ?1 LIMIT ?2")
+                .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+            let like_query = format!("%{}%", query);
+            let rows = stmt.query_map(params![like_query, limit], |row| {
+                let id_str: String = row.get(0)?;
+                Ok(crate::vector::SearchResult {
+                    id: uuid::Uuid::parse_str(&id_str).unwrap_or_else(|_| uuid::Uuid::new_v4()),
+                    score: 0.01, // Small positive score for LIKE matches
+                })
+            }).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+            for row in rows {
+                if let Ok(res) = row {
+                    results.push(res);
+                }
+            }
+        }
+
+        Ok(results)
     }
 
     fn save_edge(&self, edge: &Edge) -> Result<(), crate::plugins::StorageError> {
         let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-        
-        let metadata_json = serde_json::to_string(&edge.metadata)
-            .map_err(|e| crate::plugins::StorageError::Serialization(e.to_string()))?;
-
+        let metadata_json = serde_json::to_string(&edge.metadata).unwrap();
         conn.execute(
-            "INSERT INTO edges (id, source_id, target_id, relation_type, weight, metadata)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                edge.id.to_string(),
-                edge.source_id.to_string(),
-                edge.target_id.to_string(),
-                Self::relation_type_to_string(&edge.relation_type),
-                edge.weight,
-                metadata_json,
-            ],
+            "INSERT INTO edges (id, source_id, target_id, relation_type, weight, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![edge.id.to_string(), edge.source_id.to_string(), edge.target_id.to_string(), Self::relation_type_to_string(&edge.relation_type), edge.weight, metadata_json],
         ).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-
         Ok(())
     }
 
     fn load_edge(&self, id: &uuid::Uuid) -> Result<Edge, crate::plugins::StorageError> {
         let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-        
-        let mut stmt = conn.prepare(
-            "SELECT id, source_id, target_id, relation_type, weight, metadata FROM edges WHERE id = ?1"
-        ).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-
+        let mut stmt = conn.prepare("SELECT id, source_id, target_id, relation_type, weight, metadata FROM edges WHERE id = ?1").unwrap();
         let edge = stmt.query_row(params![id.to_string()], |row| {
             let id_str: String = row.get(0)?;
             let source_id_str: String = row.get(1)?;
@@ -349,38 +396,28 @@ impl Storage for SqliteStorage {
             let relation_type_str: String = row.get(3)?;
             let weight: f32 = row.get(4)?;
             let metadata_json: String = row.get(5)?;
-
             let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
-
             Ok(Edge {
-                id: uuid::Uuid::parse_str(&id_str).unwrap_or_else(|_| uuid::Uuid::new_v4()),
-                source_id: uuid::Uuid::parse_str(&source_id_str).unwrap_or_else(|_| uuid::Uuid::new_v4()),
-                target_id: uuid::Uuid::parse_str(&target_id_str).unwrap_or_else(|_| uuid::Uuid::new_v4()),
+                id: uuid::Uuid::parse_str(&id_str).unwrap(),
+                source_id: uuid::Uuid::parse_str(&source_id_str).unwrap(),
+                target_id: uuid::Uuid::parse_str(&target_id_str).unwrap(),
                 relation_type: Self::string_to_relation_type(&relation_type_str),
                 weight,
                 metadata,
             })
         }).map_err(|_| crate::plugins::StorageError::EdgeNotFound(*id))?;
-
         Ok(edge)
     }
 
     fn delete_edge(&self, id: &uuid::Uuid) -> Result<(), crate::plugins::StorageError> {
         let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-        
-        conn.execute("DELETE FROM edges WHERE id = ?1", params![id.to_string()])
-            .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-
+        conn.execute("DELETE FROM edges WHERE id = ?1", params![id.to_string()]).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         Ok(())
     }
 
     fn query_edges(&self, source_id: &uuid::Uuid) -> Result<Vec<Edge>, crate::plugins::StorageError> {
         let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-        
-        let mut stmt = conn.prepare(
-            "SELECT id, source_id, target_id, relation_type, weight, metadata FROM edges WHERE source_id = ?1"
-        ).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-
+        let mut stmt = conn.prepare("SELECT id, source_id, target_id, relation_type, weight, metadata FROM edges WHERE source_id = ?1").unwrap();
         let rows = stmt.query_map(params![source_id.to_string()], |row| {
             let id_str: String = row.get(0)?;
             let source_id_str: String = row.get(1)?;
@@ -388,36 +425,28 @@ impl Storage for SqliteStorage {
             let relation_type_str: String = row.get(3)?;
             let weight: f32 = row.get(4)?;
             let metadata_json: String = row.get(5)?;
-
             let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
-
             Ok(Edge {
-                id: uuid::Uuid::parse_str(&id_str).unwrap_or_else(|_| uuid::Uuid::new_v4()),
-                source_id: uuid::Uuid::parse_str(&source_id_str).unwrap_or_else(|_| uuid::Uuid::new_v4()),
-                target_id: uuid::Uuid::parse_str(&target_id_str).unwrap_or_else(|_| uuid::Uuid::new_v4()),
+                id: uuid::Uuid::parse_str(&id_str).unwrap(),
+                source_id: uuid::Uuid::parse_str(&source_id_str).unwrap(),
+                target_id: uuid::Uuid::parse_str(&target_id_str).unwrap(),
                 relation_type: Self::string_to_relation_type(&relation_type_str),
                 weight,
                 metadata,
             })
         }).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-
         let mut result = Vec::new();
         for row in rows {
             if let Ok(e) = row {
                 result.push(e);
             }
         }
-
         Ok(result)
     }
 
     fn query_edges_by_target(&self, target_id: &uuid::Uuid) -> Result<Vec<Edge>, crate::plugins::StorageError> {
         let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-        
-        let mut stmt = conn.prepare(
-            "SELECT id, source_id, target_id, relation_type, weight, metadata FROM edges WHERE target_id = ?1"
-        ).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-
+        let mut stmt = conn.prepare("SELECT id, source_id, target_id, relation_type, weight, metadata FROM edges WHERE target_id = ?1").unwrap();
         let rows = stmt.query_map(params![target_id.to_string()], |row| {
             let id_str: String = row.get(0)?;
             let source_id_str: String = row.get(1)?;
@@ -425,26 +454,22 @@ impl Storage for SqliteStorage {
             let relation_type_str: String = row.get(3)?;
             let weight: f32 = row.get(4)?;
             let metadata_json: String = row.get(5)?;
-
             let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
-
             Ok(Edge {
-                id: uuid::Uuid::parse_str(&id_str).unwrap_or_else(|_| uuid::Uuid::new_v4()),
-                source_id: uuid::Uuid::parse_str(&source_id_str).unwrap_or_else(|_| uuid::Uuid::new_v4()),
-                target_id: uuid::Uuid::parse_str(&target_id_str).unwrap_or_else(|_| uuid::Uuid::new_v4()),
+                id: uuid::Uuid::parse_str(&id_str).unwrap(),
+                source_id: uuid::Uuid::parse_str(&source_id_str).unwrap(),
+                target_id: uuid::Uuid::parse_str(&target_id_str).unwrap(),
                 relation_type: Self::string_to_relation_type(&relation_type_str),
                 weight,
                 metadata,
             })
         }).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-
         let mut result = Vec::new();
         for row in rows {
             if let Ok(e) = row {
                 result.push(e);
             }
         }
-
         Ok(result)
     }
 }
