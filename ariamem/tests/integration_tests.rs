@@ -77,7 +77,7 @@ fn test_calculate_relevance_new_memory() {
         MemoryType::World,
     );
     
-    let relevance = calculate_relevance(&memory);
+    let relevance = calculate_relevance(&memory, 0.1);
     
     assert!(relevance >= 0.0);
 }
@@ -93,7 +93,7 @@ fn test_calculate_relevance_accessed_memory() {
         memory.record_access();
     }
     
-    let relevance = calculate_relevance(&memory);
+    let relevance = calculate_relevance(&memory, 0.1);
     
     assert!(relevance > 1.0);
 }

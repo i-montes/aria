@@ -2,11 +2,14 @@ use ariamem::{Memory, MemoryEngine, MemoryType, RelationType, SqliteStorage};
 use ariamem::plugins::Embedder;
 use uuid::Uuid;
 
+use async_trait::async_trait;
+
 // A mock embedder that knows specific semantic relations for testing
 struct MockSemanticEmbedder;
 
+#[async_trait]
 impl Embedder for MockSemanticEmbedder {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, ariamem::plugins::EmbedderError> {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, ariamem::plugins::EmbedderError> {
         let mut vec = vec![0.0; 384];
         let text = text.to_lowercase();
         
@@ -31,22 +34,22 @@ impl Embedder for MockSemanticEmbedder {
     fn dimension(&self) -> usize { 384 }
     fn name(&self) -> &str { "MockSemantic" }
 
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, ariamem::plugins::EmbedderError> {
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, ariamem::plugins::EmbedderError> {
         let mut results = Vec::new();
         for text in texts {
-            results.push(self.embed(text)?);
+            results.push(self.embed(text).await?);
         }
         Ok(results)
     }
 }
 
-#[test]
-fn test_hybrid_coverage_complementarity() {
+#[tokio::test]
+async fn test_hybrid_coverage_complementarity() {
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir.path().join(format!("test_hybrid_{}.db", Uuid::new_v4()));
     let storage = SqliteStorage::new(db_path.to_str().unwrap()).unwrap();
     let embedder = MockSemanticEmbedder;
-    let engine = MemoryEngine::new(storage, embedder, 384);
+    let engine = MemoryEngine::new(storage, embedder, 384).expect("Failed to create engine");
 
     // SETUP DATA
     
@@ -74,14 +77,14 @@ fn test_hybrid_coverage_complementarity() {
         MemoryType::Observation
     );
 
-    engine.store(mem_hnsw.clone()).unwrap();
-    engine.store(mem_blue.clone()).unwrap();
-    let (_, _, _) = engine.store_with_edge(mem_project.clone(), mem_error.clone(), RelationType::Causal).unwrap();
+    engine.store(mem_hnsw.clone()).await.unwrap();
+    engine.store(mem_blue.clone()).await.unwrap();
+    let (_, _, _) = engine.store_with_edge(mem_project.clone(), mem_error.clone(), RelationType::Causal).await.unwrap();
 
     // --- EXECUTION & VALIDATION ---
 
     // Escenario 1: Victoria de FTS5 (Acrónimo técnico)
-    let results = engine.search_by_text("HNSW", 5).unwrap();
+    let results = engine.search_by_text("HNSW", 5).await.unwrap();
     println!("Resultados HNSW: {:?}", results.iter().map(|r| &r.memory.content).collect::<Vec<_>>());
     assert!(!results.is_empty(), "FTS5 debería encontrar 'HNSW' por coincidencia exacta");
     assert!(results.iter().any(|r| r.memory.id == mem_hnsw.id), "Debe encontrar la memoria de HNSW");
@@ -89,7 +92,7 @@ fn test_hybrid_coverage_complementarity() {
     println!("✅ Escenario 1 (FTS5 Win) Pasado: Encontrado por acrónimo exacto.");
 
     // Escenario 2: Victoria de HNSW (Sin traslape de palabras)
-    let results = engine.search_by_text("preferencias de tonalidad", 5).unwrap();
+    let results = engine.search_by_text("preferencias de tonalidad", 5).await.unwrap();
     println!("Resultados Semánticos: {:?}", results.iter().map(|r| &r.memory.content).collect::<Vec<_>>());
     assert!(!results.is_empty(), "HNSW debería encontrar el recuerdo de 'azul' por el mock semántico");
     assert!(results.iter().any(|r| r.memory.id == mem_blue.id), "Debe encontrar la memoria de 'azul'");
@@ -97,7 +100,7 @@ fn test_hybrid_coverage_complementarity() {
     println!("✅ Escenario 2 (HNSW Win) Pasado: Encontrado por significado semántico.");
 
     // Escenario 3: La magia del Grafo (Spreading Activation)
-    let results = engine.search_by_text("status del proyecto", 5).unwrap();
+    let results = engine.search_by_text("status del proyecto", 5).await.unwrap();
     
     let found_project = results.iter().any(|r| r.memory.id == mem_project.id);
     let found_error = results.iter().any(|r| r.memory.id == mem_error.id);

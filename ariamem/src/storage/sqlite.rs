@@ -169,27 +169,30 @@ impl SqliteStorage {
         let last_accessed_str: Option<String> = row.get("last_accessed")?;
         let is_active_int: i32 = row.get("is_active")?;
 
-        let embedding: Vec<f32> = serde_json::from_str(&embedding_json).unwrap_or_default();
-        let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
+        let embedding: Vec<f32> = serde_json::from_str(&embedding_json)
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+        let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json)
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
 
         let occurrence_start = chrono::DateTime::parse_from_rfc3339(&occurrence_start_str)
             .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(|_| chrono::Utc::now());
-        let occurrence_end = occurrence_end_str.and_then(|s| {
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+            
+        let occurrence_end = occurrence_end_str.map(|s| {
             chrono::DateTime::parse_from_rfc3339(&s)
                 .map(|dt| dt.with_timezone(&chrono::Utc))
-                .ok()
-        });
-        let mention_time = mention_time_str.parse::<chrono::DateTime<chrono::Utc>>().unwrap_or_else(|_| {
-             chrono::DateTime::parse_from_rfc3339(&mention_time_str)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .unwrap_or_else(|_| chrono::Utc::now())
-        });
-        let last_accessed = last_accessed_str.and_then(|s| {
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+        }).transpose()?;
+
+        let mention_time = chrono::DateTime::parse_from_rfc3339(&mention_time_str)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+
+        let last_accessed = last_accessed_str.map(|s| {
             chrono::DateTime::parse_from_rfc3339(&s)
                 .map(|dt| dt.with_timezone(&chrono::Utc))
-                .ok()
-        });
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+        }).transpose()?;
 
         Ok(Memory {
             id: id_str,
@@ -291,8 +294,12 @@ impl Storage for SqliteStorage {
     fn delete_memory(&self, id: &String) -> Result<(), crate::plugins::StorageError> {
         let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
-        // Logical delete
+        // Logical delete memory
         conn.execute("UPDATE memories SET is_active = 0 WHERE id = ?1", params![id])
+            .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+
+        // Delete related edges (cascading cleanup)
+        conn.execute("DELETE FROM edges WHERE source_id = ?1 OR target_id = ?1", params![id])
             .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
 
         Ok(())
@@ -410,7 +417,8 @@ impl Storage for SqliteStorage {
             let relation_type_str: String = row.get("relation_type")?;
             let weight: f32 = row.get("weight")?;
             let metadata_json: String = row.get("metadata")?;
-            let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
+            let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json)
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
             Ok(Edge {
                 id: id_str,
                 source_id: source_id_str,
@@ -419,7 +427,10 @@ impl Storage for SqliteStorage {
                 weight,
                 metadata,
             })
-        }).map_err(|_| crate::plugins::StorageError::EdgeNotFound(id.clone()))?;
+        }).map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => crate::plugins::StorageError::EdgeNotFound(id.clone()),
+            _ => crate::plugins::StorageError::Database(e.to_string()),
+        })?;
         Ok(edge)
     }
 
@@ -440,7 +451,8 @@ impl Storage for SqliteStorage {
             let relation_type_str: String = row.get("relation_type")?;
             let weight: f32 = row.get("weight")?;
             let metadata_json: String = row.get("metadata")?;
-            let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
+            let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json)
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
             Ok(Edge {
                 id: id_str,
                 source_id: source_id_str,
@@ -452,9 +464,7 @@ impl Storage for SqliteStorage {
         }).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         let mut result = Vec::new();
         for row in rows {
-            if let Ok(e) = row {
-                result.push(e);
-            }
+            result.push(row.map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?);
         }
         Ok(result)
     }
@@ -470,7 +480,8 @@ impl Storage for SqliteStorage {
             let relation_type_str: String = row.get("relation_type")?;
             let weight: f32 = row.get("weight")?;
             let metadata_json: String = row.get("metadata")?;
-            let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json).unwrap_or_default();
+            let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json)
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
             Ok(Edge {
                 id: id_str,
                 source_id: source_id_str,
@@ -482,9 +493,7 @@ impl Storage for SqliteStorage {
         }).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         let mut result = Vec::new();
         for row in rows {
-            if let Ok(e) = row {
-                result.push(e);
-            }
+            result.push(row.map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?);
         }
         Ok(result)
     }

@@ -9,7 +9,6 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use std::net::SocketAddr;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct RpcRequest {
@@ -80,8 +79,8 @@ impl McpServer {
             .route("/", post(handle_http_post))
             .with_state(self.engine.clone());
 
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        let listener = tokio::net::TcpListener::bind(addr).await?;
+        let addr = format!("0.0.0.0:{}", port);
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
         axum::serve(listener, app).await?;
 
         Ok(())
@@ -237,7 +236,7 @@ async fn handle_tool_call(
             let memory = Memory::new(content.to_string(), mem_type);
             let num_links = links.len();
 
-            match engine.store_contextual(memory, links) {
+            match engine.store_contextual(memory, links).await {
                 Ok(m) => Ok(format!("Memory stored successfully with ID: {}. ({} links created)", m.id, num_links)),
                 Err(e) => Err(format!("Failed to store memory: {}", e)),
             }
@@ -246,7 +245,7 @@ async fn handle_tool_call(
             let query = args["query"].as_str().unwrap_or("");
             let limit = args["limit"].as_u64().unwrap_or(5) as usize;
 
-            match engine.search_by_text(query, limit) {
+            match engine.search_by_text(query, limit).await {
                 Ok(results) => Ok(engine.format_search_results(&results)),
                 Err(e) => Err(format!("Search failed: {}", e)),
             }

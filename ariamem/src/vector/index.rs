@@ -13,6 +13,7 @@ pub trait VectorIndex: Send + Sync {
     fn remove(&self, id: String) -> Result<()>;
     fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>>;
     fn dimension(&self) -> usize;
+    fn count(&self) -> usize;
 }
 
 #[derive(Debug, Clone)]

@@ -48,6 +48,7 @@ pub struct HttpConfig {
 pub struct EngineConfig {
     pub default_search_limit: usize,
     pub cache_size: usize,
+    pub recency_lambda: f32,
 }
 
 fn detect_gpu() -> bool {
@@ -98,6 +99,7 @@ impl Default for Config {
             engine: EngineConfig {
                 default_search_limit: 10,
                 cache_size: 10000,
+                recency_lambda: 0.1,
             },
         }
     }

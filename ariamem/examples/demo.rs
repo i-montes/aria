@@ -1,7 +1,8 @@
 use ariamem::{MemoryEngine, SqliteStorage, WordCountEmbedder, Memory, MemoryType, Embedder};
 use std::sync::Arc;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     println!("╔══════════════════════════════════════════════════════════╗");
     println!("║         AriaMem Demo - Hybrid Memory Engine             ║");
     println!("╚══════════════════════════════════════════════════════════╝\n");
@@ -23,7 +24,7 @@ fn main() {
     embedder.fit(&corpus);
     let dimension = embedder.dimension();
     
-    let engine = Arc::new(MemoryEngine::new(storage, embedder, dimension));
+    let engine = Arc::new(MemoryEngine::new(storage, embedder, dimension).expect("Failed to create engine"));
 
     println!("[2] Almacenando memorias de prueba...\n");
     
@@ -31,28 +32,28 @@ fn main() {
         "Usuario Juan trabaja en el proyecto API REST con Python".to_string(),
         MemoryType::World,
     );
-    let stored1 = engine.store(memory1).expect("Failed to store");
+    let stored1 = engine.store(memory1).await.expect("Failed to store");
     println!("  ✓ Guardado: {}", truncate(&stored1.content, 50));
 
     let memory2 = Memory::new(
         "El agente coder es especialista en Rust y Go".to_string(),
         MemoryType::Experience,
     );
-    let stored2 = engine.store(memory2).expect("Failed to store");
+    let stored2 = engine.store(memory2).await.expect("Failed to store");
     println!("  ✓ Guardado: {}", truncate(&stored2.content, 50));
 
     let memory3 = Memory::new(
         "El proyecto frontend usa React y TypeScript".to_string(),
         MemoryType::World,
     );
-    let stored3 = engine.store(memory3).expect("Failed to store");
+    let stored3 = engine.store(memory3).await.expect("Failed to store");
     println!("  ✓ Guardado: {}", truncate(&stored3.content, 50));
 
     let memory4 = Memory::new(
         "Juan prefiere trabajar de noche y tomar café".to_string(),
         MemoryType::Observation,
     );
-    let stored4 = engine.store(memory4).expect("Failed to store");
+    let stored4 = engine.store(memory4).await.expect("Failed to store");
     println!("  ✓ Guardado: {}", truncate(&stored4.content, 50));
 
     let memory5 = Memory::new(
@@ -60,7 +61,7 @@ fn main() {
         MemoryType::Opinion,
     )
     .with_confidence(0.75);
-    let stored5 = engine.store(memory5).expect("Failed to store");
+    let stored5 = engine.store(memory5).await.expect("Failed to store");
     println!("  ✓ Guardado: {}", truncate(&stored5.content, 50));
 
     println!("\n[3] Estadísticas de la base de datos:");
@@ -90,7 +91,7 @@ fn main() {
     println!("  ✓ Accedido {} veces a la memoria de Juan", engine.get(&stored1.id).unwrap().access_count);
 
     println!("\n[6] Buscando memorias relacionadas con 'Python'...\n");
-    let results = engine.search_by_text("python programming scripts fast", 5).expect("Search failed");
+    let results = engine.search_by_text("python programming scripts fast", 5).await.expect("Search failed");
     for (i, result) in results.iter().enumerate() {
         println!("  {}. [score: {:.3}] [relevance: {:.3}]", 
             i + 1, result.score, result.relevance_score);
@@ -98,21 +99,21 @@ fn main() {
     }
 
     println!("\n[7] Buscando memorias relacionadas con 'Rust programming'...\n");
-    let results = engine.search_by_text("rust go language software", 5).expect("Search failed");
+    let results = engine.search_by_text("rust go language software", 5).await.expect("Search failed");
     for (i, result) in results.iter().enumerate() {
         println!("  {}. [score: {:.3}]", i + 1, result.score);
         println!("     \"{}\"", truncate(&result.memory.content, 70));
     }
 
     println!("\n[8] Buscando memorias relacionadas con 'Frontend'...\n");
-    let results = engine.search_by_text("frontend react typescript web development", 5).expect("Search failed");
+    let results = engine.search_by_text("frontend react typescript web development", 5).await.expect("Search failed");
     for (i, result) in results.iter().enumerate() {
         println!("  {}. [score: {:.3}]", i + 1, result.score);
         println!("     \"{}\"", truncate(&result.memory.content, 70));
     }
 
     println!("[9] Buscando memorias relacionadas con 'Usuario Juan'...\n");
-    let results = engine.search_by_text("juan api rest database backend", 5).expect("Search failed");
+    let results = engine.search_by_text("juan api rest database backend", 5).await.expect("Search failed");
     for (i, result) in results.iter().enumerate() {
         println!("  {}. [score: {:.3}]", i + 1, result.score);
         println!("     \"{}\"", truncate(&result.memory.content, 70));
@@ -124,14 +125,14 @@ fn main() {
         stored1.clone(),
         stored2.clone(),
         ariamem::RelationType::WorksOn,
-    );
+    ).await;
     println!("  ✓ Relacionado: Juan -> trabaja_con -> Coder");
 
     let _ = engine.store_with_edge(
         stored2.clone(),
         stored3.clone(),
         ariamem::RelationType::Related,
-    );
+    ).await;
     println!("  ✓ Relacionado: Coder -> relacionado_con -> Frontend");
 
     println!("\n[11] Obteniendo memorias relacionadas con 'Coder'...\n");

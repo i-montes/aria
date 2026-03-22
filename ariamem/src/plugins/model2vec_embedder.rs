@@ -4,8 +4,10 @@ use ndarray::Array2;
 use hf_hub::api::sync::ApiBuilder;
 use std::path::PathBuf;
 
+use std::sync::Arc;
+
 pub struct Model2VecEmbedder {
-    model: Model2Vec,
+    model: Arc<Model2Vec>,
     dimension: usize,
 }
 
@@ -17,7 +19,7 @@ impl Model2VecEmbedder {
         let embeddings = model.encode(&["test"]).unwrap();
         let dimension = embeddings.ncols();
 
-        Ok(Self { model, dimension })
+        Ok(Self { model: Arc::new(model), dimension })
     }
 
     pub fn from_hub(repo_id: &str) -> Result<Self> {
@@ -70,26 +72,36 @@ impl Model2VecEmbedder {
         let embeddings = model.encode(&["test"]).unwrap();
         let dimension = embeddings.ncols();
 
-        Ok(Self { model, dimension })
+        Ok(Self { model: Arc::new(model), dimension })
     }
 }
 
+use async_trait::async_trait;
+
+#[async_trait]
 impl Embedder for Model2VecEmbedder {
-    fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        let embeddings = self
-            .model
-            .encode(&[text])
-            .map_err(|e| EmbedderError::Inference(e.to_string()))?;
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        let text = text.to_string();
+        let model = self.model.clone();
+        
+        let embeddings = tokio::task::spawn_blocking(move || {
+            model.encode(&[&text])
+        }).await.map_err(|e: tokio::task::JoinError| EmbedderError::Inference(e.to_string()))?
+          .map_err(|e| EmbedderError::Inference(e.to_string()))?;
 
         let row = embeddings.row(0);
         Ok(row.to_vec())
     }
 
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        let embeddings: Array2<f32> = self
-            .model
-            .encode(texts)
-            .map_err(|e| EmbedderError::Inference(e.to_string()))?;
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        let texts: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
+        let model = self.model.clone();
+
+        let embeddings: Array2<f32> = tokio::task::spawn_blocking(move || {
+            let texts_ref: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            model.encode(&texts_ref)
+        }).await.map_err(|e: tokio::task::JoinError| EmbedderError::Inference(e.to_string()))?
+          .map_err(|e| EmbedderError::Inference(e.to_string()))?;
 
         let mut result = Vec::with_capacity(embeddings.nrows());
         for i in 0..embeddings.nrows() {

@@ -1,5 +1,6 @@
-use crate::plugins::Embedder;
+use crate::plugins::embedder::{Embedder, Result};
 use std::collections::{HashMap, HashSet};
+use async_trait::async_trait;
 
 pub struct TfIdfEmbedder {
     dimension: usize,
@@ -96,10 +97,8 @@ impl TfIdfEmbedder {
             })
             .collect()
     }
-}
 
-impl Embedder for TfIdfEmbedder {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, crate::plugins::EmbedderError> {
+    fn embed_sync(&self, text: &str) -> Result<Vec<f32>> {
         let terms = self.tokenize(text);
         let tf = self.compute_tf(&terms);
         
@@ -123,9 +122,22 @@ impl Embedder for TfIdfEmbedder {
         
         Ok(vector)
     }
+}
 
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, crate::plugins::EmbedderError> {
-        texts.iter().map(|t| self.embed(t)).collect()
+#[async_trait]
+impl Embedder for TfIdfEmbedder {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        let text = text.to_string();
+        // These are very light computations, but we follow the pattern for consistency
+        Ok(self.embed_sync(&text)?)
+    }
+
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        let mut result = Vec::with_capacity(texts.len());
+        for text in texts {
+            result.push(self.embed_sync(text)?);
+        }
+        Ok(result)
     }
 
     fn dimension(&self) -> usize {
@@ -180,10 +192,8 @@ impl WordCountEmbedder {
             .map(|s| s.to_string())
             .collect()
     }
-}
 
-impl Embedder for WordCountEmbedder {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, crate::plugins::EmbedderError> {
+    fn embed_sync(&self, text: &str) -> Result<Vec<f32>> {
         let terms = self.tokenize(text);
         let mut counts: HashMap<String, f32> = HashMap::new();
         for term in &terms {
@@ -209,9 +219,20 @@ impl Embedder for WordCountEmbedder {
         
         Ok(vector)
     }
+}
 
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, crate::plugins::EmbedderError> {
-        texts.iter().map(|t| self.embed(t)).collect()
+#[async_trait]
+impl Embedder for WordCountEmbedder {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        Ok(self.embed_sync(text)?)
+    }
+
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        let mut result = Vec::with_capacity(texts.len());
+        for text in texts {
+            result.push(self.embed_sync(text)?);
+        }
+        Ok(result)
     }
 
     fn dimension(&self) -> usize {

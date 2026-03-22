@@ -55,5 +55,6 @@ aria start mem
 echo -e "\nNext steps:"
 echo "  1. Check running services: aria status"
 echo "  2. Search your memory: aria mem search -q \"query\""
-echo "  3. Stop services: aria stop mem"
+echo "  3. REST API is running at: http://localhost:9090"
+echo "  4. Stop services: aria stop mem"
 echo ""

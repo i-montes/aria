@@ -1,7 +1,8 @@
-use crate::plugins::{Embedder, EmbedderError};
+use crate::plugins::embedder::{Embedder, EmbedderError, Result};
 use serde::{Deserialize, Serialize};
 use dashmap::DashMap;
 use std::sync::Arc;
+use async_trait::async_trait;
 
 pub struct HttpEmbedder {
     url: String,
@@ -34,7 +35,7 @@ impl HttpEmbedder {
         }
     }
 
-    pub async fn from_ollama(url: &str, model: &str) -> Result<Self, EmbedderError> {
+    pub async fn from_ollama(url: &str, model: &str) -> Result<Self> {
         let url = format!("{}/api/embeddings", url.trim_end_matches('/'));
         
         let test_req = EmbedRequest {
@@ -61,47 +62,9 @@ impl HttpEmbedder {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl Embedder for HttpEmbedder {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, EmbedderError> {
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle.block_on(self.embed_async(text)),
-            Err(_) => {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(self.embed_async(text))
-            }
-        }
-    }
-
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedderError> {
-        let embed_all = async {
-            let mut results = Vec::new();
-            for text in texts {
-                results.push(self.embed_async(text).await?);
-            }
-            Ok(results)
-        };
-
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle.block_on(embed_all),
-            Err(_) => {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(embed_all)
-            }
-        }
-    }
-
-    fn dimension(&self) -> usize {
-        self.dimension
-    }
-
-    fn name(&self) -> &str {
-        "http"
-    }
-}
-
-impl HttpEmbedder {
-    async fn embed_async(&self, text: &str) -> Result<Vec<f32>, EmbedderError> {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let cache_key = text.to_string();
         
         if let Some(cached) = self.cache.get(&cache_key) {
@@ -141,5 +104,21 @@ impl HttpEmbedder {
         }
         
         Ok(embedding)
+    }
+
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        let mut results = Vec::new();
+        for text in texts {
+            results.push(self.embed(text).await?);
+        }
+        Ok(results)
+    }
+
+    fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    fn name(&self) -> &str {
+        "http"
     }
 }

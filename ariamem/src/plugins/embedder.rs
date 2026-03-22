@@ -1,4 +1,5 @@
 use thiserror::Error;
+use async_trait::async_trait;
 
 #[derive(Error, Debug)]
 pub enum EmbedderError {
@@ -12,9 +13,10 @@ pub enum EmbedderError {
 
 pub type Result<T> = std::result::Result<T, EmbedderError>;
 
+#[async_trait]
 pub trait Embedder: Send + Sync {
-    fn embed(&self, text: &str) -> Result<Vec<f32>>;
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
+    async fn embed(&self, text: &str) -> Result<Vec<f32>>;
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
     fn dimension(&self) -> usize;
     fn name(&self) -> &str;
 }

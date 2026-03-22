@@ -4,10 +4,14 @@ use hnsw::{Hnsw, Searcher};
 use space::{MetricPoint, Neighbor};
 use std::sync::RwLock;
 use rand_pcg::Pcg64;
+use serde::{Serialize, Deserialize};
+use std::path::Path;
+use std::fs::File;
+use ndarray::ArrayView1;
 
 const SCALE_FACTOR: f32 = 1_000_000_000.0;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VectorPoint(pub Vec<f32>);
 
 impl MetricPoint for VectorPoint {
@@ -17,9 +21,16 @@ impl MetricPoint for VectorPoint {
         let a = &self.0;
         let b = &other.0;
         
-        let mut dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if a.is_empty() || b.is_empty() {
+            return SCALE_FACTOR as u32;
+        }
+
+        let av = ArrayView1::from(a);
+        let bv = ArrayView1::from(b);
+
+        let mut dot = av.dot(&bv);
+        let norm_a = av.dot(&av).sqrt();
+        let norm_b = bv.dot(&bv).sqrt();
 
         if norm_a > 0.0 && norm_b > 0.0 {
             dot /= norm_a * norm_b;
@@ -30,7 +41,6 @@ impl MetricPoint for VectorPoint {
         let similarity = dot.clamp(-1.0, 1.0);
         let distance = 1.0 - similarity;
         
-        // Use 9 decimals of precision mapped to u32
         (distance * SCALE_FACTOR) as u32
     }
 }
@@ -41,7 +51,16 @@ pub struct HnswIndex {
     hnsw: RwLock<Hnsw<VectorPoint, Pcg64, 12, 24>>,
     id_to_uuid: DashMap<usize, String>,
     uuid_to_id: DashMap<String, usize>,
+    internal_to_vector: DashMap<usize, Vec<f32>>,
     deleted_internal_ids: DashSet<usize>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PersistedIndexData {
+    // We only save the ID map and the actual vectors
+    // Rebuilding the HNSW graph on load is safer than relying on broken internal serialization
+    vectors: Vec<(String, Vec<f32>)>,
+    deleted_uuids: Vec<String>,
 }
 
 impl HnswIndex {
@@ -51,8 +70,105 @@ impl HnswIndex {
             hnsw: RwLock::new(Hnsw::new()),
             id_to_uuid: DashMap::new(),
             uuid_to_id: DashMap::new(),
+            internal_to_vector: DashMap::new(),
             deleted_internal_ids: DashSet::new(),
         }
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let mut vectors = Vec::new();
+        for entry in self.id_to_uuid.iter() {
+            let internal_id = *entry.key();
+            let uuid = entry.value().clone();
+            
+            if let Some(vec) = self.internal_to_vector.get(&internal_id) {
+                vectors.push((uuid, vec.clone()));
+            }
+        }
+
+        let deleted_uuids = Vec::new(); 
+
+        let persisted = PersistedIndexData {
+            vectors,
+            deleted_uuids,
+        };
+
+        let file = File::create(path).map_err(|e| IndexError::Index(format!("Failed to create index file: {}", e)))?;
+        bincode::serialize_into(file, &persisted)
+            .map_err(|e| IndexError::Index(format!("Failed to serialize index: {}", e)))?;
+
+        Ok(())
+    }
+
+    pub fn load(path: &Path, dimension: usize) -> Result<Self> {
+        let file = File::open(path).map_err(|e| IndexError::Index(format!("Failed to open index file: {}", e)))?;
+        let persisted: PersistedIndexData = bincode::deserialize_from(file)
+            .map_err(|e| IndexError::Index(format!("Failed to deserialize index: {}", e)))?;
+
+        let index = Self::new(dimension);
+        
+        for (uuid, vector) in persisted.vectors {
+            let _ = index.add(uuid, &vector);
+        }
+
+        Ok(index)
+    }
+
+    pub fn count(&self) -> usize {
+        self.uuid_to_id.len()
+    }
+
+    pub fn reindex(&self) -> Result<()> {
+        let mut hnsw_guard = self.hnsw.write().unwrap();
+        let new_hnsw = Hnsw::new();
+        
+        // We need a temporary searcher for the new insertions
+        let mut searcher = Searcher::default();
+        
+        let new_id_to_uuid = DashMap::new();
+        let new_uuid_to_id = DashMap::new();
+        let new_internal_to_vector = DashMap::new();
+        
+        // Create a local copy of hnsw to work with
+        let mut temp_hnsw = new_hnsw;
+
+        for entry in self.id_to_uuid.iter() {
+            let internal_id = *entry.key();
+            let uuid = entry.value().clone();
+            
+            if self.deleted_internal_ids.contains(&internal_id) {
+                continue;
+            }
+
+            if let Some(vec) = self.internal_to_vector.get(&internal_id) {
+                let new_internal_id = temp_hnsw.insert(VectorPoint(vec.clone()), &mut searcher);
+                
+                new_id_to_uuid.insert(new_internal_id, uuid.clone());
+                new_uuid_to_id.insert(uuid, new_internal_id);
+                new_internal_to_vector.insert(new_internal_id, vec.clone());
+            }
+        }
+
+        // Atomically swap everything
+        *hnsw_guard = temp_hnsw;
+        
+        // Clear and refill DashMaps
+        self.id_to_uuid.clear();
+        for entry in new_id_to_uuid { self.id_to_uuid.insert(entry.0, entry.1); }
+        
+        self.uuid_to_id.clear();
+        for entry in new_uuid_to_id { self.uuid_to_id.insert(entry.0, entry.1); }
+        
+        self.internal_to_vector.clear();
+        for entry in new_internal_to_vector { self.internal_to_vector.insert(entry.0, entry.1); }
+        
+        self.deleted_internal_ids.clear();
+
+        Ok(())
+    }
+
+    pub fn tombstone_count(&self) -> usize {
+        self.deleted_internal_ids.len()
     }
 }
 
@@ -73,6 +189,7 @@ impl VectorIndex for HnswIndex {
         
         self.uuid_to_id.insert(id.clone(), internal_id);
         self.id_to_uuid.insert(internal_id, id);
+        self.internal_to_vector.insert(internal_id, vector.to_vec());
 
         Ok(())
     }
@@ -156,6 +273,10 @@ impl VectorIndex for HnswIndex {
 
     fn dimension(&self) -> usize {
         self.dimension
+    }
+
+    fn count(&self) -> usize {
+        self.uuid_to_id.len()
     }
 }
 

@@ -81,5 +81,6 @@ aria start mem
 Write-Host "`nNext steps:"
 Write-Host "  1. Check running services: aria status"
 Write-Host "  2. Search your memory: aria mem search -q `"query`""
-Write-Host "  3. Stop services: aria stop mem"
+Write-Host "  3. REST API is running at: http://localhost:9090"
+Write-Host "  4. Stop services: aria stop mem"
 Write-Host ""

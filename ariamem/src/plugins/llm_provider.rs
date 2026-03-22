@@ -49,10 +49,13 @@ pub struct ExtractionResult {
     pub summary: Option<String>,
 }
 
+use async_trait::async_trait;
+
+#[async_trait]
 pub trait LLMProvider: Send + Sync {
-    fn extract_facts(&self, text: &str) -> Result<ExtractionResult>;
-    fn extract_facts_batch(&self, texts: &[&str]) -> Result<Vec<ExtractionResult>>;
-    fn summarize(&self, text: &str, max_tokens: usize) -> Result<String>;
+    async fn extract_facts(&self, text: &str) -> Result<ExtractionResult>;
+    async fn extract_facts_batch(&self, texts: &[&str]) -> Result<Vec<ExtractionResult>>;
+    async fn summarize(&self, text: &str, max_tokens: usize) -> Result<String>;
 }
 
 pub struct HttpLLMProvider {
@@ -166,8 +169,9 @@ impl HttpLLMProvider {
     }
 }
 
+#[async_trait]
 impl LLMProvider for HttpLLMProvider {
-    fn extract_facts(&self, text: &str) -> Result<ExtractionResult> {
+    async fn extract_facts(&self, text: &str) -> Result<ExtractionResult> {
         let system_prompt = r#"You are an expert information extractor. 
 Extract facts, entities, and a summary from the text. 
 Respond ONLY with a valid JSON object in this format:
@@ -177,10 +181,7 @@ Respond ONLY with a valid JSON object in this format:
   "summary": "string"
 }"#;
 
-        let rt = tokio::runtime::Handle::try_current()
-            .map_err(|_| LLMProviderError::Config("No tokio runtime found".to_string()))?;
-        
-        let json_str = rt.block_on(self.call_llm(text, system_prompt))?;
+        let json_str = self.call_llm(text, system_prompt).await?;
         
         let raw_res: serde_json::Value = serde_json::from_str(&json_str)
             .map_err(|e| LLMProviderError::Parse(e.to_string()))?;
@@ -218,19 +219,37 @@ Respond ONLY with a valid JSON object in this format:
         })
     }
 
-    fn extract_facts_batch(&self, texts: &[&str]) -> Result<Vec<ExtractionResult>> {
-        let mut results = Vec::with_capacity(texts.len());
-        for text in texts {
-            results.push(self.extract_facts(text)?);
+    async fn extract_facts_batch(&self, texts: &[&str]) -> Result<Vec<ExtractionResult>> {
+        use tokio::task::JoinSet;
+        use std::sync::Arc;
+
+        let mut set = JoinSet::new();
+        let provider = Arc::new(HttpLLMProvider {
+            url: self.url.clone(),
+            model: self.model.clone(),
+            api_key: self.api_key.clone(),
+            client: self.client.clone(),
+        });
+
+        for (i, text) in texts.iter().enumerate() {
+            let text = text.to_string();
+            let p = provider.clone();
+            set.spawn(async move {
+                (i, p.extract_facts(&text).await)
+            });
         }
-        Ok(results)
+
+        let mut results = vec![None; texts.len()];
+        while let Some(res) = set.join_next().await {
+            let (i, extraction_res) = res.map_err(|e| LLMProviderError::Api(e.to_string()))?;
+            results[i] = Some(extraction_res?);
+        }
+
+        Ok(results.into_iter().map(|r| r.unwrap()).collect())
     }
 
-    fn summarize(&self, text: &str, _max_tokens: usize) -> Result<String> {
+    async fn summarize(&self, text: &str, _max_tokens: usize) -> Result<String> {
         let system_prompt = "Summarize the following text concisely.";
-        let rt = tokio::runtime::Handle::try_current()
-            .map_err(|_| LLMProviderError::Config("No tokio runtime found".to_string()))?;
-        
-        rt.block_on(self.call_llm(text, system_prompt))
+        self.call_llm(text, system_prompt).await
     }
 }

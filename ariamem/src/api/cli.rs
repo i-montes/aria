@@ -2,6 +2,7 @@ use crate::{
     Config, Embedder, Memory, MemoryEngine, MemoryType, Model2VecEmbedder, RelationType, SqliteStorage, Edge, Storage, core::MemoryQuery
 };
 use crate::api::mcp::McpServer;
+use crate::api::rest::RestApi;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,6 +30,14 @@ pub enum Commands {
     Init,
     /// Run as an MCP server (stdio or http)
     Serve {
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Also start the REST API on this port
+        #[arg(short = 'r', long)]
+        rest_port: Option<u16>,
+    },
+    /// Run as a REST API server
+    ServeRest {
         #[arg(short, long)]
         port: Option<u16>,
     },
@@ -86,20 +95,50 @@ pub async fn run() {
     setup_logging(&config.system.log_level);
 
     match &cli.command {
-        Commands::Serve { port } => {
+        Commands::Serve { port, rest_port } => {
             let engine_arc = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
-            let server = McpServer::new(engine_arc);
             
-            if let Some(p) = port {
-                println!("Starting MCP HTTP server on port {}...", p);
-                if let Err(e) = server.run_http(*p).await {
-                    eprintln!("MCP HTTP Server Error: {}", e);
+            let mcp_engine = engine_arc.clone();
+            let rest_engine = engine_arc.clone();
+            
+            let mcp_port = *port;
+            // Default to 9090 if not specified, as requested for the background process
+            let r_port = rest_port.unwrap_or(9090);
+
+            let mcp_handle = tokio::spawn(async move {
+                let server = McpServer::new(mcp_engine);
+                if let Some(p) = mcp_port {
+                    println!("Starting MCP HTTP server on port {}...", p);
+                    if let Err(e) = server.run_http(p).await {
+                        eprintln!("MCP HTTP Server Error: {}", e);
+                    }
+                } else {
+                    println!("Starting MCP stdio server...");
+                    if let Err(e) = server.run_stdio().await {
+                        eprintln!("MCP Stdio Server Error: {}", e);
+                    }
                 }
-            } else {
-                println!("Starting MCP stdio server...");
-                if let Err(e) = server.run_stdio().await {
-                    eprintln!("MCP Stdio Server Error: {}", e);
+            });
+
+            let rest_handle = tokio::spawn(async move {
+                let api = RestApi::new(r_port, rest_engine);
+                println!("Starting REST API server on port {}...", r_port);
+                if let Err(e) = api.start().await {
+                    eprintln!("REST API Server Error: {}", e);
                 }
+            });
+
+            // Wait for both tasks (they should run forever)
+            let _ = tokio::try_join!(mcp_handle, rest_handle);
+        }
+        Commands::ServeRest { port } => {
+            let engine_arc = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
+            let server_port = port.unwrap_or(8081);
+            let api = RestApi::new(server_port, engine_arc);
+            
+            println!("Starting REST API server on port {}...", server_port);
+            if let Err(e) = api.start().await {
+                eprintln!("REST API Server Error: {}", e);
             }
         }
         Commands::Init => {
@@ -133,8 +172,11 @@ pub async fn run() {
 
             let memory = Memory::new(content.clone(), mem_type);
 
-            match engine.store(memory) {
-                Ok(stored) => println!("✓ Stored! ID: {}", stored.id),
+            match engine.store(memory).await {
+                Ok(stored) => {
+                    println!("✓ Stored! ID: {}", stored.id);
+                    let _ = engine.save_index();
+                },
                 Err(e) => eprintln!("✗ Error: {}", e),
             }
         }
@@ -193,7 +235,7 @@ pub async fn run() {
             // Fallback to local loading
             let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
 
-            match engine.search_by_text(query, *limit) {
+            match engine.search_by_text(query, *limit).await {
                 Ok(results) => {
                     println!("{}", engine.format_search_results(&results));
                 }
@@ -314,7 +356,11 @@ fn create_engine(
         eprintln!("✓ Model loaded! Dimension: {}", dim);
     }
 
-    Arc::new(MemoryEngine::new(storage, embedder, dim))
+    let db_path = cli_db.cloned().unwrap_or_else(|| config.get_db_path());
+    let mut index_path = db_path.clone();
+    index_path.set_extension("hnsw");
+
+    Arc::new(MemoryEngine::new_with_path(storage, embedder, dim, Some(index_path), config.clone()).expect("Failed to initialize Memory Engine"))
 }
 
 fn create_storage(config: &Config, cli_db: Option<&PathBuf>) -> SqliteStorage {

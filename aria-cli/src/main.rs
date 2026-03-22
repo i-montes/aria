@@ -68,6 +68,8 @@ fn main() {
             cmd.arg("serve");
             cmd.arg("--port");
             cmd.arg("8080");
+            cmd.arg("--rest-port");
+            cmd.arg("9090");
             
             #[cfg(windows)]
             {
