@@ -75,12 +75,20 @@ impl McpServer {
     }
 
     pub async fn run_http(&self, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+        use tower::ServiceBuilder;
+        
         let app = Router::new()
             .route("/", post(handle_http_post))
+            .layer(
+                ServiceBuilder::new()
+                    .concurrency_limit(10) // Limit to 10 simultaneous requests
+                    .into_inner()
+            )
             .with_state(self.engine.clone());
 
         let addr = format!("0.0.0.0:{}", port);
         let listener = tokio::net::TcpListener::bind(&addr).await?;
+        tracing::info!("MCP HTTP server listening on {}", addr);
         axum::serve(listener, app).await?;
 
         Ok(())
@@ -178,6 +186,17 @@ async fn handle_request(
                         }
                     },
                     {
+                        "name": "delete_memory",
+                        "description": "Permanently remove a memory and its associated relations",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string", "description": "The UUID of the memory to delete" }
+                            },
+                            "required": ["id"]
+                        }
+                    },
+                    {
                         "name": "get_stats",
                         "description": "Get memory engine statistics",
                         "inputSchema": { "type": "object", "properties": {} }
@@ -208,26 +227,13 @@ async fn handle_tool_call(
         "store_memory" => {
             let content = args["content"].as_str().unwrap_or("");
             let type_str = args["type"].as_str().unwrap_or("world");
-            
-            let mem_type = match type_str {
-                "experience" => MemoryType::Experience,
-                "opinion" => MemoryType::Opinion,
-                "observation" => MemoryType::Observation,
-                _ => MemoryType::World,
-            };
+            let mem_type = type_str.parse::<MemoryType>().unwrap_or(MemoryType::World);
 
             let mut links = Vec::new();
             if let Some(links_array) = args["links"].as_array() {
                 for link_obj in links_array {
                     if let (Some(to_str), Some(rel_str)) = (link_obj["to"].as_str(), link_obj["rel"].as_str()) {
-                        let rel = match rel_str.to_lowercase().as_str() {
-                            "temporal" => RelationType::Temporal,
-                            "semantic" => RelationType::Semantic,
-                            "entity" => RelationType::Entity,
-                            "causal" => RelationType::Causal,
-                            "works_on" => RelationType::WorksOn,
-                            _ => RelationType::Related,
-                        };
+                        let rel = rel_str.parse::<RelationType>().unwrap_or(RelationType::Related);
                         links.push((to_str.to_string(), rel));
                     }
                 }
@@ -254,19 +260,24 @@ async fn handle_tool_call(
             let source_id = args["source_id"].as_str().unwrap_or("");
             let target_id = args["target_id"].as_str().unwrap_or("");
             let relation_str = args["relation"].as_str().unwrap_or("related");
-
-            let relation = match relation_str.to_lowercase().as_str() {
-                "temporal" => RelationType::Temporal,
-                "semantic" => RelationType::Semantic,
-                "entity" => RelationType::Entity,
-                "causal" => RelationType::Causal,
-                "works_on" => RelationType::WorksOn,
-                _ => RelationType::Related,
-            };
+            let relation = relation_str.parse::<RelationType>().unwrap_or(RelationType::Related);
 
             match engine.link_by_ids(source_id, target_id, relation) {
                 Ok(edge) => Ok(format!("Successfully linked {} -> {} with relation {:?}. Edge ID: {}", source_id, target_id, relation, edge.id)),
                 Err(e) => Err(format!("Failed to link memories: {}", e)),
+            }
+        }
+        "delete_memory" => {
+            let id_str = args["id"].as_str().unwrap_or("");
+            match engine.exists(id_str) {
+                Ok(true) => {
+                    match engine.delete(id_str) {
+                        Ok(_) => Ok(format!("Memory {} and its relations were permanently deleted.", id_str)),
+                        Err(e) => Err(format!("Failed to delete memory {}: {}", id_str, e)),
+                    }
+                },
+                Ok(false) => Err(format!("Memory {} not found", id_str)),
+                Err(e) => Err(format!("Error checking memory existence: {}", e)),
             }
         }
         "get_stats" => {

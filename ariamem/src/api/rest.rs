@@ -109,7 +109,6 @@ async fn handle_store(
     let memory = Memory::new(payload.content, mem_type);
     match engine.store(memory).await {
         Ok(stored) => {
-            let _ = engine.save_index();
             Ok((StatusCode::CREATED, Json(stored)))
         },
         Err(e) => {

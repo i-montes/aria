@@ -163,19 +163,13 @@ pub async fn run() {
 
             // Fallback to local loading if service is down
             let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
-            let mem_type = match memory_type.to_lowercase().as_str() {
-                "experience" => MemoryType::Experience,
-                "opinion" => MemoryType::Opinion,
-                "observation" => MemoryType::Observation,
-                _ => MemoryType::World,
-            };
+            let mem_type = memory_type.parse::<MemoryType>().unwrap_or(MemoryType::World);
 
             let memory = Memory::new(content.clone(), mem_type);
 
             match engine.store(memory).await {
                 Ok(stored) => {
                     println!("✓ Stored! ID: {}", stored.id);
-                    let _ = engine.save_index();
                 },
                 Err(e) => eprintln!("✗ Error: {}", e),
             }
@@ -244,10 +238,21 @@ pub async fn run() {
         }
 
         Commands::Delete { id } => {
-            let storage = create_storage(&config, cli.database.as_ref());
+            // Try calling the background service first
+            if let Some(response) = call_mcp_tool("delete_memory", serde_json::json!({
+                "id": id
+            })) {
+                println!("✓ (via service) {}", response);
+                return;
+            }
 
-            match storage.delete_memory(id) {
-                Ok(_) => println!("✓ Deleted!"),
+            // Fallback to local engine
+            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
+
+            match engine.delete(id) {
+                Ok(_) => {
+                    println!("✓ Deleted!");
+                },
                 Err(e) => eprintln!("✗ Error: {}", e),
             }
         }
@@ -286,7 +291,17 @@ pub async fn run() {
             target,
             relation,
         } => {
-            let storage = create_storage(&config, cli.database.as_ref());
+            // Try calling the background service first
+            if let Some(response) = call_mcp_tool("link_memories", serde_json::json!({
+                "source_id": source,
+                "target_id": target,
+                "relation": relation
+            })) {
+                println!("✓ (via service) {}", response);
+                return;
+            }
+
+            let engine = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
             let rel_type = match relation.to_lowercase().as_str() {
                 "temporal" => RelationType::Temporal,
                 "entity" => RelationType::Entity,
@@ -295,9 +310,7 @@ pub async fn run() {
                 _ => RelationType::Related,
             };
 
-            let edge = Edge::new(source.clone(), target.clone(), rel_type);
-
-            match storage.save_edge(&edge) {
+            match engine.link_by_ids(&source, &target, rel_type) {
                 Ok(_) => println!("✓ Linked! {} → {}", source, target),
                 Err(e) => eprintln!("✗ Error: {}", e),
             }

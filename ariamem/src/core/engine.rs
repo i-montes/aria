@@ -20,12 +20,13 @@ pub struct SearchResult {
     pub source: RetrievalSource,
 }
 
+#[derive(Clone)]
 pub struct MemoryEngine {
     storage: Arc<dyn Storage>,
     embedder: Arc<dyn Embedder>,
     index: Arc<HnswIndex>,
     index_path: Option<std::path::PathBuf>,
-    config: crate::Config,
+    recency_lambda: f32,
 }
 
 impl MemoryEngine {
@@ -44,7 +45,9 @@ impl MemoryEngine {
     {
         let storage = Arc::new(storage);
         let embedder = Arc::new(embedder);
+        let recency_lambda = config.engine.recency_lambda;
         
+        let mut needs_reconstruction = false;
         let index = if let Some(ref path) = index_path {
             if path.exists() {
                 match HnswIndex::load(path, dimension) {
@@ -53,19 +56,27 @@ impl MemoryEngine {
                         Arc::new(idx)
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to load HNSW index from disk ({}), reconstructing...", e);
+                        // CRITICAL: File exists but failed to load (corruption or version mismatch)
+                        tracing::error!("CRITICAL: Failed to load existing HNSW index at {:?} (Error: {}). Index will be reconstructed from storage.", path, e);
+                        needs_reconstruction = true;
                         Arc::new(HnswIndex::new(dimension))
                     }
                 }
             } else {
+                // NORMAL: First run, file doesn't exist yet
+                tracing::info!("No index file found at {:?}, initializing new index", path);
+                needs_reconstruction = true;
                 Arc::new(HnswIndex::new(dimension))
             }
         } else {
+            // Memory-only index
+            needs_reconstruction = true;
             Arc::new(HnswIndex::new(dimension))
         };
 
-        // If index is empty, reconstruct from storage
-        if index.count() == 0 {
+        // Reconstruct from storage ONLY if explicitly needed (failed load or new index)
+        // AND the index is actually empty.
+        if needs_reconstruction && index.count() == 0 {
             let query_all = MemoryQuery {
                 limit: 1_000_000,
                 ..Default::default()
@@ -79,7 +90,7 @@ impl MemoryEngine {
                 }
             }
             if count > 0 {
-                tracing::info!("Reconstructed HNSW index with {} memories", count);
+                tracing::info!("Successfully reconstructed HNSW index with {} memories from storage", count);
             }
         }
 
@@ -88,7 +99,7 @@ impl MemoryEngine {
             embedder,
             index,
             index_path,
-            config,
+            recency_lambda,
         })
     }
 
@@ -116,15 +127,44 @@ impl MemoryEngine {
         Ok(memory)
     }
 
+    pub async fn store_batch(&self, mut memories: Vec<Memory>) -> Result<Vec<Memory>> {
+        if memories.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 1. Generate all embeddings in one batch (Optimized SIMD/Parallelism)
+        let texts: Vec<&str> = memories.iter().map(|m| m.content.as_str()).collect();
+        let embeddings = self.embedder.embed_batch(&texts).await?;
+
+        for (i, embedding) in embeddings.into_iter().enumerate() {
+            memories[i].embedding = embedding;
+        }
+
+        // 2. Save all to storage in a single transaction (Atomic and Fast)
+        self.storage.save_memories_batch(&memories)?;
+
+        // 3. Add all to vector index
+        for memory in &memories {
+            self.index.add(memory.id.clone(), &memory.embedding)?;
+        }
+
+        Ok(memories)
+    }
+
     pub async fn store_contextual(&self, memory: Memory, links: Vec<(String, RelationType)>) -> Result<Memory> {
-        // 1. Store the primary memory
+        // 1. Pre-validate all target IDs to ensure graph integrity
+        for (target_id, _) in &links {
+            if !self.storage.exists_memory(target_id)? {
+                return Err(CoreError::NotFound(format!("Target memory {} for context link not found", target_id)));
+            }
+        }
+
+        // 2. Store the primary memory
         let stored = self.store(memory).await?;
         
-        // 2. Create edges for each link provided
+        // 3. Create edges for each link provided
         for (target_id, relation) in links {
-            // We ignore errors on individual links to ensure the primary memory persists,
-            // but in a production environment we might want more granular error reporting.
-            let _ = self.link_by_ids(&stored.id, &target_id, relation);
+            self.link_by_ids(&stored.id, &target_id, relation)?;
         }
         
         Ok(stored)
@@ -155,12 +195,12 @@ impl MemoryEngine {
     }
 
     #[tracing::instrument(skip(self))]
-    pub fn remove(&self, id: &str) -> Result<()> {
-        // 1. Storage delete (logical)
-        self.storage.delete_memory(&id.to_string())?;
-
-        // 2. Index delete
+    pub fn delete(&self, id: &str) -> Result<()> {
+        // 1. Index delete (first, to ensure consistency)
         self.index.remove(id.to_string())?;
+
+        // 2. Storage delete (includes edges cleanup in sqlite.rs)
+        self.storage.delete_memory(&id.to_string())?;
 
         // 3. Auto-reindex if threshold reached (e.g., 20% tombstones)
         let tombstones = self.index.tombstone_count();
@@ -175,12 +215,16 @@ impl MemoryEngine {
     }
 
     pub fn get(&self, id: &str) -> Result<Memory> {
-        let mut memory = self.storage.load_memory(&id.to_string())?;
+        let memory = self.storage.load_memory(&id.to_string())?;
         
-        memory.record_access();
-        let _ = self.storage.update_memory(&memory);
+        // Atomic increment in DB to avoid lost updates under high concurrency
+        let _ = self.storage.increment_access_count(id);
         
         Ok(memory)
+    }
+
+    pub fn exists(&self, id: &str) -> Result<bool> {
+        Ok(self.storage.exists_memory(id)?)
     }
 
     #[tracing::instrument(skip(self, query))]
@@ -248,37 +292,48 @@ impl MemoryEngine {
         let mut search_results: Vec<SearchResult> = Vec::new();
         let mut seen_ids = std::collections::HashSet::new();
         
-        for (id, rrf_score) in combined_scores {
-            if let Ok(memory) = self.storage.load_memory(&id) {
-                let static_relevance = relevance::calculate_relevance(&memory, self.config.engine.recency_lambda);
-                seen_ids.insert(memory.id.clone());
+        // Collect IDs to fetch in batch
+        let ids_to_fetch: Vec<String> = combined_scores.keys().cloned().collect();
+        let fetched_memories = self.storage.load_memories_by_ids(&ids_to_fetch)?;
+
+        for memory in fetched_memories {
+            let id = &memory.id;
+            if let Some(&rrf_score) = combined_scores.get(id) {
+                let static_relevance = relevance::calculate_relevance(&memory, self.recency_lambda);
+                seen_ids.insert(id.clone());
                 search_results.push(SearchResult {
                     memory,
-                    score: *final_similarities.get(&id).unwrap_or(&0.0),
+                    score: *final_similarities.get(id).unwrap_or(&0.0),
                     relevance_score: rrf_score + (0.1 * static_relevance), 
                     source: RetrievalSource::Direct,
                 });
             }
         }
 
-        // 5. Spreading Activation (Exact Graph Math) - BFS with 3 hops and decay
+        // 5. Spreading Activation (Budgeted Graph Search)
         let graph_start = std::time::Instant::now();
         let mut graph_boosts: HashMap<String, (f32, String, RelationType)> = HashMap::new();
-        let mut frontier: Vec<(String, f32, usize)> = Vec::new();
+        let mut frontier: Vec<(String, f32)> = Vec::new();
         
+        let hop_cap = 50;
+        let global_budget = 450;
+        let energy_cutoff = 0.01;
+        let mut total_processed = 0;
+
         // Initialize frontier with direct search results
         for res in &search_results {
-            frontier.push((res.memory.id.clone(), res.relevance_score, 0));
+            frontier.push((res.memory.id.clone(), res.relevance_score));
         }
 
-        let mut current_hop = 0;
-        let max_hops = 3;
-        let hop_decay = 0.45; // Energy loss per hop
-
-        while !frontier.is_empty() && current_hop < max_hops {
-            let mut next_frontier = Vec::new();
+        for _hop in 0..3 {
+            if frontier.is_empty() || total_processed >= global_budget { break; }
             
-            for (source_id, source_relevance, _hop) in frontier {
+            let mut next_frontier_map: HashMap<String, f32> = HashMap::new();
+
+            for (source_id, source_relevance) in frontier {
+                if total_processed >= global_budget { break; }
+                total_processed += 1;
+
                 if let Ok(edges) = self.storage.query_edges(&source_id) {
                     for edge in edges {
                         let relation_multiplier = match edge.relation_type {
@@ -290,44 +345,59 @@ impl MemoryEngine {
                             RelationType::Related => 0.10,
                         };
                         
-                        // New energy to transmit: current relevance * relation * decay
-                        let boost = source_relevance * relation_multiplier * hop_decay;
+                        // Energy: current * relation * decay (0.45)
+                        let boost = source_relevance * relation_multiplier * 0.45;
                         
-                        if boost > 0.001 { // Cutoff for efficiency
-                            let entry = graph_boosts.entry(edge.target_id.clone())
-                                .or_insert((0.0, source_id.clone(), edge.relation_type.clone()));
+                        if boost > energy_cutoff {
+                            let current_max = graph_boosts.get(&edge.target_id).map(|(b, _, _)| *b).unwrap_or(0.0);
                             
-                            entry.0 += boost;
-                            
-                            // We only explore further if it's not a node we already explored in THIS search
-                            // to avoid infinite loops and keep it a DAG exploration per search.
-                            if !seen_ids.contains(&edge.target_id) {
-                                next_frontier.push((edge.target_id.clone(), boost, current_hop + 1));
+                            // Mechanism 1: Only propagate if this is a better path (more energy)
+                            if boost > current_max {
+                                // Record the path with most energy
+                                graph_boosts.insert(edge.target_id.clone(), (boost, source_id.clone(), edge.relation_type.clone()));
+                                
+                                // Only add to next frontier if not already a direct result
+                                // Direct results already "seeded" the first hop.
+                                if !seen_ids.contains(&edge.target_id) {
+                                    let entry = next_frontier_map.entry(edge.target_id.clone()).or_insert(0.0);
+                                    if boost > *entry { *entry = boost; }
+                                }
                             }
                         }
                     }
                 }
             }
+
+            // Mechanism 2: Cap per hop. Sort by energy and truncate to prevent exponential fan-out.
+            let mut next_frontier: Vec<(String, f32)> = next_frontier_map.into_iter().collect();
+            next_frontier.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            next_frontier.truncate(hop_cap);
             frontier = next_frontier;
-            current_hop += 1;
         }
 
-        // Introduce Graph-discovered nodes that weren't found by vectors/fts
-        for (target_id, (boost, origin_id, rel_type)) in &graph_boosts {
-            if !seen_ids.contains(target_id) {
-                if let Ok(memory) = self.storage.load_memory(target_id) {
-                    let r_score = relevance::calculate_relevance(&memory, self.config.engine.recency_lambda);
+        // 5b. Batch Load Graph-discovered nodes (Optimization to eliminate final N+1)
+        let graph_discovered_ids: Vec<String> = graph_boosts.keys()
+            .filter(|id| !seen_ids.contains(*id))
+            .cloned()
+            .collect();
+            
+        if !graph_discovered_ids.is_empty() {
+            let memories = self.storage.load_memories_by_ids(&graph_discovered_ids)?;
+            for memory in memories {
+                if let Some((_boost, origin_id, rel_type)) = graph_boosts.get(&memory.id) {
+                    let r_score = relevance::calculate_relevance(&memory, self.recency_lambda);
                     search_results.push(SearchResult {
                         memory,
                         score: 0.0, 
-                        relevance_score: *boost + (0.1 * r_score),
+                        relevance_score: (0.1 * r_score), // Initial score, boost added in Step 6
                         source: RetrievalSource::Graph(origin_id.clone(), rel_type.clone()),
                     });
+                    seen_ids.insert(memory.id.clone()); 
                 }
             }
         }
         let graph_time = graph_start.elapsed();
-        tracing::debug!(latency_ms = graph_time.as_millis(), "Spreading activation completed");
+        tracing::debug!(latency_ms = graph_time.as_millis(), total_processed, "Budgeted spreading activation completed");
 
         // 6. Final Ranking - Add boosts to existing results
         for sr in &mut search_results {
@@ -353,6 +423,14 @@ impl MemoryEngine {
         yaml.push_str("inst: Responde solo con esta memoria. Usa 'direct' como hechos primarios y 'graph' para el contexto lógico/causal basado en 'rel'. Sintetiza ambos sin alucinar información externa.\n");
         yaml.push_str("mem:\n");
 
+        if results.is_empty() {
+            return yaml;
+        }
+
+        // Batch fetch all edges for all results to avoid N+1 queries
+        let ids: Vec<String> = results.iter().map(|r| r.memory.id.clone()).collect();
+        let all_edges = self.storage.query_edges_batch(&ids).unwrap_or_default();
+
         let mut direct_results = Vec::new();
         let mut graph_results = Vec::new();
 
@@ -366,67 +444,54 @@ impl MemoryEngine {
         if !direct_results.is_empty() {
             yaml.push_str("  direct:\n");
             for r in direct_results {
-                yaml.push_str(&format!("    - id: {}\n", r.memory.id));
-                let content = r.memory.content.replace('\n', " ");
-                yaml.push_str(&format!("      sum: \"{}\"\n", content));
-                yaml.push_str(&format!("      type: {:?}\n", r.memory.memory_type));
-                yaml.push_str(&format!("      time: \"{}\"\n", r.memory.temporal.occurrence_start.format("%Y-%m-%d %H:%M:%S UTC")));
-                
-                // Relaciones salientes (Grafo)
-                if let Ok(edges) = self.storage.query_edges(&r.memory.id) {
-                    if !edges.is_empty() {
-                        yaml.push_str("      links:\n");
-                        for edge in edges {
-                            yaml.push_str(&format!("        - rel: {:?}\n", edge.relation_type));
-                            yaml.push_str(&format!("          target: {}\n", edge.target_id));
-                        }
-                    }
-                }
-
-                if let Some(conf) = r.memory.confidence {
-                    yaml.push_str(&format!("      conf: {:.2}\n", conf));
-                }
-                if !r.memory.metadata.is_empty() {
-                    yaml.push_str("      meta:\n");
-                    for (k, v) in &r.memory.metadata {
-                        yaml.push_str(&format!("        {}: \"{}\"\n", k, v.replace('"', "\\\"")));
-                    }
-                }
+                self.format_single_result(&mut yaml, r, &all_edges, false);
             }
         }
 
         if !graph_results.is_empty() {
             yaml.push_str("  graph:\n");
             for r in graph_results {
-                if let RetrievalSource::Graph(origin, rel) = &r.source {
-                    yaml.push_str(&format!("    - id: {}\n", r.memory.id));
-                    let content = r.memory.content.replace('\n', " ");
-                    yaml.push_str(&format!("      sum: \"{}\"\n", content));
-                    yaml.push_str(&format!("      rel: {:?}->{}\n", rel, origin));
-                    yaml.push_str(&format!("      type: {:?}\n", r.memory.memory_type));
-                    yaml.push_str(&format!("      time: \"{}\"\n", r.memory.temporal.occurrence_start.format("%Y-%m-%d %H:%M:%S UTC")));
-                    
-                    // También mostramos enlaces salientes para nodos del grafo
-                    if let Ok(edges) = self.storage.query_edges(&r.memory.id) {
-                        if !edges.is_empty() {
-                            yaml.push_str("      links:\n");
-                            for edge in edges {
-                                yaml.push_str(&format!("        - rel: {:?}\n", edge.relation_type));
-                                yaml.push_str(&format!("          target: {}\n", edge.target_id));
-                            }
-                        }
-                    }
-
-                    if !r.memory.metadata.is_empty() {
-                        yaml.push_str("      meta:\n");
-                        for (k, v) in &r.memory.metadata {
-                            yaml.push_str(&format!("        {}: \"{}\"\n", k, v.replace('"', "\\\"")));
-                        }
-                    }
-                }
+                self.format_single_result(&mut yaml, r, &all_edges, true);
             }
         }
         yaml
+    }
+
+    fn format_single_result(&self, yaml: &mut String, r: &SearchResult, all_edges: &HashMap<String, Vec<Edge>>, is_graph: bool) {
+        yaml.push_str(&format!("    - id: {}\n", r.memory.id));
+        let content = r.memory.content.replace('\n', " ");
+        yaml.push_str(&format!("      sum: \"{}\"\n", content));
+        
+        if is_graph {
+            if let RetrievalSource::Graph(origin, rel) = &r.source {
+                yaml.push_str(&format!("      rel: {:?}->{}\n", rel, origin));
+            }
+        }
+
+        yaml.push_str(&format!("      type: {:?}\n", r.memory.memory_type));
+        yaml.push_str(&format!("      time: \"{}\"\n", r.memory.temporal.occurrence_start.format("%Y-%m-%d %H:%M:%S UTC")));
+        
+        // Use pre-fetched edges
+        if let Some(edges) = all_edges.get(&r.memory.id) {
+            if !edges.is_empty() {
+                yaml.push_str("      links:\n");
+                for edge in edges {
+                    yaml.push_str(&format!("        - rel: {:?}\n", edge.relation_type));
+                    yaml.push_str(&format!("          target: {}\n", edge.target_id));
+                }
+            }
+        }
+
+        if let Some(conf) = r.memory.confidence {
+            yaml.push_str(&format!("      conf: {:.2}\n", conf));
+        }
+        
+        if !r.memory.metadata.is_empty() {
+            yaml.push_str("      meta:\n");
+            for (k, v) in &r.memory.metadata {
+                yaml.push_str(&format!("        {}: \"{}\"\n", k, v.replace('"', "\\\"")));
+            }
+        }
     }
 
     pub fn get_related(&self, id: &str) -> Result<Vec<(Edge, Memory)>> {

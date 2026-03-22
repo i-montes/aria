@@ -47,20 +47,21 @@ impl MetricPoint for VectorPoint {
 
 pub struct HnswIndex {
     dimension: usize,
-    // Use standard defaults (M=12, M0=24) which are more robust in this hnsw crate version
     hnsw: RwLock<Hnsw<VectorPoint, Pcg64, 12, 24>>,
-    id_to_uuid: DashMap<usize, String>,
-    uuid_to_id: DashMap<String, usize>,
-    internal_to_vector: DashMap<usize, Vec<f32>>,
+    // We group these to allow atomic swapping during reindex
+    maps: RwLock<HnswMaps>,
     deleted_internal_ids: DashSet<usize>,
+}
+
+struct HnswMaps {
+    id_to_ext: HashMap<usize, String>,
+    ext_to_id: HashMap<String, usize>,
+    internal_to_vector: HashMap<usize, Vec<f32>>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct PersistedIndexData {
-    // We only save the ID map and the actual vectors
-    // Rebuilding the HNSW graph on load is safer than relying on broken internal serialization
     vectors: Vec<(String, Vec<f32>)>,
-    deleted_uuids: Vec<String>,
 }
 
 impl HnswIndex {
@@ -68,30 +69,26 @@ impl HnswIndex {
         Self {
             dimension,
             hnsw: RwLock::new(Hnsw::new()),
-            id_to_uuid: DashMap::new(),
-            uuid_to_id: DashMap::new(),
-            internal_to_vector: DashMap::new(),
+            maps: RwLock::new(HnswMaps {
+                id_to_ext: HashMap::new(),
+                ext_to_id: HashMap::new(),
+                internal_to_vector: HashMap::new(),
+            }),
             deleted_internal_ids: DashSet::new(),
         }
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
+        let maps = self.maps.read().unwrap();
         let mut vectors = Vec::new();
-        for entry in self.id_to_uuid.iter() {
-            let internal_id = *entry.key();
-            let uuid = entry.value().clone();
-            
-            if let Some(vec) = self.internal_to_vector.get(&internal_id) {
-                vectors.push((uuid, vec.clone()));
+        
+        for (&internal_id, ext_id) in &maps.id_to_ext {
+            if let Some(vec) = maps.internal_to_vector.get(&internal_id) {
+                vectors.push((ext_id.clone(), vec.clone()));
             }
         }
 
-        let deleted_uuids = Vec::new(); 
-
-        let persisted = PersistedIndexData {
-            vectors,
-            deleted_uuids,
-        };
+        let persisted = PersistedIndexData { vectors };
 
         let file = File::create(path).map_err(|e| IndexError::Index(format!("Failed to create index file: {}", e)))?;
         bincode::serialize_into(file, &persisted)
@@ -106,61 +103,51 @@ impl HnswIndex {
             .map_err(|e| IndexError::Index(format!("Failed to deserialize index: {}", e)))?;
 
         let index = Self::new(dimension);
-        
-        for (uuid, vector) in persisted.vectors {
-            let _ = index.add(uuid, &vector);
+        for (id, vector) in persisted.vectors {
+            let _ = index.add(id, &vector);
         }
 
         Ok(index)
     }
 
     pub fn count(&self) -> usize {
-        self.uuid_to_id.len()
+        self.maps.read().unwrap().ext_to_id.len()
     }
 
     pub fn reindex(&self) -> Result<()> {
         let mut hnsw_guard = self.hnsw.write().unwrap();
-        let new_hnsw = Hnsw::new();
-        
-        // We need a temporary searcher for the new insertions
+        let mut temp_hnsw = Hnsw::new();
         let mut searcher = Searcher::default();
         
-        let new_id_to_uuid = DashMap::new();
-        let new_uuid_to_id = DashMap::new();
-        let new_internal_to_vector = DashMap::new();
+        let mut new_id_to_ext = HashMap::new();
+        let mut new_ext_to_id = HashMap::new();
+        let mut new_internal_to_vector = HashMap::new();
         
-        // Create a local copy of hnsw to work with
-        let mut temp_hnsw = new_hnsw;
+        // Use a block to minimize maps read lock time
+        let old_data = {
+            let maps = self.maps.read().unwrap();
+            maps.id_to_ext.iter()
+                .filter(|(&internal_id, _)| !self.deleted_internal_ids.contains(&internal_id))
+                .map(|(&internal_id, ext_id)| (ext_id.clone(), maps.internal_to_vector.get(&internal_id).cloned()))
+                .collect::<Vec<_>>()
+        };
 
-        for entry in self.id_to_uuid.iter() {
-            let internal_id = *entry.key();
-            let uuid = entry.value().clone();
-            
-            if self.deleted_internal_ids.contains(&internal_id) {
-                continue;
-            }
-
-            if let Some(vec) = self.internal_to_vector.get(&internal_id) {
+        for (ext_id, vec_opt) in old_data {
+            if let Some(vec) = vec_opt {
                 let new_internal_id = temp_hnsw.insert(VectorPoint(vec.clone()), &mut searcher);
-                
-                new_id_to_uuid.insert(new_internal_id, uuid.clone());
-                new_uuid_to_id.insert(uuid, new_internal_id);
-                new_internal_to_vector.insert(new_internal_id, vec.clone());
+                new_id_to_ext.insert(new_internal_id, ext_id.clone());
+                new_ext_to_id.insert(ext_id, new_internal_id);
+                new_internal_to_vector.insert(new_internal_id, vec);
             }
         }
 
-        // Atomically swap everything
+        // ATOMIC SWAP: Under hnsw_guard, swap both the graph and the maps
         *hnsw_guard = temp_hnsw;
         
-        // Clear and refill DashMaps
-        self.id_to_uuid.clear();
-        for entry in new_id_to_uuid { self.id_to_uuid.insert(entry.0, entry.1); }
-        
-        self.uuid_to_id.clear();
-        for entry in new_uuid_to_id { self.uuid_to_id.insert(entry.0, entry.1); }
-        
-        self.internal_to_vector.clear();
-        for entry in new_internal_to_vector { self.internal_to_vector.insert(entry.0, entry.1); }
+        let mut maps_guard = self.maps.write().unwrap();
+        maps_guard.id_to_ext = new_id_to_ext;
+        maps_guard.ext_to_id = new_ext_to_id;
+        maps_guard.internal_to_vector = new_internal_to_vector;
         
         self.deleted_internal_ids.clear();
 
@@ -187,16 +174,18 @@ impl VectorIndex for HnswIndex {
         
         let internal_id = hnsw.insert(VectorPoint(vector.to_vec()), &mut searcher);
         
-        self.uuid_to_id.insert(id.clone(), internal_id);
-        self.id_to_uuid.insert(internal_id, id);
-        self.internal_to_vector.insert(internal_id, vector.to_vec());
+        let mut maps = self.maps.write().unwrap();
+        maps.ext_to_id.insert(id.clone(), internal_id);
+        maps.id_to_ext.insert(internal_id, id);
+        maps.internal_to_vector.insert(internal_id, vector.to_vec());
 
         Ok(())
     }
 
     fn remove(&self, id: String) -> Result<()> {
-        if let Some((_, internal_id)) = self.uuid_to_id.remove(&id) {
-            self.id_to_uuid.remove(&internal_id);
+        let mut maps = self.maps.write().unwrap();
+        if let Some(internal_id) = maps.ext_to_id.remove(&id) {
+            maps.id_to_ext.remove(&internal_id);
             self.deleted_internal_ids.insert(internal_id);
         }
         Ok(())
@@ -208,38 +197,31 @@ impl VectorIndex for HnswIndex {
         }
 
         let hnsw = self.hnsw.read().unwrap();
+        let maps = self.maps.read().unwrap();
         let mut searcher = Searcher::default();
         
-        let node_count = self.id_to_uuid.len() + self.deleted_internal_ids.len();
+        let node_count = maps.id_to_ext.len() + self.deleted_internal_ids.len();
         if node_count == 0 {
             return Ok(Vec::new());
         }
 
-        // Variable ef_search: starts at 40, scales with k, capped at 250
         let mut ef = (k * 4).clamp(40, 250);
         let mut results = Vec::new();
         let mut attempts = 0;
 
-        // Loop to handle tombstones: if we don't find enough valid results, 
-        // we expand the search area (ef) up to the limit.
         while results.len() < k && attempts < 3 {
             attempts += 1;
             
-            // IMPORTANT: In hnsw 0.10.x, if ef >= node_count, the search might return 
-            // fewer candidates than ef, but the crate attempts to copy ef elements 
-            // from an internal slice that might have even fewer elements (node_count-1 or similar).
-            // This causes a panic in copy_from_slice.
-            // For small collections (< 100), we stay well below node_count using division.
-            // For larger collections, node_count - 1 is generally safe.
-            let search_ef = if node_count < 100 {
-                ef.min(node_count / 2).max(1)
+            // Safety guard for small collections to prevent hnsw crate panics
+            let search_ef = if node_count < 2 {
+                1
+            } else if node_count < 100 {
+                ef.min(node_count - 1).max(1)
             } else {
                 ef.min(node_count - 1).max(1)
             };
             
             let mut neighbors = vec![Neighbor { index: 0, distance: 0 }; search_ef];
-            
-            // Note: the 2nd parameter in nearest() is 'ef' (search depth)
             let found_neighbors = hnsw.nearest(&VectorPoint(query.to_vec()), search_ef, &mut searcher, &mut neighbors);
 
             results.clear();
@@ -248,10 +230,10 @@ impl VectorIndex for HnswIndex {
                     continue;
                 }
 
-                if let Some(uuid) = self.id_to_uuid.get(&neighbor.index) {
+                if let Some(ext_id) = maps.id_to_ext.get(&neighbor.index) {
                     let similarity = 1.0 - (neighbor.distance as f32 / SCALE_FACTOR);
                     results.push(SearchResult {
-                        id: uuid.value().clone(),
+                        id: ext_id.clone(),
                         score: similarity,
                     });
                 }
@@ -260,8 +242,6 @@ impl VectorIndex for HnswIndex {
             if results.len() >= k || ef >= 250 || ef >= node_count {
                 break;
             }
-
-            // Expand search scope if tombstones blocked our results
             ef = (ef * 2).min(250);
         }
 

@@ -27,6 +27,8 @@ pub enum CoreError {
 
 pub type Result<T> = std::result::Result<T, CoreError>;
 
+use std::str::FromStr;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryType {
@@ -34,6 +36,19 @@ pub enum MemoryType {
     Experience,
     Opinion,
     Observation,
+}
+
+impl FromStr for MemoryType {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "world" => Ok(MemoryType::World),
+            "experience" => Ok(MemoryType::Experience),
+            "opinion" => Ok(MemoryType::Opinion),
+            "observation" => Ok(MemoryType::Observation),
+            _ => Err(format!("Unknown memory type: {}", s)),
+        }
+    }
 }
 
 impl Default for MemoryType {
@@ -51,6 +66,21 @@ pub enum RelationType {
     Causal,
     Related,
     WorksOn,
+}
+
+impl FromStr for RelationType {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "temporal" => Ok(RelationType::Temporal),
+            "semantic" => Ok(RelationType::Semantic),
+            "entity" => Ok(RelationType::Entity),
+            "causal" => Ok(RelationType::Causal),
+            "related" => Ok(RelationType::Related),
+            "works_on" => Ok(RelationType::WorksOn),
+            _ => Err(format!("Unknown relation type: {}", s)),
+        }
+    }
 }
 
 impl Default for RelationType {

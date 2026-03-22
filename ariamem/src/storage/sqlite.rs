@@ -170,33 +170,37 @@ impl SqliteStorage {
         let is_active_int: i32 = row.get("is_active")?;
 
         let embedding: Vec<f32> = serde_json::from_str(&embedding_json)
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?;
+        
         let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json)
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e)))?;
+
+        let memory_type = memory_type_str.parse::<MemoryType>()
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e))))?;
 
         let occurrence_start = chrono::DateTime::parse_from_rfc3339(&occurrence_start_str)
             .map(|dt| dt.with_timezone(&chrono::Utc))
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e)))?;
             
         let occurrence_end = occurrence_end_str.map(|s| {
             chrono::DateTime::parse_from_rfc3339(&s)
                 .map(|dt| dt.with_timezone(&chrono::Utc))
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(e)))
         }).transpose()?;
 
         let mention_time = chrono::DateTime::parse_from_rfc3339(&mention_time_str)
             .map(|dt| dt.with_timezone(&chrono::Utc))
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(e)))?;
 
         let last_accessed = last_accessed_str.map(|s| {
             chrono::DateTime::parse_from_rfc3339(&s)
                 .map(|dt| dt.with_timezone(&chrono::Utc))
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(e)))
         }).transpose()?;
 
         Ok(Memory {
             id: id_str,
-            memory_type: Self::string_to_memory_type(&memory_type_str),
+            memory_type,
             content,
             embedding,
             temporal: TemporalMetadata {
@@ -215,39 +219,54 @@ impl SqliteStorage {
 
 impl Storage for SqliteStorage {
     fn save_memory(&self, memory: &Memory) -> Result<(), crate::plugins::StorageError> {
-        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+        self.save_memories_batch(std::slice::from_ref(memory))
+    }
+
+    fn save_memories_batch(&self, memories: &[Memory]) -> Result<(), crate::plugins::StorageError> {
+        if memories.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+        let tx = conn.transaction().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
-        let metadata_json = serde_json::to_string(&memory.metadata)
-            .map_err(|e| crate::plugins::StorageError::Serialization(e.to_string()))?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO memories (id, memory_type, content, embedding, occurrence_start, occurrence_end, mention_time, metadata, confidence, access_count, last_accessed, is_active)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"
+            ).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
 
-        let embedding_blob = serde_json::to_string(&memory.embedding)
-            .map_err(|e| crate::plugins::StorageError::Serialization(e.to_string()))?;
+            for memory in memories {
+                let metadata_json = serde_json::to_string(&memory.metadata)
+                    .map_err(|e| crate::plugins::StorageError::Serialization(e.to_string()))?;
 
-        conn.execute(
-            "INSERT INTO memories (id, memory_type, content, embedding, occurrence_start, occurrence_end, mention_time, metadata, confidence, access_count, last_accessed, is_active)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                memory.id,
-                Self::memory_type_to_string(&memory.memory_type),
-                memory.content,
-                embedding_blob,
-                memory.temporal.occurrence_start.to_rfc3339(),
-                memory.temporal.occurrence_end.map(|t| t.to_rfc3339()),
-                memory.temporal.mention_time.to_rfc3339(),
-                metadata_json,
-                memory.confidence,
-                memory.access_count,
-                memory.last_accessed.map(|t| t.to_rfc3339()),
-                if memory.is_active { 1 } else { 0 },
-            ],
-        ).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+                let embedding_blob = serde_json::to_string(&memory.embedding)
+                    .map_err(|e| crate::plugins::StorageError::Serialization(e.to_string()))?;
 
+                stmt.execute(params![
+                    memory.id,
+                    Self::memory_type_to_string(&memory.memory_type),
+                    memory.content,
+                    embedding_blob,
+                    memory.temporal.occurrence_start.to_rfc3339(),
+                    memory.temporal.occurrence_end.map(|t| t.to_rfc3339()),
+                    memory.temporal.mention_time.to_rfc3339(),
+                    metadata_json,
+                    memory.confidence,
+                    memory.access_count,
+                    memory.last_accessed.map(|t| t.to_rfc3339()),
+                    if memory.is_active { 1 } else { 0 },
+                ]).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+            }
+        }
+
+        tx.commit().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         Ok(())
     }
 
     fn load_memory(&self, id: &String) -> Result<Memory, crate::plugins::StorageError> {
         let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-        
+
         let mut stmt = conn.prepare(
             "SELECT rowid, id, memory_type, content, embedding, occurrence_start, occurrence_end, mention_time, metadata, confidence, access_count, last_accessed, is_active
              FROM memories WHERE id = ?1 AND is_active = 1"
@@ -260,6 +279,47 @@ impl Storage for SqliteStorage {
         Ok(memory)
     }
 
+    fn load_memories_by_ids(&self, ids: &[String]) -> Result<Vec<Memory>, crate::plugins::StorageError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+        let query = format!(
+            "SELECT rowid, id, memory_type, content, embedding, occurrence_start, occurrence_end, mention_time, metadata, confidence, access_count, last_accessed, is_active 
+             FROM memories 
+             WHERE id IN ({}) AND is_active = 1",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = conn.prepare(&query)
+            .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+
+        let params = rusqlite::params_from_iter(ids.iter());
+
+        let memory_iter = stmt.query_map(params, |row| {
+            Self::row_to_memory(row)
+        }).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+
+        let mut results = Vec::new();
+        for mem_res in memory_iter {
+            results.push(mem_res.map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?);
+        }
+
+        Ok(results)
+    }
+
+    fn exists_memory(&self, id: &str) -> Result<bool, crate::plugins::StorageError> {
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM memories WHERE id = ?1 AND is_active = 1",
+            params![id],
+            |row| row.get(0)
+        ).unwrap_or(0);
+        Ok(count > 0)
+    }
     fn update_memory(&self, memory: &Memory) -> Result<(), crate::plugins::StorageError> {
         let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
         
@@ -286,6 +346,18 @@ impl Storage for SqliteStorage {
                 memory.last_accessed.map(|t| t.to_rfc3339()),
                 if memory.is_active { 1 } else { 0 },
             ],
+        ).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    fn increment_access_count(&self, id: &str) -> Result<(), crate::plugins::StorageError> {
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+        let now = chrono::Utc::now().to_rfc3339();
+        
+        conn.execute(
+            "UPDATE memories SET access_count = access_count + 1, last_accessed = ?2 WHERE id = ?1 AND is_active = 1",
+            params![id, now],
         ).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
 
         Ok(())
@@ -442,15 +514,20 @@ impl Storage for SqliteStorage {
 
     fn query_edges(&self, source_id: &String) -> Result<Vec<Edge>, crate::plugins::StorageError> {
         let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
-        let mut stmt = conn.prepare("SELECT id, source_id, target_id, relation_type, weight, metadata FROM edges WHERE source_id = ?1")
-            .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT e.id, e.source_id, e.target_id, e.relation_type, e.weight, e.metadata 
+             FROM edges e
+             JOIN memories m ON e.target_id = m.id
+             WHERE e.source_id = ?1 AND m.is_active = 1"
+        ).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+        
         let rows = stmt.query_map(params![source_id], |row| {
-            let id_str: String = row.get("id")?;
-            let source_id_str: String = row.get("source_id")?;
-            let target_id_str: String = row.get("target_id")?;
-            let relation_type_str: String = row.get("relation_type")?;
-            let weight: f32 = row.get("weight")?;
-            let metadata_json: String = row.get("metadata")?;
+            let id_str: String = row.get(0)?;
+            let source_id_str: String = row.get(1)?;
+            let target_id_str: String = row.get(2)?;
+            let relation_type_str: String = row.get(3)?;
+            let weight: f32 = row.get(4)?;
+            let metadata_json: String = row.get(5)?;
             let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json)
                 .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
             Ok(Edge {
@@ -466,6 +543,56 @@ impl Storage for SqliteStorage {
         for row in rows {
             result.push(row.map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?);
         }
+        Ok(result)
+    }
+
+    fn query_edges_batch(&self, source_ids: &[String]) -> Result<HashMap<String, Vec<Edge>>, crate::plugins::StorageError> {
+        if source_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let conn = self.pool.get().map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+        
+        let placeholders: Vec<String> = (1..=source_ids.len()).map(|i| format!("?{}", i)).collect();
+        let query = format!(
+            "SELECT e.id, e.source_id, e.target_id, e.relation_type, e.weight, e.metadata 
+             FROM edges e
+             JOIN memories m ON e.target_id = m.id
+             WHERE e.source_id IN ({}) AND m.is_active = 1",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = conn.prepare(&query)
+            .map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+
+        let params = rusqlite::params_from_iter(source_ids.iter());
+
+        let rows = stmt.query_map(params, |row| {
+            let id_str: String = row.get(0)?;
+            let source_id_str: String = row.get(1)?;
+            let target_id_str: String = row.get(2)?;
+            let relation_type_str: String = row.get(3)?;
+            let weight: f32 = row.get(4)?;
+            let metadata_json: String = row.get(5)?;
+            let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json)
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+            
+            Ok(Edge {
+                id: id_str,
+                source_id: source_id_str,
+                target_id: target_id_str,
+                relation_type: Self::string_to_relation_type(&relation_type_str),
+                weight,
+                metadata,
+            })
+        }).map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+
+        let mut result: HashMap<String, Vec<Edge>> = HashMap::new();
+        for row in rows {
+            let edge = row.map_err(|e| crate::plugins::StorageError::Database(e.to_string()))?;
+            result.entry(edge.source_id.clone()).or_default().push(edge);
+        }
+        
         Ok(result)
     }
 

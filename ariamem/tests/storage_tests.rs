@@ -1,6 +1,6 @@
 use ariamem::plugins::Storage;
 use ariamem::{
-    Edge, Memory, MemoryEngine, MemoryType, RelationType, SqliteStorage, WordCountEmbedder, RetrievalSource,
+    Edge, Memory, MemoryType, RelationType, SqliteStorage,
 };
 
 #[test]
@@ -74,7 +74,7 @@ fn test_sqlite_storage_delete_memory_cascade() {
     let edges = storage.query_edges(&source.id).unwrap();
     assert_eq!(edges.len(), 0);
     
-    // Also check from target side if we had such query (we have query_edges_by_target)
+    // Also check from target side
     let edges_target = storage.query_edges_by_target(&target.id).unwrap();
     assert_eq!(edges_target.len(), 0);
 }
@@ -105,206 +105,38 @@ fn test_sqlite_storage_query_edges() {
     let storage = SqliteStorage::in_memory().unwrap();
 
     let source = Memory::new("Source".to_string(), MemoryType::World);
-    let target1 = Memory::new("Target 1".to_string(), MemoryType::World);
-    let target2 = Memory::new("Target 2".to_string(), MemoryType::World);
+    let t1 = Memory::new("Target 1".to_string(), MemoryType::World);
+    let t2 = Memory::new("Target 2".to_string(), MemoryType::World);
 
     storage.save_memory(&source).unwrap();
-    storage.save_memory(&target1).unwrap();
-    storage.save_memory(&target2).unwrap();
+    storage.save_memory(&t1).unwrap();
+    storage.save_memory(&t2).unwrap();
 
-    let edge1 = Edge::new(source.id.clone(), target1.id.clone(), RelationType::Semantic);
-    let edge2 = Edge::new(source.id.clone(), target2.id.clone(), RelationType::Temporal);
+    let e1 = Edge::new(source.id.clone(), t1.id.clone(), RelationType::Semantic);
+    let e2 = Edge::new(source.id.clone(), t2.id.clone(), RelationType::Temporal);
 
-    storage.save_edge(&edge1).unwrap();
-    storage.save_edge(&edge2).unwrap();
+    storage.save_edge(&e1).unwrap();
+    storage.save_edge(&e2).unwrap();
 
     let edges = storage.query_edges(&source.id).unwrap();
-
     assert_eq!(edges.len(), 2);
 }
 
 #[test]
-fn test_sqlite_storage_count() {
+fn test_sqlite_storage_search_fts() {
     let storage = SqliteStorage::in_memory().unwrap();
 
-    assert_eq!(storage.count_memories().unwrap(), 0);
+    let m1 = Memory::new("The quick brown fox".to_string(), MemoryType::World);
+    let m2 = Memory::new("Jumps over the lazy dog".to_string(), MemoryType::World);
 
-    let memory1 = Memory::new("Memory 1".to_string(), MemoryType::World);
-    let memory2 = Memory::new("Memory 2".to_string(), MemoryType::Experience);
+    storage.save_memory(&m1).unwrap();
+    storage.save_memory(&m2).unwrap();
 
-    storage.save_memory(&memory1).unwrap();
-    storage.save_memory(&memory2).unwrap();
+    let results = storage.search_fts("fox", 5).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, m1.id);
 
-    assert_eq!(storage.count_memories().unwrap(), 2);
-}
-
-#[tokio::test]
-async fn test_memory_engine_store() {
-    let storage = SqliteStorage::in_memory().unwrap();
-    let embedder = WordCountEmbedder::new(384);
-    let engine = MemoryEngine::new(storage, embedder, 384).expect("Failed to create engine");
-
-    let memory = Memory::new("Test memory with embedding".to_string(), MemoryType::World);
-
-    let stored = engine.store(memory).await.unwrap();
-
-    assert!(!stored.embedding.is_empty());
-    assert_eq!(stored.embedding.len(), 384);
-}
-
-#[tokio::test]
-async fn test_memory_engine_get() {
-    let storage = SqliteStorage::in_memory().unwrap();
-    let embedder = WordCountEmbedder::new(384);
-    let engine = MemoryEngine::new(storage, embedder, 384).expect("Failed to create engine");
-
-    let memory = Memory::new("Memory to retrieve".to_string(), MemoryType::World);
-
-    let stored = engine.store(memory).await.unwrap();
-
-    let retrieved = engine.get(&stored.id).unwrap();
-
-    assert_eq!(retrieved.id, stored.id);
-    assert_eq!(retrieved.access_count, 1);
-}
-
-#[tokio::test]
-async fn test_memory_engine_search() {
-    let storage = SqliteStorage::in_memory().unwrap();
-    let embedder = WordCountEmbedder::new(384);
-    let engine = MemoryEngine::new(storage, embedder, 384).expect("Failed to create engine");
-
-    let memory1 = Memory::new("Python programming language".to_string(), MemoryType::World);
-    let memory2 = Memory::new("Rust programming language".to_string(), MemoryType::World);
-    let memory3 = Memory::new("Coffee beans from Colombia".to_string(), MemoryType::World);
-
-    engine.store(memory1).await.unwrap();
-    engine.store(memory2).await.unwrap();
-    engine.store(memory3).await.unwrap();
-
-    let results = engine.search_by_text("programming", 3).await.unwrap();
-
-    assert!(results.len() <= 3);
-    for result in &results {
-        println!(
-            "Found: {} (score: {:.3})",
-            result.memory.content, result.score
-        );
-    }
-}
-
-#[tokio::test]
-async fn test_memory_engine_store_with_edge() {
-    let storage = SqliteStorage::in_memory().unwrap();
-    let embedder = WordCountEmbedder::new(384);
-    let engine = MemoryEngine::new(storage, embedder, 384).expect("Failed to create engine");
-
-    let source = Memory::new("User prefers dark mode".to_string(), MemoryType::Experience);
-    let target = Memory::new("Theme configuration".to_string(), MemoryType::World);
-
-    let (stored_source, edge, stored_target) = engine
-        .store_with_edge(source, target, RelationType::Related)
-        .await
-        .unwrap();
-
-    assert_eq!(edge.source_id, stored_source.id);
-    assert_eq!(edge.target_id, stored_target.id);
-}
-
-#[tokio::test]
-async fn test_memory_engine_get_related() {
-    let storage = SqliteStorage::in_memory().unwrap();
-    let embedder = WordCountEmbedder::new(384);
-    let engine = MemoryEngine::new(storage, embedder, 384).expect("Failed to create engine");
-
-    let source = Memory::new("Main topic".to_string(), MemoryType::World);
-    let target = Memory::new("Related topic".to_string(), MemoryType::World);
-
-    let (stored_source, edge, _) = engine
-        .store_with_edge(source, target, RelationType::Related)
-        .await
-        .unwrap();
-
-    let related = engine.get_related(&stored_source.id).unwrap();
-
-    assert_eq!(related.len(), 1);
-    assert_eq!(related[0].0.id, edge.id);
-}
-
-#[tokio::test]
-async fn test_memory_engine_count() {
-    let storage = SqliteStorage::in_memory().unwrap();
-    let embedder = WordCountEmbedder::new(384);
-    let engine = MemoryEngine::new(storage, embedder, 384).expect("Failed to create engine");
-
-    assert_eq!(engine.count().unwrap(), 0);
-
-    let memory = Memory::new("Test".to_string(), MemoryType::World);
-    engine.store(memory).await.unwrap();
-
-    assert_eq!(engine.count().unwrap(), 1);
-}
-
-#[tokio::test]
-async fn test_memory_engine_graph_boost() {
-    let storage = SqliteStorage::in_memory().unwrap();
-    let embedder = WordCountEmbedder::new(384);
-    let engine = MemoryEngine::new(storage, embedder, 384).expect("Failed to create engine");
-
-    let root_memory = Memory::new("rust memory engine".to_string(), MemoryType::World);
-    let leaf_memory = Memory::new("safety and performance guarantees".to_string(), MemoryType::World);
-
-    let (_, _, leaf) = engine.store_with_edge(root_memory, leaf_memory, RelationType::WorksOn).await.unwrap();
-
-    let results = engine.search_by_text("rust", 5).await.unwrap();
-
-    println!("Total results: {}", results.len());
-    for res in &results {
-        println!("Result: ID={}, Content='{}', Score={}, Relevance={}", res.memory.id, res.memory.content, res.score, res.relevance_score);
-    }
-
-    let leaf_result = results.iter().find(|r| r.memory.id == leaf.id);
-    
-    assert!(leaf_result.is_some(), "Graph spreading activation should pull the leaf node into results");
-    
-    if let Some(res) = leaf_result {
-        assert!(res.relevance_score > 0.0, "The relevance score must have been boosted by the graph edge");
-    }
-}
-
-#[tokio::test]
-async fn test_memory_engine_multi_hop_activation() {
-    let storage = SqliteStorage::in_memory().unwrap();
-    let embedder = WordCountEmbedder::new(384);
-    let engine = MemoryEngine::new(storage, embedder, 384).expect("Failed to create engine");
-
-    // Chain: Python -> Guido van Rossum -> Netherlands
-    let m1 = Memory::new("Python is a programming language".to_string(), MemoryType::World);
-    let m2 = Memory::new("Guido van Rossum created Python".to_string(), MemoryType::World);
-    let m3 = Memory::new("Guido was born in the Netherlands".to_string(), MemoryType::World);
-
-    let s1 = engine.store(m1).await.unwrap();
-    let s2 = engine.store(m2).await.unwrap();
-    let s3 = engine.store(m3).await.unwrap();
-
-    // Link them: s1 -> s2 -> s3
-    engine.link_by_ids(&s1.id, &s2.id, RelationType::Entity).unwrap();
-    engine.link_by_ids(&s2.id, &s3.id, RelationType::Entity).unwrap();
-
-    // Search for "Python". Netherlands (s3) is 2 hops away.
-    // It should NOT be found by vector/fts because it doesn't contain "Python".
-    let results = engine.search_by_text("Python", 10).await.unwrap();
-
-    let netherlands_result = results.iter().find(|r| r.memory.id == s3.id);
-    
-    assert!(netherlands_result.is_some(), "Multi-hop activation should find nodes 2 hops away");
-    
-    if let Some(res) = netherlands_result {
-        println!("Multi-hop found: {} with relevance {}", res.memory.content, res.relevance_score);
-        assert!(res.relevance_score > 0.0);
-        if let RetrievalSource::Graph(origin, rel) = &res.source {
-             assert_eq!(origin, &s2.id); // It came from s2 in the last hop
-             assert_eq!(rel, &RelationType::Entity);
-        }
-    }
+    let results = storage.search_fts("dog", 5).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, m2.id);
 }

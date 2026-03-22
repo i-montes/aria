@@ -18,8 +18,12 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 
 pub trait Storage: Send + Sync {
     fn save_memory(&self, memory: &Memory) -> Result<()>;
+    fn save_memories_batch(&self, memories: &[Memory]) -> Result<()>;
     fn load_memory(&self, id: &String) -> Result<Memory>;
+    fn load_memories_by_ids(&self, ids: &[String]) -> Result<Vec<Memory>>;
+    fn exists_memory(&self, id: &str) -> Result<bool>;
     fn update_memory(&self, memory: &Memory) -> Result<()>;
+    fn increment_access_count(&self, id: &str) -> Result<()>;
     fn delete_memory(&self, id: &String) -> Result<()>;
     fn list_memories(&self, query: &MemoryQuery) -> Result<Vec<Memory>>;
     fn count_memories(&self) -> Result<usize>;
@@ -29,5 +33,6 @@ pub trait Storage: Send + Sync {
     fn load_edge(&self, id: &String) -> Result<Edge>;
     fn delete_edge(&self, id: &String) -> Result<()>;
     fn query_edges(&self, source_id: &String) -> Result<Vec<Edge>>;
+    fn query_edges_batch(&self, source_ids: &[String]) -> Result<std::collections::HashMap<String, Vec<Edge>>>;
     fn query_edges_by_target(&self, target_id: &String) -> Result<Vec<Edge>>;
 }
