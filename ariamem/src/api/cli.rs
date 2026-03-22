@@ -128,17 +128,39 @@ pub async fn run() {
                 }
             });
 
-            // Wait for both tasks (they should run forever)
-            let _ = tokio::try_join!(mcp_handle, rest_handle);
+            // Wait for shutdown signal or server error
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    println!("\nShutdown signal received. Saving index...");
+                    if let Err(e) = engine_arc.save_index() {
+                        eprintln!("Error saving index during shutdown: {}", e);
+                    }
+                    println!("✓ Cleanup complete. Exiting.");
+                }
+                res = tokio::try_join!(mcp_handle, rest_handle) => {
+                    if let Err(e) = res {
+                        eprintln!("Server error: {}", e);
+                    }
+                }
+            }
         }
         Commands::ServeRest { port } => {
             let engine_arc = create_engine(&config, cli.database.as_ref(), cli.model.as_ref());
             let server_port = port.unwrap_or(8081);
-            let api = RestApi::new(server_port, engine_arc);
+            let api = RestApi::new(server_port, engine_arc.clone());
             
             println!("Starting REST API server on port {}...", server_port);
-            if let Err(e) = api.start().await {
-                eprintln!("REST API Server Error: {}", e);
+            
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    println!("\nShutdown signal received. Saving index...");
+                    let _ = engine_arc.save_index();
+                }
+                res = api.start() => {
+                    if let Err(e) = res {
+                        eprintln!("REST API Server Error: {}", e);
+                    }
+                }
             }
         }
         Commands::Init => {

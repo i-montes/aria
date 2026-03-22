@@ -1,5 +1,5 @@
 use crate::vector::index::{IndexError, Result, SearchResult, VectorIndex};
-use dashmap::{DashMap, DashSet};
+use dashmap::DashSet;
 use hnsw::{Hnsw, Searcher};
 use space::{MetricPoint, Neighbor};
 use std::sync::RwLock;
@@ -7,6 +7,7 @@ use rand_pcg::Pcg64;
 use serde::{Serialize, Deserialize};
 use std::path::Path;
 use std::fs::File;
+use std::collections::HashMap;
 use ndarray::ArrayView1;
 
 const SCALE_FACTOR: f32 = 1_000_000_000.0;
@@ -80,7 +81,7 @@ impl HnswIndex {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         let maps = self.maps.read().unwrap();
-        let mut vectors = Vec::new();
+        let mut vectors: Vec<(String, Vec<f32>)> = Vec::new();
         
         for (&internal_id, ext_id) in &maps.id_to_ext {
             if let Some(vec) = maps.internal_to_vector.get(&internal_id) {
@@ -115,30 +116,34 @@ impl HnswIndex {
     }
 
     pub fn reindex(&self) -> Result<()> {
+        // 1. Hold hnsw write lock during the whole process.
+        // Since add() also needs this lock, no new nodes will be added to 
+        // neither the old hnsw nor the maps until we finish.
         let mut hnsw_guard = self.hnsw.write().unwrap();
+        
         let mut temp_hnsw = Hnsw::new();
         let mut searcher = Searcher::default();
         
-        let mut new_id_to_ext = HashMap::new();
-        let mut new_ext_to_id = HashMap::new();
-        let mut new_internal_to_vector = HashMap::new();
+        let mut new_id_to_ext: HashMap<usize, String> = HashMap::new();
+        let mut new_ext_to_id: HashMap<String, usize> = HashMap::new();
+        let mut new_internal_to_vector: HashMap<usize, Vec<f32>> = HashMap::new();
         
-        // Use a block to minimize maps read lock time
-        let old_data = {
+        // Use a block to capture the current state of maps safely
+        let old_data: Vec<(String, Vec<f32>)> = {
             let maps = self.maps.read().unwrap();
             maps.id_to_ext.iter()
-                .filter(|(&internal_id, _)| !self.deleted_internal_ids.contains(&internal_id))
-                .map(|(&internal_id, ext_id)| (ext_id.clone(), maps.internal_to_vector.get(&internal_id).cloned()))
-                .collect::<Vec<_>>()
+                .filter(|&(internal_id, _)| !self.deleted_internal_ids.contains(internal_id))
+                .filter_map(|(internal_id, ext_id)| {
+                    maps.internal_to_vector.get(internal_id).map(|vec| (ext_id.clone(), vec.clone()))
+                })
+                .collect()
         };
 
-        for (ext_id, vec_opt) in old_data {
-            if let Some(vec) = vec_opt {
-                let new_internal_id = temp_hnsw.insert(VectorPoint(vec.clone()), &mut searcher);
-                new_id_to_ext.insert(new_internal_id, ext_id.clone());
-                new_ext_to_id.insert(ext_id, new_internal_id);
-                new_internal_to_vector.insert(new_internal_id, vec);
-            }
+        for (ext_id, vec) in old_data {
+            let new_internal_id = temp_hnsw.insert(VectorPoint(vec.clone()), &mut searcher);
+            new_id_to_ext.insert(new_internal_id, ext_id.clone());
+            new_ext_to_id.insert(ext_id, new_internal_id);
+            new_internal_to_vector.insert(new_internal_id, vec);
         }
 
         // ATOMIC SWAP: Under hnsw_guard, swap both the graph and the maps
@@ -169,15 +174,20 @@ impl VectorIndex for HnswIndex {
             )));
         }
 
-        let mut hnsw = self.hnsw.write().unwrap();
-        let mut searcher = Searcher::default();
+        // 1. Update graph (Hold write lock)
+        let internal_id = {
+            let mut hnsw = self.hnsw.write().unwrap();
+            let mut searcher = Searcher::default();
+            hnsw.insert(VectorPoint(vector.to_vec()), &mut searcher)
+        };
         
-        let internal_id = hnsw.insert(VectorPoint(vector.to_vec()), &mut searcher);
-        
-        let mut maps = self.maps.write().unwrap();
-        maps.ext_to_id.insert(id.clone(), internal_id);
-        maps.id_to_ext.insert(internal_id, id);
-        maps.internal_to_vector.insert(internal_id, vector.to_vec());
+        // 2. Update maps (Hold write lock briefly)
+        {
+            let mut maps = self.maps.write().unwrap();
+            maps.ext_to_id.insert(id.clone(), internal_id);
+            maps.id_to_ext.insert(internal_id, id);
+            maps.internal_to_vector.insert(internal_id, vector.to_vec());
+        }
 
         Ok(())
     }
@@ -196,17 +206,20 @@ impl VectorIndex for HnswIndex {
             return Err(IndexError::Index("Query dimension mismatch".to_string()));
         }
 
-        let hnsw = self.hnsw.read().unwrap();
-        let maps = self.maps.read().unwrap();
         let mut searcher = Searcher::default();
         
-        let node_count = maps.id_to_ext.len() + self.deleted_internal_ids.len();
+        // Capture node count to estimate search depth
+        let node_count = {
+            let maps = self.maps.read().unwrap();
+            maps.id_to_ext.len() + self.deleted_internal_ids.len()
+        };
+
         if node_count == 0 {
             return Ok(Vec::new());
         }
 
         let mut ef = (k * 4).clamp(40, 250);
-        let mut results = Vec::new();
+        let mut results: Vec<SearchResult> = Vec::new();
         let mut attempts = 0;
 
         while results.len() < k && attempts < 3 {
@@ -215,27 +228,34 @@ impl VectorIndex for HnswIndex {
             // Safety guard for small collections to prevent hnsw crate panics
             let search_ef = if node_count < 2 {
                 1
-            } else if node_count < 100 {
-                ef.min(node_count - 1).max(1)
             } else {
                 ef.min(node_count - 1).max(1)
             };
             
             let mut neighbors = vec![Neighbor { index: 0, distance: 0 }; search_ef];
-            let found_neighbors = hnsw.nearest(&VectorPoint(query.to_vec()), search_ef, &mut searcher, &mut neighbors);
+            
+            // Search the graph (Hold read lock)
+            let found_neighbors = {
+                let hnsw = self.hnsw.read().unwrap();
+                hnsw.nearest(&VectorPoint(query.to_vec()), search_ef, &mut searcher, &mut neighbors)
+            };
 
-            results.clear();
-            for neighbor in found_neighbors {
-                if self.deleted_internal_ids.contains(&neighbor.index) {
-                    continue;
-                }
+            // ID translation (Hold maps read lock briefly)
+            {
+                let maps = self.maps.read().unwrap();
+                results.clear();
+                for neighbor in found_neighbors {
+                    if self.deleted_internal_ids.contains(&neighbor.index) {
+                        continue;
+                    }
 
-                if let Some(ext_id) = maps.id_to_ext.get(&neighbor.index) {
-                    let similarity = 1.0 - (neighbor.distance as f32 / SCALE_FACTOR);
-                    results.push(SearchResult {
-                        id: ext_id.clone(),
-                        score: similarity,
-                    });
+                    if let Some(ext_id) = maps.id_to_ext.get(&neighbor.index) {
+                        let similarity = 1.0 - (neighbor.distance as f32 / SCALE_FACTOR);
+                        results.push(SearchResult {
+                            id: ext_id.clone(),
+                            score: similarity,
+                        });
+                    }
                 }
             }
 
@@ -251,12 +271,12 @@ impl VectorIndex for HnswIndex {
         Ok(results)
     }
 
-    fn dimension(&self) -> usize {
-        self.dimension
+    fn count(&self) -> usize {
+        self.count()
     }
 
-    fn count(&self) -> usize {
-        self.uuid_to_id.len()
+    fn dimension(&self) -> usize {
+        self.dimension
     }
 }
 

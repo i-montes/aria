@@ -20,6 +20,18 @@ pub struct SearchResult {
     pub source: RetrievalSource,
 }
 
+/// The core hybrid memory engine for ARIA.
+/// 
+/// # Architecture
+/// MemoryEngine coordinates three primary components:
+/// 1. **Storage**: Durable persistence (SQLite).
+/// 2. **Embedder**: Vector generation (Model2Vec).
+/// 3. **Index**: Fast vector similarity search (HNSW cache).
+/// 
+/// # Concurrency & Cloning
+/// This struct implements `Clone` but follows **shallow clone semantics**. All clones
+/// share the same underlying storage, embedder, and index via `Arc`. It is safe and
+/// efficient to clone and move the engine across threads and tasks.
 #[derive(Clone)]
 pub struct MemoryEngine {
     storage: Arc<dyn Storage>,
@@ -127,6 +139,12 @@ impl MemoryEngine {
         Ok(memory)
     }
 
+    /// Stores a batch of memories efficiently.
+    /// 
+    /// # Consistency Note
+    /// This method is atomic regarding the database (SQLite transaction), but not regarding 
+    /// the HNSW index. If the process crashes after the SQL commit but before the HNSW update,
+    /// the index will be out of sync until the next restart (when reconstruction triggers).
     pub async fn store_batch(&self, mut memories: Vec<Memory>) -> Result<Vec<Memory>> {
         if memories.is_empty() {
             return Ok(Vec::new());
@@ -297,13 +315,13 @@ impl MemoryEngine {
         let fetched_memories = self.storage.load_memories_by_ids(&ids_to_fetch)?;
 
         for memory in fetched_memories {
-            let id = &memory.id;
-            if let Some(&rrf_score) = combined_scores.get(id) {
+            let id = memory.id.clone();
+            if let Some(&rrf_score) = combined_scores.get(&id) {
                 let static_relevance = relevance::calculate_relevance(&memory, self.recency_lambda);
                 seen_ids.insert(id.clone());
                 search_results.push(SearchResult {
                     memory,
-                    score: *final_similarities.get(id).unwrap_or(&0.0),
+                    score: *final_similarities.get(&id).unwrap_or(&0.0),
                     relevance_score: rrf_score + (0.1 * static_relevance), 
                     source: RetrievalSource::Direct,
                 });
@@ -329,12 +347,16 @@ impl MemoryEngine {
             if frontier.is_empty() || total_processed >= global_budget { break; }
             
             let mut next_frontier_map: HashMap<String, f32> = HashMap::new();
+            
+            // Collect all IDs in the current frontier to fetch edges in batch
+            let frontier_ids: Vec<String> = frontier.iter().map(|(id, _)| id.clone()).collect();
+            let all_frontier_edges = self.storage.query_edges_batch(&frontier_ids).unwrap_or_default();
 
             for (source_id, source_relevance) in frontier {
                 if total_processed >= global_budget { break; }
                 total_processed += 1;
 
-                if let Ok(edges) = self.storage.query_edges(&source_id) {
+                if let Some(edges) = all_frontier_edges.get(&source_id) {
                     for edge in edges {
                         let relation_multiplier = match edge.relation_type {
                             RelationType::WorksOn => 0.40,
@@ -357,7 +379,6 @@ impl MemoryEngine {
                                 graph_boosts.insert(edge.target_id.clone(), (boost, source_id.clone(), edge.relation_type.clone()));
                                 
                                 // Only add to next frontier if not already a direct result
-                                // Direct results already "seeded" the first hop.
                                 if !seen_ids.contains(&edge.target_id) {
                                     let entry = next_frontier_map.entry(edge.target_id.clone()).or_insert(0.0);
                                     if boost > *entry { *entry = boost; }
@@ -384,7 +405,8 @@ impl MemoryEngine {
         if !graph_discovered_ids.is_empty() {
             let memories = self.storage.load_memories_by_ids(&graph_discovered_ids)?;
             for memory in memories {
-                if let Some((_boost, origin_id, rel_type)) = graph_boosts.get(&memory.id) {
+                let mem_id = &memory.id;
+                if let Some((_boost, origin_id, rel_type)) = graph_boosts.get(mem_id) {
                     let r_score = relevance::calculate_relevance(&memory, self.recency_lambda);
                     search_results.push(SearchResult {
                         memory,
@@ -392,7 +414,6 @@ impl MemoryEngine {
                         relevance_score: (0.1 * r_score), // Initial score, boost added in Step 6
                         source: RetrievalSource::Graph(origin_id.clone(), rel_type.clone()),
                     });
-                    seen_ids.insert(memory.id.clone()); 
                 }
             }
         }
