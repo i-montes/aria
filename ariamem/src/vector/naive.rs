@@ -1,10 +1,9 @@
 use crate::vector::index::{VectorIndex, SearchResult, Result, IndexError};
-use uuid::Uuid;
 use dashmap::DashMap;
 
 pub struct NaiveIndex {
     dimension: usize,
-    vectors: DashMap<Uuid, Vec<f32>>,
+    vectors: DashMap<String, Vec<f32>>,
 }
 
 impl NaiveIndex {
@@ -29,7 +28,7 @@ impl NaiveIndex {
 }
 
 impl VectorIndex for NaiveIndex {
-    fn add(&self, id: Uuid, vector: &[f32]) -> Result<()> {
+    fn add(&self, id: String, vector: &[f32]) -> Result<()> {
         if vector.len() != self.dimension {
             return Err(IndexError::Index(format!(
                 "Dimension mismatch: expected {}, got {}",
@@ -41,7 +40,7 @@ impl VectorIndex for NaiveIndex {
         Ok(())
     }
 
-    fn remove(&self, id: Uuid) -> Result<()> {
+    fn remove(&self, id: String) -> Result<()> {
         self.vectors.remove(&id);
         Ok(())
     }
@@ -51,7 +50,7 @@ impl VectorIndex for NaiveIndex {
             .iter()
             .map(|entry| {
                 let score = Self::cosine_similarity(query, entry.value());
-                SearchResult { id: *entry.key(), score }
+                SearchResult { id: entry.key().clone(), score }
             })
             .collect();
         

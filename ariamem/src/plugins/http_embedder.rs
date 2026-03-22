@@ -64,19 +64,31 @@ impl HttpEmbedder {
 #[async_trait::async_trait]
 impl Embedder for HttpEmbedder {
     fn embed(&self, text: &str) -> Result<Vec<f32>, EmbedderError> {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(self.embed_async(text))
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(self.embed_async(text)),
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(self.embed_async(text))
+            }
+        }
     }
 
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedderError> {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
+        let embed_all = async {
             let mut results = Vec::new();
             for text in texts {
                 results.push(self.embed_async(text).await?);
             }
             Ok(results)
-        })
+        };
+
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(embed_all),
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(embed_all)
+            }
+        }
     }
 
     fn dimension(&self) -> usize {

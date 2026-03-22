@@ -1,6 +1,6 @@
 use ariamem::plugins::Storage;
 use ariamem::{
-    Edge, Memory, MemoryEngine, MemoryType, RelationType, SqliteStorage, WordCountEmbedder,
+    Edge, Memory, MemoryEngine, MemoryType, RelationType, SqliteStorage, WordCountEmbedder, RetrievalSource,
 };
 
 #[test]
@@ -60,7 +60,7 @@ fn test_sqlite_storage_delete_memory_cascade() {
     storage.save_memory(&source).unwrap();
     storage.save_memory(&target).unwrap();
 
-    let edge = Edge::new(source.id, target.id, RelationType::Semantic);
+    let edge = Edge::new(source.id.clone(), target.id.clone(), RelationType::Semantic);
     storage.save_edge(&edge).unwrap();
 
     // Verify edge exists
@@ -89,7 +89,7 @@ fn test_sqlite_storage_save_and_load_edge() {
     storage.save_memory(&source).unwrap();
     storage.save_memory(&target).unwrap();
 
-    let edge = Edge::new(source.id, target.id, RelationType::Semantic).with_weight(0.85);
+    let edge = Edge::new(source.id.clone(), target.id.clone(), RelationType::Semantic).with_weight(0.85);
 
     storage.save_edge(&edge).unwrap();
 
@@ -112,8 +112,8 @@ fn test_sqlite_storage_query_edges() {
     storage.save_memory(&target1).unwrap();
     storage.save_memory(&target2).unwrap();
 
-    let edge1 = Edge::new(source.id, target1.id, RelationType::Semantic);
-    let edge2 = Edge::new(source.id, target2.id, RelationType::Temporal);
+    let edge1 = Edge::new(source.id.clone(), target1.id.clone(), RelationType::Semantic);
+    let edge2 = Edge::new(source.id.clone(), target2.id.clone(), RelationType::Temporal);
 
     storage.save_edge(&edge1).unwrap();
     storage.save_edge(&edge2).unwrap();
@@ -267,5 +267,42 @@ fn test_memory_engine_graph_boost() {
     
     if let Some(res) = leaf_result {
         assert!(res.relevance_score > 0.0, "The relevance score must have been boosted by the graph edge");
+    }
+}
+
+#[test]
+fn test_memory_engine_multi_hop_activation() {
+    let storage = SqliteStorage::in_memory().unwrap();
+    let embedder = WordCountEmbedder::new(384);
+    let engine = MemoryEngine::new(storage, embedder, 384);
+
+    // Chain: Python -> Guido van Rossum -> Netherlands
+    let m1 = Memory::new("Python is a programming language".to_string(), MemoryType::World);
+    let m2 = Memory::new("Guido van Rossum created Python".to_string(), MemoryType::World);
+    let m3 = Memory::new("Guido was born in the Netherlands".to_string(), MemoryType::World);
+
+    let s1 = engine.store(m1).unwrap();
+    let s2 = engine.store(m2).unwrap();
+    let s3 = engine.store(m3).unwrap();
+
+    // Link them: s1 -> s2 -> s3
+    engine.link_by_ids(&s1.id, &s2.id, RelationType::Entity).unwrap();
+    engine.link_by_ids(&s2.id, &s3.id, RelationType::Entity).unwrap();
+
+    // Search for "Python". Netherlands (s3) is 2 hops away.
+    // It should NOT be found by vector/fts because it doesn't contain "Python".
+    let results = engine.search_by_text("Python", 10).unwrap();
+
+    let netherlands_result = results.iter().find(|r| r.memory.id == s3.id);
+    
+    assert!(netherlands_result.is_some(), "Multi-hop activation should find nodes 2 hops away");
+    
+    if let Some(res) = netherlands_result {
+        println!("Multi-hop found: {} with relevance {}", res.memory.content, res.relevance_score);
+        assert!(res.relevance_score > 0.0);
+        if let RetrievalSource::Graph(origin, rel) = &res.source {
+             assert_eq!(origin, &s2.id); // It came from s2 in the last hop
+             assert_eq!(rel, &RelationType::Entity);
+        }
     }
 }

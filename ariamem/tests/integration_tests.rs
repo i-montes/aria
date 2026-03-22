@@ -61,13 +61,13 @@ fn test_edge_creation() {
     let source_id = uuid::Uuid::new_v4();
     let target_id = uuid::Uuid::new_v4();
     
-    let edge = Edge::new(source_id, target_id, RelationType::Semantic)
-        .with_weight(0.75);
-    
-    assert_eq!(edge.source_id, source_id);
-    assert_eq!(edge.target_id, target_id);
+    let edge = Edge::new(source_id.to_string(), target_id.to_string(), RelationType::Semantic)
+        .with_weight(0.8);
+
+    assert_eq!(edge.source_id, source_id.to_string());
+    assert_eq!(edge.target_id, target_id.to_string());
     assert_eq!(edge.relation_type, RelationType::Semantic);
-    assert_eq!(edge.weight, 0.75);
+    assert_eq!(edge.weight, 0.8);
 }
 
 #[test]
@@ -105,13 +105,13 @@ fn test_naive_vector_index() {
     let id1 = Uuid::new_v4();
     let id2 = Uuid::new_v4();
     
-    index.add(id1, &[0.1, 0.2, 0.3, 0.4]).unwrap();
-    index.add(id2, &[0.4, 0.3, 0.2, 0.1]).unwrap();
+    index.add(id1.to_string(), &[0.1, 0.2, 0.3, 0.4]).unwrap();
+    index.add(id2.to_string(), &[0.4, 0.3, 0.2, 0.1]).unwrap();
     
     let results = index.search(&[0.1, 0.2, 0.3, 0.4], 2).unwrap();
     
     assert_eq!(results.len(), 2);
-    assert_eq!(results[0].id, id1);
+    assert_eq!(results[0].id, id1.to_string());
 }
 
 #[test]

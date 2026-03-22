@@ -1,10 +1,9 @@
 use crate::core::{Memory, MemoryType, RelationType};
-use crate::core::engine::{MemoryEngine, RetrievalSource};
+use crate::core::engine::MemoryEngine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use uuid::Uuid;
 use axum::{
     extract::State,
     routing::post,
@@ -41,9 +40,9 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    pub fn new(engine: MemoryEngine) -> Self {
+    pub fn new(engine: Arc<MemoryEngine>) -> Self {
         Self {
-            engine: Arc::new(engine),
+            engine,
         }
     }
 
@@ -54,8 +53,18 @@ impl McpServer {
 
         while let Some(line) = reader.next_line().await? {
             if let Ok(req) = serde_json::from_str::<RpcRequest>(&line) {
-                let id = req.id.unwrap_or(Value::Null);
+                let id = req.id.clone().unwrap_or(Value::Null);
+                
+                // Notifications (no ID) should not be responded to
+                if req.id.is_none() && req.method.contains("/") {
+                    // Handle notification logic if needed, but don't send RpcResponse
+                    continue;
+                }
+
                 let response = handle_request(&req.method, req.params, self.engine.clone(), id).await;
+                
+                // If it was a notification that we didn't filter above, response might be 'Null' 
+                // in result, but for safety in stdio, we only send if it's a proper response.
                 let response_json = serde_json::to_string(&response)?;
                 stdout.write_all(response_json.as_bytes()).await?;
                 stdout.write_all(b"\n").await?;
@@ -97,65 +106,96 @@ async fn handle_request(
     match method {
         "initialize" => make_tool_result(id, serde_json::json!({
             "protocolVersion": "2024-11-05",
-            "capabilities": {},
+            "capabilities": {
+                "tools": {}
+            },
             "serverInfo": {
                 "name": "ariamem",
                 "version": "0.1.0"
             }
         })),
-        "list_tools" => make_tool_result(id, serde_json::json!({
-            "tools": [
-                {
-                    "name": "store_memory",
-                    "description": "Store a new memory in ARIA",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "content": { "type": "string" },
-                            "type": { "type": "string", "enum": ["world", "experience", "opinion", "observation"] }
-                        },
-                        "required": ["content"]
+        "ping" => make_tool_result(id, serde_json::json!({})),
+        "notifications/initialized" => {
+            make_tool_result(id, Value::Null)
+        },
+        "tools/list" | "list_tools" => {
+            make_tool_result(id, serde_json::json!({
+                "tools": [
+                    {
+                        "name": "store_memory",
+                        "description": "Store a new memory in ARIA. Can optionally link to existing memories (Graph Context).",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "content": { "type": "string", "description": "The textual content to remember" },
+                                "type": { 
+                                    "type": "string", 
+                                    "enum": ["world", "experience", "opinion", "observation"],
+                                    "description": "Type of memory. 'world' for facts, 'experience' for events, etc."
+                                },
+                                "links": {
+                                    "type": "array",
+                                    "description": "Optional list of links to existing memories to create a graph context.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "to": { "type": "string", "description": "UUID of the target memory" },
+                                            "rel": { 
+                                                "type": "string", 
+                                                "enum": ["temporal", "semantic", "entity", "causal", "related", "works_on"],
+                                                "description": "Type of relationship"
+                                            }
+                                        },
+                                        "required": ["to", "rel"]
+                                    }
+                                }
+                            },
+                            "required": ["content"]
+                        }
+                    },
+                    {
+                        "name": "search_memories",
+                        "description": "Search for memories using hybrid retrieval",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "query": { "type": "string" },
+                                "limit": { "type": "number", "default": 5 }
+                            },
+                            "required": ["query"]
+                        }
+                    },
+                    {
+                        "name": "link_memories",
+                        "description": "Create a relation between two existing memories",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "source_id": { "type": "string" },
+                                "target_id": { "type": "string" },
+                                "relation": { "type": "string" }
+                            },
+                            "required": ["source_id", "target_id"]
+                        }
+                    },
+                    {
+                        "name": "get_stats",
+                        "description": "Get memory engine statistics",
+                        "inputSchema": { "type": "object", "properties": {} }
                     }
-                },
-                {
-                    "name": "search_memories",
-                    "description": "Search for memories using hybrid retrieval",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "query": { "type": "string" },
-                            "limit": { "type": "number", "default": 5 }
-                        },
-                        "required": ["query"]
-                    }
-                },
-                {
-                    "name": "link_memories",
-                    "description": "Create a relation between two existing memories",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "source_id": { "type": "string" },
-                            "target_id": { "type": "string" },
-                            "relation": { "type": "string" }
-                        },
-                        "required": ["source_id", "target_id"]
-                    }
-                },
-                {
-                    "name": "get_stats",
-                    "description": "Get memory engine statistics",
-                    "inputSchema": { "type": "object", "properties": {} }
-                }
-            ]
-        })),
-        "call_tool" => {
+                ]
+            }))
+        },
+        "tools/call" | "call_tool" => {
             let params = params.unwrap_or(Value::Null);
             let name = params["name"].as_str().unwrap_or("");
             let args = &params["arguments"];
             handle_tool_call(name, args, engine, id).await
         }
-        _ => make_tool_error(id, -32601, "Method not found"),
+        _ => {
+            eprintln!("Unknown MCP method: {}", method);
+            make_tool_error(id, -32601, &format!("Method {} not found", method))
+        }
     }
 }
 
@@ -165,7 +205,7 @@ async fn handle_tool_call(
     engine: Arc<MemoryEngine>,
     id: Value,
 ) -> RpcResponse {
-    match name {
+    let result = match name {
         "store_memory" => {
             let content = args["content"].as_str().unwrap_or("");
             let type_str = args["type"].as_str().unwrap_or("world");
@@ -177,11 +217,29 @@ async fn handle_tool_call(
                 _ => MemoryType::World,
             };
 
-            let memory = Memory::new(content.to_string(), mem_type);
+            let mut links = Vec::new();
+            if let Some(links_array) = args["links"].as_array() {
+                for link_obj in links_array {
+                    if let (Some(to_str), Some(rel_str)) = (link_obj["to"].as_str(), link_obj["rel"].as_str()) {
+                        let rel = match rel_str.to_lowercase().as_str() {
+                            "temporal" => RelationType::Temporal,
+                            "semantic" => RelationType::Semantic,
+                            "entity" => RelationType::Entity,
+                            "causal" => RelationType::Causal,
+                            "works_on" => RelationType::WorksOn,
+                            _ => RelationType::Related,
+                        };
+                        links.push((to_str.to_string(), rel));
+                    }
+                }
+            }
 
-            match engine.store(memory) {
-                Ok(m) => make_tool_result(id, format!("Memory stored successfully with ID: {}", m.id).into()),
-                Err(e) => make_tool_error(id, -1, &format!("Failed to store memory: {}", e)),
+            let memory = Memory::new(content.to_string(), mem_type);
+            let num_links = links.len();
+
+            match engine.store_contextual(memory, links) {
+                Ok(m) => Ok(format!("Memory stored successfully with ID: {}. ({} links created)", m.id, num_links)),
+                Err(e) => Err(format!("Failed to store memory: {}", e)),
             }
         }
         "search_memories" => {
@@ -189,61 +247,14 @@ async fn handle_tool_call(
             let limit = args["limit"].as_u64().unwrap_or(5) as usize;
 
             match engine.search_by_text(query, limit) {
-                Ok(results) => {
-                    let mut yaml = String::new();
-                    yaml.push_str("inst: Responde solo con esta memoria. Usa 'direct' como hechos primarios y 'graph' para el contexto lógico/causal basado en 'rel'. Sintetiza ambos sin alucinar información externa.\n");
-                    yaml.push_str("mem:\n");
-                    
-                    let mut direct_results = Vec::new();
-                    let mut graph_results = Vec::new();
-                    
-                    for r in &results {
-                        match &r.source {
-                            RetrievalSource::Direct => direct_results.push(r),
-                            RetrievalSource::Graph(_, _) => graph_results.push(r),
-                        }
-                    }
-
-                    if !direct_results.is_empty() {
-                        yaml.push_str("  direct:\n");
-                        for r in direct_results {
-                            yaml.push_str(&format!("    - id: {}\n", r.memory.id));
-                            let content = r.memory.content.replace('\n', " ");
-                            yaml.push_str(&format!("      sum: {}\n", content));
-                        }
-                    }
-
-                    if !graph_results.is_empty() {
-                        yaml.push_str("  graph:\n");
-                        for r in graph_results {
-                            if let RetrievalSource::Graph(origin, rel) = &r.source {
-                                yaml.push_str(&format!("    - id: {}\n", r.memory.id));
-                                let content = r.memory.content.replace('\n', " ");
-                                yaml.push_str(&format!("      sum: {}\n", content));
-                                yaml.push_str(&format!("      rel: {:?}->{}\n", rel, origin));
-                            }
-                        }
-                    }
-
-                    make_tool_result(id, Value::String(yaml))
-                }
-                Err(e) => make_tool_error(id, -1, &format!("Search failed: {}", e)),
+                Ok(results) => Ok(engine.format_search_results(&results)),
+                Err(e) => Err(format!("Search failed: {}", e)),
             }
         }
         "link_memories" => {
-            let source_str = args["source_id"].as_str().unwrap_or("");
-            let target_str = args["target_id"].as_str().unwrap_or("");
+            let source_id = args["source_id"].as_str().unwrap_or("");
+            let target_id = args["target_id"].as_str().unwrap_or("");
             let relation_str = args["relation"].as_str().unwrap_or("related");
-
-            let source_id = match Uuid::parse_str(source_str) {
-                Ok(uuid) => uuid,
-                Err(_) => return make_tool_error(id, -1, "Invalid source UUID format"),
-            };
-
-            let target_id = match Uuid::parse_str(target_str) {
-                Ok(uuid) => uuid,
-                Err(_) => return make_tool_error(id, -1, "Invalid target UUID format"),
-            };
 
             let relation = match relation_str.to_lowercase().as_str() {
                 "temporal" => RelationType::Temporal,
@@ -254,9 +265,9 @@ async fn handle_tool_call(
                 _ => RelationType::Related,
             };
 
-            match engine.link_by_ids(&source_id, &target_id, relation) {
-                Ok(edge) => make_tool_result(id, format!("Successfully linked {} -> {} with relation {:?}. Edge ID: {}", source_id, target_id, relation, edge.id).into()),
-                Err(e) => make_tool_error(id, -1, &format!("Failed to link memories: {}", e)),
+            match engine.link_by_ids(source_id, target_id, relation) {
+                Ok(edge) => Ok(format!("Successfully linked {} -> {} with relation {:?}. Edge ID: {}", source_id, target_id, relation, edge.id)),
+                Err(e) => Err(format!("Failed to link memories: {}", e)),
             }
         }
         "get_stats" => {
@@ -269,12 +280,32 @@ async fn handle_tool_call(
                             stats.push_str(&format!("  {:?}: {}\n", mt, mems.len()));
                         }
                     }
-                    make_tool_result(id, Value::String(stats))
+                    Ok(stats)
                 },
-                Err(e) => make_tool_error(id, -1, &format!("Failed to get stats: {}", e)),
+                Err(e) => Err(format!("Failed to get stats: {}", e)),
             }
         }
-        _ => make_tool_error(id, -32601, "Tool not found"),
+        _ => return make_tool_error(id, -32601, "Tool not found"),
+    };
+
+    match result {
+        Ok(text) => make_tool_result(id, serde_json::json!({
+            "content": [
+                {
+                    "type": "text",
+                    "text": text
+                }
+            ]
+        })),
+        Err(msg) => make_tool_result(id, serde_json::json!({
+            "content": [
+                {
+                    "type": "text",
+                    "text": msg
+                }
+            ],
+            "isError": true
+        })),
     }
 }
 

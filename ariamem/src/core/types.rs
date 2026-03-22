@@ -1,7 +1,31 @@
 use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use thiserror::Error;
+use crate::plugins::{StorageError, EmbedderError};
+use crate::vector::index::IndexError;
+
+pub fn generate_id() -> String {
+    nanoid::nanoid!(8)
+}
+
+#[derive(Error, Debug)]
+pub enum CoreError {
+    #[error("Storage error: {0}")]
+    Storage(#[from] StorageError),
+    #[error("Embedder error: {0}")]
+    Embedder(#[from] EmbedderError),
+    #[error("Index error: {0}")]
+    Index(#[from] IndexError),
+    #[error("Not found: {0}")]
+    NotFound(String),
+    #[error("Validation error: {0}")]
+    Validation(String),
+    #[error("Internal error: {0}")]
+    Internal(String),
+}
+
+pub type Result<T> = std::result::Result<T, CoreError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,7 +89,7 @@ impl Default for TemporalMetadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Memory {
-    pub id: Uuid,
+    pub id: String,
     pub memory_type: MemoryType,
     pub content: String,
     pub embedding: Vec<f32>,
@@ -74,12 +98,13 @@ pub struct Memory {
     pub confidence: Option<f32>,
     pub access_count: u32,
     pub last_accessed: Option<DateTime<Utc>>,
+    pub is_active: bool,
 }
 
 impl Memory {
     pub fn new(content: String, memory_type: MemoryType) -> Self {
         Self {
-            id: Uuid::new_v4(),
+            id: generate_id(),
             memory_type,
             content,
             embedding: Vec::new(),
@@ -88,6 +113,7 @@ impl Memory {
             confidence: None,
             access_count: 0,
             last_accessed: None,
+            is_active: true,
         }
     }
 
@@ -114,18 +140,18 @@ impl Memory {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Edge {
-    pub id: Uuid,
-    pub source_id: Uuid,
-    pub target_id: Uuid,
+    pub id: String,
+    pub source_id: String,
+    pub target_id: String,
     pub relation_type: RelationType,
     pub weight: f32,
     pub metadata: HashMap<String, String>,
 }
 
 impl Edge {
-    pub fn new(source_id: Uuid, target_id: Uuid, relation_type: RelationType) -> Self {
+    pub fn new(source_id: String, target_id: String, relation_type: RelationType) -> Self {
         Self {
-            id: Uuid::new_v4(),
+            id: generate_id(),
             source_id,
             target_id,
             relation_type,

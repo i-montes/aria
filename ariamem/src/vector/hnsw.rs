@@ -2,10 +2,10 @@ use crate::vector::index::{IndexError, Result, SearchResult, VectorIndex};
 use dashmap::{DashMap, DashSet};
 use hnsw::{Hnsw, Searcher};
 use space::{MetricPoint, Neighbor};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::RwLock;
-use uuid::Uuid;
 use rand_pcg::Pcg64;
+
+const SCALE_FACTOR: f32 = 1_000_000_000.0;
 
 #[derive(Clone, Debug)]
 pub struct VectorPoint(pub Vec<f32>);
@@ -30,21 +30,18 @@ impl MetricPoint for VectorPoint {
         let similarity = dot.clamp(-1.0, 1.0);
         let distance = 1.0 - similarity;
         
-        // Precision of 5 decimals mapped to u32
-        (distance * 100_000.0) as u32
+        // Use 9 decimals of precision mapped to u32
+        (distance * SCALE_FACTOR) as u32
     }
 }
 
 pub struct HnswIndex {
     dimension: usize,
-    // M=32 for better connectivity in high dimensions
-    // M0=64 for robust base layer
-    hnsw: RwLock<Hnsw<VectorPoint, Pcg64, 32, 64>>,
-    searcher: RwLock<Searcher<u32>>,
-    id_to_uuid: DashMap<usize, Uuid>,
-    uuid_to_id: DashMap<Uuid, usize>,
+    // Use standard defaults (M=12, M0=24) which are more robust in this hnsw crate version
+    hnsw: RwLock<Hnsw<VectorPoint, Pcg64, 12, 24>>,
+    id_to_uuid: DashMap<usize, String>,
+    uuid_to_id: DashMap<String, usize>,
     deleted_internal_ids: DashSet<usize>,
-    next_id: AtomicUsize,
 }
 
 impl HnswIndex {
@@ -52,17 +49,15 @@ impl HnswIndex {
         Self {
             dimension,
             hnsw: RwLock::new(Hnsw::new()),
-            searcher: RwLock::new(Searcher::default()),
             id_to_uuid: DashMap::new(),
             uuid_to_id: DashMap::new(),
             deleted_internal_ids: DashSet::new(),
-            next_id: AtomicUsize::new(0),
         }
     }
 }
 
 impl VectorIndex for HnswIndex {
-    fn add(&self, id: Uuid, vector: &[f32]) -> Result<()> {
+    fn add(&self, id: String, vector: &[f32]) -> Result<()> {
         if vector.len() != self.dimension {
             return Err(IndexError::Index(format!(
                 "Dimension mismatch: expected {}, got {}",
@@ -71,19 +66,18 @@ impl VectorIndex for HnswIndex {
             )));
         }
 
-        let internal_id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        self.uuid_to_id.insert(id, internal_id);
-        self.id_to_uuid.insert(internal_id, id);
-
         let mut hnsw = self.hnsw.write().unwrap();
-        let mut searcher = self.searcher.write().unwrap();
+        let mut searcher = Searcher::default();
         
-        hnsw.insert(VectorPoint(vector.to_vec()), &mut searcher);
+        let internal_id = hnsw.insert(VectorPoint(vector.to_vec()), &mut searcher);
+        
+        self.uuid_to_id.insert(id.clone(), internal_id);
+        self.id_to_uuid.insert(internal_id, id);
 
         Ok(())
     }
 
-    fn remove(&self, id: Uuid) -> Result<()> {
+    fn remove(&self, id: String) -> Result<()> {
         if let Some((_, internal_id)) = self.uuid_to_id.remove(&id) {
             self.id_to_uuid.remove(&internal_id);
             self.deleted_internal_ids.insert(internal_id);
@@ -97,7 +91,7 @@ impl VectorIndex for HnswIndex {
         }
 
         let hnsw = self.hnsw.read().unwrap();
-        let mut searcher = self.searcher.write().unwrap();
+        let mut searcher = Searcher::default();
         
         let node_count = self.id_to_uuid.len() + self.deleted_internal_ids.len();
         if node_count == 0 {
@@ -113,11 +107,23 @@ impl VectorIndex for HnswIndex {
         // we expand the search area (ef) up to the limit.
         while results.len() < k && attempts < 3 {
             attempts += 1;
-            let actual_neighbors_to_fetch = ef.min(node_count).max(1);
-            let mut neighbors = vec![Neighbor { index: 0, distance: 0 }; actual_neighbors_to_fetch];
+            
+            // IMPORTANT: In hnsw 0.10.x, if ef >= node_count, the search might return 
+            // fewer candidates than ef, but the crate attempts to copy ef elements 
+            // from an internal slice that might have even fewer elements (node_count-1 or similar).
+            // This causes a panic in copy_from_slice.
+            // For small collections (< 100), we stay well below node_count using division.
+            // For larger collections, node_count - 1 is generally safe.
+            let search_ef = if node_count < 100 {
+                ef.min(node_count / 2).max(1)
+            } else {
+                ef.min(node_count - 1).max(1)
+            };
+            
+            let mut neighbors = vec![Neighbor { index: 0, distance: 0 }; search_ef];
             
             // Note: the 2nd parameter in nearest() is 'ef' (search depth)
-            let found_neighbors = hnsw.nearest(&VectorPoint(query.to_vec()), ef, &mut searcher, &mut neighbors);
+            let found_neighbors = hnsw.nearest(&VectorPoint(query.to_vec()), search_ef, &mut searcher, &mut neighbors);
 
             results.clear();
             for neighbor in found_neighbors {
@@ -126,9 +132,9 @@ impl VectorIndex for HnswIndex {
                 }
 
                 if let Some(uuid) = self.id_to_uuid.get(&neighbor.index) {
-                    let similarity = 1.0 - (neighbor.distance as f32 / 100_000.0);
+                    let similarity = 1.0 - (neighbor.distance as f32 / SCALE_FACTOR);
                     results.push(SearchResult {
-                        id: *uuid.value(),
+                        id: uuid.value().clone(),
                         score: similarity,
                     });
                 }
@@ -156,12 +162,13 @@ impl VectorIndex for HnswIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::generate_id;
 
     #[test]
     fn test_hnsw_minimal() {
         let index = HnswIndex::new(3);
-        let id1 = Uuid::new_v4();
-        index.add(id1, &[1.0, 0.0, 0.0]).unwrap();
+        let id1 = generate_id();
+        index.add(id1.clone(), &[1.0, 0.0, 0.0]).unwrap();
         
         let results = index.search(&[1.0, 0.0, 0.0], 1).unwrap();
         assert!(!results.is_empty(), "Results should not be empty for a single node");
@@ -172,15 +179,15 @@ mod tests {
     fn test_hnsw_tombstones() {
         let index = HnswIndex::new(3);
         
-        let id1 = Uuid::new_v4();
-        let id2 = Uuid::new_v4();
+        let id1 = generate_id();
+        let id2 = generate_id();
 
-        index.add(id1, &[1.0, 0.0, 0.0]).unwrap();
-        index.add(id2, &[0.0, 1.0, 0.0]).unwrap();
+        index.add(id1.clone(), &[1.0, 0.0, 0.0]).unwrap();
+        index.add(id2.clone(), &[0.0, 1.0, 0.0]).unwrap();
 
         // Add dummy nodes
         for i in 0..50 {
-            index.add(Uuid::new_v4(), &[0.1, 0.1, i as f32 / 50.0]).unwrap();
+            index.add(generate_id(), &[0.1, 0.1, i as f32 / 50.0]).unwrap();
         }
 
         // Search for id1
@@ -188,7 +195,7 @@ mod tests {
         assert!(results.iter().any(|r| r.id == id1));
 
         // Remove id1
-        index.remove(id1).unwrap();
+        index.remove(id1.clone()).unwrap();
 
         // Search again for id1's location
         let results = index.search(&[1.0, 0.0, 0.0], 5).unwrap();
