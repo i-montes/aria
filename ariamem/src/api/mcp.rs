@@ -242,7 +242,7 @@ async fn handle_tool_call(
             let memory = Memory::new(content.to_string(), mem_type);
             let num_links = links.len();
 
-            match engine.store_contextual(memory, links) {
+            match engine.store_contextual(memory, links).await {
                 Ok(m) => Ok(format!("Memory stored successfully with ID: {}. ({} links created)", m.id, num_links)),
                 Err(crate::core::CoreError::NotFound(msg)) => Err(format!("Link failed: {}. Use search_memories to find valid IDs before linking.", msg)),
                 Err(e) => Err(format!("Failed to store memory: {}", e)),

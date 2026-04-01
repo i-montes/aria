@@ -1,0 +1,32 @@
+{
+  "workspace_root": "D:\\Proyectos\\aria",
+  "database_path": "aria_whiteboard.db",
+  "memory_port": 8080,
+  "core_port": 3000,
+  "llm_provider": "google",
+  "system": {
+    "log_level": "info",
+    "data_dir": "data"
+  },
+  "storage": {
+    "storage_type": "sqlite",
+    "path": "ariamem.db",
+    "wal_mode": true
+  },
+  "embedder": {
+    "provider": "model2vec",
+    "model2vec": {
+      "model_name": "minishlab/potion-base-32M",
+      "model_path": "models/potion-base-32M"
+    },
+    "http": {
+      "url": "http://localhost:11434/api/embeddings",
+      "timeout_seconds": 30
+    }
+  },
+  "engine": {
+    "default_search_limit": 10,
+    "cache_size": 10000,
+    "recency_lambda": 0.1
+  }
+}

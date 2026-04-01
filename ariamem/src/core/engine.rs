@@ -517,17 +517,30 @@ impl MemoryEngine {
 
     pub fn get_related(&self, id: &str) -> Result<Vec<(Edge, Memory)>> {
         let edges = self.storage.query_edges(&id.to_string())?;
-        
+
+        if edges.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Batch load all target memories
+        let target_ids: Vec<String> = edges.iter().map(|e| e.target_id.clone()).collect();
+        let memories = self.storage.load_memories_by_ids(&target_ids)?;
+
+        // Map memories by ID for efficient lookup
+        let memory_map: std::collections::HashMap<String, Memory> = memories
+            .into_iter()
+            .map(|m| (m.id.clone(), m))
+            .collect();
+
         let mut results = Vec::new();
         for edge in edges {
-            if let Ok(target) = self.storage.load_memory(&edge.target_id) {
-                results.push((edge, target));
+            if let Some(target) = memory_map.get(&edge.target_id) {
+                results.push((edge, target.clone()));
             }
         }
-        
+
         Ok(results)
     }
-
     pub fn count(&self) -> Result<usize> {
         Ok(self.storage.count_memories()?)
     }

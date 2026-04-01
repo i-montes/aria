@@ -1,5 +1,5 @@
 use crate::{
-    Config, Embedder, Memory, MemoryEngine, MemoryType, Model2VecEmbedder, RelationType, SqliteStorage, Edge, Storage, core::MemoryQuery
+    Config, Embedder, Memory, MemoryEngine, MemoryType, Model2VecEmbedder, RelationType, SqliteStorage, Storage, core::MemoryQuery
 };
 use crate::api::mcp::McpServer;
 use crate::api::rest::RestApi;
@@ -137,7 +137,7 @@ pub async fn run() {
                     }
                     println!("✓ Cleanup complete. Exiting.");
                 }
-                res = tokio::try_join!(mcp_handle, rest_handle) => {
+                res = async { tokio::try_join!(mcp_handle, rest_handle) } => {
                     if let Err(e) = res {
                         eprintln!("Server error: {}", e);
                     }

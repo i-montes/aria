@@ -1,4 +1,3 @@
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -6,11 +5,27 @@ use std::process::Command;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
+    // Global ARIA settings
+    #[serde(default = "default_workspace_root")]
+    pub workspace_root: String,
+    #[serde(default = "default_database_path")]
+    pub database_path: String,
+    #[serde(default = "default_memory_port")]
+    pub memory_port: u16,
+    #[serde(default = "default_core_port")]
+    pub core_port: u16,
+
+    // Module specific settings
     pub system: SystemConfig,
     pub storage: StorageConfig,
     pub embedder: EmbedderConfig,
     pub engine: EngineConfig,
 }
+
+fn default_workspace_root() -> String { ".".into() }
+fn default_database_path() -> String { "aria_whiteboard.db".into() }
+fn default_memory_port() -> u16 { 8080 }
+fn default_core_port() -> u16 { 3000 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SystemConfig {
@@ -71,14 +86,17 @@ fn detect_gpu() -> bool {
 
 impl Default for Config {
     fn default() -> Self {
-        // Standardize on the ultra-lightweight potion model for reliability
         let model_name = "minishlab/potion-base-32M".to_string();
         let model_path = "models/potion-base-32M".to_string();
 
         Self {
+            workspace_root: ".".into(),
+            database_path: "aria_whiteboard.db".into(),
+            memory_port: 8080,
+            core_port: 3000,
             system: SystemConfig {
                 log_level: "info".to_string(),
-                data_dir: None,
+                data_dir: Some(PathBuf::from("data")),
             },
             storage: StorageConfig {
                 storage_type: "sqlite".to_string(),
@@ -107,39 +125,26 @@ impl Default for Config {
 
 impl Config {
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
-        // 1. Check local directory first
         let local_path = PathBuf::from("aria.config.json");
+        
         if local_path.exists() {
             let content = fs::read_to_string(&local_path)?;
             let config: Config = serde_json::from_str(&content)?;
             return Ok(config);
         }
 
-        // 2. Check system directories
-        let project_dirs = ProjectDirs::from("", "aria-project", "aria")
-            .ok_or("Could not determine system directory")?;
-        let config_dir = project_dirs.config_dir();
-        let system_path = config_dir.join("aria.config.json");
-
-        if system_path.exists() {
-            let content = fs::read_to_string(&system_path)?;
-            let config: Config = serde_json::from_str(&content)?;
-            return Ok(config);
+        let mut default_config = Config::default();
+        
+        if let Some(ref data_dir) = default_config.system.data_dir {
+            if !data_dir.exists() {
+                fs::create_dir_all(data_dir)?;
+            }
         }
 
-        // 3. If no config exists, create default in system directory
-        let mut default_config = Config::default();
-        let data_dir = project_dirs.data_dir();
-        default_config.system.data_dir = Some(data_dir.to_path_buf());
+        let content = serde_json::to_string_pretty(&default_config)?;
+        fs::write(&local_path, content)?;
         
-        fs::create_dir_all(config_dir)?;
-        fs::create_dir_all(data_dir)?; // Create data dir as well just in case
-
-        // Write default config
-        let json = serde_json::to_string_pretty(&default_config)?;
-        fs::write(&system_path, json)?;
-        
-        println!("✓ Created default configuration at {:?}", system_path);
+        println!("✓ Created default configuration at {:?}", local_path);
         if detect_gpu() {
             println!("✓ Hardware detection: GPU found. Selected optimal model.");
         } else {
@@ -149,9 +154,6 @@ impl Config {
         Ok(default_config)
     }
 
-    /// Resolves the final database path.
-    /// If storage.path is absolute, it uses it directly.
-    /// Otherwise, it joins it with the configured data_dir or the current directory.
     pub fn get_db_path(&self) -> PathBuf {
         let path = PathBuf::from(&self.storage.path);
         if path.is_absolute() {
@@ -163,7 +165,6 @@ impl Config {
         }
     }
 
-    /// Resolves the final model path.
     pub fn get_model_path(&self) -> PathBuf {
         let path = PathBuf::from(&self.embedder.model2vec.model_path);
         if path.is_absolute() {

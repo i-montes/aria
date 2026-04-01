@@ -20,6 +20,12 @@ if ! command -v cargo &> /dev/null; then
     exit 1
 fi
 
+echo -e "\nStep 1.5: Stopping existing Aria processes..."
+pkill aria || true
+pkill ariamem || true
+pkill ariacore || true
+sleep 1
+
 echo -e "\nStep 2: Installing Aria CLI globally..."
 cargo install --path aria-cli --force
 info "Aria CLI installed successfully to PATH."
@@ -28,8 +34,12 @@ echo -e "\nStep 3: Installing AriaMem service globally..."
 cargo install --path ariamem --force
 info "AriaMem installed successfully to PATH."
 
+echo -e "\nStep 3.5: Installing AriaCore service globally..."
+cargo install --path aria-core --force
+info "AriaCore installed successfully to PATH."
+
 echo -e "\nStep 4: Running global tests..."
-rm -f ~/.local/share/aria-project/aria/config/aria.config.json
+# Clean local project config if requested, but ariamem now handles it
 
 info "Initializing Memory Engine via global CLI..."
 aria mem init
@@ -51,6 +61,9 @@ echo -e "==========================================\n"
 
 info "Starting AriaMem Server in the background..."
 aria start mem
+
+info "Starting AriaCore Orchestrator in the background..."
+aria start core
 
 echo -e "\nNext steps:"
 echo "  1. Check running services: aria status"

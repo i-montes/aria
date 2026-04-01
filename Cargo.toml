@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "aria-cli",
-    "ariamem"
-, "hf_diag"]
+    "ariamem",
+    "aria-core",
+    "hf_diag"
+]
 resolver = "2"
