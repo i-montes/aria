@@ -30,7 +30,7 @@ function request(message, onProgress) {
 
 const handlers = {
   open: () => {
-    if (state.mode === 'chat') chat.show()
+    if (state.mode === 'chat') booted.then(() => chat.show())
     else onboarding.onOpen() // in the middle of a setup, keep the place
     document.body.classList.remove('show-notice')
     document.body.classList.remove('open')
@@ -119,6 +119,7 @@ const onboarding = createOnboarding({
     i18n.setLanguage(code)
     renderProblem()
     onboarding.render()
+    chat.mount()
   },
 })
 
@@ -166,9 +167,13 @@ async function boot() {
   const [en, es] = await Promise.all(['en', 'es'].map((code) => fetch(`aria://app/i18n/${code}.json`).then((r) => r.json())))
   i18n = createI18n({ en, es })
   i18n.setLanguage(navigator.language)
+  chat.mount()
   const reply = await request({ type: 'loadSettings' })
   if (reply.problem) state.problem = reply.problem
-  if (reply.settings?.assistant?.language) i18n.setLanguage(reply.settings.assistant.language)
+  if (reply.settings?.assistant?.language) {
+    i18n.setLanguage(reply.settings.assistant.language)
+    chat.mount()
+  }
   onboarding.start(reply.settings, reply.connected)
   setMode(reply.settings?.setup?.completed ? 'chat' : 'setup')
   renderProblem()

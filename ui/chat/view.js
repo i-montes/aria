@@ -139,7 +139,14 @@ export function createChatView({ root, t, send, request, onSettings }) {
   let fileToken = 0
   let fileTimer = null
 
-  root.innerHTML = `
+  let input = null
+  let banner = ''
+  let dialogsKey = ''
+  const $ = (id) => root.querySelector(`#${id}`)
+
+  /** Builds the chat's HTML. Called once the texts are loaded (and again when the language changes). */
+  function mount() {
+    root.innerHTML = `
     <header class="chat-head">
       <div class="chat-path" id="chat-path"></div>
       <button type="button" class="icon-btn" data-chat="new" data-nav aria-label="${esc(t('chat.new'))}" title="${esc(t('chat.new'))}">${icon.plus}</button>
@@ -159,11 +166,14 @@ export function createChatView({ root, t, send, request, onSettings }) {
       <button type="button" class="model-chip" id="chat-model" data-chat="model"></button>
       <span class="hints"><kbd>/</kbd> ${esc(t('chat.hint.commands'))} · <kbd>@</kbd> ${esc(t('chat.hint.files'))}</span>
     </div>`
-  const $ = (id) => root.querySelector(`#${id}`)
-  const input = $('chat-input')
-  let dialogsKey = ''
+    input = $('chat-input')
+    dialogsKey = ''
+    bindInput()
+    render()
+  }
 
   function render() {
+    if (!input) return
     $('chat-path').innerHTML = renderPath(state, t)
     $('chat-problem').innerHTML = renderProblem(state, t)
     const list = $('chat-list')
@@ -182,6 +192,7 @@ export function createChatView({ root, t, send, request, onSettings }) {
     const pick = $('chat-picker')
     pick.hidden = !picker
     pick.innerHTML = renderPicker(picker, t)
+    $('chat-banner').innerHTML = banner
   }
 
   // ---- composer -------------------------------------------------------------------------------
@@ -262,34 +273,36 @@ export function createChatView({ root, t, send, request, onSettings }) {
     input.focus()
   }
 
-  input.addEventListener('input', () => {
-    autosize()
-    updatePicker()
-  })
+  function bindInput() {
+    input.addEventListener('input', () => {
+      autosize()
+      updatePicker()
+    })
 
-  input.addEventListener('keydown', (event) => {
-    if (picker && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
-      event.preventDefault()
-      event.stopPropagation()
-      const size = picker.items.length
-      if (size) picker = { ...picker, index: (picker.index + (event.key === 'ArrowDown' ? 1 : -1) + size) % size }
-      return render()
-    }
-    if (picker && (event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && picker.items.length) {
-      event.preventDefault()
-      return choose(picker.index)
-    }
-    if (picker && event.key === 'Escape') {
-      event.stopPropagation()
-      return closePicker()
-    }
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-      event.preventDefault()
-      submit()
-    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.stopPropagation() // the arrows move the caret here, not focus between controls
-    }
-  })
+    input.addEventListener('keydown', (event) => {
+      if (picker && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
+        event.preventDefault()
+        event.stopPropagation()
+        const size = picker.items.length
+        if (size) picker = { ...picker, index: (picker.index + (event.key === 'ArrowDown' ? 1 : -1) + size) % size }
+        return render()
+      }
+      if (picker && (event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && picker.items.length) {
+        event.preventDefault()
+        return choose(picker.index)
+      }
+      if (picker && event.key === 'Escape') {
+        event.stopPropagation()
+        return closePicker()
+      }
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+        event.preventDefault()
+        submit()
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.stopPropagation() // the arrows move the caret here, not focus between controls
+      }
+    })
+  }
 
   // ---- clicks ---------------------------------------------------------------------------------
 
@@ -331,14 +344,16 @@ export function createChatView({ root, t, send, request, onSettings }) {
       state = reduce(state, message)
       render()
     },
+    mount,
     show() {
       send({ type: 'chatLoad' })
       render()
-      input.focus()
+      input?.focus()
     },
     render,
     setBanner(html) {
-      $('chat-banner').innerHTML = html
+      banner = html
+      if (input) $('chat-banner').innerHTML = html
     },
   }
 }
