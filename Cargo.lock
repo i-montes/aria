@@ -37,6 +37,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aria-engine"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "aria-hyprland"
 version = "0.1.0"
 dependencies = [
