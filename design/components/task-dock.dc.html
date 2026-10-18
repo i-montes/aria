@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Task dock</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+@keyframes td-sheen{from{background-position:200% 0}to{background-position:-200% 0}}
+@keyframes td-spin{to{transform:rotate(360deg)}}
+@keyframes td-fade-up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.aria-scroll::-webkit-scrollbar{width:14px;height:14px}
+.aria-scroll::-webkit-scrollbar-track{background:transparent}
+.aria-scroll::-webkit-scrollbar-corner{background:transparent}
+.aria-scroll::-webkit-scrollbar-thumb{background-color:rgba(255,255,255,0.16);border:4px solid transparent;background-clip:padding-box;border-radius:999px}
+.aria-scroll:hover::-webkit-scrollbar-thumb{background-color:rgba(255,255,255,0.28)}
+.aria-scroll::-webkit-scrollbar-thumb:hover{background-color:rgba(185,168,255,0.7);border-width:2px}
+.aria-scroll::-webkit-scrollbar-thumb:active{background-color:#B9A8FF;border-width:2px}
+@supports not selector(::-webkit-scrollbar){.aria-scroll{scrollbar-width:auto;scrollbar-color:rgba(255,255,255,0.28) transparent}}
+@media (prefers-reduced-motion: reduce){
+  .td, .td *{animation:none !important;transition:none !important}
+}
+</style>
+</helmet>
+<div class="td" style="position: relative; z-index: 1; display: grid; grid-template-rows: {{showRows}}; opacity: {{showOpacity}}; visibility: {{showVisibility}}; transition: grid-template-rows 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease, visibility 0s linear {{showDelay}}; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; animation: {{rootAnimation}}">
+  <div style="min-height: 0; clip-path: inset(0 -24px -1px -24px)">
+    <div style="display: flex; justify-content: {{align}}">
+      <div style="position: relative; display: flex; flex-direction: {{flow}}; width: {{dockWidth}}; max-width: {{maxWidth}}; box-sizing: border-box; margin-bottom: {{overlap}}; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.1); border-bottom: {{borderBottom}}; border-radius: {{radius}}; background: rgba(22, 22, 26, 0.96); transition: width 360ms cubic-bezier(0.22, 1, 0.36, 1)">
+
+        <div style="display: grid; grid-template-rows: {{listRows}}; opacity: {{listOpacity}}; visibility: {{listVisibility}}; transition: grid-template-rows 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease, visibility 0s linear {{listDelay}}">
+          <div style="min-height: 0; overflow: hidden">
+            <ul aria-label="{{listLabel}}" class="aria-scroll" style="display: flex; flex-direction: column; gap: 2px; margin: 0; padding: {{listPadding}}; list-style: none; max-height: 232px; overflow-x: hidden; overflow-y: auto">
+              <sc-for list="{{rows}}" as="t" hint-placeholder-count="4">
+                <li aria-current="{{t.current}}" style="opacity: {{t.opacity}}; transform: {{t.transform}}; transition: opacity 240ms ease {{t.delay}}ms, transform 300ms cubic-bezier(0.22, 1, 0.36, 1) {{t.delay}}ms">
+                  <sc-if value="{{t.clickable}}" hint-placeholder-val="{{ false }}">
+                    <button type="button" onClick="{{t.pick}}" aria-label="{{t.ariaLabel}}" style-hover="background: rgba(255, 255, 255, 0.06)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: -2px" style="display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 10px; align-items: start; width: 100%; box-sizing: border-box; margin: 0; padding: 6px 8px; border: 0; border-radius: 10px; background: {{t.bg}}; color: inherit; font-family: Geist, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: background-color 300ms ease">
+                    <span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 16px; height: 18px">
+                      <sc-if value="{{t.isDone}}" hint-placeholder-val="{{ false }}"><span style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background: rgba(139, 224, 176, 0.14); color: #8BE0B0"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg></span></sc-if>
+                      <sc-if value="{{t.isActive}}" hint-placeholder-val="{{ false }}"><span style="width: 13px; height: 13px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid #34343B; border-top-color: #B9A8FF; animation: td-spin 700ms linear infinite"></span></sc-if>
+                      <sc-if value="{{t.isTodo}}" hint-placeholder-val="{{ false }}"><span style="width: 13px; height: 13px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid #34343B"></span></sc-if>
+                    </span>
+                    <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+                      <span style="font-family: {{t.primaryFont}}; font-size: {{t.primarySize}}; font-weight: {{t.weight}}; line-height: 18px; color: {{t.color}}; overflow-wrap: anywhere; transition: color 300ms ease">{{t.primary}}</span>
+                      <sc-if value="{{t.hasSecond}}" hint-placeholder-val="{{ false }}"><span style="font-family: {{t.secondFont}}; font-size: {{t.secondSize}}; line-height: 16px; color: #9A9AA3; overflow-wrap: anywhere">{{t.second}}</span></sc-if>
+                    </span>
+                    <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 18px; color: {{t.statusColor}}; white-space: nowrap">{{t.statusText}}</span>
+                    </button>
+                  </sc-if>
+                  <sc-if value="{{t.plain}}" hint-placeholder-val="{{ true }}">
+                    <div style="display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 10px; align-items: start; padding: 6px 8px; border-radius: 10px; background: {{t.bg}}; transition: background-color 300ms ease">
+                    <span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 16px; height: 18px">
+                      <sc-if value="{{t.isDone}}" hint-placeholder-val="{{ false }}"><span style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background: rgba(139, 224, 176, 0.14); color: #8BE0B0"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg></span></sc-if>
+                      <sc-if value="{{t.isActive}}" hint-placeholder-val="{{ false }}"><span style="width: 13px; height: 13px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid #34343B; border-top-color: #B9A8FF; animation: td-spin 700ms linear infinite"></span></sc-if>
+                      <sc-if value="{{t.isTodo}}" hint-placeholder-val="{{ false }}"><span style="width: 13px; height: 13px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid #34343B"></span></sc-if>
+                    </span>
+                    <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+                      <span style="font-family: {{t.primaryFont}}; font-size: {{t.primarySize}}; font-weight: {{t.weight}}; line-height: 18px; color: {{t.color}}; overflow-wrap: anywhere; transition: color 300ms ease">{{t.primary}}</span>
+                      <sc-if value="{{t.hasSecond}}" hint-placeholder-val="{{ false }}"><span style="font-family: {{t.secondFont}}; font-size: {{t.secondSize}}; line-height: 16px; color: #9A9AA3; overflow-wrap: anywhere">{{t.second}}</span></sc-if>
+                    </span>
+                    <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 18px; color: {{t.statusColor}}; white-space: nowrap">{{t.statusText}}</span>
+                    </div>
+                  </sc-if>
+                </li>
+              </sc-for>
+            </ul>
+          </div>
+        </div>
+
+        <button type="button" aria-expanded="{{openAttr}}" aria-label="{{ariaLabel}}" onClick="{{toggle}}" style-hover="background: rgba(255, 255, 255, 0.04)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: -2px" style="display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; box-sizing: border-box; margin: 0; padding: 0 14px; border: 0; background: transparent; color: inherit; font-family: Geist, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: background-color 120ms">
+          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#B4B4BC" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 14px; transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1); transform: {{chevron}}"><path d="M6 15l6-6 6 6"></path></svg>
+          <span style="flex: 0 0 auto; font-size: 12px; font-weight: 500; line-height: 16px; color: #D6D6DC">{{kindLabel}}</span>
+          <span aria-hidden="true" style="position: relative; flex: 1 1 auto; min-width: 0; height: 4px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, 0.1)">
+            <span style="position: absolute; top: 0; left: 0; bottom: 0; width: {{percent}}%; border-radius: 999px; background: {{fillBackground}}; background-size: 200% 100%; animation: {{fillAnimation}}; filter: {{fillFilter}}; transition: width 700ms cubic-bezier(0.22, 1, 0.36, 1), background-color 300ms ease, filter 350ms ease"></span>
+          </span>
+          <span style="flex: 0 0 auto; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; font-variant-numeric: tabular-nums; display: inline-block; transform: {{countTransform}}; color: {{countColor}}; transition: color 300ms ease, transform 350ms cubic-bezier(0.22, 1, 0.36, 1)">{{countText}}</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"startOpen":{"editor":"boolean","default":true},"show":{"editor":null},"inline":{"editor":"boolean","default":false},"kind":{"editor":"enum","options":["tasks","agents"],"default":"tasks"},"onSelect":{"editor":null},"partial":{"editor":null},"complete":{"editor":"boolean","default":false},"tasks":{"editor":null},"onOpenChange":{"editor":null},"$preview":{"width":448,"height":380}}'>
+class Component extends DCLogic {
+  defaults() {
+    return [
+      { label: 'Define the queue message contract', status: 'done' },
+      { label: 'Producer in the send endpoint', status: 'done' },
+      { label: 'Consumer with retries and a dead-letter queue', status: 'active', note: 'src/queue/consumer.ts' },
+      { label: 'Tests with a simulated bulk send', status: 'todo' },
+      { label: 'Remove direct sending', status: 'todo' }
+    ];
+  }
+  agentDefaults() {
+    return [
+      { role: 'researcher', label: 'Compare queue options for the push sends', status: 'done' },
+      { role: 'backend', label: 'Producer and consumer with retries', status: 'active' },
+      { role: 'security', label: 'Check the idempotency key and rate limits', status: 'active' },
+      { role: 'reviewer', label: 'Review the change before it ships', status: 'todo' }
+    ];
+  }
+  data() {
+    if (Array.isArray(this.props.tasks)) return this.props.tasks;
+    const d = this.props.kind === 'agents' ? this.agentDefaults() : this.defaults();
+    return this.props.complete === true ? d.map((x) => Object.assign({}, x, { status: 'done' })) : d;
+  }
+  doneCount() {
+    return this.data().filter((x) => x.status === 'done').length;
+  }
+  componentDidMount() {
+    this.lastDone = this.doneCount();
+  }
+  componentDidUpdate() {
+    const d = this.doneCount();
+    if (this.lastDone !== undefined && d > this.lastDone) {
+      this.setState({ pulse: true });
+      clearTimeout(this.pulseT);
+      this.pulseT = setTimeout(() => this.setState({ pulse: false }), 700);
+    }
+    this.lastDone = d;
+  }
+  componentWillUnmount() {
+    clearTimeout(this.pulseT);
+  }
+  toggle() {
+    const s = this.state || {};
+    const current = (s.open !== undefined && s.open !== null) ? s.open : !!this.props.startOpen;
+    this.setState({ open: !current });
+    if (this.props.onOpenChange) this.props.onOpenChange(!current);
+  }
+  renderVals() {
+    const s = this.state || {};
+    const inline = this.props.inline === true;
+    const liveTasks = this.data();
+    if (liveTasks.length) this.lastTasks = liveTasks;
+    const tasks = liveTasks.length ? liveTasks : (this.lastTasks || []);
+    const total = tasks.length;
+    const done = tasks.filter((t) => t.status === 'done').length;
+    const activeTask = tasks.find((t) => t.status === 'active');
+    const complete = total > 0 && done === total;
+    const show = this.props.show !== false && liveTasks.length > 0;
+    const open = ((s.open !== undefined && s.open !== null) ? s.open : !!this.props.startOpen) && show;
+    const partial = Math.min(1, Math.max(0, this.props.partial || 0));
+    const agents = this.props.kind === 'agents';
+    const activeCount = tasks.filter((x) => x.status === 'active').length;
+    const percent = total ? Math.round(((done + (complete ? 0 : (agents ? activeCount * 0.5 : (activeTask ? partial : 0)))) / total) * 100) : 0;
+    const pulse = !!s.pulse;
+    const rows = tasks.map((t, i) => {
+      const isDone = t.status === 'done';
+      const isActive = t.status === 'active';
+      const statusText = agents ? (isDone ? 'done' : (isActive ? 'working' : 'queued')) : '';
+      const clickable = agents && !!this.props.onSelect;
+      return {
+        primary: agents ? (t.role || '') : t.label,
+        primaryFont: agents ? "'Geist Mono', ui-monospace, monospace" : 'Geist, ui-sans-serif, system-ui, sans-serif',
+        primarySize: agents ? '12.5px' : '13px',
+        second: agents ? (t.label || '') : (t.note || ''),
+        hasSecond: agents ? !!t.label : (isActive && !!t.note),
+        secondFont: agents ? 'Geist, ui-sans-serif, system-ui, sans-serif' : "'Geist Mono', ui-monospace, monospace",
+        secondSize: agents ? '12.5px' : '11.5px',
+        statusText: statusText,
+        statusColor: isDone ? '#8BE0B0' : (isActive ? '#B9A8FF' : '#8A8A94'),
+        clickable: clickable,
+        plain: !clickable,
+        ariaLabel: (t.role || t.label) + ': ' + (t.label || '') + ', ' + statusText + '. Open its session',
+        pick: () => { if (this.props.onSelect) this.props.onSelect(t.role); },
+        isDone: isDone, isActive: isActive, isTodo: !isDone && !isActive,
+        current: isActive ? 'step' : 'false',
+        bg: isActive ? 'rgba(185, 168, 255, 0.08)' : 'transparent',
+        color: isActive ? '#F4F4F5' : (isDone ? '#8A8A94' : '#B4B4BC'),
+        weight: isActive ? 500 : 400,
+        opacity: open ? 1 : 0,
+        transform: open ? 'translateY(0)' : 'translateY(6px)',
+        delay: open ? 40 + i * 35 : 0
+      };
+    });
+    return {
+      showRows: show ? '1fr' : '0fr',
+      showOpacity: show ? 1 : 0,
+      showVisibility: show ? 'visible' : 'hidden',
+      showDelay: show ? '0ms' : '320ms',
+      dockWidth: open ? '100%' : '264px',
+      listRows: open ? '1fr' : '0fr',
+      listOpacity: open ? 1 : 0,
+      listVisibility: open ? 'visible' : 'hidden',
+      listDelay: open ? '0ms' : '320ms',
+      openAttr: open ? 'true' : 'false',
+      chevron: (open !== inline) ? 'rotate(180deg)' : 'rotate(0deg)',
+      rootAnimation: inline ? 'td-fade-up 320ms cubic-bezier(0.22, 1, 0.36, 1) both' : 'none',
+      align: inline ? 'flex-start' : 'center',
+      flow: inline ? 'column-reverse' : 'column',
+      maxWidth: inline ? '360px' : '100%',
+      overlap: inline ? '0' : '-1px',
+      borderBottom: inline ? '1px solid rgba(255, 255, 255, 0.1)' : '0',
+      radius: inline ? '14px' : '14px 14px 0 0',
+      listPadding: inline ? '2px 8px 8px' : '10px 8px 4px',
+      listLabel: agents ? 'Agents' : 'Tasks',
+      kindLabel: agents ? 'Agents' : 'Tasks',
+      ariaLabel: (agents ? 'Agents: ' : 'Tasks: ') + done + ' of ' + total + ' done' + (activeTask ? ', working on ' + (agents ? activeTask.role : activeTask.label) : ''),
+      percent: percent,
+      fillBackground: complete ? '#8BE0B0' : 'linear-gradient(90deg, #B9A8FF, #E4DDFF, #B9A8FF)',
+      fillAnimation: (activeTask && !complete) ? 'td-sheen 2.4s linear infinite' : 'none',
+      fillFilter: pulse ? 'brightness(1.5) saturate(1.2)' : 'none',
+      countTransform: pulse ? 'scale(1.25)' : 'scale(1)',
+      countText: complete ? 'Done' : (done + '/' + total),
+      countColor: complete ? '#8BE0B0' : '#B4B4BC',
+      rows: rows,
+      toggle: () => this.toggle()
+    };
+  }
+}
+</script>
+</body>
+</html>

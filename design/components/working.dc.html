@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Working</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+@keyframes pixel-on{0%,100%{opacity:.15}30%{opacity:1}}
+@keyframes shimmer-text{from{background-position:130% 0}to{background-position:-30% 0}}
+@media (prefers-reduced-motion: reduce){
+  .aria-cell{animation:none !important;opacity:.15 !important}
+  .aria-shimmer{animation:none !important;background-position:50% 0 !important}
+}
+</style>
+</helmet>
+<div style="display: flex; align-items: center; gap: 10px; width: fit-content; max-width: 100%; box-sizing: border-box; min-height: 20px; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF">
+  <span aria-hidden="true" style="display: grid; grid-template-columns: repeat(3, 4px); gap: 1.5px; flex: 0 0 auto">
+    <sc-for list="{{cells}}" as="c" hint-placeholder-count="9">
+      <span class="aria-cell" style="width: 4px; height: 4px; border-radius: 50%; background: {{accent}}; opacity: 0.15; animation: pixel-on 650ms ease-in-out {{c.delay}}ms infinite"></span>
+    </sc-for>
+  </span>
+  <span role="status" class="aria-shimmer" style="min-width: 0; font-size: 13px; font-weight: 500; line-height: 20px; color: transparent; background-image: linear-gradient(90deg, #8A8A94 35%, #F4F4F5 50%, #8A8A94 65%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; overflow-wrap: anywhere; animation: shimmer-text 1.4s linear infinite">{{label}}</span>
+  <span role="timer" aria-live="off" style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; font-variant-numeric: tabular-nums; color: #9A9AA3; white-space: nowrap">{{elapsed}}</span>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"phase":{"editor":"enum","options":["thinking","working","searching memory","searching the web","checking Notion","reading files","writing files","running command","delegating","planning","writing the spec","splitting into phases","compacting context"],"default":"working"},"label":{"editor":"text","default":""},"startAt":{"editor":"int","min":0,"max":3600,"step":1,"unit":"s","default":0},"accent":{"editor":"color","default":"#F4F4F5","options":["#F4F4F5","#B9A8FF","#7DD3FC","#9BE7C4"]},"$preview":{"width":448,"height":24}}'>
+class Component extends DCLogic {
+  componentDidMount() {
+    this.t0 = Date.now() - (this.props.startAt ?? 0) * 1000;
+    this.timer = setInterval(() => this.setState({ tick: Date.now() }), 100);
+  }
+  componentWillUnmount() {
+    clearInterval(this.timer);
+  }
+  renderVals() {
+    const t0 = this.t0 ?? (Date.now() - (this.props.startAt ?? 0) * 1000);
+    const total = Math.max(0, Math.floor((Date.now() - t0) / 100)) / 10;
+    const elapsed = total < 60
+      ? total.toFixed(1) + 's'
+      : Math.floor(total / 60) + 'm ' + (total % 60).toFixed(1) + 's';
+    const custom = (this.props.label ?? '').trim();
+    const base = custom || (this.props.phase ?? 'working');
+    const label = base.charAt(0).toUpperCase() + base.slice(1);
+    const cells = Array.from({ length: 9 }, (_, i) => {
+      const r = Math.floor(i / 3), c = i % 3;
+      return { delay: (c + Math.abs(r - 1)) * 90 };
+    });
+    return {
+      cells: cells,
+      label: label,
+      elapsed: elapsed,
+      accent: this.props.accent ?? '#F4F4F5'
+    };
+  }
+}
+</script>
+</body>
+</html>

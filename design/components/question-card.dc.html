@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Question card</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+@keyframes pop-in{from{opacity:0;transform:scale(0.96)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){
+  .pq, .pq *{animation:none !important;transition:none !important}
+}
+</style>
+</helmet>
+<div class="pq" style="width: 100%; max-width: {{maxWidth}}; box-sizing: border-box; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF">
+
+  <sc-if value="{{isOpen}}" hint-placeholder-val="{{ true }}">
+    <div style="position: relative; overflow: hidden; border-radius: 16px; background: #141417; border: 1px solid rgba(255, 255, 255, 0.09)">
+
+      <button type="button" aria-label="Dismiss questions" onClick="{{dismiss}}" style-hover="background: rgba(255, 255, 255, 0.06); color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: -2px" style="position: absolute; top: 6px; right: 6px; z-index: 2; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 12px; background: transparent; color: #9A9AA3; cursor: pointer; transition: background-color 100ms, color 100ms">
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"></path></svg>
+      </button>
+
+      <div style="padding: 14px 14px 0">
+        <div role="tablist" aria-label="Questions" style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 32px; padding-right: 44px">
+          <sc-for list="{{tabs}}" as="tb" hint-placeholder-count="3">
+            <button type="button" role="tab" aria-selected="{{tb.selected}}" onClick="{{tb.go}}" style-hover="background: {{tb.hoverBg}}" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: inline-flex; align-items: center; gap: 6px; min-height: 32px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 8px; background: {{tb.bg}}; color: {{tb.color}}; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12px; font-weight: 500; line-height: 16px; text-align: left; cursor: pointer; transition: background-color 150ms, color 150ms">
+              <sc-if value="{{tb.checked}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 11px"><path d="M20 6L9 17l-5-5"></path></svg></sc-if>
+              <sc-if value="{{tb.talked}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 11px"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path></svg></sc-if>
+              <span style="overflow-wrap: anywhere">{{tb.header}}</span>
+            </button>
+          </sc-for>
+        </div>
+      </div>
+
+      <div aria-live="polite" style="margin-top: 14px; padding: 0 14px">
+        <div style="overflow: hidden; height: {{viewportHeight}}; transition: {{viewportTransition}}">
+          <div style="position: relative; display: flex; flex-direction: column; gap: 26px; transform: translate3d(0, {{trackY}}, 0); transition: {{trackTransition}}; will-change: transform">
+
+            <sc-for list="{{questions}}" as="q" hint-placeholder-count="1">
+              <div role="tabpanel" ref="{{q.ref}}" style="display: {{q.display}}; opacity: {{q.opacity}}; visibility: {{q.visibility}}; pointer-events: {{q.pointerEvents}}; transition: {{q.transition}}">
+                <div style="font-size: 14px; font-weight: 500; line-height: 1.4; color: #F4F4F5; overflow-wrap: anywhere">{{q.question}}</div>
+
+                <div style="display: flex; flex-direction: column; gap: 2px; margin-top: 10px">
+                  <sc-for list="{{q.options}}" as="o" hint-placeholder-count="3">
+                    <button type="button" aria-pressed="{{o.pressed}}" onClick="{{o.pick}}" style-hover="background: rgba(255, 255, 255, 0.05)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: -2px" style="display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 10px; align-items: start; width: 100%; min-height: 44px; box-sizing: border-box; margin: 0; padding: 9px 8px; border: 0; border-radius: 10px; background: transparent; color: inherit; font-family: Geist, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: background-color 120ms">
+                      <span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-top: 1px; border-radius: {{q.indicatorRadius}}; background: {{o.indicatorBg}}; box-shadow: {{o.indicatorRing}}; color: #0B0B0D; transition: background-color 200ms, box-shadow 200ms">
+                        <sc-if value="{{q.isRadio}}" hint-placeholder-val="{{ true }}"><span style="width: 6px; height: 6px; border-radius: 50%; background: #0B0B0D; transform: {{o.dotScale}}; transition: transform 200ms"></span></sc-if>
+                        <sc-if value="{{q.isCheck}}" hint-placeholder-val="{{ false }}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="opacity: {{o.checkOpacity}}; transition: opacity 200ms"><path d="M20 6L9 17l-5-5"></path></svg></sc-if>
+                      </span>
+                      <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+                        <span style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px">
+                          <span style="font-size: 13px; font-weight: 500; line-height: 18px; color: {{o.labelColor}}; overflow-wrap: anywhere; transition: color 200ms">{{o.label}}</span>
+                          <sc-if value="{{o.recommended}}" hint-placeholder-val="{{ false }}"><span style="padding: 0 6px; border-radius: 999px; background: rgba(185, 168, 255, 0.14); color: #B9A8FF; font-size: 11px; font-weight: 500; line-height: 16px; white-space: nowrap">Recommended</span></sc-if>
+                        </span>
+                        <sc-if value="{{o.hasDescription}}" hint-placeholder-val="{{ true }}"><span style="font-size: 12px; line-height: 1.45; color: #9A9AA3; overflow-wrap: anywhere">{{o.description}}</span></sc-if>
+                      </span>
+                    </button>
+                  </sc-for>
+
+                </div>
+              </div>
+            </sc-for>
+
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px 14px">
+        <button type="button" onClick="{{talk}}" style-hover="background: rgba(255, 255, 255, 0.06); color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px 0 10px; border: 0; border-radius: 12px; background: transparent; color: #B4B4BC; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13.5px; cursor: pointer; transition: background-color 100ms, color 100ms">
+          <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path></svg>
+          <span>{{talkLabel}}</span>
+        </button>
+        <div style="display: flex; align-items: center; gap: 8px; margin-left: auto">
+        <button type="button" onClick="{{skip}}" style-hover="background: rgba(255, 255, 255, 0.06); color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="min-height: 44px; padding: 0 14px; border: 0; border-radius: 12px; background: transparent; color: #B4B4BC; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13.5px; cursor: pointer; transition: background-color 100ms, color 100ms">{{skipLabel}}</button>
+        <button type="button" disabled="{{continueDisabled}}" onClick="{{advance}}" style-focus-visible="outline: 2px solid #F4F4F5; outline-offset: 2px" style="display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; border: 0; border-radius: 12px; background: #B9A8FF; color: #0B0816; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13.5px; font-weight: 600; opacity: {{continueOpacity}}; cursor: {{continueCursor}}; transition: opacity 150ms">
+          <span>{{primaryLabel}}</span>
+          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.6"><path d="M20 4v7a4 4 0 0 1-4 4H4"></path><path d="M9 10l-5 5 5 5"></path></svg>
+        </button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{isSent}}" hint-placeholder-val="{{ false }}">
+    <div style="display: flex; align-items: center; gap: 12px; animation: pop-in 260ms cubic-bezier(0.23, 1, 0.32, 1) both">
+      <span style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px; border-radius: 999px; background: rgba(139, 224, 176, 0.12); color: #8BE0B0; font-size: 12.5px; font-weight: 500">
+        <span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: #8BE0B0; color: #0B0B0D"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg></span>
+        {{sentMessage}}
+      </span>
+      <button type="button" onClick="{{reset}}" style-hover="color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="min-height: 44px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: #9A9AA3; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12px; font-weight: 500; cursor: pointer; transition: color 150ms">Start over</button>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{isClosed}}" hint-placeholder-val="{{ false }}">
+    <button type="button" onClick="{{reset}}" style-hover="background: #1C1C21" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="min-height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.1); background: #141417; color: #F4F4F5; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13px; font-weight: 500; cursor: pointer; transition: background-color 100ms">Open questions</button>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"talkLabel":{"editor":"text","default":"Talk about this"},"skipLabel":{"editor":"text","default":"Skip"},"continueLabel":{"editor":"text","default":"Continue"},"sendLabel":{"editor":"text","default":"Send"},"sentMessage":{"editor":"text","default":"Answers sent"},"standalone":{"editor":"boolean","default":true},"fill":{"editor":"boolean","default":false},"questions":{"editor":null},"onSubmitted":{"editor":null},"onDismiss":{"editor":null},"onAnswerChange":{"editor":null},"$preview":{"width":448,"height":560}}'>
+class Component extends DCLogic {
+  defaults() {
+    return [
+      {
+        header: 'Fallback',
+        question: 'What should RELEASE be when it isn’t set?',
+        type: 'radio',
+        options: [
+          { label: 'Commit hash', description: 'Read it from git, so every build gets a real version.', recommended: true },
+          { label: '“dev”', description: 'Simplest, but every build reports the same version.', recommended: false },
+          { label: 'Keep it required', description: 'Fails fast, but every deploy has to set it.', recommended: false }
+        ]
+      },
+      {
+        header: 'Tests',
+        question: 'Which tests should I add?',
+        type: 'radio',
+        options: [
+          { label: 'Fallback only', description: 'One test for the commit-hash fallback.', recommended: false },
+          { label: 'Fallback and API_URL', description: 'Also covers the missing API_URL error.', recommended: true }
+        ]
+      },
+      {
+        header: 'Docs',
+        question: 'Where should I document it?',
+        type: 'check',
+        options: [
+          { label: '.env.example', description: 'Add RELEASE with a comment.', recommended: true },
+          { label: 'README.md', description: 'A short Environment section.', recommended: false },
+          { label: 'CHANGELOG.md', description: 'Note the behavior change.', recommended: false }
+        ]
+      }
+    ];
+  }
+  data() {
+    const list = (this.props.questions && this.props.questions.length) ? this.props.questions : this.defaults();
+    return list.map((q) => ({
+      header: q.header || 'Question',
+      question: q.question || '',
+      type: q.type === 'check' ? 'check' : 'radio',
+      options: (q.options || []).slice(0, 4).map((o) => ({
+        label: o.label || '',
+        description: o.description || '',
+        recommended: !!o.recommended
+      }))
+    }));
+  }
+  curr() {
+    const n = this.data().length;
+    return Math.min((this.state && this.state.qi) || 0, n - 1);
+  }
+  measure() {
+    if (this.dead) return;
+    const el = (this.qEls || [])[this.curr()];
+    if (!el) return;
+    const s = this.state || {};
+    const h = el.offsetHeight;
+    const y = el.offsetTop;
+    if (s.h !== h || s.y !== y || !s.ready) this.setState({ h: h, y: y, ready: true });
+  }
+  componentDidMount() {
+    this.qEls = this.qEls || [];
+    requestAnimationFrame(() => this.measure());
+    if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => this.measure());
+    }
+  }
+  componentDidUpdate() {
+    this.measure();
+  }
+  componentWillUnmount() {
+    this.dead = true;
+    clearTimeout(this.timer);
+  }
+  goTo(i) {
+    clearTimeout(this.timer);
+    const n = this.data().length;
+    this.setState({ qi: Math.min(Math.max(i, 0), n - 1) });
+  }
+  hasAnswer(i) {
+    const a = ((this.state || {}).answers || {})[i];
+    return a === 'talk' || (Array.isArray(a) && a.length > 0);
+  }
+  pick(qIdx, oIdx) {
+    const s = this.state || {};
+    const q = this.data()[qIdx];
+    const answers = Object.assign({}, s.answers || {});
+    const cur = Array.isArray(answers[qIdx]) ? answers[qIdx] : [];
+    if (q.type === 'check') {
+      answers[qIdx] = cur.includes(oIdx) ? cur.filter((x) => x !== oIdx) : cur.concat([oIdx]);
+      this.setState({ answers: answers });
+    } else {
+      answers[qIdx] = [oIdx];
+      this.setState({ answers: answers });
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => this.afterPick(), 480);
+    }
+    if (this.props.onAnswerChange) this.props.onAnswerChange(qIdx, answers[qIdx]);
+  }
+  afterPick() {
+    const n = this.data().length;
+    const i = this.curr();
+    if (i >= n - 1) this.submit();
+    else this.setState({ qi: i + 1 });
+  }
+  talk() {
+    const s = this.state || {};
+    const answers = Object.assign({}, s.answers || {});
+    answers[this.curr()] = 'talk';
+    this.setState({ answers: answers });
+    this.submit();
+  }
+  advance() {
+    const n = this.data().length;
+    const i = this.curr();
+    if (i >= n - 1) this.submit();
+    else this.goTo(i + 1);
+  }
+  skip() {
+    const n = this.data().length;
+    const i = this.curr();
+    if (i < n - 1) { this.goTo(i + 1); return; }
+    const any = this.data().some((q, k) => this.hasAnswer(k));
+    if (any) this.submit();
+    else this.dismiss();
+  }
+  submit() {
+    clearTimeout(this.timer);
+    const s = this.state || {};
+    const answers = s.answers || {};
+    const out = [];
+    let talk = false;
+    this.data().forEach((q, i) => {
+      const a = answers[i];
+      if (a === 'talk') {
+        talk = true;
+        out.push({ header: q.header, question: q.question, selected: [], talk: true });
+      } else if (Array.isArray(a) && a.length) {
+        out.push({ header: q.header, question: q.question, selected: a.map((k) => q.options[k].label), talk: false });
+      }
+    });
+    if (this.props.standalone !== false) this.setState({ sent: true });
+    if (this.props.onSubmitted) this.props.onSubmitted({ talk: talk, answers: out });
+  }
+  dismiss() {
+    clearTimeout(this.timer);
+    if (this.props.standalone !== false) this.setState({ closed: true });
+    if (this.props.onDismiss) this.props.onDismiss();
+  }
+  reset() {
+    clearTimeout(this.timer);
+    this.setState({ qi: 0, answers: {}, sent: false, closed: false, ready: false, h: null, y: 0 });
+  }
+  renderVals() {
+    this.qEls = this.qEls || [];
+    const st = this.state || {};
+    const data = this.data();
+    const n = data.length;
+    const qi = this.curr();
+    const answers = st.answers || {};
+    const cur = answers[qi];
+    const hasAnswer = cur === 'talk' || (Array.isArray(cur) && cur.length > 0);
+    const last = qi === n - 1;
+    const ready = !!st.ready;
+    const reduce = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const animate = ready && !reduce;
+    const SLIDE = '360ms cubic-bezier(0.22, 1, 0.36, 1)';
+    const standalone = this.props.standalone !== false;
+    const sent = !!st.sent;
+    const closed = !!st.closed;
+
+    const tabs = data.map((q, i) => {
+      const a = answers[i];
+      const active = i === qi;
+      return {
+        header: q.header,
+        selected: active ? 'true' : 'false',
+        bg: active ? 'rgba(255, 255, 255, 0.09)' : 'transparent',
+        hoverBg: active ? 'rgba(255, 255, 255, 0.09)' : 'rgba(255, 255, 255, 0.05)',
+        color: active ? '#F4F4F5' : '#9A9AA3',
+        checked: Array.isArray(a) && a.length > 0,
+        talked: a === 'talk',
+        go: () => this.goTo(i)
+      };
+    });
+
+    const questions = data.map((q, qIdx) => {
+      const active = qIdx === qi;
+      const a = answers[qIdx];
+      const picked = Array.isArray(a) ? a : [];
+      const check = q.type === 'check';
+      return {
+        question: q.question,
+        isRadio: !check,
+        isCheck: check,
+        indicatorRadius: check ? '5px' : '50%',
+        display: (ready || active) ? 'block' : 'none',
+        opacity: active ? 1 : 0,
+        visibility: active ? 'visible' : 'hidden',
+        pointerEvents: active ? 'auto' : 'none',
+        transition: animate ? ('opacity ' + SLIDE + ', visibility 0s linear ' + (active ? '0ms' : '360ms')) : 'none',
+        ref: (el) => { this.qEls[qIdx] = el; },
+        options: q.options.map((o, oIdx) => {
+          const on = picked.includes(oIdx);
+          return {
+            label: o.label,
+            description: o.description,
+            hasDescription: !!o.description,
+            recommended: o.recommended,
+            pressed: on ? 'true' : 'false',
+            indicatorBg: on ? '#F4F4F5' : 'transparent',
+            indicatorRing: on ? 'inset 0 0 0 0 transparent' : 'inset 0 0 0 1.5px #34343B',
+            dotScale: on ? 'scale(1)' : 'scale(0)',
+            checkOpacity: on ? 1 : 0,
+            labelColor: on ? '#F4F4F5' : '#C8C8CE',
+            pick: () => { if (active) this.pick(qIdx, oIdx); }
+          };
+        })
+      };
+    });
+
+    return {
+      maxWidth: this.props.fill ? '100%' : '320px',
+      isOpen: !sent && !closed,
+      isSent: standalone && sent,
+      isClosed: standalone && closed && !sent,
+      tabs: tabs,
+      questions: questions,
+      viewportHeight: (st.h !== null && st.h !== undefined) ? (st.h + 'px') : 'auto',
+      viewportTransition: animate ? ('height ' + SLIDE) : 'none',
+      trackY: (-(st.y || 0)) + 'px',
+      trackTransition: animate ? ('transform ' + SLIDE) : 'none',
+      talkLabel: this.props.talkLabel || 'Talk about this',
+      skipLabel: this.props.skipLabel || 'Skip',
+      primaryLabel: last ? (this.props.sendLabel || 'Send') : (this.props.continueLabel || 'Continue'),
+      sentMessage: this.props.sentMessage || 'Answers sent',
+      continueDisabled: !hasAnswer,
+      continueOpacity: hasAnswer ? 1 : 0.4,
+      continueCursor: hasAnswer ? 'pointer' : 'default',
+      talk: () => this.talk(),
+      dismiss: () => this.dismiss(),
+      skip: () => this.skip(),
+      advance: () => { if (hasAnswer) this.advance(); },
+      reset: () => this.reset()
+    };
+  }
+}
+</script>
+</body>
+</html>

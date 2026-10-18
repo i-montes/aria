@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Note</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+</style>
+</helmet>
+<p style="margin: 0; width: 100%; box-sizing: border-box; padding-left: 4px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; line-height: 18px; color: #9A9AA3; overflow-wrap: anywhere"><span style="color: #D6D6DC">{{label}}</span> {{text}}</p>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"label":{"editor":"enum","options":["engram","notion","tavily","sandbox"],"default":"engram"},"text":{"editor":"text","default":"saved: you prefer pnpm over npm"},"$preview":{"width":448,"height":18}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      label: this.props.label ?? 'engram',
+      text: this.props.text ?? 'saved: you prefer pnpm over npm'
+    };
+  }
+}
+</script>
+</body>
+</html>

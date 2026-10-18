@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Answer card</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+@keyframes pop-in{from{opacity:0;transform:scale(0.96)}to{opacity:1;transform:none}}
+@keyframes fade-up{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){
+  .ra, .ra *{animation:none !important}
+}
+</style>
+</helmet>
+<div class="ra" style="display: flex; justify-content: flex-end; width: 100%; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #F4F4F5">
+  <div role="group" aria-label="{{title}}" style="display: flex; flex-direction: column; gap: 10px; min-width: 0; max-width: 92%; box-sizing: border-box; padding: 12px 14px; border-radius: 16px 16px 4px 16px; background: #2A2A31; transform-origin: bottom right; animation: pop-in 260ms cubic-bezier(0.23, 1, 0.32, 1) both">
+
+    <div style="display: flex; align-items: center; gap: 6px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 16px; color: #B4B4BC">
+      <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8BE0B0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 12px"><path d="M20 6L9 17l-5-5"></path></svg>
+      <span>{{title}}</span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <sc-for list="{{rows}}" as="r" hint-placeholder-count="3">
+        <div style="display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); column-gap: 10px; align-items: start; animation: fade-up 300ms cubic-bezier(0.23, 1, 0.32, 1) {{r.delay}}ms both">
+          <span style="min-width: 0; padding: 1px 8px; border-radius: 6px; background: rgba(255, 255, 255, 0.08); color: #C8C8CE; font-size: 11.5px; font-weight: 500; line-height: 18px; overflow-wrap: anywhere">{{r.header}}</span>
+          <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-top: 1px">
+            <sc-if value="{{r.isTalk}}" hint-placeholder-val="{{ false }}">
+              <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; line-height: 1.45; color: #C8C8CE">
+                <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 13px"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path></svg>
+                <span style="min-width: 0; overflow-wrap: anywhere">{{talkText}}</span>
+              </span>
+            </sc-if>
+            <sc-for list="{{r.values}}" as="v" hint-placeholder-count="1">
+              <span style="font-size: 13.5px; line-height: 1.45; color: #F4F4F5; overflow-wrap: anywhere">{{v.text}}</span>
+            </sc-for>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"demo":{"editor":"enum","options":["answered","talk"],"default":"answered"},"title":{"editor":"text","default":"Answers"},"talkText":{"editor":"text","default":"Let’s talk about this first"},"answers":{"editor":null},"$preview":{"width":448,"height":200}}'>
+class Component extends DCLogic {
+  samples() {
+    return {
+      answered: [
+        { header: 'Fallback', selected: ['Commit hash'] },
+        { header: 'Tests', selected: ['Fallback and API_URL'] },
+        { header: 'Docs', selected: ['.env.example', 'README.md'] }
+      ],
+      talk: [
+        { header: 'Fallback', selected: ['Commit hash'] },
+        { header: 'Tests', selected: [], talk: true }
+      ]
+    };
+  }
+  renderVals() {
+    const samples = this.samples();
+    const list = this.props.answers ?? (samples[this.props.demo] || samples.answered);
+    const rows = list.map((a, i) => ({
+      header: a.header || 'Question',
+      isTalk: !!a.talk,
+      values: a.talk ? [] : (a.selected || []).map((text) => ({ text: text })),
+      delay: 70 + i * 70
+    }));
+    return {
+      title: this.props.title || 'Answers',
+      talkText: this.props.talkText || 'Let’s talk about this first',
+      rows: rows
+    };
+  }
+}
+</script>
+</body>
+</html>

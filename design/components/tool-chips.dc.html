@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Tool chips</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+@keyframes fade-in{from{opacity:0}to{opacity:1}}
+@keyframes fade-up{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes pop-in{from{opacity:0;transform:scale(0.96)}to{opacity:1;transform:none}}
+.tc-row:hover .tc-icon, .tc-row:focus-visible .tc-icon{opacity:0 !important}
+.tc-row:hover .tc-chev, .tc-row:focus-visible .tc-chev{opacity:1 !important}
+@media (prefers-reduced-motion: reduce){
+  .tc, .tc *{animation:none !important}
+}
+</style>
+</helmet>
+<div class="tc" style="width: 100%; max-width: 320px; box-sizing: border-box; min-height: {{minHeight}}; padding-bottom: 4px; transition: min-height 300ms cubic-bezier(0.23, 1, 0.32, 1); font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF">
+
+  <button type="button" aria-expanded="{{openAttr}}" onClick="{{toggleOpen}}" style-hover="background: rgba(255, 255, 255, 0.06)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style-after="content: ''; position: absolute; top: -8px; bottom: -8px; left: -4px; right: -4px" style="position: relative; display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%; box-sizing: border-box; min-height: 28px; margin: 0 0 0 -6px; padding: 4px 6px; border: 0; border-radius: 8px; background: transparent; color: #B4B4BC; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12.5px; text-align: left; cursor: pointer; transition: background-color 100ms">
+    <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 12px; transition: transform 200ms; transform: {{headerChevron}}"><path d="M6 9l6 6 6-6"></path></svg>
+    <span style="min-width: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere">{{header}}</span>
+  </button>
+
+  <div style="display: grid; grid-template-rows: {{gridRows}}; opacity: {{regionOpacity}}; visibility: {{regionVisibility}}; transition: grid-template-rows 300ms cubic-bezier(0.23, 1, 0.32, 1), opacity 300ms cubic-bezier(0.23, 1, 0.32, 1), visibility 0s linear {{visibilityDelay}}">
+    <div style="min-height: 0; overflow: hidden; margin: 0 -6px; padding: 0 6px 4px">
+
+      <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 6px">
+        <sc-for list="{{rows}}" as="r" hint-placeholder-count="4">
+          <div style="animation: fade-up 300ms cubic-bezier(0.23, 1, 0.32, 1) both">
+            <button type="button" class="tc-row" aria-expanded="{{r.openAttr}}" onClick="{{r.toggle}}" style-hover="background: rgba(255, 255, 255, 0.06)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: flex; align-items: center; gap: 8px; width: calc(100% + 6px); min-width: 0; min-height: 28px; box-sizing: border-box; margin: 0 -3px; padding: 2px 3px; border: 0; border-radius: 8px; background: transparent; color: inherit; font-family: Geist, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: background-color 100ms">
+              <span style="position: relative; display: flex; align-items: center; justify-content: center; flex: 0 0 16px; width: 16px; height: 16px; color: #9A9AA3">
+                <span class="tc-icon" style="display: flex; opacity: {{r.iconOpacity}}; transition: opacity 100ms">
+                  <sc-if value="{{r.iThink}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z"></path></svg></sc-if>
+                  <sc-if value="{{r.iWrite}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"></path></svg></sc-if>
+                  <sc-if value="{{r.iRun}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-5-6-5M12 19h8"></path></svg></sc-if>
+                  <sc-if value="{{r.iRead}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg></sc-if>
+                </span>
+                <svg aria-hidden="true" class="tc-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; opacity: {{r.chevOpacity}}; transition: opacity 150ms, transform 150ms; transform: {{r.chevRotate}}"><path d="M6 9l6 6 6-6"></path></svg>
+              </span>
+              <span style="flex: 0 1 auto; min-width: 0; font-size: 12.5px; font-weight: 500; line-height: 18px; color: #F4F4F5; overflow-wrap: anywhere">{{r.label}}</span>
+              <span style-hover="background: #26262B" style="flex: 1 1 auto; min-width: 0; box-sizing: border-box; padding: 2px 6px; border-radius: 6px; background: #1C1C21; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08); font-family: {{r.chipFont}}; font-size: 11.5px; line-height: 18px; color: #B4B4BC; overflow-wrap: anywhere; transition: background-color 100ms">{{r.chip}}</span>
+            </button>
+
+            <div style="display: grid; grid-template-rows: {{r.detailRows}}; opacity: {{r.detailOpacity}}; visibility: {{r.detailVisibility}}; transition: grid-template-rows 300ms cubic-bezier(0.23, 1, 0.32, 1), opacity 300ms cubic-bezier(0.23, 1, 0.32, 1), visibility 0s linear {{r.detailDelay}}">
+              <div style="min-height: 0; overflow: hidden">
+                <div style="display: flex; flex-direction: column; gap: 2px; margin: 2px 0 4px 8px; padding: 2px 0 2px 14px; border-left: 1px solid #26262B">
+                  <sc-for list="{{r.detail}}" as="d" hint-placeholder-count="2">
+                    <span style="font-family: {{d.font}}; font-size: 11.5px; line-height: 1.6; color: {{d.color}}; white-space: pre-wrap; overflow-wrap: anywhere">{{d.text}}</span>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <sc-if value="{{showDiffs}}" hint-placeholder-val="{{ false }}">
+        <div style="position: relative; display: flex; flex-wrap: wrap; gap: 6px; max-width: 100%; margin-top: 10px; padding-top: 10px; border-top: 1px solid #26262B">
+
+          <sc-if value="{{hasPreview}}" hint-placeholder-val="{{ false }}">
+            <div role="group" aria-label="Diff preview" style="position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 5; width: min(288px, 100%); box-sizing: border-box; overflow: hidden; border-radius: 10px; background: #141417; border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6); transform-origin: bottom left; animation: pop-in 160ms cubic-bezier(0.23, 1, 0.32, 1) both">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid #26262B; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px">
+                <span style="min-width: 0; color: #B4B4BC; overflow-wrap: anywhere">{{previewFile}}</span>
+                <span style="flex: 0 0 auto; font-variant-numeric: tabular-nums"><span style="color: #8BE0B0">+{{previewAdd}}</span><sc-if value="{{previewHasDel}}" hint-placeholder-val="{{ false }}"> <span style="color: #FF9A8B">−{{previewDel}}</span></sc-if></span>
+              </div>
+              <div style="padding: 4px 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 1.8">
+                <sc-for list="{{previewLines}}" as="l" hint-placeholder-count="4">
+                  <div style="display: grid; grid-template-columns: 12px minmax(0, 1fr); column-gap: 8px; padding: 0 10px; color: {{l.color}}; background: {{l.bg}}"><span aria-hidden="true" style="user-select: none">{{l.mark}}</span><span style="min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere">{{l.text}}</span></div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-for list="{{chips}}" as="c" hint-placeholder-count="3">
+            <span onMouseEnter="{{c.enter}}" onMouseLeave="{{c.leave}}" style="display: inline-flex; max-width: 100%">
+              <button type="button" aria-expanded="{{c.expandedAttr}}" aria-label="{{c.ariaLabel}}" onClick="{{c.pin}}" onFocus="{{c.enter}}" onBlur="{{c.blur}}" style-hover="background: #1C1C21" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: inline-flex; align-items: center; gap: 8px; max-width: 100%; box-sizing: border-box; min-height: 28px; padding: 3px 8px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); background: #141417; color: #F4F4F5; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 18px; text-align: left; cursor: pointer; animation: pop-in 250ms cubic-bezier(0.23, 1, 0.32, 1) {{c.delay}}ms both; transition: background-color 100ms">
+                <span style="min-width: 0; overflow-wrap: anywhere">{{c.file}}</span>
+                <span style="flex: 0 0 auto; color: #8BE0B0; font-variant-numeric: tabular-nums">+{{c.add}}</span>
+                <sc-if value="{{c.hasDel}}" hint-placeholder-val="{{ false }}"><span style="flex: 0 0 auto; color: #FF9A8B; font-variant-numeric: tabular-nums">−{{c.del}}</span></sc-if>
+              </button>
+            </span>
+          </sc-for>
+
+          <sc-if value="{{hasMore}}" hint-placeholder-val="{{ false }}">
+            <button type="button" aria-expanded="{{moreExpanded}}" onClick="{{onMore}}" style-hover="color: #B4B4BC; text-decoration-color: currentColor" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: inline-flex; align-items: center; min-height: 28px; padding: 0 6px; border: 0; border-radius: 8px; background: transparent; color: #9A9AA3; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 2px; cursor: pointer; animation: fade-in 300ms ease-out {{moreDelay}}ms both; transition: color 100ms, text-decoration-color 100ms">{{more}}</button>
+          </sc-if>
+        </div>
+      </sc-if>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"header":{"editor":"text","default":""},"visibleChips":{"editor":"int","min":1,"max":10,"step":1,"default":3},"collapsed":{"editor":"boolean","default":false},"settled":{"editor":"boolean","default":false},"count":{"editor":null},"open":{"editor":null},"steps":{"editor":null},"diffs":{"editor":null},"diffLines":{"editor":null},"onSettled":{"editor":null},"onOpenChange":{"editor":null},"onToggleRow":{"editor":null},"onMore":{"editor":null},"$preview":{"width":448,"height":320}}'>
+class Component extends DCLogic {
+  defaults() {
+    return {
+      steps: [
+        { icon: 'think', label: 'Thinking', chip: 'Planning the fix…', mono: false, detailMono: false,
+          detail: [
+            { text: 'RELEASE is required, but the last commit removed it from .env.' },
+            { text: 'I’ll make it optional and fall back to the commit hash.' }
+          ] },
+        { icon: 'read', label: 'Read file', chip: 'env.ts', mono: true, detailMono: false,
+          detail: [
+            { text: 'loadEnv() throws when RELEASE is missing.' },
+            { text: 'Nothing else reads it directly.' }
+          ] },
+        { icon: 'write', label: 'Write 3 lines', chip: 'env.ts', mono: true, detailMono: true,
+          detail: [
+            { text: '+ const required = ["API_URL"]', tone: 'add' },
+            { text: '+ RELEASE: process.env.RELEASE ?? gitSha(),', tone: 'add' }
+          ] },
+        { icon: 'run', label: 'Rebuild and verify', chip: 'pnpm build', mono: true, detailMono: true,
+          detail: [
+            { text: '✓ built in 1.2s' },
+            { text: '✓ 17 tests passed' }
+          ] }
+      ],
+      diffs: [
+        { file: 'env.ts', add: 2, del: 1 },
+        { file: '.env.example', add: 1, del: 0 },
+        { file: 'env.test.ts', add: 4, del: 0 },
+        { file: 'vite.config.ts', add: 1, del: 1 },
+        { file: 'README.md', add: 2, del: 0 }
+      ],
+      diffLines: {
+        'env.ts': [
+          { text: 'export function loadEnv(mode: string) {', tone: 'ctx' },
+          { text: '  const required = ["API_URL", "RELEASE"]', tone: 'del' },
+          { text: '  const required = ["API_URL"]', tone: 'add' },
+          { text: '  const release = process.env.RELEASE ?? gitSha()', tone: 'add' },
+          { text: '}', tone: 'ctx' }
+        ],
+        '.env.example': [
+          { text: 'API_URL=', tone: 'ctx' },
+          { text: 'PUBLIC_BASE=/', tone: 'ctx' },
+          { text: 'RELEASE=', tone: 'add' }
+        ],
+        'env.test.ts': [
+          { text: 'describe("loadEnv", () => {', tone: 'ctx' },
+          { text: '  it("falls back to the commit hash", () => {', tone: 'add' },
+          { text: '    delete process.env.RELEASE', tone: 'add' },
+          { text: '    expect(loadEnv("test").RELEASE).toBeTruthy()', tone: 'add' },
+          { text: '  })', tone: 'add' },
+          { text: '})', tone: 'ctx' }
+        ],
+        'vite.config.ts': [
+          { text: '  define: {', tone: 'ctx' },
+          { text: '    __RELEASE__: JSON.stringify(env.RELEASE),', tone: 'del' },
+          { text: '    __RELEASE__: JSON.stringify(env.RELEASE ?? "dev"),', tone: 'add' },
+          { text: '  },', tone: 'ctx' }
+        ],
+        'README.md': [
+          { text: '## Environment', tone: 'ctx' },
+          { text: '- `API_URL`: required', tone: 'add' },
+          { text: '- `RELEASE`: optional, defaults to the commit hash', tone: 'add' }
+        ]
+      }
+    };
+  }
+  data() {
+    const d = this.defaults();
+    return {
+      steps: this.props.steps ?? d.steps,
+      diffs: this.props.diffs ?? d.diffs,
+      diffLines: this.props.diffLines ?? d.diffLines
+    };
+  }
+  total() {
+    return this.data().steps.length + 1;
+  }
+  tick(step) {
+    const total = this.total();
+    if (step >= total) return;
+    this.timer = setTimeout(() => {
+      const next = step + 1;
+      this.setState({ step: next });
+      if (next >= total && this.props.onSettled) this.props.onSettled();
+      this.tick(next);
+    }, 700);
+  }
+  componentDidMount() {
+    if (this.props.count !== undefined) return;
+    if (this.props.settled) this.setState({ step: this.total() });
+    else this.tick(0);
+  }
+  componentDidUpdate(prev) {
+    if (prev && prev.open !== this.props.open && this.props.open !== undefined) this.setState({ open: this.props.open });
+    if (prev && prev.settled !== this.props.settled && this.props.count === undefined) {
+      clearTimeout(this.timer);
+      if (this.props.settled) this.setState({ step: this.total() });
+      else { this.setState({ step: 0 }); this.tick(0); }
+    }
+  }
+  componentWillUnmount() {
+    clearTimeout(this.timer);
+  }
+  toggleOpen() {
+    const s = this.state || {};
+    const current = s.open ?? !this.props.collapsed;
+    this.setState({ open: !current });
+    if (this.props.onOpenChange) this.props.onOpenChange(!current);
+  }
+  toggleRow(label) {
+    const s = this.state || {};
+    const rows = Object.assign({}, s.openRows || {});
+    rows[label] = !rows[label];
+    this.setState({ openRows: rows });
+    if (this.props.onToggleRow) this.props.onToggleRow(label, !!rows[label]);
+  }
+  toggleMore() {
+    const s = this.state || {};
+    const next = !s.expanded;
+    this.setState({ expanded: next });
+    if (this.props.onMore) this.props.onMore(next);
+  }
+  peek(file) {
+    this.setState({ peek: file });
+  }
+  unpeek(file) {
+    const s = this.state || {};
+    if (s.peek === file) this.setState({ peek: null });
+  }
+  blur(file) {
+    const s = this.state || {};
+    const next = {};
+    if (s.peek === file) next.peek = null;
+    if (s.pinned === file) next.pinned = null;
+    this.setState(next);
+  }
+  pin(file) {
+    const s = this.state || {};
+    this.setState({ pinned: s.pinned === file ? null : file });
+  }
+  renderVals() {
+    const st = this.state || {};
+    const MONO = "'Geist Mono', ui-monospace, monospace";
+    const SANS = 'Geist, ui-sans-serif, system-ui, sans-serif';
+    const data = this.data();
+    const steps = data.steps;
+    const diffs = data.diffs;
+    const total = steps.length + 1;
+    const live = this.props.count !== undefined;
+    const step = live ? Math.min(Math.max(0, this.props.count), total) : (st.step ?? (this.props.settled ? total : 0));
+    const open = st.open ?? (this.props.open ?? !this.props.collapsed);
+    const rowsShown = live ? Math.min(step, steps.length) : steps.length;
+    const openRows = st.openRows || {};
+    const previewFile = (st.peek ?? null) ?? (st.pinned ?? null);
+    const tones = {
+      add: { color: '#8BE0B0', bg: 'rgba(139, 224, 176, 0.10)', mark: '+' },
+      del: { color: '#FF9A8B', bg: 'rgba(255, 154, 139, 0.10)', mark: '−' },
+      ctx: { color: '#B4B4BC', bg: 'transparent', mark: '' }
+    };
+
+    const rows = steps.slice(0, step).map((row) => {
+      const isOpen = !!openRows[row.label];
+      return {
+        label: row.label,
+        chip: row.chip,
+        chipFont: row.mono ? MONO : SANS,
+        iThink: row.icon === 'think', iWrite: row.icon === 'write', iRun: row.icon === 'run', iRead: row.icon === 'read',
+        openAttr: isOpen ? 'true' : 'false',
+        iconOpacity: isOpen ? 0 : 1,
+        chevOpacity: isOpen ? 1 : 0,
+        chevRotate: isOpen ? 'rotate(0deg)' : 'rotate(-90deg)',
+        detailRows: isOpen ? '1fr' : '0fr',
+        detailOpacity: isOpen ? 1 : 0,
+        detailVisibility: isOpen ? 'visible' : 'hidden',
+        detailDelay: isOpen ? '0ms' : '300ms',
+        detail: (row.detail || []).map((d) => ({
+          text: d.text,
+          font: row.detailMono ? MONO : SANS,
+          color: d.tone === 'add' ? '#8BE0B0' : '#B4B4BC'
+        })),
+        toggle: () => this.toggleRow(row.label)
+      };
+    });
+
+    const visibleCount = Math.max(1, this.props.visibleChips ?? 3);
+    const expanded = !!st.expanded;
+    const shown = expanded ? diffs : diffs.slice(0, visibleCount);
+    const hiddenCount = Math.max(0, diffs.length - visibleCount);
+    const chips = shown.map((d, i) => ({
+      file: d.file, add: d.add, del: d.del, hasDel: d.del > 0,
+      delay: i < visibleCount ? i * 80 : (i - visibleCount) * 60,
+      expandedAttr: previewFile === d.file ? 'true' : 'false',
+      ariaLabel: 'Show diff for ' + d.file,
+      enter: () => this.peek(d.file),
+      leave: () => this.unpeek(d.file),
+      blur: () => this.blur(d.file),
+      pin: () => this.pin(d.file)
+    }));
+
+    const current = diffs.find((d) => d.file === previewFile);
+    const previewLines = previewFile
+      ? ((data.diffLines[previewFile] || []).map((l) => {
+          const t = tones[l.tone] || tones.ctx;
+          return { text: l.text, color: t.color, bg: t.bg, mark: t.mark };
+        }))
+      : [];
+
+    const more = hiddenCount > 0 ? (expanded ? 'Show less' : '+' + hiddenCount + ' more') : '';
+    return {
+      minHeight: (open && !live) ? '220px' : '0px',
+      openAttr: open ? 'true' : 'false',
+      toggleOpen: () => this.toggleOpen(),
+      headerChevron: open ? 'rotate(0deg)' : 'rotate(-90deg)',
+      header: this.props.header || (rowsShown === 1 ? '1 tool call' : rowsShown + ' tool calls'),
+      gridRows: open ? '1fr' : '0fr',
+      regionOpacity: open ? 1 : 0,
+      regionVisibility: open ? 'visible' : 'hidden',
+      visibilityDelay: open ? '0ms' : '300ms',
+      rows: rows,
+      showDiffs: step >= total,
+      chips: chips,
+      hasPreview: !!previewFile && !!current,
+      previewFile: previewFile || '',
+      previewAdd: current ? current.add : 0,
+      previewDel: current ? current.del : 0,
+      previewHasDel: !!current && current.del > 0,
+      previewLines: previewLines,
+      hasMore: !!more,
+      more: more,
+      moreDelay: visibleCount * 80,
+      moreExpanded: expanded ? 'true' : 'false',
+      onMore: () => this.toggleMore()
+    };
+  }
+}
+</script>
+</body>
+</html>

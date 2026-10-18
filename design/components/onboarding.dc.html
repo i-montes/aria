@@ -1,0 +1,805 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Onboarding</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+.aria-scroll::-webkit-scrollbar{width:14px;height:14px}
+.aria-scroll::-webkit-scrollbar-track{background:transparent}
+.aria-scroll::-webkit-scrollbar-corner{background:transparent}
+.aria-scroll::-webkit-scrollbar-thumb{background-color:rgba(255,255,255,0.16);border:4px solid transparent;background-clip:padding-box;border-radius:999px}
+.aria-scroll:hover::-webkit-scrollbar-thumb{background-color:rgba(255,255,255,0.28)}
+.aria-scroll::-webkit-scrollbar-thumb:hover{background-color:rgba(185,168,255,0.7);border-width:2px}
+.aria-scroll::-webkit-scrollbar-thumb:active{background-color:#B9A8FF;border-width:2px}
+@supports not selector(::-webkit-scrollbar){.aria-scroll{scrollbar-width:auto;scrollbar-color:rgba(255,255,255,0.28) transparent}}
+.ob-pad{margin-right:-14px;padding-right:0;scrollbar-gutter:stable}
+.ob-input::placeholder{color:#8A8A94}
+@keyframes ob-f1{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+@keyframes ob-f2{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+@keyframes ob-b1{from{opacity:0;transform:translateX(-16px)}to{opacity:1;transform:none}}
+@keyframes ob-b2{from{opacity:0;transform:translateX(-16px)}to{opacity:1;transform:none}}
+@keyframes ob-glow{0%,100%{box-shadow:0 0 14px rgba(185,168,255,0.5)}50%{box-shadow:0 0 26px rgba(185,168,255,0.85)}}
+@keyframes ob-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){
+  .ob, .ob *{animation:none !important;transition:none !important}
+}
+</style>
+</helmet>
+<div class="ob" style="display: flex; flex-direction: column; gap: 14px; width: 100%; height: {{rootHeight}}; min-height: 0; box-sizing: border-box; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF">
+
+  <sc-if value="{{showTop}}" hint-placeholder-val="{{ false }}">
+    <div style="display: flex; flex: 0 0 auto; flex-direction: column; gap: 8px">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px">
+        <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; letter-spacing: 0.06em; font-variant-numeric: tabular-nums; color: #B4B4BC">STEP {{stepNumber}} OF {{stepTotal}}<span style="color: #8A8A94"> · {{stepName}}</span></span>
+        <sc-if value="{{showDefaults}}" hint-placeholder-val="{{ false }}">
+          <button type="button" onClick="{{useDefaults}}" style-hover="color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style-after="content: ''; position: absolute; top: -8px; bottom: -8px; left: -6px; right: -6px" style="position: relative; padding: 0; border: 0; background: transparent; color: #B9A8FF; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12px; font-weight: 500; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; transition: color 100ms">Use defaults for the rest</button>
+        </sc-if>
+      </div>
+      <div aria-hidden="true" style="display: flex; gap: 4px">
+        <sc-for list="{{bars}}" as="b" hint-placeholder-count="12"><span style="flex: 1 1 0; height: 3px; border-radius: 2px; background: {{b.bg}}; transition: background-color 300ms ease"></span></sc-for>
+      </div>
+    </div>
+  </sc-if>
+
+  <div class="aria-scroll ob-pad" style="flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 18px; overflow-x: hidden; overflow-y: auto; animation: {{anim}} 300ms cubic-bezier(0.22, 1, 0.36, 1) both">
+
+    <sc-if value="{{showWelcome}}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; flex-direction: column; gap: 22px; padding-top: 14px">
+        <span aria-hidden="true" style="width: 12px; height: 12px; border-radius: 50%; background: #B9A8FF; animation: ob-glow 2.4s ease-in-out infinite"></span>
+        <div style="display: flex; flex-direction: column; gap: 10px">
+          <h1 style="margin: 0; font-size: 28px; font-weight: 600; line-height: 1.15; letter-spacing: -0.01em; color: #F4F4F5">Welcome to Aria</h1>
+          <p style="margin: 0; font-size: 14.5px; line-height: 1.55; color: #B4B4BC">A personal assistant that lives on your desktop, works with your files, runs tasks and talks to you in your language. Let’s set it up.</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <sc-for list="{{modes}}" as="o" hint-placeholder-count="2">
+            <button type="button" onClick="{{o.pick}}" style-hover="border-color: rgba(185, 168, 255, 0.55); background: rgba(185, 168, 255, 0.08)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: flex; flex-direction: column; gap: 4px; width: 100%; box-sizing: border-box; padding: 14px 16px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(22, 22, 26, 0.96); color: inherit; font-family: Geist, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: border-color 140ms, background-color 140ms">
+              <span style="display: flex; align-items: center; justify-content: space-between; gap: 10px"><span style="font-size: 14.5px; font-weight: 600; color: #F4F4F5">{{o.label}}</span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #9A9AA3">{{o.badge}}</span></span>
+              <span style="font-size: 13px; line-height: 1.45; color: #9A9AA3">{{o.desc}}</span>
+            </button>
+          </sc-for>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px">
+          <span style="font-size: 12.5px; color: #8A8A94">You can change all of this later.</span>
+          <sc-if value="{{canSkip}}" hint-placeholder-val="{{ false }}">
+            <button type="button" onClick="{{skip}}" style-hover="color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style-after="content: ''; position: absolute; top: -12px; bottom: -12px; left: -8px; right: -8px" style="position: relative; padding: 0; border: 0; background: transparent; color: #9A9AA3; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12.5px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; transition: color 100ms">Skip for now</button>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{showStep}}" hint-placeholder-val="{{ true }}">
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <h2 style="margin: 0; font-size: 22px; font-weight: 600; line-height: 1.25; color: #F4F4F5">{{title}}</h2>
+        <p style="margin: 0; font-size: 13.5px; line-height: 1.5; color: #9A9AA3">{{desc}}</p>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 16px">
+        <sc-for list="{{fields}}" as="f" hint-placeholder-count="3">
+          <div style="margin-left: {{f.indentPx}}px">
+
+            <sc-if value="{{f.isSection}}" hint-placeholder-val="{{ false }}"><span style="display: block; padding-top: 6px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; color: #8A8A94">{{f.label}}</span></sc-if>
+
+            <sc-if value="{{f.isInfo}}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; gap: 10px; padding: 11px 13px; border-radius: 12px; background: {{f.toneBg}}; border: 1px solid {{f.toneBorder}}">
+                <span aria-hidden="true" style="flex: 0 0 6px; width: 6px; height: 6px; margin-top: 7px; border-radius: 50%; background: {{f.toneColor}}"></span>
+                <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+                  <sc-if value="{{f.hasLabel}}" hint-placeholder-val="{{ false }}"><span style="font-size: 13px; font-weight: 600; color: #F4F4F5; overflow-wrap: anywhere">{{f.label}}</span></sc-if>
+                  <span style="font-size: 12.5px; line-height: 1.5; color: #C8C8CE; overflow-wrap: anywhere">{{f.desc}}</span>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{f.isBullets}}" hint-placeholder-val="{{ false }}">
+              <ul style="display: flex; flex-direction: column; gap: 7px; margin: 0; padding: 0; list-style: none">
+                <sc-for list="{{f.items}}" as="it" hint-placeholder-count="3">
+                  <li style="display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 8px; align-items: start; font-size: 13px; line-height: 1.45; color: #D6D6DC">
+                    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#B9A8FF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="margin-top: 2px"><path d="M20 6L9 17l-5-5"></path></svg>
+                    <span style="min-width: 0; overflow-wrap: anywhere">{{it.text}}</span>
+                  </li>
+                </sc-for>
+              </ul>
+            </sc-if>
+
+            <sc-if value="{{f.isChoice}}" hint-placeholder-val="{{ false }}">
+              <div role="radiogroup" aria-label="{{f.label}}" style="display: flex; flex-direction: column; gap: 8px">
+                <sc-if value="{{f.hasLabel}}" hint-placeholder-val="{{ false }}"><span style="font-size: 13px; font-weight: 500; color: #D6D6DC">{{f.label}}</span></sc-if>
+                <sc-for list="{{f.options}}" as="o" hint-placeholder-count="3">
+                  <button type="button" aria-pressed="{{o.pressed}}" disabled="{{o.disabled}}" onClick="{{o.pick}}" style-hover="background: {{o.hoverBg}}" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: grid; grid-template-columns: 18px minmax(0, 1fr); column-gap: 12px; align-items: start; width: 100%; box-sizing: border-box; margin: 0; padding: 12px 14px; border-radius: 12px; border: 1px solid {{o.border}}; background: {{o.bg}}; color: inherit; font-family: Geist, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: {{o.cursor}}; opacity: {{o.opacity}}; transition: border-color 160ms, background-color 160ms">
+                    <span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-top: 1px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid {{o.ringColor}}; background: {{o.ringBg}}; transition: background-color 200ms, border-color 200ms"><span style="width: 6px; height: 6px; border-radius: 50%; background: #0B0816; transform: {{o.dotScale}}; transition: transform 200ms"></span></span>
+                    <span style="display: flex; flex-direction: column; gap: 3px; min-width: 0">
+                      <span style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px"><span style="font-size: 13.5px; font-weight: 500; line-height: 18px; color: #F4F4F5; overflow-wrap: anywhere">{{o.label}}</span><sc-for list="{{o.badges}}" as="b"><span style="padding: 0 7px; border-radius: 999px; background: rgba(185, 168, 255, 0.14); color: #B9A8FF; font-size: 11px; font-weight: 500; line-height: 18px; white-space: nowrap">{{b.t}}</span></sc-for></span>
+                      <sc-if value="{{o.hasDesc}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12.5px; line-height: 1.45; color: #9A9AA3; overflow-wrap: anywhere">{{o.desc}}</span></sc-if>
+                    </span>
+                  </button>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{f.isSegments}}" hint-placeholder-val="{{ false }}">
+              <div role="radiogroup" aria-label="{{f.label}}" style="display: flex; flex-direction: column; gap: 8px">
+                <sc-if value="{{f.hasLabel}}" hint-placeholder-val="{{ false }}"><span style="font-size: 13px; font-weight: 500; color: #D6D6DC">{{f.label}}</span></sc-if>
+                <div style="display: flex; flex-wrap: wrap; gap: 6px">
+                  <sc-for list="{{f.options}}" as="o" hint-placeholder-count="3">
+                    <button type="button" aria-pressed="{{o.pressed}}" disabled="{{o.disabled}}" onClick="{{o.pick}}" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="min-height: 40px; box-sizing: border-box; padding: 0 14px; border-radius: 999px; border: 1px solid {{o.border}}; background: {{o.bg}}; color: {{o.color}}; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13px; font-weight: 500; cursor: {{o.cursor}}; opacity: {{o.opacity}}; transition: background-color 140ms, border-color 140ms, color 140ms">{{o.label}}</button>
+                  </sc-for>
+                </div>
+                <sc-if value="{{f.hasDesc}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12.5px; line-height: 1.45; color: #8A8A94">{{f.desc}}</span></sc-if>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{f.isToggle}}" hint-placeholder-val="{{ false }}">
+              <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 14px; align-items: center">
+                <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+                  <span style="font-size: 13.5px; font-weight: 500; line-height: 1.35; color: #F4F4F5; overflow-wrap: anywhere">{{f.label}}</span>
+                  <sc-if value="{{f.hasDesc}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12.5px; line-height: 1.45; color: #9A9AA3; overflow-wrap: anywhere">{{f.desc}}</span></sc-if>
+                </span>
+                <button type="button" role="switch" aria-checked="{{f.onAttr}}" aria-label="{{f.label}}" onClick="{{f.toggle}}" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style-after="content: ''; position: absolute; top: -9px; bottom: -9px; left: 0; right: 0" style="position: relative; flex: 0 0 44px; width: 44px; height: 26px; box-sizing: border-box; margin: 0; padding: 0; border: 0; border-radius: 999px; background: {{f.trackBg}}; cursor: pointer; transition: background-color 200ms ease"><span style="position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #F4F4F5; transform: translateX({{f.knobX}}px); transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1)"></span></button>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{f.isInput}}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; flex-direction: column; gap: 6px">
+                <label for="{{f.id}}" style="font-size: 13px; font-weight: 500; color: #D6D6DC">{{f.label}}</label>
+                <div style="display: flex; align-items: center; gap: 6px; min-height: 44px; box-sizing: border-box; padding: 0 6px 0 12px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(22, 22, 26, 0.96)">
+                  <input id="{{f.id}}" class="ob-input" type="{{f.inputType}}" value="{{f.value}}" onChange="{{f.change}}" placeholder="{{f.placeholder}}" autocomplete="off" spellcheck="false" style="flex: 1 1 auto; min-width: 0; height: 42px; padding: 0; border: 0; outline: none; background: transparent; color: #F4F4F5; font-family: {{f.font}}; font-size: 14px">
+                  <sc-if value="{{f.canReveal}}" hint-placeholder-val="{{ false }}"><button type="button" onClick="{{f.reveal}}" aria-label="{{f.revealLabel}}" style-hover="color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: -2px" style="flex: 0 0 auto; min-height: 36px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: #9A9AA3; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; cursor: pointer; transition: color 100ms">{{f.revealText}}</button></sc-if>
+                </div>
+                <sc-if value="{{f.hasDesc}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12.5px; line-height: 1.45; color: #8A8A94">{{f.desc}}</span></sc-if>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{f.isSlider}}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; flex-direction: column; gap: 8px">
+                <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px"><label for="{{f.id}}" style="font-size: 13.5px; font-weight: 500; color: #F4F4F5">{{f.label}}</label><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; font-variant-numeric: tabular-nums; color: #B9A8FF">{{f.valueText}}</span></div>
+                <input id="{{f.id}}" type="range" min="{{f.min}}" max="{{f.max}}" step="{{f.step}}" value="{{f.value}}" onChange="{{f.change}}" style="width: 100%; height: 24px; margin: 0; accent-color: #B9A8FF; cursor: pointer">
+                <sc-if value="{{f.hasDesc}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12.5px; line-height: 1.45; color: #8A8A94">{{f.desc}}</span></sc-if>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{f.isMeter}}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; flex-direction: column; gap: 6px">
+                <div style="position: relative; height: 8px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, 0.1)"><span style="position: absolute; top: 0; left: 0; bottom: 0; width: {{f.pct}}%; border-radius: 999px; background: #7DD3FC; transition: width 300ms cubic-bezier(0.22, 1, 0.36, 1)"></span></div>
+                <div style="display: flex; justify-content: space-between; gap: 8px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; color: #8A8A94"><span>0%</span><span style="color: #B4B4BC">{{f.caption}}</span><span>100%</span></div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{f.isChips}}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; flex-direction: column; gap: 8px">
+                <span style="font-size: 13px; font-weight: 500; color: #D6D6DC">{{f.label}}</span>
+                <sc-if value="{{f.hasItems}}" hint-placeholder-val="{{ false }}">
+                  <div style="display: flex; flex-wrap: wrap; gap: 6px">
+                    <sc-for list="{{f.items}}" as="c" hint-placeholder-count="1"><span style="display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0 4px 0 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.08)"><span style="min-width: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; line-height: 28px; overflow-wrap: anywhere">{{c.label}}</span><button type="button" aria-label="Remove {{c.label}}" onClick="{{c.remove}}" style-hover="color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: -2px" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #9A9AA3; cursor: pointer; transition: color 100ms"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"></path></svg></button></span></sc-for>
+                  </div>
+                </sc-if>
+                <div style="display: flex; gap: 8px">
+                  <div style="display: flex; align-items: center; flex: 1 1 auto; min-width: 0; min-height: 44px; box-sizing: border-box; padding: 0 12px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(22, 22, 26, 0.96)"><input class="ob-input" type="text" value="{{f.draftValue}}" onChange="{{f.draftChange}}" placeholder="{{f.placeholder}}" aria-label="{{f.label}}" autocomplete="off" spellcheck="false" style="flex: 1 1 auto; min-width: 0; height: 42px; padding: 0; border: 0; outline: none; background: transparent; color: #F4F4F5; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px"></div>
+                  <button type="button" onClick="{{f.add}}" style-hover="background: rgba(255, 255, 255, 0.08)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="flex: 0 0 auto; min-height: 44px; padding: 0 16px; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 12px; background: transparent; color: #EDEDEF; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13px; cursor: pointer; transition: background-color 100ms">Add</button>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{f.isCheck}}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; flex-direction: column; gap: 2px">
+                <sc-if value="{{f.hasLabel}}" hint-placeholder-val="{{ false }}"><span style="padding-bottom: 6px; font-size: 13px; font-weight: 500; color: #D6D6DC">{{f.label}}</span></sc-if>
+                <sc-for list="{{f.items}}" as="c" hint-placeholder-count="3">
+                  <button type="button" role="checkbox" aria-checked="{{c.onAttr}}" onClick="{{c.toggle}}" style-hover="background: rgba(255, 255, 255, 0.04)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: -2px" style="display: grid; grid-template-columns: 18px minmax(0, 1fr); column-gap: 12px; align-items: start; width: 100%; min-height: 44px; box-sizing: border-box; margin: 0; padding: 10px 8px; border: 0; border-radius: 10px; background: transparent; color: inherit; font-family: Geist, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: background-color 100ms">
+                    <span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-top: 1px; box-sizing: border-box; border-radius: 5px; border: 1.5px solid {{c.boxBorder}}; background: {{c.boxBg}}; color: #0B0816; transition: background-color 180ms, border-color 180ms"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: {{c.checkOpacity}}; transition: opacity 160ms"><path d="M20 6L9 17l-5-5"></path></svg></span>
+                    <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><span style="font-size: 13.5px; line-height: 18px; color: #F4F4F5; overflow-wrap: anywhere">{{c.label}}</span><sc-if value="{{c.hasDesc}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12.5px; line-height: 1.45; color: #9A9AA3; overflow-wrap: anywhere">{{c.desc}}</span></sc-if></span>
+                  </button>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{f.isStepper}}" hint-placeholder-val="{{ false }}">
+              <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 14px; align-items: center">
+                <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><span style="font-size: 13.5px; font-weight: 500; color: #F4F4F5">{{f.label}}</span><sc-if value="{{f.hasDesc}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12.5px; line-height: 1.45; color: #9A9AA3">{{f.desc}}</span></sc-if></span>
+                <span style="display: inline-flex; align-items: center; gap: 4px">
+                  <button type="button" aria-label="Less" disabled="{{f.decDisabled}}" onClick="{{f.dec}}" style-hover="background: rgba(255, 255, 255, 0.08)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 10px; background: transparent; color: #EDEDEF; cursor: pointer; opacity: {{f.decOpacity}}; transition: background-color 100ms"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 12h14"></path></svg></button>
+                  <span style="min-width: 44px; text-align: center; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 14px; font-variant-numeric: tabular-nums; color: #F4F4F5">{{f.valueText}}</span>
+                  <button type="button" aria-label="More" disabled="{{f.incDisabled}}" onClick="{{f.inc}}" style-hover="background: rgba(255, 255, 255, 0.08)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 10px; background: transparent; color: #EDEDEF; cursor: pointer; opacity: {{f.incOpacity}}; transition: background-color 100ms"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></button>
+                </span>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{f.isButton}}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(22, 22, 26, 0.96)">
+                <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><span style="font-size: 13.5px; font-weight: 500; color: #F4F4F5">{{f.label}}</span><span style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; line-height: 1.45; color: {{f.stateColor}}; overflow-wrap: anywhere"><sc-if value="{{f.waiting}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="flex: 0 0 11px; width: 11px; height: 11px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid #34343B; border-top-color: #B9A8FF; animation: ob-spin 700ms linear infinite"></span></sc-if>{{f.stateText}}</span></span>
+                <button type="button" disabled="{{f.buttonDisabled}}" onClick="{{f.press}}" style-focus-visible="outline: 2px solid #F4F4F5; outline-offset: 2px" style="flex: 0 0 auto; min-height: 40px; padding: 0 16px; border: 0; border-radius: 10px; background: #B9A8FF; color: #0B0816; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13px; font-weight: 600; cursor: pointer; opacity: {{f.buttonOpacity}}; transition: opacity 150ms">{{f.buttonLabel}}</button>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{f.isMatrix}}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; flex-direction: column">
+                <div style="display: grid; grid-template-columns: minmax(0, 1fr) 56px 56px; column-gap: 8px; padding: 0 2px 6px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; color: #8A8A94"><span></span><span style="text-align: center">{{f.col1}}</span><span style="text-align: center">{{f.col2}}</span></div>
+                <sc-for list="{{f.rows}}" as="r" hint-placeholder-count="5">
+                  <div style="display: grid; grid-template-columns: minmax(0, 1fr) 56px 56px; column-gap: 8px; align-items: center; padding: 9px 2px; border-top: 1px solid #1E1E22">
+                    <span style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; color: #F4F4F5">{{r.label}}</span><span style="font-size: 12px; line-height: 1.4; color: #9A9AA3; overflow-wrap: anywhere">{{r.desc}}</span></span>
+                    <span style="display: flex; justify-content: center"><button type="button" role="switch" aria-checked="{{r.onAttr}}" aria-label="{{r.label}} on" onClick="{{r.toggleOn}}" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style-after="content: ''; position: absolute; top: -9px; bottom: -9px; left: -6px; right: -6px" style="position: relative; width: 44px; height: 26px; box-sizing: border-box; margin: 0; padding: 0; border: 0; border-radius: 999px; background: {{r.onBg}}; cursor: pointer; transition: background-color 200ms ease"><span style="position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #F4F4F5; transform: translateX({{r.onX}}px); transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1)"></span></button></span>
+                    <span style="display: flex; justify-content: center; opacity: {{r.roOpacity}}; transition: opacity 160ms"><button type="button" role="switch" aria-checked="{{r.roAttr}}" aria-label="{{r.label}} read-only" disabled="{{r.roDisabled}}" onClick="{{r.toggleRo}}" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style-after="content: ''; position: absolute; top: -9px; bottom: -9px; left: -6px; right: -6px" style="position: relative; width: 44px; height: 26px; box-sizing: border-box; margin: 0; padding: 0; border: 0; border-radius: 999px; background: {{r.roBg}}; cursor: pointer; transition: background-color 200ms ease"><span style="position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #F4F4F5; transform: translateX({{r.roX}}px); transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1)"></span></button></span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{f.isPackage}}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 14px; border: 1px solid rgba(240, 180, 76, 0.35); background: rgba(240, 180, 76, 0.06)">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px">
+                  <span style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; color: #F4F4F5"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 14px"><path d="M21 8l-9-5-9 5v8l9 5 9-5z"></path><path d="M3 8l9 5 9-5M12 13v8"></path></svg><span style="min-width: 0; overflow-wrap: anywhere">{{f.pkgName}}</span></span>
+                  <span style="flex: 0 0 auto; padding: 0 8px; border-radius: 999px; background: rgba(240, 180, 76, 0.16); color: #F0B44C; font-size: 11px; font-weight: 500; line-height: 18px">third party</span>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 2px"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.06em; color: #8A8A94">ORIGIN</span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #D6D6DC; overflow-wrap: anywhere">{{f.origin}}</span></div>
+                <span style="font-size: 12.5px; line-height: 1.5; color: #D6D6DC">Packages from other people can run code on your computer. Aria shows the origin and asks before installing one.</span>
+                <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 14px; align-items: center">
+                  <span style="font-size: 13.5px; font-weight: 500; color: #F4F4F5">I trust this source</span>
+                  <button type="button" role="switch" aria-checked="{{f.onAttr}}" aria-label="I trust this source" onClick="{{f.toggle}}" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style-after="content: ''; position: absolute; top: -9px; bottom: -9px; left: 0; right: 0" style="position: relative; flex: 0 0 44px; width: 44px; height: 26px; box-sizing: border-box; margin: 0; padding: 0; border: 0; border-radius: 999px; background: {{f.trackBg}}; cursor: pointer; transition: background-color 200ms ease"><span style="position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #F4F4F5; transform: translateX({{f.knobX}}px); transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1)"></span></button>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{f.isSummary}}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; flex-direction: column">
+                <sc-for list="{{f.rows}}" as="r" hint-placeholder-count="6">
+                  <div style="display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; column-gap: 12px; align-items: start; padding: 11px 0; border-top: 1px solid #1E1E22">
+                    <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 19px; color: #8A8A94">{{r.label}}</span>
+                    <span style="min-width: 0; font-size: 13px; line-height: 1.5; color: #D6D6DC; overflow-wrap: anywhere">{{r.value}}</span>
+                    <sc-if value="{{r.canEdit}}" hint-placeholder-val="{{ false }}"><button type="button" aria-label="Edit {{r.label}}" onClick="{{r.edit}}" style-hover="color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style-after="content: ''; position: absolute; top: -12px; bottom: -12px; left: -8px; right: -8px" style="position: relative; padding: 0; border: 0; background: transparent; color: #B9A8FF; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12.5px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; transition: color 100ms">Edit</button></sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{showDone}}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; flex-direction: column; gap: 14px; padding-top: 24px">
+        <span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 50%; background: rgba(139, 224, 176, 0.14); color: #8BE0B0"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg></span>
+        <h2 style="margin: 0; font-size: 22px; font-weight: 600; color: #F4F4F5">Setup complete</h2>
+        <p style="margin: 0; font-size: 13.5px; line-height: 1.5; color: #9A9AA3">In the app, Aria opens the chat now and greets you by name.</p>
+        <button type="button" onClick="{{restart}}" style-hover="background: rgba(255, 255, 255, 0.08)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="align-self: flex-start; min-height: 44px; padding: 0 16px; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 12px; background: transparent; color: #EDEDEF; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13.5px; cursor: pointer; transition: background-color 100ms">Start over</button>
+      </div>
+    </sc-if>
+  </div>
+
+  <sc-if value="{{showFooter}}" hint-placeholder-val="{{ false }}">
+    <div style="display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 10px; padding-top: 4px">
+      <button type="button" onClick="{{back}}" style-hover="background: rgba(255, 255, 255, 0.06); color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px 0 10px; border: 0; border-radius: 12px; background: transparent; color: #B4B4BC; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13.5px; cursor: pointer; transition: background-color 100ms, color 100ms"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>Back</button>
+      <button type="button" disabled="{{nextDisabled}}" onClick="{{next}}" style-focus-visible="outline: 2px solid #F4F4F5; outline-offset: 2px" style="display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 20px; border: 0; border-radius: 12px; background: #B9A8FF; color: #0B0816; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13.5px; font-weight: 600; cursor: {{nextCursor}}; opacity: {{nextOpacity}}; transition: opacity 150ms">{{nextLabel}}<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"></path></svg></button>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"demo":{"editor":"boolean","default":true},"startStep":{"editor":"text","default":"welcome"},"preset":{"editor":"enum","options":["","opencode-go","anthropic","anthropic-jev","openai","openrouter","local","other"],"default":""},"onFinish":{"editor":null},"onSkip":{"editor":null},"$preview":{"width":448,"height":680}}'>
+class Component extends DCLogic {
+  /* ===== provider modules: each one declares what it supports ===== */
+  providers() {
+    const trio = (key, label) => [
+      { id: key + '-fast', name: label + ' · fast', desc: 'Quick answers and small edits.', tag: 'pay per use', tier: 'daily' },
+      { id: key + '-balanced', name: label + ' · balanced', desc: 'Everyday work.', tag: 'pay per use', tier: 'daily' },
+      { id: key + '-capable', name: label + ' · most capable', desc: 'Hard problems and planning.', tag: 'pay per use', tier: 'strong' }
+    ];
+    return {
+      'opencode-go': {
+        id: 'opencode-go', name: 'OpenCode Go', desc: 'A subscription with a quota and free models.', badges: ['quota meter', 'Jev included'],
+        quota: true, subscription: true, jevIncluded: true, oauth: true, endpoint: false,
+        models: [
+          { id: 'go', name: 'OpenCode Go', desc: 'Everyday work. Uses your quota.', tag: 'uses quota', tier: 'daily' },
+          { id: 'go-strong', name: 'OpenCode Go · strong', desc: 'More capable. Uses more quota.', tag: 'uses more quota', tier: 'strong' }
+        ],
+        free: [
+          { id: 'free', name: 'Free model', desc: 'No quota. Slower and less capable.' },
+          { id: 'free-small', name: 'Free model · small', desc: 'The fastest free option, for short tasks.' }
+        ],
+        dailyDefault: 'go', planDefault: 'go-strong'
+      },
+      anthropic: { id: 'anthropic', name: 'Anthropic', desc: 'Your own API key or account.', badges: [], quota: false, subscription: false, oauth: true, endpoint: false, models: trio('an', 'Anthropic'), free: [], dailyDefault: 'an-balanced', planDefault: 'an-capable' },
+      openai: { id: 'openai', name: 'OpenAI', desc: 'Your own API key or account.', badges: [], quota: false, subscription: false, oauth: true, endpoint: false, models: trio('oa', 'OpenAI'), free: [], dailyDefault: 'oa-balanced', planDefault: 'oa-capable' },
+      openrouter: { id: 'openrouter', name: 'OpenRouter', desc: 'One key for many models.', badges: [], quota: false, subscription: false, oauth: false, endpoint: false, models: trio('or', 'OpenRouter'), free: [{ id: 'or-free', name: 'OpenRouter · free models', desc: 'Models marked free on OpenRouter.' }], dailyDefault: 'or-balanced', planDefault: 'or-capable' },
+      local: { id: 'local', name: 'Local', desc: 'A model running on this computer.', badges: [], quota: false, subscription: false, oauth: false, endpoint: true, needsKey: false, models: [{ id: 'local', name: 'Local model', desc: 'Whatever your server is running.', tag: 'runs locally', tier: 'daily' }], free: [], dailyDefault: 'local', planDefault: 'local' },
+      other: { id: 'other', name: 'Other', desc: 'Any compatible endpoint.', badges: [], quota: false, subscription: false, oauth: false, endpoint: true, needsKey: true, models: [{ id: 'custom', name: 'Your model', desc: 'The model name your endpoint expects.', tag: 'custom', tier: 'daily' }], free: [], dailyDefault: 'custom', planDefault: 'custom' }
+    };
+  }
+  defaults() {
+    return {
+      provider: null,
+      authMode: 'key', key: '', oauthState: 'idle', endpoint: '',
+      freeAt: 98, planFreeAt: 90, freeModel: '', askBefore: true, countdown: 5, onTimeout: 'switch',
+      router: true, typesafeKey: '',
+      userName: '', assistantName: 'Aria', language: 'Español', languageOther: '', style: 'brief',
+      daily: '', planning: '', planEffort: 'high', payPerUse: false,
+      effort: 'auto', maxEffort: false,
+      compactAt: 40,
+      memory: true, project: 'aria',
+      svc: { notion: false, tavily: false, figma: false, openpencil: false, other: false },
+      svcAuth: { notion: 'oauth', tavily: 'key', figma: 'oauth', openpencil: 'oauth', other: 'key' },
+      svcKey: { notion: '', tavily: '', figma: '', openpencil: '', other: '' },
+      otherName: '',
+      packSource: 'gallery', packPath: '', trustPack: false,
+      projects: '~/Projects', extraFolders: [], askLeave: true, jevReview: true,
+      gitCommit: true, gitPush: false, askForeign: true, proposals: true,
+      experts: { frontend: { on: true, ro: false }, backend: { on: true, ro: false }, security: { on: true, ro: true }, reviewer: { on: true, ro: true }, researcher: { on: true, ro: true } },
+      saveSessions: true, turnLimit: 30, planExec: true,
+      skills: { brainstorming: true, plans: true, tdd: true, debugging: true, review: true, verify: true }
+    };
+  }
+  providerPatch(id) {
+    const m = this.providers()[id];
+    if (!m) return {};
+    const jev = id === 'opencode-go';
+    return {
+      provider: id, daily: m.dailyDefault, planning: m.planDefault, freeModel: m.free[0] ? m.free[0].id : '',
+      router: jev, effort: jev ? 'auto' : 'medium', jevReview: jev,
+      authMode: 'key', key: '', oauthState: 'idle',
+      endpoint: id === 'local' ? 'http://localhost:11434' : ''
+    };
+  }
+  A() {
+    const st = this.state || {};
+    const pid = this.props.preset === 'anthropic-jev' ? 'anthropic' : this.props.preset;
+    const preset = (!st.a || st.a.provider === undefined) && pid ? Object.assign(this.providerPatch(pid), this.props.preset === 'anthropic-jev' ? { router: true } : {}) : {};
+    return Object.assign({}, this.defaults(), preset, st.a || {});
+  }
+  setA(patch) {
+    this.setState({ a: Object.assign({}, (this.state || {}).a || {}, patch) });
+  }
+  mod(a) {
+    return this.providers()[(a || this.A()).provider] || null;
+  }
+  /* ===== navigation ===== */
+  cur() {
+    const s = this.state || {};
+    return s.step || this.props.startStep || 'welcome';
+  }
+  mode() {
+    const s = this.state || {};
+    return s.mode || 'full';
+  }
+  stepIds() {
+    const m = this.mod();
+    if (this.mode() === 'quick') return ['provider', 'auth', 'assistant', 'review'];
+    return ['provider'].concat(m && m.quota ? ['quota'] : []).concat(['auth', 'router', 'assistant', 'models', 'effort', 'compaction', 'memory', 'integrations', 'sandbox', 'git', 'agents', 'review']);
+  }
+  stepNames() {
+    return { provider: 'Provider', quota: 'Quota', auth: 'Authentication', router: 'Router', assistant: 'Assistant', models: 'Models', effort: 'Effort', compaction: 'Compaction', memory: 'Memory', integrations: 'Integrations', sandbox: 'Sandbox', git: 'Git', agents: 'Subagents', review: 'Review' };
+  }
+  go(step, dir) {
+    this.setState({ step: step, dir: dir, flip: !(this.state || {}).flip });
+  }
+  next() {
+    const ids = this.stepIds();
+    const i = ids.indexOf(this.cur());
+    if (i > -1 && i < ids.length - 1) this.go(ids[i + 1], 1);
+    else this.finish();
+  }
+  back() {
+    const ids = this.stepIds();
+    const i = ids.indexOf(this.cur());
+    if (i > 0) this.go(ids[i - 1], -1);
+    else this.go('welcome', -1);
+  }
+  chooseMode(mode) {
+    this.setState({ mode: mode, step: 'provider', dir: 1, flip: !(this.state || {}).flip });
+  }
+  /* ===== the result ===== */
+  config() {
+    const a = this.A();
+    const m = this.mod(a) || this.providers()['opencode-go'];
+    const catalog = m.models.map((x) => ({ id: x.id, name: x.name, description: x.desc, tag: x.tag, tier: x.tier }))
+      .concat(m.free.map((x) => ({ id: x.id, name: x.name, description: x.desc, tag: 'no quota', tier: 'free' })));
+    const lang = a.language === 'Other' ? (a.languageOther || 'English') : a.language;
+    const svcNames = { notion: 'Notion', tavily: 'Tavily (web)', figma: 'Figma', openpencil: 'OpenPencil', other: a.otherName || 'Other MCP' };
+    const quick = this.mode() === 'quick';
+    return {
+      mode: this.mode(),
+      provider: m.id, providerName: m.name, hasQuota: !!m.quota,
+      authMode: a.authMode, router: !!a.router,
+      assistantName: (a.assistantName || '').trim() || 'Aria', userName: (a.userName || '').trim(), language: lang, style: a.style,
+      models: catalog, dailyModel: a.daily, planningModel: a.planning, planningEffort: a.planEffort, payPerUse: !!a.payPerUse,
+      quota: m.quota ? { freeAt: a.freeAt, planFreeAt: a.planFreeAt, freeModel: a.freeModel, askBefore: a.askBefore, countdownMin: a.countdown, onTimeout: a.onTimeout } : null,
+      effort: a.effort, maxEffort: !!a.maxEffort,
+      compactAt: a.compactAt,
+      memory: a.memory ? { engram: true, project: (a.project || 'aria').trim() || 'aria' } : { engram: false },
+      services: Object.keys(a.svc).filter((k) => a.svc[k]).map((k) => svcNames[k]),
+      packages: { source: a.packSource, path: a.packPath, thirdPartyTrusted: !!a.trustPack },
+      sandbox: { projects: a.projects, extraFolders: a.extraFolders, askBeforeLeaving: !!a.askLeave, jevReviewsCommands: !!(a.router && a.jevReview) },
+      git: { commitWithoutAsking: !!a.gitCommit, pushOrMergeWithoutAsking: !!a.gitPush, askBeforeTouchingOthersChanges: !!a.askForeign, proposeUnrequested: !!a.proposals },
+      agents: { experts: a.experts, saveSessions: !!a.saveSessions, turnLimit: a.turnLimit, planAndExecute: !!a.planExec, skills: a.skills },
+      quickSetup: quick
+    };
+  }
+  finish() {
+    const cfg = this.config();
+    if (this.props.onFinish) this.props.onFinish(cfg);
+    else this.setState({ done: true });
+  }
+  /* ===== field builders ===== */
+  decorate(f) {
+    const tones = {
+      lavender: ['rgba(185, 168, 255, 0.08)', 'rgba(185, 168, 255, 0.3)', '#B9A8FF'],
+      green: ['rgba(139, 224, 176, 0.08)', 'rgba(139, 224, 176, 0.3)', '#8BE0B0'],
+      amber: ['rgba(240, 180, 76, 0.08)', 'rgba(240, 180, 76, 0.32)', '#F0B44C'],
+      neutral: ['rgba(255, 255, 255, 0.04)', 'rgba(255, 255, 255, 0.1)', '#9A9AA3']
+    };
+    const t = tones[f.tone || 'neutral'];
+    const base = {
+      id: '', label: '', desc: '', hasLabel: !!f.label, hasDesc: !!f.desc, indentPx: f.indent ? 14 : 0,
+      toneBg: t[0], toneBorder: t[1], toneColor: t[2],
+      items: [], options: [], rows: [], value: '', placeholder: '', min: 0, max: 100, step: 1, valueText: '', pct: 0, caption: '',
+      onAttr: 'false', trackBg: '#34343B', knobX: 0, inputType: 'text', font: 'Geist, ui-sans-serif, system-ui, sans-serif',
+      canReveal: false, revealText: '', revealLabel: '', hasItems: false, draftValue: '',
+      col1: '', col2: '', pkgName: '', origin: '',
+      decDisabled: false, incDisabled: false, decOpacity: 1, incOpacity: 1,
+      buttonLabel: '', buttonDisabled: false, buttonOpacity: 1, stateText: '', stateColor: '#9A9AA3', waiting: false
+    };
+    const k = f.kind;
+    const flags = {
+      isInfo: k === 'info', isSection: k === 'section', isBullets: k === 'bullets', isChoice: k === 'choice', isSegments: k === 'segments',
+      isToggle: k === 'toggle', isInput: k === 'text' || k === 'secret', isSlider: k === 'slider', isMeter: k === 'meter', isChips: k === 'chips',
+      isCheck: k === 'check', isStepper: k === 'stepper', isButton: k === 'button', isMatrix: k === 'matrix', isPackage: k === 'package', isSummary: k === 'summary'
+    };
+    return Object.assign(base, f, flags);
+  }
+  opt(o, selected, pick) {
+    const dis = !!o.disabled;
+    return {
+      label: o.label, desc: o.desc || '', hasDesc: !!o.desc, badges: (o.badges || []).map((t) => ({ t: t })),
+      pressed: selected ? 'true' : 'false', disabled: dis, pick: () => { if (!dis) pick(); },
+      border: selected ? 'rgba(185, 168, 255, 0.6)' : 'rgba(255, 255, 255, 0.1)',
+      bg: selected ? 'rgba(185, 168, 255, 0.1)' : 'rgba(22, 22, 26, 0.96)',
+      hoverBg: selected ? 'rgba(185, 168, 255, 0.14)' : 'rgba(255, 255, 255, 0.05)',
+      cursor: dis ? 'not-allowed' : 'pointer', opacity: dis ? 0.45 : 1,
+      color: selected ? '#F4F4F5' : '#B4B4BC',
+      ringColor: selected ? '#B9A8FF' : '#34343B', ringBg: selected ? '#B9A8FF' : 'transparent', dotScale: selected ? 'scale(1)' : 'scale(0)'
+    };
+  }
+  fields(id) {
+    const a = this.A();
+    const m = this.mod(a);
+    const st = this.state || {};
+    const set = (patch) => this.setA(patch);
+    const D = (f) => this.decorate(f);
+    const section = (label) => D({ kind: 'section', label: label });
+    const info = (tone, label, desc, indent) => D({ kind: 'info', tone: tone, label: label, desc: desc, indent: !!indent });
+    const bullets = (list) => D({ kind: 'bullets', items: list.map((t) => ({ text: t })) });
+    const choice = (label, list, value, onPick) => D({ kind: 'choice', label: label, options: list.map((o) => this.opt(o, o.id === value, () => onPick(o.id))) });
+    const seg = (label, list, value, onPick, desc, indent) => D({ kind: 'segments', label: label, desc: desc || '', indent: !!indent, options: list.map((o) => this.opt(o, o.id === value, () => onPick(o.id))) });
+    const toggle = (label, desc, on, onSet, indent) => D({ kind: 'toggle', label: label, desc: desc || '', indent: !!indent, onAttr: on ? 'true' : 'false', trackBg: on ? '#B9A8FF' : '#34343B', knobX: on ? 18 : 0, toggle: () => onSet(!on) });
+    const input = (key, label, value, onSet, placeholder, opts) => {
+      const o = opts || {};
+      const secret = !!o.secret;
+      const shown = !!((st.reveal || {})[key]);
+      return D({ kind: secret ? 'secret' : 'text', id: 'ob-' + key, label: label, desc: o.desc || '', indent: !!o.indent, value: value, placeholder: placeholder || '',
+        inputType: secret && !shown ? 'password' : 'text', font: o.mono || secret ? "'Geist Mono', ui-monospace, monospace" : 'Geist, ui-sans-serif, system-ui, sans-serif',
+        canReveal: secret, revealText: shown ? 'Hide' : 'Show', revealLabel: shown ? 'Hide the key' : 'Show the key',
+        change: (e) => onSet(e.target.value),
+        reveal: () => { const r = Object.assign({}, (this.state || {}).reveal || {}); r[key] = !r[key]; this.setState({ reveal: r }); } });
+    };
+    const slider = (key, label, desc, value, min, max, stp, unit, onSet) => D({ kind: 'slider', id: 'ob-' + key, label: label, desc: desc, value: value, min: min, max: max, step: stp, valueText: value + unit, change: (e) => onSet(Number(e.target.value)) });
+    const chips = (key, label, list, onAdd, onRemove, placeholder) => {
+      const draft = ((st.draft || {})[key]) || '';
+      return D({ kind: 'chips', id: 'ob-' + key, label: label, placeholder: placeholder, hasItems: list.length > 0, items: list.map((x, i) => ({ label: x, remove: () => onRemove(i) })), draftValue: draft,
+        draftChange: (e) => { const d = Object.assign({}, (this.state || {}).draft || {}); d[key] = e.target.value; this.setState({ draft: d }); },
+        add: () => { const v = (((this.state || {}).draft || {})[key] || '').trim(); if (!v) return; onAdd(v); const d = Object.assign({}, (this.state || {}).draft || {}); d[key] = ''; this.setState({ draft: d }); } });
+    };
+    const check = (label, list) => D({ kind: 'check', label: label, items: list.map((c) => ({ label: c.label, desc: c.desc || '', hasDesc: !!c.desc, onAttr: c.on ? 'true' : 'false',
+      boxBorder: c.on ? '#B9A8FF' : '#4A4A52', boxBg: c.on ? '#B9A8FF' : 'transparent', checkOpacity: c.on ? 1 : 0, toggle: c.toggle })) });
+    const stepper = (label, desc, value, min, max, stp, unit, onSet) => D({ kind: 'stepper', label: label, desc: desc, valueText: value + unit,
+      decDisabled: value <= min, incDisabled: value >= max, decOpacity: value <= min ? 0.35 : 1, incOpacity: value >= max ? 0.35 : 1,
+      dec: () => onSet(Math.max(min, value - stp)), inc: () => onSet(Math.min(max, value + stp)) });
+    const lang = a.language === 'Other' ? (a.languageOther || 'another language') : a.language;
+    const styles = { short: 'Very short and direct', brief: 'Brief, with lists when they help', detailed: 'Detailed, with explanations', technical: 'Technical and precise', didactic: 'Didactic, step by step' };
+    const providerList = ['opencode-go', 'anthropic', 'openai', 'openrouter', 'local', 'other'].map((k) => this.providers()[k]);
+
+    if (id === 'provider') {
+      return [
+        choice('', providerList.map((p) => ({ id: p.id, label: p.name, desc: p.desc, badges: p.badges })), a.provider, (v) => set(this.providerPatch(v))),
+        info('lavender', 'Providers are modules', 'Each one declares its models, whether it has a quota Aria can read, and which free models it offers. To add a provider later, you only add its module.')
+      ];
+    }
+    if (id === 'quota' && m) {
+      const f = [
+        section('SWITCHING TO THE FREE MODEL'),
+        slider('freeAt', 'Switch at', 'When the quota reaches this level, Aria moves to the free model.', a.freeAt, 80, 100, 1, '%', (v) => set({ freeAt: v })),
+        slider('planFreeAt', 'Switch at, inside /plan', 'Planning switches earlier, so a plan is never cut halfway.', a.planFreeAt, 70, 100, 1, '%', (v) => set({ planFreeAt: v })),
+        choice('Free model to use', m.free.map((x) => ({ id: x.id, label: x.name, desc: x.desc })), a.freeModel, (v) => set({ freeModel: v })),
+        section('BEFORE SWITCHING'),
+        toggle('Ask me first', 'Aria shows a card with a countdown. If you don’t answer, the option below applies.', a.askBefore, (v) => set({ askBefore: v }))
+      ];
+      if (a.askBefore) {
+        f.push(seg('Countdown', [{ id: 1, label: '1 min' }, { id: 3, label: '3 min' }, { id: 5, label: '5 min' }, { id: 10, label: '10 min' }], a.countdown, (v) => set({ countdown: v }), '', true));
+        f.push(seg('If there is no answer', [{ id: 'switch', label: 'Switch to the free model' }, { id: 'keep', label: 'Keep the current model' }], a.onTimeout, (v) => set({ onTimeout: v }), '', true));
+      } else {
+        f.push(info('neutral', '', 'Aria switches without asking as soon as the threshold is reached.'));
+      }
+      return f;
+    }
+    if (id === 'auth' && m) {
+      const f = [];
+      if (m.endpoint) f.push(input('endpoint', 'Endpoint', a.endpoint, (v) => set({ endpoint: v }), 'http://localhost:11434', { mono: true }));
+      if (m.id === 'local') {
+        f.push(info('neutral', 'No key needed', 'Local models don’t need a key. Aria only needs to reach the endpoint.'));
+        return f;
+      }
+      if (m.oauth) f.push(seg('How do you want to sign in?', [{ id: 'key', label: 'Paste a key' }, { id: 'oauth', label: 'Sign in with OAuth' }], a.authMode, (v) => set({ authMode: v })));
+      if (a.authMode === 'oauth' && m.oauth) {
+        const s = a.oauthState;
+        f.push(D({ kind: 'button', label: 'Sign in to ' + m.name, stateText: s === 'done' ? 'Signed in' : (s === 'waiting' ? 'Waiting for the browser…' : 'Opens your browser. You can also run /login later.'),
+          stateColor: s === 'done' ? '#8BE0B0' : '#9A9AA3', waiting: s === 'waiting', buttonLabel: s === 'done' ? 'Signed in' : (s === 'waiting' ? 'Waiting…' : 'Sign in'), buttonDisabled: s !== 'idle', buttonOpacity: s === 'idle' ? 1 : 0.5,
+          press: () => this.oauthStart() }));
+      } else {
+        f.push(input('key', m.name + ' API key', a.key, (v) => set({ key: v }), 'Paste your key', { secret: true }));
+      }
+      f.push(info('lavender', 'Stored privately', 'Credentials go to auth.json with permissions 600, so only your user can read them.'));
+      return f;
+    }
+    if (id === 'router') {
+      const jev = !!(m && m.jevIncluded);
+      const f = [
+        bullets(['Route and effort chosen automatically for each message', 'Read-only mode when a message only needs reading', 'Review of the commands the sandbox asks to run', 'Experts assigned to each part of a big task']),
+        choice('Do you want a router?', [
+          { id: 'yes', label: 'Yes, use Jev', desc: jev ? 'Included with your account.' : 'Needs the Typesafe API key.' },
+          { id: 'no', label: 'No router', desc: 'Aria handles every message the same way.' }
+        ], a.router ? 'yes' : 'no', (v) => {
+          const on = v === 'yes';
+          set({ router: on, effort: (!on && a.effort === 'auto') ? 'medium' : (on && a.effort !== 'auto' && !st.touchedEffort ? 'auto' : a.effort), jevReview: on })
+        })
+      ];
+      if (a.router && jev) f.push(info('green', 'Jev is already included', 'It comes with this same OpenCode Go account, so there is nothing else to enter.'));
+      if (a.router && !jev) f.push(input('tskey', 'Typesafe API key (Jev’s key)', a.typesafeKey, (v) => set({ typesafeKey: v }), 'Paste your Typesafe key', { secret: true, desc: 'Jev is the router. It runs on Typesafe, outside your provider.' }));
+      if (!a.router) f.push(info('amber', 'Turned off without a router', 'Automatic route and effort, read-only mode, sandbox command review and expert assignment.'));
+      return f;
+    }
+    if (id === 'assistant') {
+      const f = [
+        input('userName', 'Your name', a.userName, (v) => set({ userName: v }), 'How should Aria call you?', { desc: 'Aria uses it to greet you and in its replies.' }),
+        input('assistantName', 'Assistant name', a.assistantName, (v) => set({ assistantName: v }), 'Aria', { desc: 'Aria by default.' }),
+        seg('Conversation language', ['Español', 'English', 'Português', 'Other'].map((x) => ({ id: x, label: x })), a.language, (v) => set({ language: v }))
+      ];
+      if (a.language === 'Other') f.push(input('languageOther', 'Which language?', a.languageOther, (v) => set({ languageOther: v }), 'Type it', { indent: true }));
+      f.push(choice('Response style', Object.keys(styles).map((k) => ({ id: k, label: styles[k], desc: ({ short: 'No tables.', technical: 'With code and file paths.' })[k] || '' })), a.style, (v) => set({ style: v })));
+      return f;
+    }
+    if (id === 'models' && m) {
+      const list = m.models.map((x) => ({ id: x.id, label: x.name, desc: x.desc, badges: [x.tag] }));
+      const f = [
+        section('EVERYDAY MODEL'),
+        choice('', list, a.daily, (v) => set({ daily: v })),
+        section('PLANNING MODEL'),
+        choice('', list, a.planning, (v) => set({ planning: v })),
+        seg('Planning effort', [{ id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' }], a.planEffort, (v) => set({ planEffort: v }))
+      ];
+      if (m.subscription) f.push(toggle('Allow pay-per-use models', 'Models billed per request, outside your subscription. Off by default.', a.payPerUse, (v) => set({ payPerUse: v })));
+      return f;
+    }
+    if (id === 'effort') {
+      const autoOk = !!a.router;
+      const notes = { auto: 'Jev picks the effort for each message.', low: 'Every message uses the lowest effort. Fast and cheap.', medium: 'Every message uses a medium effort.', high: 'Every message uses a high effort. Slower, more careful.', max: 'Every message uses the maximum effort. The slowest and most expensive.' };
+      const f = [
+        seg('Effort', [{ id: 'auto', label: 'Auto by route', disabled: !autoOk }, { id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' }, { id: 'max', label: 'Maximum' }], a.effort, (v) => { this.setState({ touchedEffort: true }); set({ effort: v }); }, notes[a.effort])
+      ];
+      if (!autoOk) f.push(info('amber', 'Auto needs the router', 'Without Jev there is no route to read, so choose a fixed level.'));
+      if (a.effort === 'auto' || a.effort === 'high') f.push(toggle('Allow the maximum level', 'When a task is really hard, Aria may raise the effort to maximum.', a.maxEffort, (v) => set({ maxEffort: v })));
+      return f;
+    }
+    if (id === 'compaction') {
+      return [
+        slider('compactAt', 'Compact at', 'When the context reaches this share of the window, Aria compacts it to save tokens.', a.compactAt, 20, 80, 5, '%', (v) => set({ compactAt: v })),
+        D({ kind: 'meter', pct: a.compactAt, caption: 'compacts at ' + a.compactAt + '%' }),
+        info('neutral', '', a.memory ? 'Before compacting, Aria saves the decisions to memory. A separator in the chat marks the moment.' : 'A separator in the chat marks the moment. Without memory, only the summary is kept.')
+      ];
+    }
+    if (id === 'memory') {
+      const f = [toggle('Remember with Engram', 'Decisions, preferences and solved problems, kept on this computer.', a.memory, (v) => set({ memory: v }))];
+      if (a.memory) {
+        f.push(input('project', 'Project name', a.project, (v) => set({ project: v }), 'aria', { mono: true, indent: true, desc: 'Memories are filed under this name, so searches stay scoped.' }));
+        f.push(info('neutral', '', 'Search matches words, not meaning, until you add embeddings.', true));
+      } else {
+        f.push(info('amber', 'Aria will forget between conversations', 'You can turn memory on later with /memory.'));
+      }
+      return f;
+    }
+    if (id === 'integrations') {
+      const services = [
+        { id: 'notion', label: 'Notion', desc: 'Read and write your pages and databases.' },
+        { id: 'tavily', label: 'Tavily (web)', desc: 'Search the web.' },
+        { id: 'figma', label: 'Figma', desc: 'Read your designs.' },
+        { id: 'openpencil', label: 'OpenPencil', desc: 'Work with design files.' },
+        { id: 'other', label: 'Other MCP', desc: 'Any MCP server.' }
+      ];
+      const f = [section('SERVICES (MCP)')];
+      services.forEach((sv) => {
+        const on = !!a.svc[sv.id];
+        f.push(toggle(sv.label, sv.desc, on, (v) => set({ svc: Object.assign({}, a.svc, { [sv.id]: v }) })));
+        if (on) {
+          if (sv.id === 'other') f.push(input('otherName', 'Server name or command', a.otherName, (v) => set({ otherName: v }), 'npx some-mcp-server', { mono: true, indent: true }));
+          f.push(seg('', [{ id: 'oauth', label: 'OAuth' }, { id: 'key', label: 'API key' }], a.svcAuth[sv.id], (v) => set({ svcAuth: Object.assign({}, a.svcAuth, { [sv.id]: v }) }), '', true));
+          if (a.svcAuth[sv.id] === 'key') f.push(input('svc-' + sv.id, sv.label + ' key', a.svcKey[sv.id], (v) => set({ svcKey: Object.assign({}, a.svcKey, { [sv.id]: v }) }), 'Paste the key', { secret: true, indent: true }));
+        }
+      });
+      f.push(section('PI PACKAGES'));
+      f.push(seg('Where do packages come from?', [{ id: 'gallery', label: 'Gallery' }, { id: 'local', label: 'Local folder' }], a.packSource, (v) => set({ packSource: v }), 'Extensions, skills, templates and themes.'));
+      if (a.packSource === 'local') f.push(input('packPath', 'Folder', a.packPath, (v) => set({ packPath: v }), '~/pi-packages', { mono: true, indent: true }));
+      const auto = [];
+      if (a.planExec) auto.push('subagents', 'superpowers');
+      f.push(auto.length ? info('green', 'Installed automatically', auto.join(' and ') + ' are needed by /plan and /execute, so they install without asking.') : info('neutral', '', 'No package is installed automatically while /plan and /execute are off.'));
+      f.push(D({ kind: 'package', pkgName: 'pi-pack-name', origin: 'github.com/author/pi-pack-name', onAttr: a.trustPack ? 'true' : 'false', trackBg: a.trustPack ? '#B9A8FF' : '#34343B', knobX: a.trustPack ? 18 : 0, toggle: () => set({ trustPack: !a.trustPack }) }));
+      return f;
+    }
+    if (id === 'sandbox') {
+      const f = [
+        info('neutral', '', 'Commands run in a sandbox that writes only inside your projects folder and can’t see your credentials.'),
+        input('projects', 'Projects folder', a.projects, (v) => set({ projects: v }), '~/Projects', { mono: true }),
+        chips('folder', 'Extra folders Aria can write to', a.extraFolders, (v) => set({ extraFolders: a.extraFolders.concat([v]) }), (i) => set({ extraFolders: a.extraFolders.filter((x, k) => k !== i) }), '~/Notes'),
+        toggle('Ask before leaving the sandbox', 'When a command needs the network or other folders, Aria asks first.', a.askLeave, (v) => set({ askLeave: v }))
+      ];
+      if (a.router) f.push(toggle('Jev reviews the command', 'Jev explains what the command does before you decide.', a.jevReview, (v) => set({ jevReview: v })));
+      return f;
+    }
+    if (id === 'git') {
+      return [
+        toggle('Commit without asking', 'Aria makes a commit at the end of each task.', a.gitCommit, (v) => set({ gitCommit: v })),
+        toggle('Push or merge without asking', 'Off means Aria asks before anything leaves your machine.', a.gitPush, (v) => set({ gitPush: v })),
+        toggle('Ask before touching changes that aren’t hers', 'If the working tree has changes Aria didn’t make, it asks first.', a.askForeign, (v) => set({ askForeign: v })),
+        toggle('Deliver what you didn’t ask for as a proposal', 'Extra ideas arrive as a suggestion to approve, not as a change.', a.proposals, (v) => set({ proposals: v }))
+      ];
+    }
+    if (id === 'agents') {
+      const ex = a.experts;
+      const descs = { frontend: 'Screens and components.', backend: 'Endpoints and data.', security: 'Reviews for risks.', reviewer: 'Reads the final change.', researcher: 'Looks things up.' };
+      const upd = (k, patch) => set({ experts: Object.assign({}, ex, { [k]: Object.assign({}, ex[k], patch) }) });
+      const rows = Object.keys(ex).map((k) => ({
+        label: k, desc: descs[k], hasDesc: true,
+        onAttr: ex[k].on ? 'true' : 'false', onBg: ex[k].on ? '#B9A8FF' : '#34343B', onX: ex[k].on ? 18 : 0, toggleOn: () => upd(k, { on: !ex[k].on }),
+        roAttr: ex[k].ro ? 'true' : 'false', roBg: ex[k].ro ? '#B9A8FF' : '#34343B', roX: ex[k].ro ? 18 : 0, roDisabled: !ex[k].on, roOpacity: ex[k].on ? 1 : 0.35, toggleRo: () => upd(k, { ro: !ex[k].ro })
+      }));
+      const f = [
+        section('EXPERTS'),
+        D({ kind: 'matrix', col1: 'on', col2: 'read-only', rows: rows }),
+        section('SESSIONS'),
+        toggle('Save the subagents’ sessions', 'Lets you open what each expert did, afterwards.', a.saveSessions, (v) => set({ saveSessions: v })),
+        stepper('Turn limit per subagent', 'Stops an expert that keeps going without finishing.', a.turnLimit, 5, 100, 5, ' turns', (v) => set({ turnLimit: v })),
+        section('SUPERPOWERS'),
+        toggle('Turn on /plan and /execute', 'Aria writes a spec and a plan first, then builds task by task.', a.planExec, (v) => set({ planExec: v }))
+      ];
+      if (a.planExec) {
+        const sk = a.skills;
+        const sup = (k, patch) => set({ skills: Object.assign({}, sk, { [k]: patch }) });
+        f.push(check('Skills that run on their own', [
+          { label: 'Brainstorming', desc: 'Explores the idea before the spec.', on: sk.brainstorming, toggle: () => sup('brainstorming', !sk.brainstorming) },
+          { label: 'Writing plans', desc: 'Turns the spec into phases and tasks.', on: sk.plans, toggle: () => sup('plans', !sk.plans) },
+          { label: 'Test-driven development', desc: 'Writes the test before the code.', on: sk.tdd, toggle: () => sup('tdd', !sk.tdd) },
+          { label: 'Systematic debugging', desc: 'Finds the cause before fixing.', on: sk.debugging, toggle: () => sup('debugging', !sk.debugging) },
+          { label: 'Code review', desc: 'Reviews each task’s change.', on: sk.review, toggle: () => sup('review', !sk.review) },
+          { label: 'Verification before finishing', desc: 'Runs the checks before saying it’s done.', on: sk.verify, toggle: () => sup('verify', !sk.verify) }
+        ]));
+      }
+      return f;
+    }
+    if (id === 'review') {
+      const cfg = this.config();
+      const quick = this.mode() === 'quick';
+      const can = (sid) => this.stepIds().indexOf(sid) > -1;
+      const row = (label, value, sid) => ({ label: label, value: value, canEdit: can(sid), edit: () => this.go(sid, -1) });
+      const rows = [
+        row('Provider', cfg.providerName + (cfg.hasQuota ? ' · quota meter on' : ''), 'provider'),
+        row('Sign-in', (a.authMode === 'oauth' && m && m.oauth ? 'OAuth' : (m && m.id === 'local' ? 'No key needed' : 'API key')) + ' · saved to auth.json (600)', 'auth'),
+        row('Assistant', cfg.assistantName + ' · ' + lang + ' · ' + styles[a.style].toLowerCase() + (cfg.userName ? ' · calls you ' + cfg.userName : ''), 'assistant')
+      ];
+      if (!quick) {
+        rows.splice(1, 0, row('Quota', m && m.quota ? 'Free model at ' + a.freeAt + '% (' + a.planFreeAt + '% in /plan), ' + (a.askBefore ? 'asks first, ' + a.countdown + ' min' : 'no question') : 'Not available for this provider', 'quota'));
+        rows.push(row('Router', a.router ? 'Jev' : 'Off', 'router'));
+        const mm = m ? m.models : [];
+        const nameOf = (mid) => ((mm.find((x) => x.id === mid)) || { name: '—' }).name;
+        rows.push(row('Models', nameOf(a.daily) + ' daily · ' + nameOf(a.planning) + ' for plans (' + a.planEffort + ')', 'models'));
+        rows.push(row('Effort', (a.effort === 'auto' ? 'Auto by route' : a.effort) + (a.maxEffort ? ' · max allowed' : ''), 'effort'));
+        rows.push(row('Compaction', 'At ' + a.compactAt + '% of the context', 'compaction'));
+        rows.push(row('Memory', a.memory ? 'Engram · project “' + cfg.memory.project + '”' : 'Off', 'memory'));
+        rows.push(row('Integrations', cfg.services.length ? cfg.services.join(', ') : 'None yet', 'integrations'));
+        rows.push(row('Sandbox', a.projects + (a.extraFolders.length ? ' + ' + a.extraFolders.length + ' more' : '') + (a.askLeave ? ' · asks to leave' : ' · leaves freely'), 'sandbox'));
+        rows.push(row('Git', (a.gitCommit ? 'Commits alone' : 'Asks before committing') + ' · ' + (a.gitPush ? 'pushes alone' : 'asks before pushing'), 'git'));
+        const on = Object.keys(a.experts).filter((k) => a.experts[k].on);
+        rows.push(row('Subagents', on.length + ' experts' + (a.planExec ? ' · /plan and /execute on' : ' · /plan and /execute off') + (a.saveSessions ? ' · sessions saved' : ''), 'agents'));
+      }
+      const f = [D({ kind: 'summary', rows: rows })];
+      if (quick) f.push(info('lavender', 'Everything else uses recommended defaults', 'Router, models, effort, memory, sandbox, git and subagents are set up for you.'));
+      return f;
+    }
+    return [];
+  }
+  valid(id) {
+    const a = this.A();
+    const m = this.mod(a);
+    if (id === 'provider') return !!m;
+    if (!m) return false;
+    if (id === 'auth') {
+      if (m.id === 'local') return a.endpoint.trim().length > 0;
+      if (m.id === 'other') return a.endpoint.trim().length > 0 && a.key.trim().length > 0;
+      return (a.authMode === 'oauth' && m.oauth) ? a.oauthState === 'done' : a.key.trim().length > 0;
+    }
+    if (id === 'router') return !(a.router && !m.jevIncluded && a.typesafeKey.trim().length === 0);
+    return true;
+  }
+  oauthStart() {
+    this.setA({ oauthState: 'waiting' });
+    clearTimeout(this.oauthT);
+    this.oauthT = setTimeout(() => this.setA({ oauthState: 'done' }), 1400);
+  }
+  componentWillUnmount() {
+    clearTimeout(this.oauthT);
+  }
+  renderVals() {
+    const st = this.state || {};
+    const cur = this.cur();
+    const ids = this.stepIds();
+    const idx = ids.indexOf(cur);
+    const names = this.stepNames();
+    const a = this.A();
+    const showWelcome = cur === 'welcome' && !st.done;
+    const showDone = !!st.done;
+    const showStep = !showWelcome && !showDone && idx > -1;
+    const isReview = cur === 'review';
+    const titles = {
+      provider: ['Choose a provider', 'Pick where Aria’s models come from. You can add more providers later.'],
+      quota: ['Quota', 'OpenCode Go has a quota Aria can read. Decide when to move to the free model.'],
+      auth: ['Sign in', 'Aria stores your credentials in auth.json with permissions 600, so only you can read them.'],
+      router: ['Router', 'Jev reads each message and decides how Aria should work on it.'],
+      assistant: ['Your assistant', 'How Aria addresses you, what it is called and how it talks.'],
+      models: ['Models', 'These options come from your provider.'],
+      effort: ['Effort', 'How hard Aria thinks before answering.'],
+      compaction: ['Compaction', 'When the conversation gets long, Aria compacts the context to save tokens.'],
+      memory: ['Memory', 'Engram lets Aria remember decisions, preferences and solved problems between conversations.'],
+      integrations: ['Integrations', 'Connect services and add packages. Each service has its own key or sign-in.'],
+      sandbox: ['Sandbox', 'Where Aria works, and when it has to ask before going further.'],
+      git: ['Git and how Aria works', 'What Aria may do on its own, and what it must ask first.'],
+      agents: ['Subagents and Superpowers', 'Experts that work in parallel, and the skills behind /plan and /execute.'],
+      review: ['You’re all set', this.mode() === 'quick' ? 'Here is what Aria will use. Everything else follows recommended defaults.' : 'Here is what Aria will use. You can change any of it.']
+    };
+    const t = titles[cur] || ['', ''];
+    const ok = showStep ? this.valid(cur) : true;
+    const dirKey = ((st.dir || 1) > 0 ? 'ob-f' : 'ob-b') + (st.flip ? '1' : '2');
+    const assistant = ((a.assistantName || '').trim() || 'Aria');
+    return {
+      rootHeight: this.props.demo === true ? '680px' : '100%',
+      showTop: showStep,
+      showWelcome: showWelcome,
+      showStep: showStep,
+      showDone: showDone,
+      showFooter: showStep,
+      showDefaults: showStep && this.mode() === 'full' && !isReview && idx >= 2,
+      canSkip: !!this.props.onSkip,
+      stepNumber: idx + 1,
+      stepTotal: ids.length,
+      stepName: names[cur] || '',
+      bars: ids.map((x, i) => ({ bg: i < idx ? '#B9A8FF' : (i === idx ? 'rgba(185, 168, 255, 0.55)' : 'rgba(255, 255, 255, 0.12)') })),
+      anim: dirKey,
+      title: t[0],
+      desc: t[1],
+      fields: showStep ? this.fields(cur) : [],
+      modes: [
+        { label: 'Quick setup', badge: 'about 1 min', desc: 'Provider, sign-in and your name. Recommended defaults for the rest.', pick: () => this.chooseMode('quick') },
+        { label: 'Customize', badge: '12 steps', desc: 'Models, router, memory, integrations, sandbox, git and subagents.', pick: () => this.chooseMode('full') }
+      ],
+      nextLabel: isReview ? 'Start using ' + assistant : 'Continue',
+      nextDisabled: !ok,
+      nextOpacity: ok ? 1 : 0.4,
+      nextCursor: ok ? 'pointer' : 'not-allowed',
+      next: () => { if (ok) this.next(); },
+      back: () => this.back(),
+      useDefaults: () => this.go('review', 1),
+      skip: () => { if (this.props.onSkip) this.props.onSkip(); },
+      restart: () => this.setState({ done: false, step: 'welcome', a: {}, mode: 'full', dir: -1, flip: !st.flip })
+    };
+  }
+}
+</script>
+</body>
+</html>

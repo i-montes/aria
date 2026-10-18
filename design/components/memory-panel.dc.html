@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Memory panel</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+.aria-scroll::-webkit-scrollbar{width:14px;height:14px}
+.aria-scroll::-webkit-scrollbar-track{background:transparent}
+.aria-scroll::-webkit-scrollbar-corner{background:transparent}
+.aria-scroll::-webkit-scrollbar-thumb{background-color:rgba(255,255,255,0.16);border:4px solid transparent;background-clip:padding-box;border-radius:999px}
+.aria-scroll:hover::-webkit-scrollbar-thumb{background-color:rgba(255,255,255,0.28)}
+.aria-scroll::-webkit-scrollbar-thumb:hover{background-color:rgba(185,168,255,0.7);border-width:2px}
+.aria-scroll::-webkit-scrollbar-thumb:active{background-color:#B9A8FF;border-width:2px}
+@supports not selector(::-webkit-scrollbar){.aria-scroll{scrollbar-width:auto;scrollbar-color:rgba(255,255,255,0.28) transparent}}
+.mm-pad{margin-right:-14px;padding-right:0;scrollbar-gutter:stable}
+.mm-input::placeholder{color:#8A8A94}
+@keyframes mm-up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){
+  .mm, .mm *{animation:none !important;transition:none !important}
+}
+</style>
+</helmet>
+<div class="mm" style="display: flex; flex-direction: column; gap: 12px; width: 100%; height: {{rootHeight}}; min-height: 0; box-sizing: border-box; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF">
+
+  <div style="display: flex; align-items: center; gap: 8px">
+    <button type="button" aria-label="Back to chat" onClick="{{back}}" style-hover="background: rgba(255, 255, 255, 0.06); color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; height: 44px; margin-left: -10px; padding: 0; border: 0; border-radius: 12px; background: transparent; color: #B4B4BC; cursor: pointer; transition: background-color 100ms, color 100ms">
+      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>
+    </button>
+    <div style="display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0">
+      <h2 style="margin: 0; font-size: 16px; font-weight: 600; color: #F4F4F5">Memory</h2>
+      <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #9A9AA3">engram · aria</span>
+    </div>
+    <span style="flex: 0 0 auto; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; font-variant-numeric: tabular-nums; color: #B4B4BC">{{activeText}}</span>
+  </div>
+
+  <div style="display: flex; align-items: center; gap: 8px; min-height: 44px; box-sizing: border-box; padding: 0 6px 0 12px; border-radius: 12px; background: rgba(22, 22, 26, 0.96); border: 1px solid rgba(255, 255, 255, 0.1)">
+    <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8A8A94" stroke-width="2" stroke-linecap="round" style="flex: 0 0 15px"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>
+    <label for="mm-search" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap">Search memories</label>
+    <input id="mm-search" class="mm-input" type="text" value="{{query}}" onChange="{{changeQuery}}" placeholder="Search memories" style="flex: 1 1 auto; min-width: 0; height: 42px; padding: 0; border: 0; outline: none; background: transparent; color: #F4F4F5; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 14px">
+    <sc-if value="{{hasQuery}}" hint-placeholder-val="{{ false }}">
+      <button type="button" aria-label="Clear search" onClick="{{clearQuery}}" style-hover="color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: -2px" style="display: flex; align-items: center; justify-content: center; flex: 0 0 32px; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: #8A8A94; cursor: pointer; transition: color 100ms"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"></path></svg></button>
+    </sc-if>
+    <span title="No embeddings are stored, so search matches words, not meaning" style="flex: 0 0 auto; padding: 1px 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.07); color: #B4B4BC; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px">text search</span>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 6px">
+    <sc-for list="{{typeChips}}" as="c" hint-placeholder-count="8">
+      <button type="button" aria-pressed="{{c.pressed}}" onClick="{{c.pick}}" style-hover="background: {{c.hoverBg}}" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: inline-flex; align-items: center; gap: 6px; min-height: 30px; box-sizing: border-box; padding: 0 10px; border: 1px solid {{c.border}}; border-radius: 999px; background: {{c.bg}}; color: {{c.color}}; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12px; font-weight: 500; cursor: pointer; transition: background-color 120ms, border-color 120ms, color 120ms">
+        <sc-if value="{{c.hasDot}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{c.dot}}"></span></sc-if>
+        <span>{{c.label}}</span>
+        <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.75">{{c.count}}</span>
+      </button>
+    </sc-for>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px">
+    <button type="button" aria-pressed="{{pinnedOnly}}" onClick="{{togglePinnedOnly}}" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: inline-flex; align-items: center; gap: 6px; min-height: 30px; box-sizing: border-box; padding: 0 10px; border: 1px solid {{pinnedBorder}}; border-radius: 8px; background: {{pinnedBg}}; color: {{pinnedColor}}; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12px; font-weight: 500; cursor: pointer; transition: background-color 120ms, border-color 120ms, color 120ms">Pinned <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; opacity: 0.75">{{pinnedCount}}</span></button>
+    <button type="button" aria-pressed="{{personalOnly}}" onClick="{{togglePersonalOnly}}" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: inline-flex; align-items: center; gap: 6px; min-height: 30px; box-sizing: border-box; padding: 0 10px; border: 1px solid {{personalBorder}}; border-radius: 8px; background: {{personalBg}}; color: {{personalColor}}; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12px; font-weight: 500; cursor: pointer; transition: background-color 120ms, border-color 120ms, color 120ms">Personal <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; opacity: 0.75">{{personalCount}}</span></button>
+    <button type="button" onClick="{{cycleSort}}" style-hover="color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: inline-flex; align-items: center; gap: 6px; min-height: 30px; margin-left: auto; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: #9A9AA3; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; cursor: pointer; transition: color 100ms">
+      <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4"></path></svg>
+      {{sortLabel}}
+    </button>
+  </div>
+
+  <ul class="aria-scroll mm-pad" aria-label="Memories" style="flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; overflow-x: hidden; overflow-y: auto">
+    <sc-for list="{{rows}}" as="r" hint-placeholder-count="4">
+      <li style="flex: 0 0 auto; overflow: hidden; border-radius: 14px; background: rgba(17, 17, 20, 0.94); border: 1px solid {{r.border}}; transition: border-color 200ms ease, opacity 220ms ease, transform 220ms ease; animation: mm-up 260ms cubic-bezier(0.22, 1, 0.36, 1) both">
+        <button type="button" aria-expanded="{{r.openAttr}}" onClick="{{r.toggle}}" style-hover="background: rgba(255, 255, 255, 0.04)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: -2px" style="display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; column-gap: 12px; align-items: start; width: 100%; min-height: 44px; box-sizing: border-box; margin: 0; padding: 11px 12px; border: 0; background: transparent; color: inherit; font-family: Geist, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: background-color 120ms">
+          <span aria-hidden="true" style="width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: {{r.dot}}"></span>
+          <span style="display: flex; flex-direction: column; gap: 5px; min-width: 0">
+            <span style="min-width: 0; font-size: 13.5px; font-weight: 500; line-height: 20px; overflow-wrap: anywhere"><sc-for list="{{r.titleSegs}}" as="s"><span style="color: {{s.color}}; font-weight: {{s.weight}}">{{s.t}}</span></sc-for></span>
+            <sc-if value="{{r.showPreview}}" hint-placeholder-val="{{ true }}"><span style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-width: 0; font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere"><sc-for list="{{r.previewSegs}}" as="s"><span style="color: {{s.color}}; font-weight: {{s.weight}}">{{s.t}}</span></sc-for></span></sc-if>
+            <span style="display: flex; flex-wrap: wrap; align-items: center; gap: 5px">
+              <span style="padding: 0 7px; border-radius: 6px; background: rgba(255, 255, 255, 0.07); color: {{r.dot}}; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px">{{r.typeLabel}}</span>
+              <sc-if value="{{r.hasKey}}" hint-placeholder-val="{{ false }}"><span style="padding: 0 7px; border-radius: 6px; background: rgba(255, 255, 255, 0.05); color: #B4B4BC; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px; overflow-wrap: anywhere"><sc-for list="{{r.keySegs}}" as="s"><span style="color: {{s.color}}; font-weight: {{s.weight}}">{{s.t}}</span></sc-for></span></sc-if>
+              <sc-if value="{{r.revised}}" hint-placeholder-val="{{ false }}"><span style="color: #8A8A94; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px">rev {{r.rev}}</span></sc-if>
+              <sc-if value="{{r.personal}}" hint-placeholder-val="{{ false }}"><span style="padding: 0 7px; border-radius: 6px; background: rgba(240, 168, 216, 0.14); color: #F0A8D8; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px">personal</span></sc-if>
+            </span>
+          </span>
+          <span style="display: flex; align-items: center; gap: 6px; padding-top: 2px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #8A8A94; white-space: nowrap">
+            <sc-if value="{{r.pinned}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="#B9A8FF" stroke="#B9A8FF" stroke-width="1.6" stroke-linejoin="round"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path><path d="M12 14v7" stroke-linecap="round"></path></svg></sc-if>
+            {{r.ago}}
+          </span>
+        </button>
+
+        <div style="display: grid; grid-template-rows: {{r.detailRows}}; opacity: {{r.detailOpacity}}; visibility: {{r.detailVisibility}}; transition: grid-template-rows 300ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease, visibility 0s linear {{r.detailDelay}}">
+          <div style="min-height: 0; overflow: hidden">
+            <div style="display: flex; flex-direction: column; gap: 12px; padding: 2px 12px 12px 32px">
+              <p style="margin: 0; font-size: 13px; line-height: 1.55; color: #D6D6DC; white-space: pre-wrap; overflow-wrap: anywhere">{{r.content}}</p>
+              <dl style="display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 17px">
+                <sc-for list="{{r.fields}}" as="f"><dt style="color: #8A8A94">{{f.k}}</dt><dd style="margin: 0; color: {{f.color}}; overflow-wrap: anywhere">{{f.v}}</dd></sc-for>
+              </dl>
+              <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+                <button type="button" onClick="{{r.pin}}" style-hover="background: rgba(255, 255, 255, 0.08)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 10px; background: transparent; color: #EDEDEF; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13px; cursor: pointer; transition: background-color 100ms">{{r.pinLabel}}</button>
+                <button type="button" onClick="{{r.forget}}" title="Marks it as deleted. Engram keeps the record." style-hover="background: rgba(255, 154, 139, 0.12)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px; border: 1px solid rgba(255, 154, 139, 0.3); border-radius: 10px; background: transparent; color: #FF9A8B; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13px; cursor: pointer; transition: background-color 100ms">Forget</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </li>
+    </sc-for>
+
+    <sc-if value="{{isEmpty}}" hint-placeholder-val="{{ false }}">
+      <li style="display: flex; flex-direction: column; gap: 4px; padding: 18px 4px">
+        <span style="font-size: 13.5px; line-height: 1.45; color: #C8C8CE; overflow-wrap: anywhere">{{emptyTitle}}</span>
+        <span style="font-size: 12.5px; line-height: 1.45; color: #8A8A94">Search matches the words you used when saving. There are no embeddings yet, so it can’t match by meaning.</span>
+      </li>
+    </sc-if>
+  </ul>
+
+  <sc-if value="{{hasUndo}}" hint-placeholder-val="{{ false }}">
+    <div role="status" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 6px 4px 14px; border-radius: 12px; background: rgba(30, 30, 36, 0.97); border: 1px solid rgba(255, 255, 255, 0.1); animation: mm-up 240ms cubic-bezier(0.22, 1, 0.36, 1) both">
+      <span style="min-width: 0; font-size: 13px; line-height: 1.4; color: #D6D6DC; overflow-wrap: anywhere">Forgot “{{undoTitle}}”</span>
+      <button type="button" onClick="{{undo}}" style-hover="background: rgba(255, 255, 255, 0.08)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="flex: 0 0 auto; min-height: 40px; padding: 0 14px; border: 0; border-radius: 10px; background: transparent; color: #B9A8FF; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13px; font-weight: 600; cursor: pointer; transition: background-color 100ms">Undo</button>
+    </div>
+  </sc-if>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 2px 2px 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 16px; color: #8A8A94">
+    <span>{{keyedCount}} with a topic key</span>
+    <span>{{pinnedCount}} pinned</span>
+    <span>0 embeddings</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"demo":{"editor":"boolean","default":true},"onBack":{"editor":null},"$preview":{"width":448,"height":640}}'>
+class Component extends DCLogic {
+  /* the observations table: type, title, topic_key, content, revisions, created (days ago), updated (days ago), extras */
+  data() {
+    if (this._data) return this._data;
+    const D = [
+      ['finding', 'RELEASE removed from .env breaks the build', 'build/release-env', 'Commit a41c9e2 removed RELEASE from .env while env.ts still required it, so vite build threw “Missing RELEASE”. Where: env.ts line 26. It took a day to notice because CI only ran on main.', 2, 4, 1],
+      ['finding', 'Vite define needs JSON.stringify', 'build/vite-define', 'Values passed to define must go through JSON.stringify, or the build inlines a bare identifier and the app fails at runtime. Where: vite.config.ts.', 1, 12, 12],
+      ['finding', 'Notion tasks database', 'notion-tareas-db', 'The tasks database lives under Team › Tasks in Notion. Its status is a select named Estado, not a status property, so filter with Estado is not Hecho. Aria reads it before planning.', 3, 20, 3],
+      ['finding', 'Push provider times out at 8 seconds', 'push/provider-timeouts', 'The push provider closes requests after 8 seconds, which blocked the send endpoint during bulk sends. This is the reason sending moved behind a queue.', 1, 9, 9],
+      ['finding', 'A retry can send the same push twice', 'push/idempotency', 'If the first attempt works but the ack is lost, the retry sends a second push. Each message needs an idempotency key. Where: src/queue/consumer.ts.', 2, 8, 2],
+      ['finding', 'CI runs Node 22', 'ci/node-version', 'CI runs Node 22 and the local version matches, so there is nothing to change in .nvmrc. Review before the next major Node release.', 1, 30, 30, { review: 21 }],
+      ['finding', 'pnpm needs the lockfile updated', 'ci/pnpm-frozen', 'pnpm install --frozen-lockfile fails when package.json changed without updating pnpm-lock.yaml. Run pnpm install locally first and commit the lockfile.', 1, 16, 16],
+      ['finding', 'Deploys moved to Cloudflare', 'deploy/cloudflare', 'Deploys moved to Cloudflare in commit 7f02b1d. Preview URLs follow the branch name. The old host is still up but no longer updated.', 2, 22, 7],
+      ['finding', 'The sandbox only writes inside the project', null, 'Every command runs in a sandbox that can write only inside the project and does not see credentials. Anything that needs the network asks for permission first.', 1, 25, 25],
+      ['finding', 'env.test.ts covers the loadEnv fallbacks', 'tests/env', 'env.test.ts checks that loadEnv falls back to the commit hash when RELEASE is missing, and fails with a clear message when API_URL is empty.', 1, 3, 3],
+      ['finding', 'Memory search matches words, not meaning', 'memory/search', 'No embeddings are stored, so memory search matches the words you used when saving. Save titles with the terms you will look for later.', 1, 5, 5],
+      ['finding', 'Tavily returns at most five results', null, 'A Tavily search returns up to five results. For wider research, run several narrow searches instead of one broad one.', 1, 15, 15],
+      ['finding', 'The login form submitted twice', 'ui/login-form-double-submit', 'LoginForm sent the request twice on a double click. Disabling the submit button while the request is pending fixed it. Where: src/components/LoginForm.tsx.', 1, 28, 28],
+      ['finding', 'Magic links expire in 15 minutes', 'auth/magic-link', 'Magic-link tokens are single-use, hashed at rest and expire after 15 minutes. The response is the same whether or not the email exists.', 2, 27, 19],
+      ['finding', 'Rate limiting lives in src/lib/rate.ts', null, 'The rate-limit middleware is in src/lib/rate.ts and is mounted before the auth routes. The limit is per IP and per email.', 1, 26, 26],
+      ['finding', 'Staging was one release behind', null, 'Staging ran the previous release after the last deploy because the workflow only triggers on tags. Redeploy by hand once the build passes.', 1, 6, 6, { expires: 7 }],
+      ['finding', 'The build log is written to build.log', null, 'pnpm build writes its output to build.log in the project root. Read it before the code when a build fails.', 1, 18, 18],
+      ['finding', 'Subagents share the project, not each other’s context', 'agents/context', 'Each subagent starts with a clean context and only sees the project files and its brief. Hand results over through files, not the chat.', 1, 13, 13],
+      ['finding', 'Context is compacted at 40%', 'context/compaction', 'Aria compacts the context at 40% to save tokens and saves the decisions to memory first. A separator in the chat marks the moment.', 2, 11, 4],
+      ['finding', 'The OpenCode Go quota resets monthly', 'models/quota', 'The OpenCode Go quota resets monthly. When it is almost used up, Aria asks before switching to a free model.', 1, 14, 14],
+      ['finding', 'Jev classifies every message first', 'jev/routing', 'Jev is a free classifier that reads each message and decides: quick, focused task, work to split or needs thinking. It also decides whether to search memory, the web or Notion.', 1, 10, 10],
+      ['finding', 'Hyprland blur needs ignorealpha', 'omarchy/blur', 'Blur behind a transparent layer blurs the whole window unless the layer rule sets ignorealpha. Where: the Aria layer rule in the Hyprland config.', 2, 17, 5],
+      ['finding', 'Super+A is bound in Hyprland, alt+a in the app', 'omarchy/keybinds', 'Super+A opens the panel from Hyprland. alt+a, esc and enter are handled inside the app. Do not bind alt+a globally.', 1, 19, 19],
+
+      ['decision', 'Use pnpm, not npm', 'tooling/package-manager', 'pnpm is the package manager in every project. Scripts and docs use pnpm commands. Reason: faster installs and a strict lockfile.', 1, 29, 29],
+      ['decision', 'RELEASE is optional, with the commit hash as fallback', 'build/release-fallback', 'RELEASE is no longer required. When it is missing, the build uses the commit hash. Reason: the .env cleanup removed it and CI never set it.', 1, 4, 4],
+      ['decision', 'Push sends go through a queue', 'push/queue', 'The send endpoint enqueues the message and returns right away. A consumer sends it with retries, and after 3 failed attempts the message goes to a dead-letter queue.', 2, 8, 3],
+      ['decision', 'At-least-once delivery with idempotency keys', 'push/idempotency-key', 'Delivery is at-least-once. Each message carries an idempotency key so a retry never sends twice. Discarded: exactly-once, too costly here.', 1, 7, 7],
+      ['decision', 'Answer in Spanish, keep code in English', 'style/language', 'Aria talks in Spanish. Code, identifiers, commit messages and the design stay in English.', 1, 30, 30],
+      ['decision', 'Dark UI close to black, not pure black', 'ui/dark-theme', 'The background is #050506, close to the terminal. Surfaces step up in small increments. Lavender #B9A8FF is the only accent; amber means “needs a decision”.', 2, 24, 12],
+      ['decision', 'Message index near the scrollbar', 'ui/message-index', 'Hovering near the scrollbar shows the messages you sent as a compact group with a fan zoom. Clicking one scrolls to it and closes the index.', 1, 5, 5],
+      ['decision', 'Tasks above the input, record in the chat', 'ui/task-dock', 'Tasks live in a tab attached to the input while work is pending. When the last one finishes, the list moves into the chat as a record.', 1, 4, 2],
+      ['decision', 'Spec, plan and phases before building', 'workflow/planning', 'Aria writes a spec, then a plan, then the phases, and asks for approval at each step before building anything.', 1, 3, 3],
+      ['decision', 'Ask native or agents after the phases', 'workflow/execution-mode', 'After the phases, Aria asks how to run the plan: natively, task by task, or with specialist subagents in parallel.', 1, 3, 3],
+      ['decision', 'Never store payment data in memory', null, 'Card numbers, bank accounts and ID numbers are never saved to memory, even when asked.', 1, 21, 21],
+      ['decision', 'The Engram project name is aria', null, 'All memories use the project name aria so searches stay scoped. Personal ones use the personal scope.', 1, 32, 32],
+
+      ['pattern', 'Optional env with a git fallback', 'patterns/env-fallback', 'Read an optional variable with ??, falling back to a value derived from git. Keep the required list short and explicit.', 1, 4, 4],
+      ['pattern', 'Queue, consumer and dead-letter queue', 'patterns/queue-dlq', 'The producer enqueues, the consumer sends with exponential backoff, and messages that fail 3 times go to a dead-letter queue for review.', 1, 7, 7],
+      ['pattern', 'Disable submit while pending', 'patterns/pending-submit', 'Disable the submit button and show a pending label while the request runs. It prevents double submits.', 1, 28, 28],
+      ['pattern', 'Read the log before the code', null, 'When a build or test fails, read the log first, then the file it points to, then the last commits.', 1, 18, 18],
+      ['pattern', 'Hash tokens at rest', 'patterns/token-hash', 'Store only a hash of a token, compare hashes in constant time and expire tokens quickly.', 1, 27, 27],
+      ['pattern', 'One commit per task', 'patterns/commit-per-task', 'Each task ends with its own commit and a message that names the task. It makes rollbacks and reviews easy.', 1, 13, 13],
+      ['pattern', 'Wrap long text, never scroll sideways', 'patterns/no-horizontal-scroll', 'Code, paths and long words wrap onto the next line. Horizontal scroll is never used inside the panel.', 1, 9, 9],
+      ['pattern', 'Open soft, close crisp', 'patterns/motion-asymmetry', 'Opening uses an ease-out of about 240 ms. Closing is faster, about 140 ms, and everything leaves at once.', 2, 23, 12],
+
+      ['session_summary', 'Session: fix the failing build', 'session/2026-10-14', 'Found that a41c9e2 removed RELEASE from .env. Made it optional with a commit-hash fallback and added tests. Build and 17 tests pass. Next: update the docs.', 1, 4, 4],
+      ['session_summary', 'Session: push queue spec and plan', null, 'Wrote the spec and plan for sending push through a queue. Decisions: at-least-once delivery, idempotency keys, 3 attempts. Next: execute with subagents.', 1, 3, 3],
+      ['session_summary', 'Session: message index and scroll', null, 'Designed the message index near the scrollbar, the custom scrollbar and the jump effect. Open: keyboard access.', 1, 5, 5],
+      ['session_summary', 'Session: staging deploy', null, 'Checked staging, found it one release behind and redeployed after the build passed.', 1, 6, 6],
+      ['session_summary', 'Session: Notion tasks sync', null, 'Read the Notion tasks database and mapped Estado to task statuses. Nothing was written back.', 1, 20, 20],
+      ['session_summary', 'Session: first run of Aria', null, 'Set up Aria on Pi with Engram, Jev and the OpenCode Go models. Verified the sandbox and the permission prompts.', 1, 33, 33],
+
+      ['manual', 'Ask before running migrations', null, 'Saved by hand: always ask before running a database migration, even in staging.', 1, 31, 31],
+      ['manual', 'Keep commit messages short', null, 'Saved by hand: one line, imperative, under 60 characters.', 1, 29, 29],
+
+      ['learning', 'Store the idempotency key before sending', 'learning/idempotency-order', 'Learned in review: write the idempotency key before calling the provider, not after. Otherwise a crash between the two sends twice.', 1, 2, 2],
+
+      ['identity', 'Who you are', 'identity/user', 'Full-stack developer and tech lead, self-taught. Replies in Spanish; code and identifiers in English.', 3, 34, 6, { personal: true }]
+    ];
+    const DAY = 86400000;
+    const base = Date.UTC(2026, 9, 18);
+    const NOW = base + 18 * 3600000;
+    this._now = NOW;
+    const hex = (n) => n.toString(16);
+    this._data = D.map((e, i) => {
+      const x = e[7] || {};
+      const created = base - e[5] * DAY + ((i * 137) % 1380) * 60000;
+      let updated = e[6] >= e[5] ? created + (e[4] - 1) * 3600000 : base - e[6] * DAY + ((i * 89) % 1380) * 60000;
+      if (updated < created) updated = created + 3600000;
+      const seen = Math.min(NOW, updated + ((i * 31) % 4) * DAY);
+      return {
+        id: i + 1,
+        type: e[0], title: e[1], key: e[2], content: e[3], rev: e[4],
+        created: created, updated: updated, seen: seen,
+        personal: !!x.personal,
+        review: x.review ? NOW + x.review * DAY : null,
+        expires: x.expires ? NOW + x.expires * DAY : null,
+        dup: (i % 9 === 0) ? 1 : 0,
+        session: 'ses_' + hex(0x3a5f1 + e[5] * 977 + i * 13),
+        tool: e[0] === 'manual' ? 'cli' : (e[4] > 1 ? 'mem_update' : 'mem_save')
+      };
+    });
+    return this._data;
+  }
+  types() {
+    return [
+      { id: 'finding', label: 'finding', color: '#7DD3FC' },
+      { id: 'decision', label: 'decision', color: '#B9A8FF' },
+      { id: 'pattern', label: 'pattern', color: '#9BE7C4' },
+      { id: 'session_summary', label: 'session summary', color: '#F0B44C' },
+      { id: 'manual', label: 'manual', color: '#FF9A8B' },
+      { id: 'learning', label: 'learning', color: '#F0A8D8' },
+      { id: 'identity', label: 'identity', color: '#F4F4F5' }
+    ];
+  }
+  words() {
+    return String((this.state || {}).query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  }
+  ranges(text, words) {
+    const low = String(text).toLowerCase();
+    const out = [];
+    words.forEach((w) => {
+      let i = low.indexOf(w);
+      while (i > -1) { out.push([i, i + w.length]); i = low.indexOf(w, i + w.length); }
+    });
+    out.sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    out.forEach((r) => {
+      const l = merged[merged.length - 1];
+      if (l && r[0] <= l[1]) l[1] = Math.max(l[1], r[1]); else merged.push(r.slice());
+    });
+    return merged;
+  }
+  segs(text, ranges, hl, hlW, base, baseW) {
+    const out = [];
+    let pos = 0;
+    ranges.forEach((r) => {
+      if (r[0] > pos) out.push({ t: text.slice(pos, r[0]), color: base, weight: baseW });
+      out.push({ t: text.slice(r[0], r[1]), color: hl, weight: hlW });
+      pos = r[1];
+    });
+    if (pos < text.length) out.push({ t: text.slice(pos), color: base, weight: baseW });
+    if (!out.length) out.push({ t: text, color: base, weight: baseW });
+    return out;
+  }
+  ago(ms) {
+    const d = Math.floor((this._now - ms) / 86400000);
+    if (d <= 0) return 'today';
+    if (d === 1) return 'yesterday';
+    if (d < 30) return d + 'd ago';
+    return Math.floor(d / 7) + 'w ago';
+  }
+  stamp(ms) {
+    return new Date(ms).toISOString().replace('T', ' ').slice(0, 16);
+  }
+  forgetItem(m) {
+    const s = this.state || {};
+    const gone = Object.assign({}, s.gone || {});
+    gone[m.id] = true;
+    clearTimeout(this.undoT);
+    this.setState({ gone: gone, open: null, undo: { id: m.id, title: m.title } });
+    this.undoT = setTimeout(() => this.setState({ undo: null }), 6000);
+  }
+  undoForget() {
+    const s = this.state || {};
+    if (!s.undo) return;
+    const gone = Object.assign({}, s.gone || {});
+    delete gone[s.undo.id];
+    clearTimeout(this.undoT);
+    this.setState({ gone: gone, undo: null });
+  }
+  componentWillUnmount() {
+    clearTimeout(this.undoT);
+  }
+  renderVals() {
+    const st = this.state || {};
+    const all = this.data();
+    const types = this.types();
+    const words = this.words();
+    const gone = st.gone || {};
+    const pinned = st.pinned || {};
+    const type = st.type || 'all';
+    const sort = st.sort || 'updated';
+    const labelOf = (t) => t.replace('_', ' ');
+    const colorOf = (t) => (types.find((x) => x.id === t) || { color: '#B4B4BC' }).color;
+
+    const active = all.filter((m) => !gone[m.id]);
+    const matchesText = (m) => words.every((w) => (m.title + ' ' + m.content + ' ' + (m.key || '') + ' ' + labelOf(m.type)).toLowerCase().indexOf(w) > -1);
+    const facetBase = active.filter((m) => matchesText(m) && (!st.pinnedOnly || pinned[m.id]) && (!st.personalOnly || m.personal));
+    const shown = facetBase.filter((m) => type === 'all' || m.type === type);
+
+    const sorters = {
+      updated: (a, b) => b.updated - a.updated,
+      created: (a, b) => b.created - a.created,
+      revisions: (a, b) => (b.rev - a.rev) || (b.updated - a.updated),
+      title: (a, b) => a.title.localeCompare(b.title)
+    };
+    shown.sort((a, b) => ((pinned[b.id] ? 1 : 0) - (pinned[a.id] ? 1 : 0)) || sorters[sort](a, b));
+
+    const sortNames = { updated: 'recently updated', created: 'recently created', revisions: 'most revised', title: 'title' };
+    const order = ['updated', 'created', 'revisions', 'title'];
+
+    const typeChips = [{ id: 'all', label: 'All', color: '#B4B4BC', count: facetBase.length }].concat(types.map((t) => ({ id: t.id, label: t.label, color: t.color, count: facetBase.filter((m) => m.type === t.id).length }))).map((c) => {
+      const on = type === c.id;
+      return {
+        label: c.label, count: c.count,
+        pressed: on ? 'true' : 'false',
+        hasDot: c.id !== 'all', dot: c.color,
+        bg: on ? 'rgba(185, 168, 255, 0.14)' : 'transparent',
+        hoverBg: on ? 'rgba(185, 168, 255, 0.2)' : 'rgba(255, 255, 255, 0.06)',
+        border: on ? 'rgba(185, 168, 255, 0.45)' : 'rgba(255, 255, 255, 0.1)',
+        color: on ? '#F4F4F5' : '#B4B4BC',
+        pick: () => this.setState({ type: c.id, open: null })
+      };
+    });
+
+    const rows = shown.map((m) => {
+      const isOpen = st.open === m.id;
+      const flat = m.content.replace(/\s+/g, ' ');
+      let excerpt = flat;
+      if (words.length) {
+        const hit = flat.toLowerCase().indexOf(words[0]);
+        if (hit > 90) excerpt = '…' + flat.slice(hit - 30);
+      }
+      const fields = [
+        ['project', 'aria'],
+        ['type', m.type],
+        ['scope', m.personal ? 'personal' : 'project'],
+        ['topic_key', m.key || '—'],
+        ['session_id', m.session],
+        ['tool_name', m.tool],
+        ['revision_count', String(m.rev)],
+        ['duplicate_count', String(m.dup)],
+        ['created_at', this.stamp(m.created)],
+        ['updated_at', this.stamp(m.updated)],
+        ['last_seen_at', this.stamp(m.seen)],
+        ['pinned', pinned[m.id] ? 'true' : 'false']
+      ];
+      if (m.review) fields.push(['review_after', this.stamp(m.review)]);
+      if (m.expires) fields.push(['expires_at', this.stamp(m.expires)]);
+      fields.push(['embedding', 'none (text search only)']);
+      return {
+        dot: colorOf(m.type),
+        typeLabel: labelOf(m.type),
+        titleSegs: this.segs(m.title, this.ranges(m.title, words), '#B9A8FF', 600, '#F4F4F5', 500),
+        previewSegs: this.segs(excerpt, this.ranges(excerpt, words), '#F4F4F5', 500, '#9A9AA3', 400),
+        showPreview: !isOpen,
+        hasKey: !!m.key,
+        keySegs: this.segs(m.key || '', this.ranges(m.key || '', words), '#B9A8FF', 600, '#B4B4BC', 400),
+        revised: m.rev > 1,
+        rev: m.rev,
+        personal: m.personal,
+        pinned: !!pinned[m.id],
+        ago: this.ago(m.updated),
+        border: isOpen ? 'rgba(185, 168, 255, 0.35)' : 'rgba(255, 255, 255, 0.07)',
+        openAttr: isOpen ? 'true' : 'false',
+        detailRows: isOpen ? '1fr' : '0fr',
+        detailOpacity: isOpen ? 1 : 0,
+        detailVisibility: isOpen ? 'visible' : 'hidden',
+        detailDelay: isOpen ? '0ms' : '300ms',
+        content: m.content,
+        fields: fields.map((f) => ({ k: f[0], v: f[1], color: (f[0] === 'embedding' || (f[0] === 'topic_key' && !m.key)) ? '#8A8A94' : '#D6D6DC' })),
+        pinLabel: pinned[m.id] ? 'Unpin' : 'Pin',
+        toggle: () => this.setState({ open: isOpen ? null : m.id }),
+        pin: () => { const p = Object.assign({}, this.state.pinned || {}); if (p[m.id]) delete p[m.id]; else p[m.id] = true; this.setState({ pinned: p }); },
+        forget: () => this.forgetItem(m)
+      };
+    });
+
+    const q = String(st.query || '').trim();
+    const pinnedCount = active.filter((m) => pinned[m.id]).length;
+    return {
+      rootHeight: this.props.demo === true ? '640px' : '100%',
+      activeText: active.length + ' active',
+      query: st.query || '',
+      hasQuery: !!st.query,
+      changeQuery: (e) => this.setState({ query: e.target.value, open: null }),
+      clearQuery: () => this.setState({ query: '', open: null }),
+      typeChips: typeChips,
+      pinnedOnly: st.pinnedOnly ? 'true' : 'false',
+      pinnedBg: st.pinnedOnly ? 'rgba(185, 168, 255, 0.14)' : 'transparent',
+      pinnedBorder: st.pinnedOnly ? 'rgba(185, 168, 255, 0.45)' : 'rgba(255, 255, 255, 0.1)',
+      pinnedColor: st.pinnedOnly ? '#F4F4F5' : '#B4B4BC',
+      togglePinnedOnly: () => this.setState({ pinnedOnly: !st.pinnedOnly, open: null }),
+      personalOnly: st.personalOnly ? 'true' : 'false',
+      personalBg: st.personalOnly ? 'rgba(240, 168, 216, 0.14)' : 'transparent',
+      personalBorder: st.personalOnly ? 'rgba(240, 168, 216, 0.45)' : 'rgba(255, 255, 255, 0.1)',
+      personalColor: st.personalOnly ? '#F4F4F5' : '#B4B4BC',
+      togglePersonalOnly: () => this.setState({ personalOnly: !st.personalOnly, open: null }),
+      pinnedCount: pinnedCount,
+      personalCount: active.filter((m) => m.personal).length,
+      sortLabel: sortNames[sort],
+      cycleSort: () => this.setState({ sort: order[(order.indexOf(sort) + 1) % order.length] }),
+      rows: rows,
+      isEmpty: rows.length === 0,
+      emptyTitle: q ? ('No memory matches “' + q + '”') : 'No memories here yet',
+      hasUndo: !!st.undo,
+      undoTitle: st.undo ? st.undo.title : '',
+      undo: () => this.undoForget(),
+      keyedCount: active.filter((m) => !!m.key).length,
+      back: () => { if (this.props.onBack) this.props.onBack(); }
+    };
+  }
+}
+</script>
+</body>
+</html>

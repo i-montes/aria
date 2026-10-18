@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Divider</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+</style>
+</helmet>
+<div role="separator" style="width: 100%; display: flex; align-items: center; gap: 10px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; line-height: 18px; color: #9A9AA3">
+  <span aria-hidden="true" style="flex: 1 1 24px; height: 1px; background: #26262B"></span>
+  <span style="flex: 0 1 auto; min-width: 0; text-align: center; overflow-wrap: anywhere">{{text}}</span>
+  <span aria-hidden="true" style="flex: 1 1 24px; height: 1px; background: #26262B"></span>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"text":{"editor":"text","default":"context at 40% · compacted"},"$preview":{"width":448,"height":18}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { text: this.props.text ?? 'context at 40% · compacted' };
+  }
+}
+</script>
+</body>
+</html>

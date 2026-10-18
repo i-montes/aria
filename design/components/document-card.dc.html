@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Document card</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+@keyframes dk-up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes dk-pop{0%{transform:scale(0.9)}60%{transform:scale(1.08)}100%{transform:scale(1)}}
+@media (prefers-reduced-motion: reduce){
+  .dk, .dk *{animation:none !important;transition:none !important}
+}
+</style>
+</helmet>
+<div class="dk" style="width: 100%; max-width: 400px; box-sizing: border-box; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; animation: dk-up 300ms cubic-bezier(0.22, 1, 0.36, 1) both">
+  <div style="display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border-radius: 16px 16px 16px 4px; background: rgba(17, 17, 20, 0.94); border: 1px solid rgba(255, 255, 255, 0.07)">
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px">
+      <span style="display: inline-flex; align-items: center; gap: 8px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; color: #B4B4BC">
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 14px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6M9 13h6M9 17h4"></path></svg>
+        {{kindLabel}}
+      </span>
+      <span style="display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px 1px 7px; border-radius: 999px; background: {{chipBg}}; color: {{chipColor}}; font-size: 11.5px; font-weight: 500; line-height: 18px; animation: {{chipAnimation}}; transition: background-color 300ms ease, color 300ms ease">
+        <sc-if value="{{approved}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg></sc-if>
+        <sc-if value="{{draft}}" hint-placeholder-val="{{ true }}"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: #F0B44C"></span></sc-if>
+        {{statusLabel}}
+      </span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 3px">
+      <h3 style="margin: 0; font-size: 14.5px; font-weight: 600; line-height: 1.35; color: #F4F4F5; overflow-wrap: anywhere">{{title}}</h3>
+      <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 16px; color: #9A9AA3; overflow-wrap: anywhere">{{path}}</span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 12px">
+      <sc-for list="{{sections}}" as="s" hint-placeholder-count="3">
+        <div style="display: flex; flex-direction: column; gap: 6px; animation: dk-up 320ms cubic-bezier(0.22, 1, 0.36, 1) {{s.delay}}ms both">
+          <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; color: #8A8A94">{{s.heading}}</span>
+          <sc-if value="{{s.hasText}}" hint-placeholder-val="{{ false }}"><p style="margin: 0; font-size: 13.5px; line-height: 1.5; color: #D6D6DC; overflow-wrap: anywhere">{{s.text}}</p></sc-if>
+          <sc-if value="{{s.hasItems}}" hint-placeholder-val="{{ false }}">
+            <ul style="display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none">
+              <sc-for list="{{s.items}}" as="it" hint-placeholder-count="3">
+                <li style="display: grid; grid-template-columns: 10px minmax(0, 1fr); column-gap: 8px; align-items: start; font-size: 13.5px; line-height: 1.5; color: #D6D6DC">
+                  <span aria-hidden="true" style="width: 4px; height: 4px; margin: 9px 0 0 3px; border-radius: 50%; background: #55555E"></span>
+                  <span style="min-width: 0; overflow-wrap: anywhere">{{it.text}}</span>
+                </li>
+              </sc-for>
+            </ul>
+          </sc-if>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"doc":{"editor":"enum","options":["spec","plan"],"default":"spec"},"status":{"editor":"enum","options":["draft","approved"],"default":"draft"},"title":{"editor":"text","default":""},"path":{"editor":"text","default":""},"sections":{"editor":null},"$preview":{"width":448,"height":420}}'>
+class Component extends DCLogic {
+  samples() {
+    return {
+      spec: {
+        title: 'Push notifications through a queue',
+        path: 'docs/specs/push-queue.md',
+        sections: [
+          { heading: 'GOAL', text: 'Send push notifications from a queue, so a slow provider never blocks the request.' },
+          { heading: 'REQUIREMENTS', items: [
+            'The endpoint enqueues the message and returns right away',
+            'A consumer sends it, with retries and backoff',
+            'After 3 failed attempts the message goes to a dead-letter queue',
+            'The endpoint keeps the same response shape'
+          ] },
+          { heading: 'OUT OF SCOPE', items: ['Changing the push provider', 'A dashboard for the queue'] }
+        ]
+      },
+      plan: {
+        title: 'Move push sends behind a queue',
+        path: 'docs/plans/push-queue.md',
+        sections: [
+          { heading: 'APPROACH', text: 'Put a queue between the send endpoint and the provider, then move the sending into a consumer.' },
+          { heading: 'DECISIONS', items: [
+            'At-least-once delivery, with an idempotency key per message',
+            'Exponential backoff, at most 3 attempts',
+            'No change to the endpoint contract'
+          ] },
+          { heading: 'RISKS', items: ['A retry can send twice if the first ack is lost. The idempotency key covers it.'] }
+        ]
+      }
+    };
+  }
+  renderVals() {
+    const kind = this.props.doc === 'plan' ? 'plan' : 'spec';
+    const base = this.samples()[kind];
+    const approved = this.props.status === 'approved';
+    const sections = (this.props.sections || base.sections).map((s, i) => ({
+      heading: s.heading,
+      hasText: !!s.text,
+      text: s.text || '',
+      hasItems: !!(s.items && s.items.length),
+      items: (s.items || []).map((t) => ({ text: t })),
+      delay: 80 + i * 70
+    }));
+    return {
+      kindLabel: kind === 'plan' ? 'PLAN' : 'SPEC',
+      title: this.props.title || base.title,
+      path: this.props.path || base.path,
+      sections: sections,
+      approved: approved,
+      draft: !approved,
+      statusLabel: approved ? 'Approved' : 'Draft',
+      chipBg: approved ? 'rgba(139, 224, 176, 0.14)' : 'rgba(240, 180, 76, 0.12)',
+      chipColor: approved ? '#8BE0B0' : '#F0B44C',
+      chipAnimation: approved ? 'dk-pop 360ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none'
+    };
+  }
+}
+</script>
+</body>
+</html>

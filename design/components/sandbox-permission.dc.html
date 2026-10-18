@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Sandbox permission</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+</style>
+</helmet>
+<div style="width: 100%; box-sizing: border-box; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; background: rgba(26, 20, 9, 0.96); border: 1px solid rgba(240, 180, 76, 0.42); border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px">
+  <div style="display: flex; align-items: center; gap: 8px; color: #F0B44C; font-size: 13.5px; font-weight: 600">
+    <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>
+    <span>{{title}}</span>
+  </div>
+  <div style="display: grid; grid-template-columns: 10px minmax(0, 1fr); column-gap: 8px; background: #0A0A0C; border-radius: 8px; padding: 9px 12px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; line-height: 19px">
+    <span aria-hidden="true" style="color: #8A8A94; user-select: none">$</span>
+    <code style="min-width: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; color: #FFFFFF; white-space: pre-wrap; overflow-wrap: anywhere">{{command}}</code>
+  </div>
+  <p style="margin: 0; font-size: 13.5px; line-height: 1.5; color: #D6D6DC"><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: {{accent}}">jev</span>  {{review}}</p>
+  <div style="display: flex; gap: 8px; flex-wrap: wrap">
+    <button onClick="{{onAllow}}" style="min-height: 44px; padding: 0 16px; border-radius: 10px; border: 0; background: #F0B44C; color: #1A1205; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13.5px; font-weight: 600; cursor: pointer">Allow once</button>
+    <button onClick="{{onAlways}}" style="min-height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.14); background: transparent; color: #EDEDEF; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13.5px; cursor: pointer">Always here</button>
+    <button onClick="{{onDeny}}" style="min-height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.14); background: transparent; color: #EDEDEF; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13.5px; cursor: pointer">Deny</button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"title":{"editor":"text","default":"Wants to leave the sandbox"},"command":{"editor":"text","default":"pnpm install --frozen-lockfile"},"review":{"editor":"text","default":"Needs network only for the npm registry. Doesn’t touch credentials or anything outside the project."},"accent":{"editor":"color","default":"#B9A8FF","options":["#B9A8FF","#7DD3FC","#9BE7C4","#F4F4F5"]},"onAllow":{"editor":null},"onAlways":{"editor":null},"onDeny":{"editor":null},"$preview":{"width":448,"height":220}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const noop = () => {};
+    return {
+      title: this.props.title ?? 'Wants to leave the sandbox',
+      command: this.props.command ?? 'pnpm install --frozen-lockfile',
+      review: this.props.review ?? 'Needs network only for the npm registry. Doesn’t touch credentials or anything outside the project.',
+      accent: this.props.accent ?? '#B9A8FF',
+      onAllow: this.props.onAllow ?? noop,
+      onAlways: this.props.onAlways ?? noop,
+      onDeny: this.props.onDeny ?? noop
+    };
+  }
+}
+</script>
+</body>
+</html>

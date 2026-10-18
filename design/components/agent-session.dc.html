@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Agent session</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+</style>
+</helmet>
+<div style="width: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF">
+  <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px">
+    <button type="button" onClick="{{onBack}}" style="min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 6px; margin-left: -6px; background: transparent; border: 0; border-radius: 10px; color: #D6D6DC; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13.5px; cursor: pointer">
+      <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>
+      Subagents
+    </button>
+    <span style="display: flex; align-items: center; gap: 8px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; white-space: nowrap; color: {{statusColor}}"><span aria-hidden="true" style="width: 7px; height: 7px; border-radius: 50%; background: {{dot}}"></span>{{status}}</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 4px">
+    <h2 style="margin: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 15px; font-weight: 500; color: #F4F4F5">{{role}}</h2>
+    <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #B4B4BC; overflow-wrap: anywhere">{{task}}</p>
+  </div>
+  <div aria-hidden="true" style="height: 1px; background: #1E1E22"></div>
+  <ol aria-label="Session activity" style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 12px">
+    <sc-for list="{{steps}}" as="s" hint-placeholder-count="4">
+      <li style="display: flex; flex-direction: column">
+        <sc-if value="{{s.isTool}}" hint-placeholder-val="{{ true }}">
+          <div style="display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 10px; align-items: start; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; line-height: 19px; color: #B4B4BC">
+            <span style="color: #8A8A94; padding-top: 2px; display: flex">
+              <sc-if value="{{s.iRead}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5M9 13h6M9 17h6"></path></svg></sc-if>
+              <sc-if value="{{s.iEdit}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="M13 7l4 4"></path></svg></sc-if>
+              <sc-if value="{{s.iRun}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7l5 5-5 5M12 17h7"></path></svg></sc-if>
+              <sc-if value="{{s.iSearch}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"></circle><path d="M20 20l-4.5-4.5"></path></svg></sc-if>
+            </span>
+            <span style="min-width: 0; overflow-wrap: anywhere"><span style="color: #F4F4F5">{{s.verb}}</span> {{s.target}}</span>
+            <span style="white-space: nowrap; color: {{s.metaColor}}">{{s.meta}}</span>
+          </div>
+        </sc-if>
+        <sc-if value="{{s.isMsg}}" hint-placeholder-val="{{ false }}">
+          <p style="margin: 0; max-width: 94%; box-sizing: border-box; background: rgba(17, 17, 20, 0.94); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 16px 16px 16px 4px; padding: 12px 14px; font-size: 14px; line-height: 1.55; color: #EDEDEF; overflow-wrap: anywhere">{{s.text}}</p>
+        </sc-if>
+        <sc-if value="{{s.isCode}}" hint-placeholder-val="{{ false }}">
+          <div role="group" aria-label="Code change" style="background: #0A0A0C; border-radius: 10px; padding: 12px 14px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; line-height: 19px; display: flex; flex-direction: column">
+            <sc-for list="{{s.lines}}" as="l" hint-placeholder-count="3">
+              <div style="display: grid; grid-template-columns: 12px minmax(0, 1fr); column-gap: 8px; color: {{l.color}}"><span style="user-select: none">{{l.mark}}</span><span style="min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere">{{l.text}}</span></div>
+            </sc-for>
+          </div>
+        </sc-if>
+        <sc-if value="{{s.isLive}}" hint-placeholder-val="{{ false }}">
+          <div style="padding-left: 2px">
+            <dc-import name="Trabajando" label="{{s.text}}" start-at="{{s.since}}" hint-size="100%,20px"></dc-import>
+          </div>
+        </sc-if>
+        <sc-if value="{{s.isNote}}" hint-placeholder-val="{{ false }}">
+          <p style="margin: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; line-height: 18px; color: #9A9AA3; overflow-wrap: anywhere"><span style="color: #D6D6DC">{{s.label}}</span> {{s.text}}</p>
+        </sc-if>
+      </li>
+    </sc-for>
+  </ol>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"agent":{"editor":null},"accent":{"editor":"color","default":"#B9A8FF","options":["#B9A8FF","#7DD3FC","#9BE7C4","#F4F4F5"]},"onBack":{"editor":null},"$preview":{"width":448,"height":440}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const accent = this.props.accent ?? '#B9A8FF';
+    const agent = this.props.agent ?? {
+      role: 'frontend', task: 'form and loading states', status: 'writing', kind: 'active',
+      steps: [
+        { kind: 'tool', icon: 'read', verb: 'Read', target: 'src/components/LoginForm.tsx' },
+        { kind: 'msg', text: 'The form submits twice on a double click. I’ll disable the button while the request is pending.' },
+        { kind: 'tool', icon: 'edit', verb: 'Edit', target: 'src/components/LoginForm.tsx', meta: '+18 −4' },
+        { kind: 'code', lines: [
+          { kind: '-', text: '<button type="submit">Send link</button>' },
+          { kind: '+', text: '<button type="submit" disabled={pending}>' },
+          { kind: '+', text: '  {pending ? "Sending…" : "Send link"}' },
+          { kind: '+', text: '</button>' }
+        ] },
+        { kind: 'live', text: 'Writing loading states', since: 74 }
+      ]
+    };
+    const styles = {
+      active: { dot: accent, statusColor: accent },
+      done: { dot: '#F4F4F5', statusColor: '#F4F4F5' },
+      queued: { dot: '#55555E', statusColor: '#9A9AA3' }
+    };
+    const st = styles[agent.kind] ?? styles.queued;
+    const colors = { '-': '#FF9A8B', '+': '#8BE0B0', ' ': '#C8C8CE' };
+    const steps = (agent.steps ?? []).map((s) => ({
+      isTool: s.kind === 'tool', isMsg: s.kind === 'msg', isCode: s.kind === 'code', isLive: s.kind === 'live', isNote: s.kind === 'note',
+      iRead: s.icon === 'read', iEdit: s.icon === 'edit', iRun: s.icon === 'run', iSearch: s.icon === 'search',
+      verb: s.verb ?? '', target: s.target ?? '', meta: s.meta ?? '', metaColor: s.metaColor ?? '#9A9AA3',
+      text: s.text ?? '', label: s.label ?? '', since: s.since ?? 0,
+      lines: (s.lines ?? []).map((l) => ({ mark: l.kind && l.kind !== ' ' ? l.kind : '', text: l.text, color: colors[l.kind] ?? '#C8C8CE' }))
+    }));
+    return {
+      role: agent.role, task: agent.task, status: agent.status,
+      dot: st.dot, statusColor: st.statusColor,
+      steps: steps, accent: accent,
+      onBack: this.props.onBack ?? (() => {})
+    };
+  }
+}
+</script>
+</body>
+</html>

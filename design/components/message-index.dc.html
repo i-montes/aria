@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Message index</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+@media (prefers-reduced-motion: reduce){
+  .ix, .ix *{transition:none !important}
+}
+</style>
+</helmet>
+<div class="ix" style="position: relative; width: 100%; height: {{rootHeight}}; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF">
+  <div ref="{{panelRef}}" role="navigation" aria-label="Jump to a message you sent" onMouseEnter="{{enter}}" onMouseMove="{{move}}" onMouseLeave="{{leave}}" style="position: absolute; top: 0; right: 0; width: 300px; height: {{panelHeight}}px; visibility: {{visibility}}; pointer-events: {{pointerEvents}}; transition: visibility 0s linear {{visibilityDelay}}">
+
+    <div aria-hidden="true" style="position: absolute; inset: 0; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); -webkit-mask-image: linear-gradient(to left, #000 0%, #000 55%, transparent 100%); mask-image: linear-gradient(to left, #000 0%, #000 55%, transparent 100%); opacity: {{veilOpacity}}; transition: opacity 220ms ease"></div>
+    <div aria-hidden="true" style="position: absolute; inset: 0; background: linear-gradient(to left, rgba(5, 5, 6, 0.94) 0%, rgba(5, 5, 6, 0.82) 50%, rgba(5, 5, 6, 0) 100%); opacity: {{veilOpacity}}; transition: opacity 220ms ease"></div>
+
+    <ol style="position: absolute; inset: 0; margin: 0; padding: 0; list-style: none; overflow: hidden; -webkit-mask-image: {{fade}}; mask-image: {{fade}}">
+      <sc-for list="{{rows}}" as="r" hint-placeholder-count="4">
+        <li style="position: absolute; top: {{r.top}}px; right: 8px; display: flex; align-items: center; justify-content: flex-end; height: {{r.height}}px; transition: top 140ms cubic-bezier(0.22, 1, 0.36, 1), height 140ms cubic-bezier(0.22, 1, 0.36, 1)">
+          <button type="button" aria-current="{{r.current}}" onClick="{{r.go}}" style-hover="border-color: rgba(185, 168, 255, 0.55)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: flex; align-items: center; gap: 8px; height: {{r.btnHeight}}px; max-width: 190px; box-sizing: border-box; margin: 0; padding: 0 12px 0 10px; border: 1px solid {{r.border}}; border-radius: 10px; background: {{r.bg}}; color: {{r.color}}; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12.5px; font-weight: 500; line-height: 16px; cursor: pointer; transform-origin: right center; transform: {{r.transform}}; opacity: {{r.opacity}}; transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1) {{r.delay}}ms, opacity 140ms ease {{r.delay}}ms, background-color 140ms ease, border-color 140ms ease">
+            <span aria-hidden="true" style="flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: {{r.dot}}; transition: background-color 140ms ease"></span>
+            <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.label}}</span>
+          </button>
+        </li>
+      </sc-for>
+    </ol>
+
+    <sc-if value="{{showTrack}}" hint-placeholder-val="{{ false }}">
+      <div aria-hidden="true" style="position: absolute; top: {{thumbTop}}px; right: 2px; width: 3px; height: {{thumbHeight}}px; border-radius: 999px; background: rgba(185, 168, 255, 0.55); transition: top 100ms ease-out"></div>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"demo":{"editor":"boolean","default":true},"demoCount":{"editor":"int","min":2,"max":30,"step":1,"default":5},"target":{"editor":null},"items":{"editor":null},"$preview":{"width":448,"height":360}}'>
+class Component extends DCLogic {
+  items() {
+    const given = this.props.items;
+    if (given && given.length) return given;
+    if (Array.isArray(given) && !this.isDemo()) return given;
+    const pool = [
+      'The build has been failing since yesterday. Check the log and fix it.',
+      '/plan move push notifications to a queue',
+      'Fallback: Commit hash · Tests: Fallback and API_URL',
+      'Can you also check the staging deploy?',
+      'Add a test for the missing API_URL case.'
+    ];
+    const count = Math.max(2, Math.min(30, this.props.demoCount || 5));
+    return Array.from({ length: count }, (_, i) => ({
+      id: 'demo-' + (i + 1),
+      label: i < pool.length ? pool[i] : 'Message ' + (i + 1) + ': ' + pool[i % pool.length]
+    }));
+  }
+  isDemo() {
+    return this.props.demo === true;
+  }
+  itemsKey() {
+    return this.items().map((i) => i.id + ':' + i.label).join('|');
+  }
+  /* the chips are one compact group; the rail only needs its own height */
+  measure() {
+    if (this.isDemo() || !this.c) return { H: 360 };
+    return { H: this.c.clientHeight };
+  }
+  /* chips keep a fixed size; when they do not all fit, the list itself scrolls */
+  geom(H) {
+    const n = this.items().length;
+    const contentH = n * 34 - 4 + 16;
+    return { overflow: contentH > H, maxOff: Math.max(0, contentH - H), contentH: contentH };
+  }
+  onWheel(e) {
+    const st = this.state || {};
+    if (!st.expanded) return;
+    const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+    e.preventDefault();
+    const g = this.geom(st.H || 360);
+    if (g.overflow) this.setState({ off: Math.min(g.maxOff, Math.max(0, (st.off || 0) + dy)) });
+    else if (this.c) this.c.scrollBy({ top: dy });
+  }
+  show(my) {
+    clearTimeout(this.hideT);
+    const s = this.state || {};
+    const m = this.measure();
+    const g = this.geom(m.H);
+    const patch = { my: my, H: m.H };
+    if (!s.expanded) {
+      const n = this.items().length;
+      const act = (s.active === undefined || s.active === null) ? n - 1 : s.active;
+      patch.off = g.overflow ? Math.min(g.maxOff, Math.max(0, 8 + act * 34 + 15 - m.H / 2)) : 0;
+      patch.expanded = true;
+      patch.settled = false;
+      clearTimeout(this.settleT);
+      this.settleT = setTimeout(() => this.setState({ settled: true }), 450);
+    } else {
+      patch.off = Math.min(g.maxOff, Math.max(0, s.off || 0));
+    }
+    this.setState(patch);
+  }
+  scheduleHide() {
+    if (this.isDemo()) return;
+    const s = this.state || {};
+    if (!s.expanded) return;
+    clearTimeout(this.hideT);
+    this.hideT = setTimeout(() => {
+      if (this.overPanel) return;
+      this.setState({ expanded: false, my: null, settled: false });
+    }, 160);
+  }
+  containerMove(e) {
+    const r = this.c.getBoundingClientRect();
+    if (e.clientX >= r.right - 56) {
+      if (!this.suppressed) this.show(e.clientY - r.top);
+    } else {
+      this.suppressed = false;
+      this.scheduleHide();
+    }
+  }
+  queueActive() {
+    if (this.raf) return;
+    this.raf = requestAnimationFrame(() => {
+      this.raf = 0;
+      this.computeActive();
+    });
+  }
+  computeActive() {
+    if (!this.c || this.isDemo()) return;
+    const items = this.items();
+    const cTop = this.c.getBoundingClientRect().top;
+    let a = -1;
+    for (let i = 0; i < items.length && a === -1; i++) {
+      const el = document.getElementById(items[i].id);
+      if (el && el.getBoundingClientRect().bottom > cTop + 8) a = i;
+    }
+    if (a === -1) a = items.length - 1;
+    if (((this.state || {}).active) !== a) this.setState({ active: a });
+  }
+  /* wait until the smooth scroll has come to rest (or never started) */
+  whenSettled(cb) {
+    const c = this.c;
+    let done = false;
+    let quiet = null;
+    let cap = null;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      c.removeEventListener('scroll', onScroll);
+      clearTimeout(quiet);
+      clearTimeout(cap);
+      cb();
+    };
+    const onScroll = () => {
+      clearTimeout(quiet);
+      quiet = setTimeout(finish, 110);
+    };
+    c.addEventListener('scroll', onScroll, { passive: true });
+    quiet = setTimeout(finish, 160);
+    cap = setTimeout(finish, 1400);
+  }
+  /* "it's me": a soft lavender halo, a hint of lift and a tint that fades back */
+  flash(el) {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const BG = 'rgb(42, 42, 49)';
+    let bubble = null;
+    if (getComputedStyle(el).backgroundColor === BG) bubble = el;
+    else {
+      const all = el.querySelectorAll('*');
+      for (let i = 0; i < all.length && i < 60 && !bubble; i++) {
+        if (getComputedStyle(all[i]).backgroundColor === BG) bubble = all[i];
+      }
+    }
+    const origin = 'right center';
+    const frames = bubble ? [
+      { transform: 'scale(1)', transformOrigin: origin, boxShadow: '0 0 0 0 rgba(185, 168, 255, 0.5)', backgroundColor: BG, offset: 0 },
+      { transform: 'scale(1.035)', transformOrigin: origin, boxShadow: '0 0 0 4px rgba(185, 168, 255, 0.28)', backgroundColor: 'rgb(56, 51, 80)', offset: 0.3 },
+      { transform: 'scale(1)', transformOrigin: origin, boxShadow: '0 0 0 12px rgba(185, 168, 255, 0)', backgroundColor: BG, offset: 1 }
+    ] : [
+      { transform: 'scale(1)', transformOrigin: origin, offset: 0 },
+      { transform: 'scale(1.02)', transformOrigin: origin, offset: 0.3 },
+      { transform: 'scale(1)', transformOrigin: origin, offset: 1 }
+    ];
+    try { (bubble || el).animate(frames, { duration: 850, easing: 'ease-in-out' }); } catch (err) {}
+  }
+  go(i) {
+    if (this.isDemo() || !this.c) { this.setState({ active: i }); return; }
+    clearTimeout(this.hideT);
+    clearTimeout(this.settleT);
+    this.overPanel = false;
+    this.suppressed = true;
+    this.setState({ active: i, expanded: false, my: null, settled: false });
+    const it = this.items()[i];
+    const el = it && document.getElementById(it.id);
+    if (!el) return;
+    const delta = el.getBoundingClientRect().top - this.c.getBoundingClientRect().top - 12;
+    this.c.scrollBy({ top: delta, behavior: 'smooth' });
+    this.whenSettled(() => this.flash(el));
+  }
+  componentDidMount() {
+    this.lastKey = this.itemsKey();
+    if (this.isDemo()) {
+      this.setState(Object.assign({ expanded: true, settled: true, active: 0, off: 0 }, this.measure()));
+      return;
+    }
+    this.c = document.getElementById(this.props.target);
+    if (!this.c) return;
+    this.onMove = (e) => this.containerMove(e);
+    this.onLeave = () => { this.suppressed = false; this.scheduleHide(); };
+    this.onScroll = () => this.queueActive();
+    this.c.addEventListener('mousemove', this.onMove);
+    this.c.addEventListener('mouseleave', this.onLeave);
+    this.c.addEventListener('scroll', this.onScroll, { passive: true });
+    this.queueActive();
+  }
+  componentDidUpdate() {
+    const key = this.itemsKey();
+    if (key === this.lastKey) return;
+    this.lastKey = key;
+    this.queueActive();
+    if ((this.state || {}).expanded) this.setState(this.measure());
+  }
+  componentWillUnmount() {
+    clearTimeout(this.hideT);
+    clearTimeout(this.settleT);
+    if (this.wheelEl) this.wheelEl.removeEventListener('wheel', this.wheelFn);
+    if (this.raf) cancelAnimationFrame(this.raf);
+    if (this.c) {
+      this.c.removeEventListener('mousemove', this.onMove);
+      this.c.removeEventListener('mouseleave', this.onLeave);
+      this.c.removeEventListener('scroll', this.onScroll);
+    }
+  }
+  renderVals() {
+    const st = this.state || {};
+    const items = this.items();
+    const demo = this.isDemo();
+    const expanded = !!st.expanded;
+    const my = (st.my === undefined) ? null : st.my;
+    const H = st.H || 360;
+    const n = items.length;
+    const G = 4;
+    const h0 = 30;
+    const p0 = h0 + G;
+    const g = this.geom(H);
+    const off = Math.min(g.maxOff, Math.max(0, st.off || 0));
+    const top0 = g.overflow ? (8 - off) : (H - (n * p0 - G)) / 2;
+    const scales = items.map((_, i) => {
+      if (my === null) return 1;
+      const c = top0 + i * p0 + h0 / 2;
+      return 1 + 0.4 * Math.exp(-((c - my) * (c - my)) / (2 * 44 * 44));
+    });
+    const heights = scales.map((s) => h0 * s);
+    const total = heights.reduce((x, y) => x + y, 0) + Math.max(0, n - 1) * G;
+    let y0 = top0;
+    if (my !== null && n > 0) {
+      const u = Math.min(n, Math.max(0, (my - top0) / p0));
+      const k = Math.min(n - 1, Math.floor(u));
+      let before = 0;
+      for (let j = 0; j < k; j++) before += heights[j] + G;
+      y0 = my - (before + (u - k) * (heights[k] + G));
+    }
+    if (g.overflow) y0 = Math.min(8, Math.max(y0, H - 8 - total));
+    else y0 = Math.min(Math.max(y0, 8), Math.max(8, H - total - 8));
+    const mid = (n - 1) / 2;
+    let cursor = y0;
+    const rows = items.map((it, i) => {
+      const s = scales[i];
+      const near = (s - 1) / 0.4;
+      const active = st.active === i;
+      const row = {
+        label: it.label,
+        top: cursor,
+        height: heights[i],
+        btnHeight: h0,
+        transform: expanded ? ('translateX(' + (-(s - 1) * 60).toFixed(1) + 'px) scale(' + s.toFixed(3) + ')') : 'translateX(28px) scale(0.6)',
+        opacity: expanded ? (0.62 + 0.38 * near).toFixed(2) : 0,
+        delay: (st.settled || !expanded) ? 0 : Math.round(Math.abs(i - mid) * 30),
+        color: near > 0.45 ? '#F4F4F5' : '#C8C8CE',
+        bg: near > 0.45 ? 'rgba(30, 30, 36, 0.97)' : 'rgba(20, 20, 23, 0.92)',
+        border: active ? 'rgba(185, 168, 255, 0.5)' : 'rgba(255, 255, 255, 0.1)',
+        dot: active ? '#B9A8FF' : '#55555E',
+        current: active ? 'true' : 'false',
+        go: () => this.go(i)
+      };
+      cursor += heights[i] + G;
+      return row;
+    });
+    const thumbH = Math.max(24, (H * H) / Math.max(g.contentH, 1));
+    return {
+      rootHeight: demo ? '360px' : '100%',
+      panelHeight: H,
+      visibility: expanded ? 'visible' : 'hidden',
+      pointerEvents: expanded ? 'auto' : 'none',
+      visibilityDelay: expanded ? '0ms' : '260ms',
+      veilOpacity: expanded ? 1 : 0,
+      fade: g.overflow ? 'linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%)' : 'none',
+      showTrack: expanded && g.overflow,
+      thumbHeight: thumbH,
+      thumbTop: g.maxOff ? 4 + (off / g.maxOff) * (H - thumbH - 8) : 4,
+      rows: rows,
+      panelRef: (el) => {
+        this.panelEl = el;
+        if (el && this.wheelEl !== el) {
+          if (this.wheelEl) this.wheelEl.removeEventListener('wheel', this.wheelFn);
+          this.wheelFn = (e) => this.onWheel(e);
+          this.wheelEl = el;
+          el.addEventListener('wheel', this.wheelFn, { passive: false });
+        }
+      },
+      enter: () => { this.overPanel = true; clearTimeout(this.hideT); },
+      move: (e) => {
+        this.overPanel = true;
+        clearTimeout(this.hideT);
+        if (!this.panelEl) return;
+        this.setState({ my: e.clientY - this.panelEl.getBoundingClientRect().top });
+      },
+      leave: () => { this.overPanel = false; this.scheduleHide(); }
+    };
+  }
+}
+</script>
+</body>
+</html>

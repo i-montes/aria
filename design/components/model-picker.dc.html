@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Model picker</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+@media (prefers-reduced-motion: reduce){
+  .mp, .mp *{transition:none !important}
+}
+</style>
+</helmet>
+<div class="mp" style="width: 100%; box-sizing: border-box; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; transform-origin: bottom center; opacity: {{opacity}}; transform: {{transform}}; visibility: {{visibility}}; pointer-events: {{pointerEvents}}; transition: opacity 160ms ease, transform 200ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear {{visibilityDelay}}">
+  <div style="overflow: hidden; border-radius: 14px; background: rgba(20, 20, 23, 0.97); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55)">
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px 6px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; color: #8A8A94">
+      <span>MODELS</span>
+      <span style="letter-spacing: 0; font-variant-numeric: tabular-nums">{{countText}}</span>
+    </div>
+
+    <sc-if value="{{hasItems}}" hint-placeholder-val="{{ true }}">
+      <ul role="listbox" aria-label="Models" style="margin: 0; padding: 2px 6px 6px; list-style: none">
+        <sc-for list="{{items}}" as="c" hint-placeholder-count="3">
+          <li role="option" aria-selected="{{c.selected}}">
+            <button type="button" onClick="{{c.pick}}" onMouseMove="{{c.hover}}" style="display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 12px; align-items: center; width: 100%; min-height: 52px; box-sizing: border-box; margin: 0; padding: 8px 8px; border: 0; border-radius: 10px; background: {{c.bg}}; color: inherit; font-family: Geist, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: background-color 100ms">
+              <span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid {{c.ringColor}}; background: {{c.ringBg}}; transition: background-color 200ms, border-color 200ms">
+                <span style="width: 6px; height: 6px; border-radius: 50%; background: #0B0816; transform: {{c.dotScale}}; transition: transform 200ms"></span>
+              </span>
+              <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+                <span style="min-width: 0; font-size: 13.5px; font-weight: 500; line-height: 18px; overflow-wrap: anywhere"><sc-for list="{{c.nameSegs}}" as="s"><span style="color: {{s.color}}; font-weight: {{s.weight}}">{{s.t}}</span></sc-for></span>
+                <span style="min-width: 0; font-size: 12.5px; line-height: 1.45; color: #9A9AA3; overflow-wrap: anywhere">{{c.description}}</span>
+              </span>
+              <span style="display: flex; align-items: center; gap: 8px">
+                <span style="padding: 0 7px; border-radius: 999px; background: {{c.tagBg}}; color: {{c.tagColor}}; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px; white-space: nowrap">{{c.tag}}</span>
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#B9A8FF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 14px; opacity: {{c.enterOpacity}}; transition: opacity 120ms"><path d="M20 4v7a4 4 0 0 1-4 4H4"></path><path d="M9 10l-5 5 5 5"></path></svg>
+              </span>
+            </button>
+          </li>
+        </sc-for>
+      </ul>
+    </sc-if>
+
+    <sc-if value="{{isEmpty}}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; flex-direction: column; gap: 4px; padding: 10px 14px 16px">
+        <span style="font-size: 13px; line-height: 1.45; color: #C8C8CE; overflow-wrap: anywhere">No model matches “{{query}}”</span>
+        <span style="font-size: 12px; line-height: 1.45; color: #8A8A94">Try “go”, “strong” or “free”.</span>
+      </div>
+    </sc-if>
+
+    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 14px 10px; border-top: 1px solid #26262B; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #8A8A94">
+      <span><kbd style="font-family: inherit; color: #D6D6DC">↑↓</kbd> navigate</span>
+      <span><kbd style="font-family: inherit; color: #D6D6DC">↵</kbd> use it</span>
+      <span><kbd style="font-family: inherit; color: #D6D6DC">esc</kbd> close</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"query":{"editor":"text","default":""},"open":{"editor":"boolean","default":true},"current":{"editor":"enum","options":["go","go-strong","free"],"default":"go"},"models":{"editor":null},"active":{"editor":null},"onPick":{"editor":null},"onActive":{"editor":null},"onFiltered":{"editor":null},"$preview":{"width":448,"height":300}}'>
+class Component extends DCLogic {
+  catalog() {
+    if (this.props.models && this.props.models.length) return this.props.models;
+    return [
+      { id: 'go', name: 'OpenCode Go', description: 'Your subscription. Everyday work.', tag: 'uses quota', tier: 'subscription' },
+      { id: 'go-strong', name: 'OpenCode Go · strong', description: 'More capable. Used for /plan and hard problems.', tag: 'uses more quota', tier: 'subscription' },
+      { id: 'free', name: 'Free model', description: 'No quota. Slower and less capable.', tag: 'no quota', tier: 'free' }
+    ];
+  }
+  segs(text, ranges) {
+    const out = [];
+    let pos = 0;
+    ranges.forEach((r) => {
+      if (r[0] > pos) out.push({ t: text.slice(pos, r[0]), color: '#F4F4F5', weight: 500 });
+      out.push({ t: text.slice(r[0], r[1]), color: '#B9A8FF', weight: 600 });
+      pos = r[1];
+    });
+    if (pos < text.length) out.push({ t: text.slice(pos), color: '#F4F4F5', weight: 500 });
+    if (!out.length) out.push({ t: text, color: '#F4F4F5', weight: 500 });
+    return out;
+  }
+  /* name first, then the description, the tag and the tier */
+  compute() {
+    const q = String(this.props.query || '').trim().toLowerCase();
+    const out = [];
+    this.catalog().forEach((m, order) => {
+      const name = m.name.toLowerCase();
+      let score = null;
+      let ranges = [];
+      if (!q) score = 0;
+      else if (name.startsWith(q)) { score = 0; ranges = [[0, q.length]]; }
+      else if (name.indexOf(q) > -1) { const i = name.indexOf(q); score = 1 + i; ranges = [[i, i + q.length]]; }
+      else if ((m.id + ' ' + (m.description || '') + ' ' + (m.tag || '') + ' ' + (m.tier || '')).toLowerCase().indexOf(q) > -1) score = 50;
+      if (score === null) return;
+      out.push({ m: m, order: order, score: score, ranges: ranges });
+    });
+    out.sort((a, b) => (a.score - b.score) || (a.order - b.order));
+    return out;
+  }
+  currentActive(n) {
+    const a = this.props.active !== undefined && this.props.active !== null ? this.props.active : ((this.state || {}).active || 0);
+    return Math.min(Math.max(0, a), Math.max(0, n - 1));
+  }
+  report() {
+    const list = this.compute();
+    const key = list.map((x) => x.m.id).join(',');
+    if (key !== this.lastKey) {
+      this.lastKey = key;
+      if (this.props.onFiltered) this.props.onFiltered(list.map((x) => x.m.id));
+    }
+  }
+  componentDidMount() { this.report(); }
+  componentDidUpdate() { this.report(); }
+  renderVals() {
+    const list = this.compute();
+    const n = list.length;
+    const active = this.currentActive(n);
+    const open = this.props.open !== false;
+    const current = this.props.current || 'go';
+    const items = list.map((x, i) => {
+      const on = i === active;
+      const isCurrent = x.m.id === current;
+      const free = x.m.tier === 'free';
+      return {
+        selected: isCurrent ? 'true' : 'false',
+        bg: on ? 'rgba(255, 255, 255, 0.07)' : 'transparent',
+        enterOpacity: on ? 1 : 0,
+        ringColor: isCurrent ? '#B9A8FF' : '#34343B',
+        ringBg: isCurrent ? '#B9A8FF' : 'transparent',
+        dotScale: isCurrent ? 'scale(1)' : 'scale(0)',
+        nameSegs: this.segs(x.m.name, x.ranges),
+        description: x.m.description || '',
+        tag: x.m.tag || '',
+        tagBg: free ? 'rgba(139, 224, 176, 0.14)' : 'rgba(255, 255, 255, 0.07)',
+        tagColor: free ? '#8BE0B0' : '#B4B4BC',
+        pick: () => { if (this.props.onPick) this.props.onPick(x.m.id); },
+        hover: () => {
+          if (i === active) return;
+          if (this.props.onActive) this.props.onActive(i);
+          else this.setState({ active: i });
+        }
+      };
+    });
+    return {
+      opacity: open ? 1 : 0,
+      transform: open ? 'translateY(0) scale(1)' : 'translateY(8px) scale(0.98)',
+      visibility: open ? 'visible' : 'hidden',
+      pointerEvents: open ? 'auto' : 'none',
+      visibilityDelay: open ? '0ms' : '200ms',
+      countText: n + (n === 1 ? ' model' : ' models'),
+      hasItems: n > 0,
+      isEmpty: n === 0,
+      query: String(this.props.query || '').trim(),
+      items: items
+    };
+  }
+}
+</script>
+</body>
+</html>

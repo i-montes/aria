@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* Timings and curves measured from the design (Aria.html, "Open Aria" / "Close Aria"). */
+  :root {
+    --accent: #B9A8FF; --text: #F4F4F5; --muted: #A1A1AA; --card: rgba(24, 24, 27, 0.92); --line: rgba(255, 255, 255, 0.08);
+    --out: cubic-bezier(0.16, 1, 0.3, 1); --in: cubic-bezier(0.4, 0, 1, 1); --content: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body { font-family: Geist, Inter, system-ui, sans-serif; color: var(--text); }
+
+  /* 700 px veil, dark against the screen edge, clear towards the left. */
+  .veil {
+    position: absolute; inset: 0;
+    background: linear-gradient(to left, rgba(4, 4, 5, 0.78) 0%, rgba(4, 4, 5, 0.78) 52%, rgba(4, 4, 5, 0) 100%);
+    opacity: 0; transition: opacity 140ms var(--in) 20ms;
+  }
+  body.open .veil { opacity: 1; transition: opacity 180ms ease-out; }
+
+  /* 470 px dock column on the right. */
+  aside {
+    position: absolute; top: 0; right: 0; bottom: 0; width: 470px;
+    opacity: 0; transform: translateX(24px);
+    transition: opacity 120ms var(--in), transform 140ms var(--in);
+  }
+  body.open aside { opacity: 1; transform: none; transition: opacity 200ms var(--out), transform 240ms var(--out); }
+
+  .content { position: absolute; top: 24px; right: 28px; left: 0; }
+  body.open .content { animation: enter 300ms var(--content) both; }
+  @keyframes enter { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+
+  .dot { display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: glow 2400ms ease-in-out infinite; }
+  @keyframes glow {
+    0%, 100% { box-shadow: 0 0 14px rgba(185, 168, 255, 0.5); }
+    50% { box-shadow: 0 0 26px rgba(185, 168, 255, 0.85); }
+  }
+  h1 { font-size: 28px; font-weight: 600; margin: 26px 0 10px; letter-spacing: -0.01em; }
+  p { color: #D4D4D8; font-size: 14px; line-height: 1.6; margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; }
+  .card b { font-size: 14px; } .card span { float: right; font-size: 12px; color: var(--muted); }
+  .card div { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  footer { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 22px; }
+  .monitor { position: absolute; bottom: 20px; right: 28px; font: 12px ui-monospace, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="veil"></div>
+<aside>
+  <div class="content">
+    <span class="dot"></span>
+    <h1>Welcome to Aria</h1>
+    <p>A personal assistant that lives on your desktop, works with your files, runs tasks and talks to you in your language. Let's set it up.</p>
+    <div class="card"><b>Quick setup</b><span>about 1 min</span><div>Provider, sign-in and your name. Recommended defaults for the rest.</div></div>
+    <div class="card"><b>Customize</b><span>12 steps</span><div>Models, router, memory, integrations, sandbox, git and subagents.</div></div>
+    <footer><span>You can change all of this later.</span><span>Skip for now</span></footer>
+  </div>
+  <div class="monitor" id="monitor">spike</div>
+</aside>
+<script>
+  // The dock maps the surface in the closed state, then asks the page to animate open.
+  // Two frames so the closed state is on screen before the transition starts.
+  window.ariaOpen = (monitor) => {
+    document.getElementById('monitor').textContent = 'opened on ' + monitor
+    document.body.classList.remove('open')
+    void document.body.offsetWidth
+    requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.add('open')))
+  }
+  // The dock hides the surface once this transition is over (CLOSE_MS in main.rs).
+  window.ariaClose = () => document.body.classList.remove('open')
+</script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Aria message</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+</style>
+</helmet>
+<div style="width: 100%; display: flex; justify-content: flex-start; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF">
+  <div style="max-width: 94%; box-sizing: border-box; background: rgba(17, 17, 20, 0.94); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 16px 16px 16px 4px; padding: 14px 16px; font-size: 14.5px; line-height: 1.55; color: #EDEDEF; display: flex; flex-direction: column; gap: 10px">
+    <p style="margin: 0; white-space: pre-line; overflow-wrap: anywhere">{{text}}</p>
+    <sc-if value="{{hasDetail}}" hint-placeholder-val="{{ true }}">
+      <p style="margin: 0; color: #B4B4BC; white-space: pre-line; overflow-wrap: anywhere">{{detail}}</p>
+    </sc-if>
+    <sc-if value="{{hasSource}}" hint-placeholder-val="{{ false }}">
+      <p style="margin: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #9A9AA3; overflow-wrap: anywhere">source · {{source}}</p>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"text":{"editor":"text","default":"Commit a41c9e2 removed RELEASE from .env, but env.ts still requires it."},"detail":{"editor":"text","default":"We solved this before: we made it optional, with the commit hash as a fallback."},"source":{"editor":"text","default":""},"$preview":{"width":448,"height":130}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const detail = this.props.detail ?? 'We solved this before: we made it optional, with the commit hash as a fallback.';
+    const source = this.props.source ?? '';
+    return {
+      text: this.props.text ?? 'Commit a41c9e2 removed RELEASE from .env, but env.ts still requires it.',
+      detail: detail,
+      hasDetail: !!detail,
+      source: source,
+      hasSource: !!source
+    };
+  }
+}
+</script>
+</body>
+</html>

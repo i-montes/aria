@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Quota meter</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+@media (prefers-reduced-motion: reduce){
+  .qm, .qm *{transition:none !important}
+}
+</style>
+</helmet>
+<div class="qm" style="position: relative; display: inline-flex; max-width: 100%; min-width: 0; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF">
+
+  <button type="button" aria-label="{{ariaLabel}}" onClick="{{click}}" onMouseEnter="{{enter}}" onMouseLeave="{{leave}}" onFocus="{{focus}}" onBlur="{{blur}}" style-hover="background: rgba(255, 255, 255, 0.06)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 2px" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; min-height: 28px; box-sizing: border-box; margin: 0 -8px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; transition: background-color 100ms">
+    <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #9A9AA3">{{modelName}}</span>
+    <sc-if value="{{showMeter}}" hint-placeholder-val="{{ true }}">
+      <span aria-hidden="true" style="position: relative; flex: 0 0 36px; width: 36px; height: 4px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, 0.12)">
+        <span style="position: absolute; top: 0; left: 0; bottom: 0; width: {{usedPercent}}%; border-radius: 999px; background: {{quotaColor}}; transition: width 600ms cubic-bezier(0.22, 1, 0.36, 1), background-color 300ms ease"></span>
+      </span>
+      <span style="flex: 0 0 auto; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; font-variant-numeric: tabular-nums; color: {{pctColor}}; transition: color 300ms ease">{{usedPercent}}%</span>
+    </sc-if>
+    <sc-if value="{{free}}" hint-placeholder-val="{{ false }}">
+      <span style="flex: 0 0 auto; padding: 0 7px; border-radius: 999px; background: rgba(139, 224, 176, 0.14); color: #8BE0B0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px">free</span>
+    </sc-if>
+  </button>
+
+  <div role="tooltip" style="position: absolute; left: -8px; top: calc(100% + 8px); z-index: 30; width: 252px; box-sizing: border-box; padding: 12px 14px; border-radius: 14px; background: rgba(20, 20, 23, 0.98); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55); pointer-events: none; transform-origin: top left; opacity: {{popOpacity}}; transform: {{popTransform}}; visibility: {{popVisibility}}; transition: opacity 160ms ease, transform 200ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear {{popDelay}}">
+    <div style="display: flex; flex-direction: column; gap: 12px">
+
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px">
+        <span style="min-width: 0; font-size: 13px; font-weight: 600; color: #F4F4F5; overflow-wrap: anywhere">{{modelName}}</span>
+        <span style="flex: 0 0 auto; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; color: #8A8A94">{{tierLabel}}</span>
+      </div>
+
+      <sc-if value="{{showMeter}}" hint-placeholder-val="{{ true }}">
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px">
+            <span style="color: #8A8A94">QUOTA</span>
+            <span style="color: {{pctColor}}; font-variant-numeric: tabular-nums">{{usedPercent}}% used</span>
+          </div>
+          <div style="position: relative; height: 6px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, 0.1)"><span style="position: absolute; top: 0; left: 0; bottom: 0; width: {{usedPercent}}%; border-radius: 999px; background: {{quotaColor}}"></span></div>
+          <span style="font-size: 12px; line-height: 1.4; color: #9A9AA3">{{quotaNote}}</span>
+        </div>
+      </sc-if>
+      <sc-if value="{{noQuota}}" hint-placeholder-val="{{ false }}">
+        <span style="font-size: 12.5px; line-height: 1.45; color: #B4B4BC">This provider has no quota to read. You pay per use.</span>
+      </sc-if>
+      <sc-if value="{{free}}" hint-placeholder-val="{{ false }}">
+        <span style="font-size: 12.5px; line-height: 1.45; color: #B4B4BC">No quota on free models. Switch back with /model when you want the subscription.</span>
+      </sc-if>
+
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px">
+          <span style="color: #8A8A94">CONTEXT</span>
+          <span style="color: #D6D6DC; font-variant-numeric: tabular-nums">{{contextPercent}}%</span>
+        </div>
+        <div style="position: relative; height: 6px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, 0.1)">
+          <span style="position: absolute; top: 0; left: 0; bottom: 0; width: {{contextPercent}}%; border-radius: 999px; background: #7DD3FC; transition: width 600ms cubic-bezier(0.22, 1, 0.36, 1)"></span>
+          <span style="position: absolute; top: 0; bottom: 0; left: {{compactAt}}%; width: 1px; background: rgba(255, 255, 255, 0.5)"></span>
+        </div>
+        <span style="font-size: 12px; line-height: 1.4; color: #9A9AA3">Compacts at {{compactAt}}%</span>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 8px; padding-top: 10px; border-top: 1px solid #26262B; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #8A8A94">
+        <kbd style="padding: 0 6px; border: 1px solid #34343B; border-radius: 5px; background: #1C1C21; color: #D6D6DC; font-family: inherit; font-size: 11px; line-height: 16px">/model</kbd>
+        <span>to change it</span>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"model":{"editor":"text","default":"OpenCode Go"},"used":{"editor":"range","min":0,"max":100,"step":1,"unit":"%","default":62},"context":{"editor":"range","min":0,"max":100,"step":1,"unit":"%","default":18},"resets":{"editor":"text","default":"12 days"},"free":{"editor":"boolean","default":false},"hasQuota":{"editor":"boolean","default":true},"compactAt":{"editor":"range","min":20,"max":80,"step":5,"unit":"%","default":40},"showPopover":{"editor":"boolean","default":false},"onOpen":{"editor":null},"$preview":{"width":448,"height":300}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = this.state || {};
+    const free = this.props.free === true;
+    const hasQuota = this.props.hasQuota !== false;
+    const compactAt = Math.max(0, Math.min(100, Math.round(this.props.compactAt ?? 40)));
+    const used = Math.max(0, Math.min(100, Math.round(this.props.used ?? 62)));
+    const ctx = Math.max(0, Math.min(100, Math.round(this.props.context ?? 18)));
+    const model = this.props.model ?? 'OpenCode Go';
+    const resets = this.props.resets ?? '12 days';
+    const quotaColor = used >= 95 ? '#FF9A8B' : (used >= 80 ? '#F0B44C' : '#B9A8FF');
+    const show = !!(st.hover || st.focus || st.tap || this.props.showPopover === true);
+    const note = used >= 95 ? 'Almost out. Resets in ' + resets + '.' : (used >= 80 ? 'Running low. Resets in ' + resets + '.' : 'Resets in ' + resets + '.');
+    return {
+      modelName: model,
+      free: free,
+      showMeter: !free && hasQuota,
+      noQuota: !free && !hasQuota,
+      compactAt: compactAt,
+      usedPercent: used,
+      contextPercent: ctx,
+      quotaColor: quotaColor,
+      pctColor: used >= 95 ? '#FF9A8B' : (used >= 80 ? '#F0B44C' : '#B4B4BC'),
+      quotaNote: note,
+      tierLabel: free ? 'free' : (hasQuota ? 'subscription' : 'pay per use'),
+      ariaLabel: (!free && !hasQuota) ? (model + ', no quota to read. Context ' + ctx + '%. Change the model with /model') : free ? (model + ', free, no quota. Context ' + ctx + '%. Change the model with /model') : (model + ', ' + used + '% of the quota used, resets in ' + resets + '. Context ' + ctx + '%. Change the model with /model'),
+      popOpacity: show ? 1 : 0,
+      popTransform: show ? 'translateY(0) scale(1)' : 'translateY(-6px) scale(0.97)',
+      popVisibility: show ? 'visible' : 'hidden',
+      popDelay: show ? '0ms' : '200ms',
+      enter: () => this.setState({ hover: true }),
+      leave: () => this.setState({ hover: false }),
+      focus: () => this.setState({ focus: true }),
+      blur: () => this.setState({ focus: false, tap: false }),
+      click: () => {
+        if (this.props.onOpen) { this.props.onOpen(); this.setState({ tap: false }); }
+        else this.setState({ tap: !st.tap });
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Session tabs</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+.st-tab{transition:background-color 140ms ease}
+.st-tab.st-on{background:rgba(255,255,255,0.09)}
+.st-tab:not(.st-on):hover{background:rgba(255,255,255,0.05)}
+.st-tab .st-x{opacity:0;transition:opacity 120ms ease}
+.st-tab.st-on .st-x,.st-tab:hover .st-x,.st-tab:focus-within .st-x{opacity:1}
+.st-input::selection{background:rgba(185,168,255,0.35)}
+.st-tip{opacity:0;visibility:hidden;pointer-events:none;transition:opacity 100ms ease,visibility 0s linear 100ms}
+.st-tab:hover .st-tip,.st-tab:focus-within .st-tip{opacity:1;visibility:visible;transition:opacity 140ms ease 280ms,visibility 0s linear 280ms}
+@keyframes st-pulse{0%,100%{opacity:1}50%{opacity:0.35}}
+@keyframes st-pop{from{opacity:0;transform:translateY(-4px) scale(0.98)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){
+  .st, .st *{animation:none !important;transition:none !important}
+}
+</style>
+</helmet>
+<div class="st" style="display: flex; flex-direction: column; gap: 6px; width: 100%; box-sizing: border-box; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF">
+  <div style="position: relative; display: flex; align-items: center; gap: 2px; min-height: 36px">
+    <div role="tablist" aria-label="Sessions" style="display: flex; align-items: center; flex: 1 1 auto; min-width: 0; gap: 2px">
+      <sc-for list="{{tabs}}" as="t" hint-placeholder-count="3">
+        <div class="st-tab {{t.cls}}" style="position: relative; display: flex; align-items: center; flex: 1 1 0; min-width: 0; max-width: 156px; height: 34px; border-radius: 10px">
+          <sc-if value="{{t.renaming}}" hint-placeholder-val="{{ false }}">
+            <input class="st-input" ref="{{renameRef}}" value="{{draftTitle}}" onChange="{{changeTitle}}" onKeyDown="{{titleKey}}" onBlur="{{commitTitle}}" aria-label="Rename session" spellcheck="false" autocomplete="off" style="flex: 1 1 auto; min-width: 0; height: 28px; box-sizing: border-box; margin: 0 4px; padding: 0 8px; border-radius: 8px; border: 1px solid rgba(185, 168, 255, 0.6); background: rgba(0, 0, 0, 0.35); color: #F4F4F5; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12.5px; outline: none">
+          </sc-if>
+          <sc-if value="{{t.normal}}" hint-placeholder-val="{{ true }}">
+            <button type="button" role="tab" aria-selected="{{t.selected}}" aria-label="{{t.aria}}" title="{{t.title}}" onClick="{{t.pick}}" onDoubleClick="{{t.rename}}" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: -2px" style="display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; height: 100%; box-sizing: border-box; margin: 0; padding: 0 {{t.padRight}}px 0 11px; border: 0; border-radius: 10px; background: transparent; color: {{t.color}}; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12.5px; font-weight: {{t.weight}}; text-align: left; cursor: pointer">
+              <span aria-hidden="true" style="flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%; background: {{t.dot}}; animation: {{t.dotAnim}}"></span>
+              <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{t.title}}</span>
+            </button>
+            <sc-if value="{{t.closable}}" hint-placeholder-val="{{ true }}">
+              <button class="st-x" type="button" aria-label="Close {{t.title}}" onClick="{{t.close}}" style-hover="background: rgba(255, 255, 255, 0.14); color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 1px" style="position: absolute; top: 50%; right: 4px; width: 24px; height: 24px; margin: -12px 0 0; padding: 0; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 7px; background: transparent; color: #9A9AA3; cursor: pointer"><svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"></path></svg></button>
+            </sc-if>
+            <sc-if value="{{t.showTip}}" hint-placeholder-val="{{ false }}">
+              <div class="st-tip" role="tooltip" style="position: absolute; top: 40px; {{t.tipPos}} z-index: 40; display: flex; flex-direction: column; gap: 10px; width: 240px; box-sizing: border-box; padding: 12px 14px; border-radius: 14px; background: rgba(20, 20, 23, 0.98); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55); text-align: left; cursor: default">
+                <div style="display: flex; flex-direction: column; gap: 3px">
+                  <span style="font-size: 13px; font-weight: 600; line-height: 1.35; color: #F4F4F5; overflow-wrap: anywhere">{{t.title}}</span>
+                  <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: {{t.tipStateColor}}">{{t.tipState}}</span>
+                </div>
+                <sc-if value="{{t.tipQuota}}" hint-placeholder-val="{{ true }}">
+                  <div style="display: flex; flex-direction: column; gap: 8px">
+                    <span style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; color: #8A8A94">QUOTA</span>
+                    <div aria-hidden="true" style="position: relative; height: 6px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, 0.1)"><span style="position: absolute; top: 0; left: 0; bottom: 0; width: {{t.barAcct}}%; background: rgba(185, 168, 255, 0.35)"></span><span style="position: absolute; top: 0; left: 0; bottom: 0; width: {{t.barSess}}%; background: #B9A8FF"></span></div>
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; color: #D6D6DC"><span style="display: inline-flex; align-items: center; gap: 7px"><span aria-hidden="true" style="width: 7px; height: 7px; border-radius: 50%; background: #B9A8FF"></span>This session</span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums">{{t.tipSession}}</span></div>
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; color: #B4B4BC"><span style="display: inline-flex; align-items: center; gap: 7px"><span aria-hidden="true" style="width: 7px; height: 7px; border-radius: 50%; background: rgba(185, 168, 255, 0.35)"></span>Account</span><span style="font-family: 'Geist Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums">{{t.tipAccount}}</span></div>
+                  </div>
+                </sc-if>
+                <sc-if value="{{t.tipFree}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12.5px; line-height: 1.45; color: #B4B4BC">Free model. This session uses no quota.</span></sc-if>
+                <sc-if value="{{t.tipNone}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12.5px; line-height: 1.45; color: #B4B4BC">This provider has no quota to read.</span></sc-if>
+                <div style="display: flex; flex-direction: column; gap: 4px; padding-top: 8px; border-top: 1px solid #26262B; font-size: 12.5px; color: #9A9AA3">
+                  <div style="display: flex; justify-content: space-between; gap: 10px"><span>Model</span><span style="color: #D6D6DC; text-align: right; overflow-wrap: anywhere">{{t.tipModel}}</span></div>
+                  <div style="display: flex; justify-content: space-between; gap: 10px"><span>Context</span><span style="font-family: 'Geist Mono', ui-monospace, monospace; color: #D6D6DC; font-variant-numeric: tabular-nums">{{t.tipCtx}}</span></div>
+                </div>
+              </div>
+            </sc-if>
+          </sc-if>
+        </div>
+      </sc-for>
+    </div>
+
+    <sc-if value="{{hasOverflow}}" hint-placeholder-val="{{ false }}">
+      <div onBlur="{{menuBlur}}" style="position: relative; flex: 0 0 auto">
+        <button type="button" aria-haspopup="true" aria-expanded="{{menuAttr}}" aria-label="{{overflowLabel}}" onClick="{{toggleMenu}}" style-hover="background: rgba(255, 255, 255, 0.08); color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: -2px" style="display: flex; align-items: center; justify-content: center; min-width: 40px; height: 34px; box-sizing: border-box; margin: 0; padding: 0 8px; border: 0; border-radius: 10px; background: {{menuBg}}; color: #B4B4BC; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; cursor: pointer; transition: background-color 120ms, color 120ms">{{overflowText}}</button>
+        <sc-if value="{{menuOpen}}" hint-placeholder-val="{{ false }}">
+          <div role="menu" aria-label="More sessions" style="position: absolute; top: 40px; right: 0; z-index: 20; display: flex; flex-direction: column; gap: 2px; width: 264px; box-sizing: border-box; padding: 6px; border-radius: 14px; background: rgba(20, 20, 23, 0.98); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55); animation: st-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both">
+            <sc-for list="{{menuRows}}" as="r" hint-placeholder-count="2">
+              <button type="button" role="menuitem" onClick="{{r.pick}}" style-hover="background: rgba(255, 255, 255, 0.07)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: -2px" style="display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; box-sizing: border-box; margin: 0; padding: 0 10px; border: 0; border-radius: 9px; background: transparent; color: #D6D6DC; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13px; text-align: left; cursor: pointer; transition: background-color 100ms">
+                <span aria-hidden="true" style="flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%; background: {{r.dot}}; animation: {{r.dotAnim}}"></span>
+                <span style="flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.title}}</span>
+                <span style="flex: 0 0 auto; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; color: {{r.stateColor}}">{{r.stateText}}</span>
+              </button>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{showNew}}" hint-placeholder-val="{{ true }}">
+        <button type="button" aria-label="{{newLabel}}" title="{{newLabel}}" disabled="{{newDisabled}}" onClick="{{addNew}}" style-hover="background: rgba(255, 255, 255, 0.08); color: #F4F4F5" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: -2px" style="flex: 0 0 auto; display: flex; align-items: center; justify-content: center; width: 36px; height: 34px; margin: 0; padding: 0; border: 0; border-radius: 10px; background: transparent; color: #B4B4BC; cursor: {{newCursor}}; opacity: {{newOpacity}}; transition: background-color 120ms, color 120ms"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></button>
+    </sc-if>
+  </div>
+
+  <sc-if value="{{showClosed}}" hint-placeholder-val="{{ false }}">
+    <div role="status" style="display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 36px; box-sizing: border-box; padding: 0 6px 0 12px; border-radius: 10px; background: rgba(255, 255, 255, 0.05); animation: st-pop 200ms cubic-bezier(0.22, 1, 0.36, 1) both">
+      <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: #B4B4BC">Closed “{{closedTitle}}”</span>
+      <button type="button" onClick="{{undo}}" style-hover="background: rgba(185, 168, 255, 0.14)" style-focus-visible="outline: 2px solid #B9A8FF; outline-offset: 1px" style="flex: 0 0 auto; min-height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: #B9A8FF; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12.5px; font-weight: 500; cursor: pointer; transition: background-color 100ms">Undo</button>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"sessions":{"editor":null},"closed":{"editor":null},"quota":{"editor":"range","min":0,"max":100,"step":1,"unit":"%","default":62},"hasQuota":{"editor":"boolean","default":true},"hideNew":{"editor":"boolean","default":false},"hideUndo":{"editor":"boolean","default":false},"maxVisible":{"editor":"range","min":2,"max":6,"step":1,"default":4},"onSelect":{"editor":null},"onNew":{"editor":null},"onClose":{"editor":null},"onRename":{"editor":null},"onUndo":{"editor":null},"$preview":{"width":442,"height":44}}'>
+class Component extends DCLogic {
+  /* the demo keeps its own sessions when no callbacks are wired */
+  controlled() {
+    return !!this.props.sessions;
+  }
+  demoList() {
+    return [
+      { id: 'a', title: 'Fix the failing build', status: 'working', active: true, qUsed: 7, model: 'OpenCode Go', ctx: 18 },
+      { id: 'b', title: 'Push queue plan', status: 'needs', qUsed: 11, model: 'OpenCode Go · strong', ctx: 42 },
+      { id: 'c', title: 'Notion tasks sync', status: 'done', unread: true, qUsed: 4, model: 'OpenCode Go', ctx: 9 },
+      { id: 'd', title: 'Release notes', status: 'idle', qUsed: 0, model: 'Free model', free: true, ctx: 6 },
+      { id: 'e', title: 'Staging check', status: 'idle', qUsed: 2, model: 'OpenCode Go', ctx: 12 }
+    ];
+  }
+  list() {
+    if (this.controlled()) return this.props.sessions;
+    return (this.state || {}).local || this.demoList();
+  }
+  setLocal(next) {
+    this.setState({ local: next });
+  }
+  titleOf(id) {
+    const x = this.list().find((q) => q.id === id);
+    return x ? x.title : '';
+  }
+  select(id) {
+    this.setState({ menuOpen: false });
+    if (this.controlled()) { if (this.props.onSelect) this.props.onSelect(id); return; }
+    this.setLocal(this.list().map((x) => Object.assign({}, x, { active: x.id === id, unread: x.id === id ? false : x.unread })));
+  }
+  add() {
+    this.setState({ menuOpen: false });
+    if (this.controlled()) { if (this.props.onNew) this.props.onNew(); return; }
+    const l = this.list();
+    if (l.length >= 8) return;
+    const n = ((this.state || {}).seq || 0) + 1;
+    this.setState({ seq: n });
+    this.setLocal(l.map((x) => Object.assign({}, x, { active: false })).concat([{ id: 'n' + n, title: 'New session', status: 'idle', active: true }]));
+  }
+  close(id) {
+    this.setState({ menuOpen: false });
+    if (this.controlled()) { if (this.props.onClose) this.props.onClose(id); return; }
+    const l = this.list();
+    if (l.length <= 1) return;
+    const i = l.findIndex((x) => x.id === id);
+    const rest = l.filter((x) => x.id !== id);
+    const wasActive = l[i].active;
+    this.setState({ localClosed: { title: l[i].title, entry: l[i], index: i } });
+    this.setLocal(wasActive ? rest.map((x, k) => Object.assign({}, x, { active: k === Math.min(i, rest.length - 1) })) : rest);
+  }
+  undo() {
+    if (this.controlled()) { if (this.props.onUndo) this.props.onUndo(); return; }
+    const c = (this.state || {}).localClosed;
+    if (!c) return;
+    const l = this.list().slice();
+    l.splice(Math.min(c.index, l.length), 0, Object.assign({}, c.entry, { active: false }));
+    this.setLocal(l);
+    this.setState({ localClosed: null });
+  }
+  commitRename(id, title) {
+    const t = (title || '').trim();
+    if (t) {
+      if (this.controlled()) { if (this.props.onRename) this.props.onRename(id, t); }
+      else this.setLocal(this.list().map((x) => (x.id === id ? Object.assign({}, x, { title: t }) : x)));
+    }
+    this.setState({ renaming: null });
+  }
+  look(status, unread) {
+    if (status === 'working') return { dot: '#B9A8FF', anim: 'st-pulse 1.4s ease-in-out infinite', text: 'working', color: '#B9A8FF' };
+    if (status === 'needs') return { dot: '#F0B44C', anim: 'none', text: 'needs you', color: '#F0B44C' };
+    if (status === 'done' || unread) return { dot: '#8BE0B0', anim: 'none', text: 'done', color: '#8BE0B0' };
+    return { dot: '#4A4A52', anim: 'none', text: '', color: '#8A8A94' };
+  }
+  renderVals() {
+    const st = this.state || {};
+    const all = this.list();
+    const max = Math.max(2, Math.round(this.props.maxVisible || 4));
+    const activeIdx = all.findIndex((x) => x.active);
+    let vis = all.slice(0, max);
+    if (activeIdx >= max) vis = vis.slice(0, max - 1).concat([all[activeIdx]]);
+    const visIds = vis.map((x) => x.id);
+    const rest = all.filter((x) => visIds.indexOf(x.id) === -1);
+    const closable = all.length > 1;
+    const renaming = st.renaming;
+    const acct = Math.max(0, Math.min(100, Math.round(this.props.quota === undefined ? 62 : this.props.quota)));
+    const hasQ = this.props.hasQuota !== false;
+    const multi = all.length > 1;
+    const tabs = vis.map((x, i) => {
+      const lk = this.look(x.status, x.unread);
+      const on = !!x.active;
+      const used = Math.max(0, Math.round(x.qUsed || 0));
+      const free = !!x.free;
+      return {
+        showTip: multi,
+        tipPos: i >= Math.ceil(vis.length / 2) ? 'right: 0;' : 'left: 0;',
+        tipState: lk.text || 'idle', tipStateColor: lk.color,
+        tipQuota: hasQ && !free, tipFree: free, tipNone: !hasQ && !free,
+        tipSession: used + '%', tipAccount: acct + '%', barSess: Math.min(used, acct), barAcct: acct,
+        tipModel: x.model || '—', tipCtx: Math.round(x.ctx || 0) + '%',
+        cls: on ? 'st-on' : '',
+        renaming: renaming === x.id, normal: renaming !== x.id,
+        selected: on ? 'true' : 'false',
+        title: x.title,
+        aria: x.title + (lk.text ? ', ' + lk.text : ''),
+        dot: lk.dot, dotAnim: lk.anim,
+        color: on ? '#F4F4F5' : (x.unread ? '#E4E4E8' : '#9A9AA3'),
+        weight: on || x.unread ? 500 : 400,
+        padRight: closable ? 30 : 11,
+        closable: closable,
+        pick: () => this.select(x.id),
+        close: () => this.close(x.id),
+        rename: () => this.setState({ renaming: x.id, draftTitle: x.title })
+      };
+    });
+    const closed = this.controlled() ? this.props.closed : st.localClosed;
+    const menuOpen = !!st.menuOpen && rest.length > 0;
+    const needsInRest = rest.some((x) => x.status === 'needs');
+    const l = all.length >= 8;
+    return {
+      tabs: tabs,
+      draftTitle: st.draftTitle || '',
+      renameRef: (el) => { if (el && typeof document !== 'undefined' && document.activeElement !== el) { el.focus(); el.select(); } },
+      changeTitle: (e) => this.setState({ draftTitle: e.target.value }),
+      titleKey: (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); this.commitRename(renaming, e.target.value); }
+        else if (e.key === 'Escape') { e.preventDefault(); this.setState({ renaming: null }); }
+      },
+      commitTitle: (e) => { if (renaming) this.commitRename(renaming, e.target.value); },
+      hasOverflow: rest.length > 0,
+      overflowText: '+' + rest.length,
+      overflowLabel: rest.length + ' more sessions' + (needsInRest ? ', one needs you' : ''),
+      menuBg: menuOpen ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
+      menuAttr: menuOpen ? 'true' : 'false',
+      menuOpen: menuOpen,
+      toggleMenu: () => this.setState({ menuOpen: !st.menuOpen }),
+      menuBlur: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) this.setState({ menuOpen: false }); },
+      menuRows: rest.map((x) => {
+        const lk = this.look(x.status, x.unread);
+        return { title: x.title, dot: lk.dot, dotAnim: lk.anim, stateText: lk.text, stateColor: lk.color, pick: () => this.select(x.id) };
+      }),
+      newLabel: l ? 'Close a session to open another' : 'New session',
+      newDisabled: l,
+      newCursor: l ? 'not-allowed' : 'pointer',
+      newOpacity: l ? 0.4 : 1,
+      addNew: () => this.add(),
+      showNew: this.props.hideNew !== true,
+      showClosed: !!closed && this.props.hideUndo !== true,
+      closedTitle: closed ? closed.title : '',
+      undo: () => this.undo()
+    };
+  }
+}
+</script>
+</body>
+</html>

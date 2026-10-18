@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · File picker</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+.aria-scroll::-webkit-scrollbar{width:14px;height:14px}
+.aria-scroll::-webkit-scrollbar-track{background:transparent}
+.aria-scroll::-webkit-scrollbar-corner{background:transparent}
+.aria-scroll::-webkit-scrollbar-thumb{background-color:rgba(255,255,255,0.16);border:4px solid transparent;background-clip:padding-box;border-radius:999px}
+.aria-scroll:hover::-webkit-scrollbar-thumb{background-color:rgba(255,255,255,0.28)}
+.aria-scroll::-webkit-scrollbar-thumb:hover{background-color:rgba(185,168,255,0.7);border-width:2px}
+.aria-scroll::-webkit-scrollbar-thumb:active{background-color:#B9A8FF;border-width:2px}
+@supports not selector(::-webkit-scrollbar){.aria-scroll{scrollbar-width:auto;scrollbar-color:rgba(255,255,255,0.28) transparent}}
+@media (prefers-reduced-motion: reduce){
+  .fp, .fp *{transition:none !important}
+}
+</style>
+</helmet>
+<div class="fp" style="width: 100%; box-sizing: border-box; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; transform-origin: bottom center; opacity: {{opacity}}; transform: {{transform}}; visibility: {{visibility}}; pointer-events: {{pointerEvents}}; transition: opacity 160ms ease, transform 200ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear {{visibilityDelay}}">
+  <div style="overflow: hidden; border-radius: 14px; background: rgba(20, 20, 23, 0.97); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55)">
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px 6px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; color: #8A8A94">
+      <span>FILES</span>
+      <span style="letter-spacing: 0; font-variant-numeric: tabular-nums">{{countText}}</span>
+    </div>
+
+    <sc-if value="{{hasItems}}" hint-placeholder-val="{{ true }}">
+      <ul ref="{{listRef}}" role="listbox" aria-label="Files" class="aria-scroll" style="position: relative; margin: 0; padding: 2px 6px 6px; list-style: none; max-height: 288px; overflow-x: hidden; overflow-y: auto">
+        <sc-for list="{{items}}" as="c" hint-placeholder-count="4">
+          <li role="option" aria-selected="{{c.selected}}" id="{{c.domId}}">
+            <button type="button" onClick="{{c.pick}}" onMouseMove="{{c.hover}}" style="display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; column-gap: 10px; align-items: center; width: 100%; min-height: 44px; box-sizing: border-box; margin: 0; padding: 6px 8px; border: 0; border-radius: 10px; background: {{c.bg}}; color: inherit; font-family: Geist, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: background-color 100ms">
+              <span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 18px; color: {{c.iconColor}}; transition: color 100ms">
+                <sc-if value="{{c.isFile}}" hint-placeholder-val="{{ true }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg></sc-if>
+                <sc-if value="{{c.isFolder}}" hint-placeholder-val="{{ false }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg></sc-if>
+              </span>
+              <span style="display: flex; flex-direction: column; gap: 1px; min-width: 0">
+                <span style="min-width: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; line-height: 18px; overflow-wrap: anywhere"><sc-for list="{{c.nameSegs}}" as="s"><span style="color: {{s.color}}; font-weight: {{s.weight}}">{{s.t}}</span></sc-for></span>
+                <sc-if value="{{c.hasDir}}" hint-placeholder-val="{{ false }}"><span style="min-width: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 16px; overflow-wrap: anywhere"><sc-for list="{{c.dirSegs}}" as="s"><span style="color: {{s.color}}; font-weight: {{s.weight}}">{{s.t}}</span></sc-for></span></sc-if>
+              </span>
+              <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#B9A8FF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 14px; opacity: {{c.enterOpacity}}; transition: opacity 120ms"><path d="M20 4v7a4 4 0 0 1-4 4H4"></path><path d="M9 10l-5 5 5 5"></path></svg>
+            </button>
+          </li>
+        </sc-for>
+      </ul>
+    </sc-if>
+
+    <sc-if value="{{isEmpty}}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; flex-direction: column; gap: 4px; padding: 10px 14px 16px">
+        <span style="font-size: 13px; line-height: 1.45; color: #C8C8CE; overflow-wrap: anywhere">No file matches “@{{query}}”</span>
+        <span style="font-size: 12px; line-height: 1.45; color: #8A8A94">Keep typing, or add a space to leave it as text.</span>
+      </div>
+    </sc-if>
+
+    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 14px 10px; border-top: 1px solid #26262B; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #8A8A94">
+      <span><kbd style="font-family: inherit; color: #D6D6DC">↑↓</kbd> navigate</span>
+      <span><kbd style="font-family: inherit; color: #D6D6DC">↵</kbd> attach</span>
+      <span><kbd style="font-family: inherit; color: #D6D6DC">esc</kbd> close</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"query":{"editor":"text","default":""},"open":{"editor":"boolean","default":true},"files":{"editor":null},"active":{"editor":null},"onPick":{"editor":null},"onActive":{"editor":null},"onFiltered":{"editor":null},"$preview":{"width":448,"height":440}}'>
+class Component extends DCLogic {
+  catalog() {
+    if (this.props.files && this.props.files.length) return this.props.files;
+    return [
+      { path: 'src/queue/consumer.ts' },
+      { path: 'src/queue/contract.ts' },
+      { path: 'src/routes/send.ts' },
+      { path: 'src/lib/push.ts' },
+      { path: 'src/lib/env.ts' },
+      { path: 'src/lib/env.test.ts' },
+      { path: 'docs/specs/push-queue.md' },
+      { path: 'docs/plans/push-queue.md' },
+      { path: 'vite.config.ts' },
+      { path: '.env.example' },
+      { path: 'package.json' },
+      { path: 'README.md' },
+      { path: 'src/queue/', kind: 'folder' },
+      { path: 'docs/', kind: 'folder' }
+    ];
+  }
+  segs(text, ranges, hlColor, hlWeight, baseColor, baseWeight) {
+    const out = [];
+    let pos = 0;
+    ranges.forEach((r) => {
+      if (r[0] > pos) out.push({ t: text.slice(pos, r[0]), color: baseColor, weight: baseWeight });
+      out.push({ t: text.slice(r[0], r[1]), color: hlColor, weight: hlWeight });
+      pos = r[1];
+    });
+    if (pos < text.length) out.push({ t: text.slice(pos), color: baseColor, weight: baseWeight });
+    if (!out.length) out.push({ t: text, color: baseColor, weight: baseWeight });
+    return out;
+  }
+  /* file name first, then anywhere in the path, then letters in order inside the file name */
+  compute() {
+    const q = String(this.props.query || '').trim().toLowerCase();
+    const out = [];
+    this.catalog().forEach((f, order) => {
+      const isFolder = f.kind === 'folder' || f.path.endsWith('/');
+      const clean = isFolder ? f.path.replace(/\/$/, '') : f.path;
+      const dirLen = clean.lastIndexOf('/') + 1;
+      const hay = clean.toLowerCase();
+      const nameLower = hay.slice(dirLen);
+      let score = null;
+      let ranges = [];
+      if (!q) score = 0;
+      else if (nameLower.startsWith(q)) { score = 0; ranges = [[dirLen, dirLen + q.length]]; }
+      else if (nameLower.indexOf(q) > -1) { const i = nameLower.indexOf(q); score = 1 + i; ranges = [[dirLen + i, dirLen + i + q.length]]; }
+      else if (hay.indexOf(q) > -1) { const i = hay.indexOf(q); score = 10 + i; ranges = [[i, i + q.length]]; }
+      else {
+        let pos = 0;
+        const hit = [];
+        for (let k = dirLen; k < hay.length && pos < q.length; k++) {
+          if (hay[k] === q[pos]) { hit.push(k); pos++; }
+        }
+        if (pos === q.length && (hit[hit.length - 1] - hit[0]) <= q.length + 3) {
+          score = 40 + (hit[hit.length - 1] - hit[0]);
+          hit.forEach((k) => {
+            const last = ranges[ranges.length - 1];
+            if (last && last[1] === k) last[1] = k + 1; else ranges.push([k, k + 1]);
+          });
+        }
+      }
+      if (score === null) return;
+      out.push({
+        f: f, order: order, score: score, isFolder: isFolder,
+        name: clean.slice(dirLen) + (isFolder ? '/' : ''),
+        dir: clean.slice(0, dirLen),
+        nameRanges: ranges.filter((r) => r[1] > dirLen).map((r) => [Math.max(r[0], dirLen) - dirLen, r[1] - dirLen]),
+        dirRanges: ranges.filter((r) => r[0] < dirLen).map((r) => [r[0], Math.min(r[1], dirLen)])
+      });
+    });
+    out.sort((a, b) => (a.score - b.score) || (a.order - b.order));
+    return out;
+  }
+  currentActive(n) {
+    const a = this.props.active !== undefined && this.props.active !== null ? this.props.active : ((this.state || {}).active || 0);
+    return Math.min(Math.max(0, a), Math.max(0, n - 1));
+  }
+  report() {
+    const list = this.compute();
+    const key = list.map((x) => x.f.path).join(',');
+    if (key !== this.lastKey) {
+      this.lastKey = key;
+      if (this.props.onFiltered) this.props.onFiltered(list.map((x) => x.f.path));
+    }
+    return list;
+  }
+  keepVisible(list) {
+    const a = this.currentActive(list.length);
+    if (!list[a] || !this.listEl || !this.uid) return;
+    const row = document.getElementById(this.uid + '-' + a);
+    if (!row) return;
+    const top = row.offsetTop;
+    const bottom = top + row.offsetHeight;
+    if (top < this.listEl.scrollTop) this.listEl.scrollTop = Math.max(0, top - 4);
+    else if (bottom > this.listEl.scrollTop + this.listEl.clientHeight) this.listEl.scrollTop = bottom - this.listEl.clientHeight + 4;
+  }
+  componentDidMount() {
+    this.report();
+  }
+  componentDidUpdate() {
+    this.keepVisible(this.report());
+  }
+  renderVals() {
+    if (!this.uid) this.uid = 'fil' + Math.random().toString(36).slice(2, 7);
+    const list = this.compute();
+    const n = list.length;
+    const active = this.currentActive(n);
+    const open = this.props.open !== false;
+    const items = list.map((x, i) => {
+      const on = i === active;
+      return {
+        domId: this.uid + '-' + i,
+        selected: on ? 'true' : 'false',
+        bg: on ? 'rgba(255, 255, 255, 0.07)' : 'transparent',
+        iconColor: on ? '#B4B4BC' : '#8A8A94',
+        enterOpacity: on ? 1 : 0,
+        isFolder: x.isFolder,
+        isFile: !x.isFolder,
+        nameSegs: this.segs(x.name, x.nameRanges, '#B9A8FF', 600, '#F4F4F5', 500),
+        hasDir: !!x.dir,
+        dirSegs: this.segs(x.dir, x.dirRanges, '#D6D6DC', 500, '#8A8A94', 400),
+        pick: () => { if (this.props.onPick) this.props.onPick(x.f.path); },
+        hover: () => {
+          if (i === active) return;
+          if (this.props.onActive) this.props.onActive(i);
+          else this.setState({ active: i });
+        }
+      };
+    });
+    return {
+      opacity: open ? 1 : 0,
+      transform: open ? 'translateY(0) scale(1)' : 'translateY(8px) scale(0.98)',
+      visibility: open ? 'visible' : 'hidden',
+      pointerEvents: open ? 'auto' : 'none',
+      visibilityDelay: open ? '0ms' : '200ms',
+      countText: n + (n === 1 ? ' match' : ' matches'),
+      hasItems: n > 0,
+      isEmpty: n === 0,
+      query: String(this.props.query || '').trim(),
+      items: items,
+      listRef: (el) => { this.listEl = el; }
+    };
+  }
+}
+</script>
+</body>
+</html>

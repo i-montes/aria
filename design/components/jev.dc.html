@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aria · Jev</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+</style>
+</helmet>
+<div style="width: 100%; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; line-height: 18px; color: #9A9AA3; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+  <span style="color: {{accent}}">jev</span>
+  <span>{{mode}}</span>
+  <sc-if value="{{hasAction}}" hint-placeholder-val="{{ true }}">
+    <span aria-hidden="true">·</span>
+    <span>{{action}}</span>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"mode":{"editor":"enum","options":["quick","focused task","work to split","needs thinking"],"default":"focused task"},"action":{"editor":"text","default":"searches memory"},"accent":{"editor":"color","default":"#B9A8FF","options":["#B9A8FF","#7DD3FC","#9BE7C4","#F4F4F5"]},"$preview":{"width":448,"height":20}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const action = this.props.action ?? 'searches memory';
+    return {
+      mode: this.props.mode ?? 'focused task',
+      action: action,
+      hasAction: !!action,
+      accent: this.props.accent ?? '#B9A8FF'
+    };
+  }
+}
+</script>
+</body>
+</html>
