@@ -1,0 +1,19 @@
+{
+  "notice.title": "Aria está instalada",
+  "notice.press": "Presiona",
+  "notice.toSetUp": "para configurarla.",
+  "welcome.title": "Te damos la bienvenida a Aria",
+  "welcome.intro": "Un asistente personal que vive en tu escritorio, trabaja con tus archivos, ejecuta tareas y te habla en tu idioma. Vamos a configurarlo.",
+  "welcome.quick.title": "Configuración rápida",
+  "welcome.quick.time": "aprox. 1 min",
+  "welcome.quick.description": "Proveedor, inicio de sesión y tu nombre. Valores recomendados para lo demás.",
+  "welcome.customize.title": "Personalizar",
+  "welcome.customize.steps": "12 pasos",
+  "welcome.customize.description": "Modelos, router, memoria, integraciones, sandbox, git y subagentes.",
+  "welcome.later": "Puedes cambiar todo esto después.",
+  "welcome.skip": "Omitir por ahora",
+  "problem.title": "Aria no puede arrancar bien",
+  "problem.hyprland-classic-config": "Aria necesita Hyprland 0.56 o más reciente con la configuración en Lua. La tuya usa el formato clásico.",
+  "problem.hyprland-not-running": "Aria tiene que ejecutarse dentro de una sesión de Hyprland.",
+  "problem.hyprland-error": "Aria no pudo comunicarse con Hyprland."
+}

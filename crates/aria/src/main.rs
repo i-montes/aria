@@ -70,7 +70,7 @@ fn run_dock() {
         }))
     };
     if first_run {
-        dock.send(&DockMessage::Notice);
+        dock.show_notice();
     }
 
     let exe = std::env::current_exe().expect("own path");

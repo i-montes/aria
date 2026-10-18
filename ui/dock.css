@@ -1,10 +1,13 @@
 /* Timings and curves measured from the design (design/Aria.html, "Open Aria" / "Close Aria"). */
 :root {
-  --accent: #B9A8FF; --text: #F4F4F5; --muted: #A1A1AA;
+  --accent: #B9A8FF; --text: #F4F4F5; --muted: #A1A1AA; --amber: #F0B44C;
+  --card: rgba(24, 24, 27, 0.92); --line: rgba(255, 255, 255, 0.08);
   --out: cubic-bezier(0.16, 1, 0.3, 1); --in: cubic-bezier(0.4, 0, 1, 1); --content: cubic-bezier(0.22, 1, 0.36, 1);
 }
+* { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
 body { font-family: Geist, Inter, system-ui, sans-serif; color: var(--text); }
+button { font: inherit; color: inherit; }
 
 /* The 700 px veil: dark against the screen edge, clear towards the left. */
 .veil {
@@ -26,10 +29,45 @@ body.open aside { opacity: 1; transform: none; transition: opacity 200ms var(--o
 body.open .content { animation: enter 300ms var(--content) both; }
 @keyframes enter { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
 
-.dot { display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: glow 2400ms ease-in-out infinite; }
+.dot { display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: glow 2400ms ease-in-out infinite; flex: none; }
 @keyframes glow {
   0%, 100% { box-shadow: 0 0 14px rgba(185, 168, 255, 0.5); }
   50% { box-shadow: 0 0 26px rgba(185, 168, 255, 0.85); }
 }
+
+/* The corner notice: shown while the dock is closed (first run). */
+.notice {
+  position: absolute; top: 20px; right: 20px; width: 340px; padding: 14px 18px;
+  display: flex; gap: 12px; align-items: flex-start;
+  background: rgba(15, 15, 18, 0.94); border: 1px solid var(--line); border-radius: 12px;
+  opacity: 0; transition: opacity 200ms ease-out; pointer-events: none;
+}
+.notice .dot { margin-top: 5px; }
+.notice b { display: block; font-size: 14px; margin-bottom: 6px; }
+.notice span.line { font-size: 13px; color: #D4D4D8; }
+body.show-notice .notice { opacity: 1; animation: notice 420ms var(--content) both; }
+@keyframes notice { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+kbd {
+  font: 12px ui-monospace, "Geist Mono", monospace; padding: 1px 6px; border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.14); background: rgba(255, 255, 255, 0.06);
+}
+
 h1 { font-size: 28px; font-weight: 600; margin: 26px 0 10px; letter-spacing: -0.01em; }
-p { color: #D4D4D8; font-size: 14px; line-height: 1.6; margin: 0 0 20px; }
+p.intro { color: #D4D4D8; font-size: 14px; line-height: 1.6; margin: 0 0 20px; }
+.card {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 10px;
+}
+.card .row { display: flex; justify-content: space-between; align-items: baseline; }
+.card b { font-size: 14px; }
+.card .meta { font-size: 12px; color: var(--muted); }
+.card .description { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.card:hover, .card:focus-visible { border-color: rgba(185, 168, 255, 0.5); outline: none; background: rgba(185, 168, 255, 0.06); }
+.footer { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); margin-top: 22px; }
+.link { background: none; border: 0; padding: 4px 2px; color: var(--muted); text-decoration: underline; cursor: pointer; }
+.link:hover, .link:focus-visible { color: var(--text); outline: none; }
+.problem {
+  margin-bottom: 18px; padding: 12px 14px; border-radius: 10px; font-size: 13px; line-height: 1.5;
+  background: rgba(240, 180, 76, 0.08); border: 1px solid rgba(240, 180, 76, 0.32); color: var(--amber);
+}
+.problem b { display: block; margin-bottom: 4px; }

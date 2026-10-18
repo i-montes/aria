@@ -15,7 +15,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 use webkit2gtk::{
-    SecurityManagerExt, URISchemeRequest, URISchemeRequestExt, UserContentManager, UserContentManagerExt, WebContext,
+    SecurityManagerExt, SettingsExt, URISchemeRequest, URISchemeRequestExt, UserContentManager, UserContentManagerExt, WebContext,
     WebContextExt, WebView, WebViewExt,
 };
 
@@ -24,6 +24,8 @@ const SURFACE_WIDTH: i32 = 700;
 const DOCK_WIDTH: i32 = 470;
 /// The close transition (140 ms + 20 ms delay in dock.css) plus a frame of margin.
 const CLOSE_MS: u64 = 180;
+/// The corner notice fades after 8 s in the page (`NOTICE_MS` in app.js); the surface goes a bit later.
+const NOTICE_UNMAP_MS: u64 = 8600;
 
 static UI: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../ui");
 
@@ -39,6 +41,11 @@ pub struct Dock {
     /// The page has loaded and can take messages; until then they wait in `queued`.
     ready: Cell<bool>,
     queued: RefCell<Vec<String>>,
+    /// While the first-run notice is on screen the surface is mapped but lets every click through.
+    click_through: Rc<Cell<bool>>,
+    notice_visible: Cell<bool>,
+    notice_generation: Cell<u64>,
+    notice_wanted: Cell<bool>,
     on_message: OnMessage,
 }
 
@@ -53,13 +60,21 @@ impl Dock {
         register_ui_scheme(&context);
         let webview = WebView::builder().web_context(&context).user_content_manager(&ucm).build();
         webview.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
+        if std::env::var_os("ARIA_DEBUG").is_some() {
+            if let Some(settings) = WebViewExt::settings(&webview) {
+                settings.set_enable_write_console_messages_to_stdout(true);
+            }
+        }
         window.add(&webview);
 
         // Clicks pass through the clear part of the veil; only the dock column takes them.
-        window.connect_size_allocate(|window, allocation| {
-            let rect = gtk::cairo::RectangleInt::new(allocation.width() - DOCK_WIDTH, 0, DOCK_WIDTH, allocation.height());
-            window.input_shape_combine_region(Some(&gtk::cairo::Region::create_rectangle(&rect)));
-        });
+        let click_through = Rc::new(Cell::new(false));
+        {
+            let click_through = click_through.clone();
+            window.connect_size_allocate(move |window, allocation| {
+                apply_input_region(window, allocation.width(), allocation.height(), click_through.get());
+            });
+        }
         window.realize();
 
         let dock = Rc::new(Dock {
@@ -70,6 +85,10 @@ impl Dock {
             problem: RefCell::new(None),
             ready: Cell::new(false),
             queued: RefCell::new(Vec::new()),
+            click_through,
+            notice_visible: Cell::new(false),
+            notice_generation: Cell::new(0),
+            notice_wanted: Cell::new(false),
             on_message,
         });
 
@@ -118,11 +137,54 @@ impl Dock {
         self.webview.evaluate_javascript(&format!("window.aria.receive({json})"), None, None, None::<&gio::Cancellable>, |_| {});
     }
 
-    fn page_ready(&self) {
+    fn page_ready(self: &Rc<Self>) {
         self.ready.set(true);
         for json in self.queued.take() {
             self.deliver(&json);
         }
+        if self.notice_wanted.take() {
+            self.show_notice_now();
+        }
+    }
+
+    /// The first-run corner notice, shown while the dock is closed: the surface is mapped without the
+    /// keyboard and without taking clicks, then unmapped again. Pressing SUPER + A meanwhile opens
+    /// the dock normally.
+    pub fn show_notice(self: &Rc<Self>) {
+        if self.ready.get() {
+            self.show_notice_now();
+        } else {
+            self.notice_wanted.set(true);
+        }
+    }
+
+    fn show_notice_now(self: &Rc<Self>) {
+        if self.state.get() != State::Hidden || self.notice_visible.get() {
+            return;
+        }
+        self.notice_visible.set(true);
+        self.click_through.set(true);
+        self.notice_generation.set(self.notice_generation.get() + 1);
+        let generation = self.notice_generation.get();
+        self.place_on_focused_monitor();
+        self.window.set_keyboard_mode(KeyboardMode::None);
+        self.window.show_all();
+        self.refresh_input_region();
+        self.send(&DockMessage::Notice);
+        let weak: Weak<Dock> = Rc::downgrade(self);
+        glib::timeout_add_local_once(Duration::from_millis(NOTICE_UNMAP_MS), move || {
+            let Some(dock) = weak.upgrade() else { return };
+            if dock.notice_generation.get() == generation && dock.notice_visible.get() && dock.state.get() == State::Hidden {
+                dock.notice_visible.set(false);
+                dock.click_through.set(false);
+                dock.window.hide();
+            }
+        });
+    }
+
+    fn refresh_input_region(&self) {
+        let allocation = self.window.allocation();
+        apply_input_region(&self.window, allocation.width(), allocation.height(), self.click_through.get());
     }
 
     pub fn feed(self: &Rc<Self>, event: Event) {
@@ -135,9 +197,12 @@ impl Dock {
         match command {
             Command::Show => {
                 self.generation.set(self.generation.get() + 1);
-                // A surface that is still mapped (re-opened mid-close) does not get the keyboard back
-                // by changing the mode, so it is mapped again.
-                if previous == State::Closing {
+                let was_notice = self.notice_visible.replace(false);
+                self.notice_generation.set(self.notice_generation.get() + 1);
+                self.click_through.set(false);
+                // A surface that is still mapped (re-opened mid-close, or showing the notice) does not
+                // get the keyboard back by changing the mode, so it is mapped again.
+                if previous == State::Closing || was_notice {
                     self.window.hide();
                 }
                 let monitor = self.place_on_focused_monitor();
@@ -183,6 +248,16 @@ impl Dock {
             None => "(compositor's choice)".into(),
         }
     }
+}
+
+/// Only the dock column takes input (nothing at all while `click_through`).
+fn apply_input_region(window: &gtk::Window, width: i32, height: i32, click_through: bool) {
+    let region = if click_through {
+        gtk::cairo::Region::create()
+    } else {
+        gtk::cairo::Region::create_rectangle(&gtk::cairo::RectangleInt::new(width - DOCK_WIDTH, 0, DOCK_WIDTH, height))
+    };
+    window.input_shape_combine_region(Some(&region));
 }
 
 fn build_window() -> gtk::Window {
