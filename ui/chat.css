@@ -1,0 +1,85 @@
+/* The chat. House rule (the owner's taste): buttons, cards and fields have SOLID backgrounds that
+   never change on hover, focus or selection; only the border takes the accent. Bubbles and shapes
+   follow design/components (aria-message, user-message, tool-chips, working, composer, pickers). */
+.chat { position: absolute; top: 24px; right: 28px; bottom: 20px; left: 0; display: none; flex-direction: column; gap: 10px; min-height: 0; }
+body.mode-chat .content { display: none; }
+body.mode-chat .chat { display: flex; }
+body.open.mode-chat .chat { animation: enter 300ms var(--content) both; }
+
+.chat-head { display: flex; align-items: center; gap: 8px; flex: none; }
+.chat-path { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 9px; background: var(--surface); border: 1px solid var(--line-strong); font: 12px ui-monospace, "Geist Mono", monospace; color: #B4B4BC; }
+.path-icon { color: var(--accent); flex: none; }
+.path-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; unicode-bidi: plaintext; }
+.path-text.muted { color: var(--muted); direction: ltr; }
+.icon-btn, .stop-btn, .send-btn { display: grid; place-items: center; flex: none; cursor: pointer; border-radius: 9px; border: 1px solid var(--line-strong); background: var(--surface); color: #B4B4BC; }
+.icon-btn { width: 32px; height: 32px; padding: 0; }
+.icon-btn:hover, .icon-btn:focus-visible, .stop-btn:hover, .stop-btn:focus-visible, .model-chip:hover, .model-chip:focus-visible,
+.opt-btn:hover, .opt-btn:focus-visible, .secondary:hover, .secondary:focus-visible, .tools-head:hover, .tools-head:focus-visible { border-color: var(--accent-border); outline: none; }
+
+.chat-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; scrollbar-width: thin; scrollbar-color: #34343B transparent; }
+.chat-list::-webkit-scrollbar { width: 6px; }
+.chat-list::-webkit-scrollbar-thumb { background: #34343B; border-radius: 3px; }
+.empty { margin: auto 0; padding: 0 12px; text-align: center; font-size: 13.5px; line-height: 1.6; color: var(--muted); }
+
+.msg p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; font-size: 14.5px; }
+.msg.user { display: flex; justify-content: flex-end; }
+.msg.user p { max-width: 82%; background: #2A2A31; color: var(--text); border-radius: 16px 16px 4px 16px; padding: 11px 15px; line-height: 1.5; }
+.msg.assistant { display: flex; justify-content: flex-start; flex-direction: column; gap: 6px; max-width: 94%; background: #111114; border: 1px solid var(--line); border-radius: 16px 16px 16px 4px; padding: 14px 16px; color: #EDEDEF; }
+.msg.assistant p.thinking { color: var(--muted); font-size: 13px; }
+
+.tools { font-size: 12.5px; color: #B4B4BC; }
+.tools-head { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 8px; border: 1px solid transparent; background: var(--field); color: #B4B4BC; cursor: pointer; font-size: 12.5px; }
+.chev { display: inline-block; transition: transform 200ms; }
+.chev.open { transform: rotate(90deg); }
+.tool-rows { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+.tool-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 6px; min-width: 0; }
+.tool-dot { flex: none; width: 14px; text-align: center; color: var(--ok); font-size: 11px; }
+.tool-row.status-running .tool-dot { width: 7px; height: 7px; margin: 0 3.5px; border-radius: 50%; background: var(--accent); align-self: center; animation: glow 1400ms ease-in-out infinite; }
+.tool-row.status-error .tool-dot { color: #FF8A8A; }
+.tool-name { flex: none; font: 12px ui-monospace, "Geist Mono", monospace; color: var(--text); }
+.tool-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px ui-monospace, "Geist Mono", monospace; color: var(--muted); }
+
+.notice { align-self: stretch; padding: 8px 12px; border-radius: 9px; font-size: 12.5px; line-height: 1.5; background: #131316; border: 1px solid var(--line); color: #B4B4BC; }
+.notice.tone-warn { background: #1c1710; border-color: #5a4720; color: var(--warn); }
+.notice.tone-error { background: #1d1214; border-color: #5a2a30; color: #FF9A9A; }
+
+.working { display: flex; align-items: center; gap: 10px; min-height: 20px; }
+.cells { display: grid; grid-template-columns: repeat(3, 4px); gap: 1.5px; flex: none; }
+.cells i { width: 4px; height: 4px; border-radius: 50%; background: var(--text); opacity: 0.15; animation: pixel-on 650ms ease-in-out infinite; }
+@keyframes pixel-on { 0%, 100% { opacity: 0.15; } 50% { opacity: 1; } }
+.working-label { font-size: 13px; font-weight: 500; color: #8A8A94; }
+@media (prefers-reduced-motion: reduce) { .cells i, .tool-row.status-running .tool-dot { animation: none; opacity: 0.6; } }
+
+.dialog { flex: none; display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--accent-border); }
+.dialog-title { font-size: 14px; }
+.dialog-message { margin: 0; font-size: 13px; line-height: 1.5; color: #B4B4BC; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dialog-options { display: flex; flex-direction: column; gap: 6px; }
+.opt-btn { text-align: left; cursor: pointer; padding: 9px 12px; border-radius: 9px; font-size: 13.5px; background: var(--surface-2); border: 1px solid var(--line-strong); }
+.dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.dialog-field { width: 100%; padding: 9px 12px; border-radius: 8px; font: inherit; font-size: 13px; color: var(--text); background: var(--field); border: 1px solid var(--line-strong); resize: vertical; }
+.dialog-field:focus { outline: none; border-color: var(--accent-border); }
+.primary { cursor: pointer; padding: 8px 14px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: #0B0816; font-weight: 500; font-size: 13px; }
+.primary:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 2px; }
+.secondary { cursor: pointer; padding: 8px 14px; border-radius: 9px; border: 1px solid var(--line-strong); background: var(--surface); color: #B4B4BC; font-size: 13px; }
+
+.picker { flex: none; max-height: 250px; overflow-y: auto; padding: 4px 6px 6px; border-radius: 14px; background: #141417; border: 1px solid var(--line-strong); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55); }
+.picker[hidden] { display: none; }
+.picker-title { padding: 8px 8px 6px; font: 11px ui-monospace, "Geist Mono", monospace; letter-spacing: 0.08em; color: #8A8A94; }
+.picker-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 7px 8px; border-radius: 9px; border: 1px solid transparent; background: #141417; cursor: pointer; text-align: left; }
+.picker-row.active { border-color: var(--accent-border); }
+.picker-main { font: 13px ui-monospace, "Geist Mono", monospace; color: var(--text); overflow-wrap: anywhere; }
+.picker-hint { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.picker-empty { padding: 10px 8px; font-size: 13px; color: var(--muted); }
+
+.composer { flex: none; display: flex; align-items: flex-end; gap: 8px; padding: 6px 6px 6px 16px; border-radius: 14px; background: #16161a; border: 1px solid var(--line-strong); }
+.composer:focus-within { border-color: var(--accent-border); }
+#chat-input { flex: 1; min-width: 0; min-height: 44px; max-height: 154px; resize: none; overflow-y: auto; border: 0; outline: none; padding: 11px 0; background: transparent; color: #F4F4F5; font: 14.5px/22px Geist, ui-sans-serif, system-ui, sans-serif; overflow-wrap: anywhere; scrollbar-width: thin; }
+#chat-input::placeholder { color: #8A8A94; }
+.send-btn, .stop-btn { width: 44px; height: 44px; padding: 0; border-radius: 10px; }
+.send-btn { background: var(--accent); border-color: var(--accent); color: #0B0816; }
+.send-btn:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 2px; }
+.stop-btn[hidden] { display: none; }
+
+.chat-foot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; font: 12px ui-monospace, "Geist Mono", monospace; color: #9A9AA3; padding-left: 4px; }
+.model-chip { cursor: pointer; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 9px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); color: #D6D6DC; font: inherit; }
+.hints { white-space: nowrap; }

@@ -13,7 +13,8 @@ const STYLES = ['very-short', 'brief', 'detailed', 'technical', 'teaching']
 const LEVELS = ['low', 'medium', 'high']
 const DEFAULT_TURN_LIMIT = 30
 
-/** `env`: { root, t, request, post, setLanguage, browserLanguage }. */
+/** `env`: { root, t, request, post, setLanguage, browserLanguage, onDone? }. `onDone` runs when the user
+ * presses the button of the "set up" screen (the dock goes to the chat); without it the dock closes. */
 export function createOnboarding(env) {
   const { root, t, request, post } = env
   const state = {
@@ -754,7 +755,7 @@ export function createOnboarding(env) {
     if (action === 'next') return next()
     if (action === 'defaults') return go('review')
     if (action === 'edit') return go(value)
-    if (action === 'close') return post({ type: 'closeRequest' })
+    if (action === 'close') return env.onDone ? env.onDone() : post({ type: 'closeRequest' })
     if (action === 'pick') return pick(field, value)
     if (action === 'toggle') return toggleField(field)
     if (action === 'reveal') {

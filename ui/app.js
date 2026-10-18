@@ -2,11 +2,12 @@
 // onboarding. Everything the dock sends arrives through `window.aria.receive(message)` (see
 // crates/aria-core/src/bridge.rs).
 import { createI18n, normalizeLanguage } from './i18n.js'
+import { createChatView } from './chat/view.js'
 import { createOnboarding } from './onboarding/view.js'
 
 let i18n = createI18n({})
 const t = (key, vars) => i18n.t(key, vars)
-const state = { problem: null }
+const state = { problem: null, mode: 'setup' } // mode: `setup` (the onboarding) or `chat`
 
 // ---- bridge ----------------------------------------------------------------------------------
 
@@ -29,7 +30,8 @@ function request(message, onProgress) {
 
 const handlers = {
   open: () => {
-    onboarding.onOpen() // after a finished setup, show the settings again
+    if (state.mode === 'chat') chat.show()
+    else onboarding.onOpen() // in the middle of a setup, keep the place
     document.body.classList.remove('show-notice')
     document.body.classList.remove('open')
     void document.body.offsetWidth
@@ -37,11 +39,18 @@ const handlers = {
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         document.body.classList.add('open')
-        document.querySelector('#flow [data-nav]')?.focus()
+        if (state.mode === 'chat') document.getElementById('chat-input')?.focus()
+        else document.querySelector('#flow [data-nav]')?.focus()
       }),
     )
   },
   close: () => document.body.classList.remove('open'),
+  // The chat's messages need the catalogs too (and the chat view), so they wait for the boot.
+  chatState: (message) => booted.then(() => chat.receive(message)),
+  chatEvent: (message) => booted.then(() => chat.receive(message)),
+  chatDialog: (message) => booted.then(() => chat.receive(message)),
+  chatDialogClosed: (message) => booted.then(() => chat.receive(message)),
+  chatEngine: (message) => booted.then(() => chat.receive(message)),
   // These need the catalogs, so they wait for the boot to finish.
   notice: () => booted.then(showNotice),
   problem: (message) =>
@@ -72,7 +81,14 @@ const problem = document.getElementById('problem')
 function renderProblem() {
   // Settings problems are not "Aria can't start": it started, and it is protecting your file.
   const title = state.problem?.startsWith('settings-') ? t('problem.settings.title') : t('problem.title')
-  problem.innerHTML = state.problem ? `<div class="problem"><b>${title}</b>${t('problem.' + state.problem)}</div>` : ''
+  const html = state.problem ? `<div class="problem"><b>${title}</b>${t('problem.' + state.problem)}</div>` : ''
+  problem.innerHTML = html
+  chat?.setBanner(html)
+}
+
+function setMode(mode) {
+  state.mode = mode
+  document.body.classList.toggle('mode-chat', mode === 'chat')
 }
 
 const NOTICE_MS = 8000
@@ -93,11 +109,32 @@ const onboarding = createOnboarding({
   request,
   post,
   browserLanguage: () => normalizeLanguage(navigator.language),
+  // "Start using Aria" / "Close" on the last screen: on to the chat.
+  onDone: () => {
+    setMode('chat')
+    chat.show()
+  },
   // The interface follows the conversation language as soon as it is picked.
   setLanguage: (code) => {
     i18n.setLanguage(code)
     renderProblem()
     onboarding.render()
+  },
+})
+
+// ---- chat ------------------------------------------------------------------------------------
+
+const chat = createChatView({
+  root: document.getElementById('chat'),
+  t,
+  send: post,
+  request,
+  // The settings are the onboarding's review step, loaded fresh from disk.
+  onSettings: async () => {
+    const reply = await request({ type: 'loadSettings' })
+    onboarding.start(reply.settings, reply.connected)
+    setMode('setup')
+    document.querySelector('#flow [data-nav]')?.focus()
   },
 })
 
@@ -132,9 +169,13 @@ async function boot() {
   const reply = await request({ type: 'loadSettings' })
   if (reply.problem) state.problem = reply.problem
   if (reply.settings?.assistant?.language) i18n.setLanguage(reply.settings.assistant.language)
-  renderProblem()
   onboarding.start(reply.settings, reply.connected)
-  if (document.body.classList.contains('open')) document.querySelector('#flow [data-nav]')?.focus()
+  setMode(reply.settings?.setup?.completed ? 'chat' : 'setup')
+  renderProblem()
+  if (document.body.classList.contains('open')) {
+    if (state.mode === 'chat') chat.show()
+    else document.querySelector('#flow [data-nav]')?.focus()
+  }
 }
 
 // `ready` means the bridge is up (the dock holds its messages until then), so it goes out before
