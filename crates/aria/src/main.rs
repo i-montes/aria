@@ -8,12 +8,6 @@ mod dock;
 mod handlers;
 mod visibility;
 
-/// Tests that start child processes or hold a listening socket take turns: a fork in one test
-/// leaves copies of every open descriptor in the child until it execs, which keeps a dropped socket
-/// "listening" and a freshly written script "busy" for a moment.
-#[cfg(test)]
-pub(crate) static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::paths::AriaPaths;
 use aria_hyprland::Registration;
@@ -155,3 +149,9 @@ fn run_dock() {
     eprintln!("aria: ready, press SUPER + A");
     gtk::main();
 }
+
+/// Tests that start child processes or hold a listening socket take turns: a fork in one test
+/// leaves copies of every open descriptor in the child until it execs, which keeps a dropped socket
+/// "listening" and a freshly written script "busy" for a moment.
+#[cfg(test)]
+pub(crate) static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
