@@ -2,3 +2,4 @@
 
 pub mod json_file;
 pub mod paths;
+pub mod auth;
