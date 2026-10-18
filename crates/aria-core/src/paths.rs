@@ -1,0 +1,63 @@
+//! Where Aria keeps its data: `~/.aria/` (or `$ARIA_HOME`). The repo never holds user data.
+
+use std::io;
+use std::os::unix::fs::DirBuilderExt;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone)]
+pub struct AriaPaths {
+    pub root: PathBuf,
+}
+
+impl AriaPaths {
+    /// `$ARIA_HOME` when set, otherwise `$HOME/.aria`.
+    pub fn from_env() -> AriaPaths {
+        let root = match std::env::var_os("ARIA_HOME") {
+            Some(dir) => PathBuf::from(dir),
+            None => PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".aria"),
+        };
+        AriaPaths { root }
+    }
+
+    pub fn settings(&self) -> PathBuf {
+        self.root.join("settings.json")
+    }
+
+    pub fn auth(&self) -> PathBuf {
+        self.root.join("auth.json")
+    }
+
+    /// Creates the root directory (mode 0700) when it is missing.
+    pub fn ensure_root(&self) -> io::Result<()> {
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&self.root)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Environment variables are process-wide: serialize the tests that set them.
+    static ENV: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn paths_use_aria_home() {
+        let _guard = ENV.lock().unwrap();
+        std::env::set_var("ARIA_HOME", "/tmp/x");
+        let paths = AriaPaths::from_env();
+        assert_eq!(paths.settings(), PathBuf::from("/tmp/x/settings.json"));
+        assert_eq!(paths.auth(), PathBuf::from("/tmp/x/auth.json"));
+        std::env::remove_var("ARIA_HOME");
+    }
+
+    #[test]
+    fn ensure_root_creates_private_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = AriaPaths { root: dir.path().join(".aria") };
+        paths.ensure_root().unwrap();
+        let mode = std::fs::metadata(&paths.root).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+    }
+}
