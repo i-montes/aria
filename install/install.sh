@@ -128,6 +128,18 @@ do_install() {
   say "Aria is installed. Press Super+A to set it up."
 }
 
+# True only for a real directory (not a symlink) that is neither / nor the home directory and that
+# looks like Aria's data: it holds settings.json or auth.json, or it is empty. Compared by real path,
+# so `$HOME/`, `$HOME/.` and friends do not slip past.
+safe_to_delete() {
+  dir=$1
+  [ -n "$dir" ] && [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
+  real=$(cd "$dir" 2>/dev/null && pwd -P) || return 1
+  home_real=$(cd "$HOME" 2>/dev/null && pwd -P) || return 1
+  [ "$real" != "/" ] && [ "$real" != "$home_real" ] || return 1
+  [ -e "$real/settings.json" ] || [ -e "$real/auth.json" ] || [ -z "$(ls -A "$real")" ]
+}
+
 ask_delete_data() {
   [ -d "$DATA_DIR" ] || return 0
   if [ "$DRY_RUN" = 1 ]; then
@@ -141,7 +153,12 @@ ask_delete_data() {
   fi
   case "$answer" in
     y | Y | yes)
-      if [ -n "$DATA_DIR" ] && [ "$DATA_DIR" != "/" ] && [ "$DATA_DIR" != "$HOME" ]; then rm -rf "$DATA_DIR"; say "Deleted $DATA_DIR"; fi
+      if safe_to_delete "$DATA_DIR"; then
+        rm -rf -- "$DATA_DIR"
+        say "Deleted $DATA_DIR"
+      else
+        say "$DATA_DIR does not look like Aria's data, so it was left alone."
+      fi
       ;;
     *) say "Kept $DATA_DIR" ;;
   esac
@@ -168,6 +185,11 @@ while [ $# -gt 0 ]; do
       ;;
     --uninstall) MODE=uninstall ;;
     --print-unit) MODE=print-unit ;;
+    --can-delete) # test hook: exit 0 when the directory is one uninstall would delete
+      [ $# -ge 2 ] || die "--can-delete needs a directory"
+      safe_to_delete "$2"
+      exit $?
+      ;;
     -h | --help) usage; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac

@@ -123,6 +123,10 @@ impl Dock {
         *self.problem.borrow_mut() = Some(code.to_string());
     }
 
+    pub fn clear_problem(&self) {
+        *self.problem.borrow_mut() = None;
+    }
+
     /// Sends a message to the page; before the page has loaded it waits in a queue.
     pub fn send(&self, message: &DockMessage) {
         let Ok(json) = serde_json::to_string(message) else { return };
@@ -213,9 +217,9 @@ impl Dock {
                 self.window.show_all();
                 self.window.present();
                 self.send(&DockMessage::Open { monitor });
-                if let Some(code) = self.problem.borrow().clone() {
-                    self.send(&DockMessage::Problem { code });
-                }
+                // Always tell the page: an empty code clears a banner from an earlier open.
+                let code = self.problem.borrow().clone().unwrap_or_default();
+                self.send(&DockMessage::Problem { code });
             }
             Command::StartClose => {
                 // The surface stays mapped for the close animation; it must not keep the keyboard.

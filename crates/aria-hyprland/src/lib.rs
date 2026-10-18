@@ -137,16 +137,23 @@ pub fn is_config_reloaded(event_line: &str) -> bool {
     event_line.starts_with("configreloaded>>")
 }
 
-/// Calls `on_reload` for every `configreloaded>>` event on `path`, reconnecting after `retry`
-/// whenever the socket drops (Hyprland restarted, or was not up yet).
-pub fn watch_events_at(path: PathBuf, retry: Duration, on_reload: impl Fn() + Send + 'static) -> JoinHandle<()> {
+/// Calls `on_reload` for every `configreloaded>>` event. The socket path is asked for again on every
+/// attempt, so a Hyprland that was not up yet, or restarted with a new instance, is followed; a
+/// dropped connection is retried after `retry`.
+pub fn watch_events_with(
+    resolve: impl Fn() -> Option<PathBuf> + Send + 'static,
+    retry: Duration,
+    on_reload: impl Fn() + Send + 'static,
+) -> JoinHandle<()> {
     std::thread::spawn(move || loop {
-        if let Ok(stream) = UnixStream::connect(&path) {
-            for line in BufReader::new(stream).lines() {
-                match line {
-                    Ok(line) if is_config_reloaded(&line) => on_reload(),
-                    Ok(_) => {}
-                    Err(_) => break,
+        if let Some(path) = resolve() {
+            if let Ok(stream) = UnixStream::connect(&path) {
+                for line in BufReader::new(stream).lines() {
+                    match line {
+                        Ok(line) if is_config_reloaded(&line) => on_reload(),
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
                 }
             }
         }
@@ -154,11 +161,64 @@ pub fn watch_events_at(path: PathBuf, retry: Duration, on_reload: impl Fn() + Se
     })
 }
 
+/// The same for a known socket path.
+pub fn watch_events_at(path: PathBuf, retry: Duration, on_reload: impl Fn() + Send + 'static) -> JoinHandle<()> {
+    watch_events_with(move || Some(path.clone()), retry, on_reload)
+}
+
 pub fn watch_events(on_reload: impl Fn() + Send + 'static) -> JoinHandle<()> {
-    match socket_path(".socket2.sock") {
-        Ok(path) => watch_events_at(path, Duration::from_secs(1), on_reload),
-        Err(_) => std::thread::spawn(|| ()),
+    watch_events_with(|| socket_path(".socket2.sock").ok(), Duration::from_secs(1), on_reload)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Registration {
+    /// Hyprland is not reachable yet (or refused the bind): trying again.
+    WaitingForHyprland,
+    /// The classic configuration: the hotkey cannot be registered; not retried.
+    ClassicConfig,
+    Registered,
+}
+
+/// Registers the hotkey, retrying every `retry` until Hyprland answers. Returns how it settled:
+/// `Registered` or `ClassicConfig`. `on_state` hears about every attempt.
+pub fn keep_registered_with(
+    detect: impl Fn() -> Result<ConfigKind, HyprError>,
+    register: impl Fn() -> Result<(), HyprError>,
+    retry: Duration,
+    on_state: impl Fn(Registration),
+) -> Registration {
+    loop {
+        match detect() {
+            Ok(ConfigKind::Classic) => {
+                on_state(Registration::ClassicConfig);
+                return Registration::ClassicConfig;
+            }
+            Ok(ConfigKind::Lua) if register().is_ok() => {
+                on_state(Registration::Registered);
+                return Registration::Registered;
+            }
+            _ => {
+                on_state(Registration::WaitingForHyprland);
+                std::thread::sleep(retry);
+            }
+        }
     }
+}
+
+/// In the background: register the hotkey as soon as Hyprland can take it, then register it again
+/// after every config reload (a reload drops runtime binds).
+pub fn keep_hotkey_registered(exe: PathBuf, retry: Duration, on_state: impl Fn(Registration) + Send + 'static) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        let settled = keep_registered_with(detect_config, || register_hotkey(&exe), retry, on_state);
+        if settled == Registration::Registered {
+            let _ = watch_events(move || {
+                if let Err(error) = register_hotkey(&exe) {
+                    eprintln!("aria: could not register SUPER + A after a reload: {error}");
+                }
+            })
+            .join();
+        }
+    })
 }
 
 #[cfg(test)]
@@ -199,6 +259,83 @@ mod tests {
         assert_eq!(discover_signature(runtime.path()), None);
         std::fs::create_dir_all(runtime.path().join("hypr").join("dead")).unwrap();
         assert_eq!(discover_signature(runtime.path()), None);
+    }
+
+    #[test]
+    fn watcher_follows_a_socket_path_that_appears_or_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join(".socket2.sock");
+        let gone = dir.path().join("gone.sock");
+        let listener = UnixListener::bind(&real).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(b"configreloaded>>\n").unwrap();
+            let mut hold = String::new();
+            let _ = BufReader::new(stream).read_line(&mut hold);
+        });
+        let calls = Arc::new(AtomicUsize::new(0));
+        let resolve = {
+            let (calls, real) = (calls.clone(), real.clone());
+            // Hyprland not up yet, then an old instance's dead path, then the live one.
+            move || match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => None,
+                1 => Some(gone.clone()),
+                _ => Some(real.clone()),
+            }
+        };
+        let fired = Arc::new(AtomicUsize::new(0));
+        let seen = fired.clone();
+        watch_events_with(resolve, Duration::from_millis(20), move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fired.load(Ordering::SeqCst) < 1 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
+        assert!(calls.load(Ordering::SeqCst) >= 3);
+        drop(server);
+    }
+
+    fn states_until_settled(
+        detect: impl Fn() -> Result<ConfigKind, HyprError>,
+        register: impl Fn() -> Result<(), HyprError>,
+    ) -> (Vec<Registration>, Registration) {
+        let seen = std::cell::RefCell::new(Vec::new());
+        let last = keep_registered_with(detect, register, Duration::from_millis(1), |s| seen.borrow_mut().push(s));
+        (seen.into_inner(), last)
+    }
+
+    #[test]
+    fn registration_waits_for_hyprland_and_then_registers() {
+        let attempts = std::cell::Cell::new(0);
+        let (seen, last) = states_until_settled(
+            || {
+                attempts.set(attempts.get() + 1);
+                if attempts.get() <= 2 { Err(HyprError::NotRunning) } else { Ok(ConfigKind::Lua) }
+            },
+            || Ok(()),
+        );
+        assert_eq!(seen, vec![Registration::WaitingForHyprland, Registration::WaitingForHyprland, Registration::Registered]);
+        assert_eq!(last, Registration::Registered);
+    }
+
+    #[test]
+    fn registration_retries_when_the_bind_is_refused_once() {
+        let refused = std::cell::Cell::new(true);
+        let (seen, last) = states_until_settled(
+            || Ok(ConfigKind::Lua),
+            || if refused.replace(false) { Err(HyprError::Eval("not ready".into())) } else { Ok(()) },
+        );
+        assert_eq!(seen, vec![Registration::WaitingForHyprland, Registration::Registered]);
+        assert_eq!(last, Registration::Registered);
+    }
+
+    #[test]
+    fn a_classic_config_is_reported_and_not_retried() {
+        let (seen, last) = states_until_settled(|| Ok(ConfigKind::Classic), || panic!("must not register on a classic config"));
+        assert_eq!(seen, vec![Registration::ClassicConfig]);
+        assert_eq!(last, Registration::ClassicConfig);
     }
 
     #[test]

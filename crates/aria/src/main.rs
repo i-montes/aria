@@ -8,7 +8,7 @@ mod visibility;
 
 use aria_core::bridge::DockMessage;
 use aria_core::paths::AriaPaths;
-use aria_hyprland::{ConfigKind, HyprError};
+use aria_hyprland::Registration;
 use dock::Dock;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -73,26 +73,14 @@ fn run_dock() {
         dock.show_notice();
     }
 
+    // The hotkey: registered as soon as Hyprland can take it (it may not be up when a service starts),
+    // and again after every config reload. The thread reports how it is going; the problem banner
+    // follows it.
+    let (registration_sender, registration_receiver) = mpsc::channel::<Registration>();
     let exe = std::env::current_exe().expect("own path");
-    match aria_hyprland::detect_config() {
-        Ok(ConfigKind::Lua) => {
-            if let Err(error) = aria_hyprland::register_hotkey(&exe) {
-                eprintln!("aria: could not register SUPER + A: {error}");
-            }
-            let exe = exe.clone();
-            aria_hyprland::watch_events(move || {
-                if let Err(error) = aria_hyprland::register_hotkey(&exe) {
-                    eprintln!("aria: could not register SUPER + A after a reload: {error}");
-                }
-            });
-        }
-        Ok(ConfigKind::Classic) => dock.set_problem("hyprland-classic-config"),
-        Err(HyprError::NotRunning) => dock.set_problem("hyprland-not-running"),
-        Err(error) => {
-            eprintln!("aria: {error}");
-            dock.set_problem("hyprland-error");
-        }
-    }
+    aria_hyprland::keep_hotkey_registered(exe, Duration::from_secs(2), move |state| {
+        let _ = registration_sender.send(state);
+    });
 
     // Commands arrive on a socket thread and are handled on the GTK thread.
     let (sender, receiver) = mpsc::channel::<String>();
@@ -112,6 +100,13 @@ fn run_dock() {
         }
         while let Ok(reply) = reply_receiver.try_recv() {
             dock.send(&reply);
+        }
+        while let Ok(state) = registration_receiver.try_recv() {
+            match state {
+                Registration::Registered => dock.clear_problem(),
+                Registration::WaitingForHyprland => dock.set_problem("hyprland-not-running"),
+                Registration::ClassicConfig => dock.set_problem("hyprland-classic-config"),
+            }
         }
         glib::ControlFlow::Continue
     });

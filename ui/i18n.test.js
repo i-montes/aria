@@ -1,5 +1,5 @@
 // Run: bun test ui
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { createI18n } from './i18n.js'
 
@@ -51,4 +51,30 @@ test('variables are filled in', () => {
 
 test('English and Spanish have exactly the same keys', () => {
   expect(Object.keys(es).sort()).toEqual(Object.keys(en).sort())
+})
+
+// Every code the Rust side can send to the page must have a text, or the page shows the raw key.
+describe('every code the dock can emit has a string in both languages', () => {
+  const rust = (file) => readFileSync(new URL(`../crates/${file}`, import.meta.url), 'utf8').split('#[cfg(test)]')[0]
+  const handlers = rust('aria/src/handlers.rs')
+  const main = rust('aria/src/main.rs')
+  const problemCodes = [...main.matchAll(/set_problem\("([a-z-]+)"\)/g)].map((m) => m[1])
+  // load_settings reports its problem as `problem: Some("...")` / a match arm that yields the code
+  problemCodes.push(...[...handlers.slice(handlers.indexOf('fn load_settings'), handlers.indexOf('fn save_settings')).matchAll(/=> "([a-z-]+)"/g)].map((m) => m[1]))
+  const errorCodes = [...handlers.matchAll(/(?:Some\(|=> |code: )"([a-z]+-[a-z-]+)"/g)].map((m) => m[1]).filter((code) => !problemCodes.includes(code) || code.startsWith('settings-'))
+
+  test('the scan finds the codes it should', () => {
+    expect(problemCodes).toContain('hyprland-classic-config')
+    expect(problemCodes).toContain('settings-invalid')
+    expect(errorCodes).toContain('key-rejected')
+    expect(errorCodes).toContain('oauth-timeout')
+  })
+  for (const [name, catalog] of [['en', en], ['es', es]]) {
+    test(`problems in ${name}`, () => {
+      for (const code of new Set(problemCodes)) expect(catalog[`problem.${code}`], `problem.${code}`).toBeDefined()
+    })
+    test(`errors in ${name}`, () => {
+      for (const code of new Set(errorCodes)) expect(catalog[`ob.error.${code}`], `ob.error.${code}`).toBeDefined()
+    })
+  }
 })

@@ -35,7 +35,7 @@ export function createOnboarding(env) {
       drafts: { key: '', typesafeKey: '', extraWritable: '' },
       key: { status: 'idle', error: null },
       typesafe: { status: 'idle', error: null },
-      oauth: { status: 'idle', error: null, url: null },
+      oauth: { status: 'idle', error: null, url: null, token: 0 },
     }
   }
 
@@ -222,7 +222,9 @@ export function createOnboarding(env) {
         disabled: o.status === 'waiting' || o.status === 'done',
         tone: o.status === 'done' ? 'ok' : o.error ? 'error' : '',
       })
-      if (o.status === 'waiting' && o.url) html += `<button class="link" data-nav data-action="oauth-reopen" data-key="oauth-reopen">${c.esc(t('ob.signin.oauth.reopen'))}</button>`
+      if (o.status === 'waiting') {
+        html += `<div class="action-row">${o.url ? `<button class="link" data-nav data-action="oauth-reopen" data-key="oauth-reopen">${c.esc(t('ob.signin.oauth.reopen'))}</button>` : ''}<button class="link" data-nav data-action="oauth-cancel" data-key="oauth-cancel">${c.esc(t('ob.signin.oauth.cancel'))}</button></div>`
+      }
     }
     return html + c.info('lavender', t('ob.signin.stored.title'), t('ob.signin.stored.desc'))
   }
@@ -557,20 +559,25 @@ export function createOnboarding(env) {
 
   // ---- keys and sign-in -----------------------------------------------------------------------
 
+  // A reply can arrive after the user moved on (changed provider, cancelled): `state.ui` is replaced
+  // when the provider changes, so a continuation that finds another `ui` has been overtaken and
+  // must not touch the state.
   async function saveKey(field) {
-    const status = field === 'key' ? state.ui.key : state.ui.typesafe
-    const draft = state.ui.drafts[field]
+    const ui = state.ui
+    const status = field === 'key' ? ui.key : ui.typesafe
+    const draft = ui.drafts[field]
     if (status.status === 'checking' || !draft.trim()) return
     status.status = 'checking'
     status.error = null
     render()
     const provider = field === 'typesafeKey' ? 'typesafe' : module().keyProvider
     const reply = await request({ type: 'saveKey', provider, key: draft })
+    if (state.ui !== ui) return
     if (reply.type === 'keyResult' && reply.ok) {
       status.status = 'saved'
-      if (field === 'key') state.ui.signedIn = true
-      else state.ui.typesafeSaved = true
-      state.ui.drafts[field] = ''
+      if (field === 'key') ui.signedIn = true
+      else ui.typesafeSaved = true
+      ui.drafts[field] = ''
     } else {
       status.status = 'idle'
       status.error = reply.error ?? reply.code ?? 'generic'
@@ -579,24 +586,47 @@ export function createOnboarding(env) {
   }
 
   async function startOauth() {
-    const o = state.ui.oauth
+    const ui = state.ui
+    const o = ui.oauth
     if (o.status === 'waiting') return
+    const token = ++o.token
+    const current = () => state.ui === ui && o.token === token
     o.status = 'waiting'
     o.error = null
     o.url = null
     render()
     const reply = await request({ type: 'startOauth' }, (progress) => {
+      if (!current()) return
       o.url = progress.url
       render()
     })
+    if (!current()) return
     if (reply.type === 'oauthResult' && reply.ok) {
       o.status = 'done'
-      state.ui.signedIn = true
+      ui.signedIn = true
     } else {
       o.status = 'idle'
       o.error = reply.error ?? reply.code ?? 'oauth-failed'
     }
     render()
+  }
+
+  /** Gives up waiting for the browser; whatever that attempt reports later is ignored. */
+  function cancelOauth() {
+    const o = state.ui.oauth
+    o.token++
+    o.status = 'idle'
+    o.error = null
+    o.url = null
+    render()
+  }
+
+  /** The dock was opened again: after a finished setup, show the settings (fresh from disk) so they
+   * can be changed; in the middle of a setup, keep the place. */
+  async function onOpen() {
+    if (state.view !== 'done') return
+    const reply = await request({ type: 'loadSettings' })
+    if (state.view === 'done') start(reply.settings)
   }
 
   // ---- events ---------------------------------------------------------------------------------
@@ -620,6 +650,7 @@ export function createOnboarding(env) {
     if (action === 'save-key') return saveKey('key')
     if (action === 'save-typesafeKey') return saveKey('typesafeKey')
     if (action === 'oauth-start') return startOauth()
+    if (action === 'oauth-cancel') return cancelOauth()
     if (action === 'oauth-reopen') return post({ type: 'openUrl', url: state.ui.oauth.url })
     if (action === 'step') {
       update((s) => {
@@ -675,5 +706,17 @@ export function createOnboarding(env) {
     items[items.indexOf(event.target) + 1]?.focus()
   })
 
-  return { start, render }
+  /** What a test (or a bug report) needs to see of the controller, without the DOM. */
+  const snapshot = () => ({
+    view: state.view,
+    step: state.step,
+    mode: state.mode,
+    editing: state.editing,
+    signedIn: state.ui.signedIn,
+    typesafeSaved: state.ui.typesafeSaved,
+    oauth: state.ui.oauth.status,
+    key: state.ui.key.status,
+  })
+
+  return { start, render, snapshot, onOpen }
 }

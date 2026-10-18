@@ -36,6 +36,28 @@ if ARIA_BIN_DIR="$tmp/bin" ARIA_HOME="$tmp/home" sh "$installer" --local /nonexi
 [ ! -e "$tmp/bin" ] && [ ! -e "$tmp/home" ] && pass "nothing was created by the refused install" || fail "the refused install left files behind"
 rm -r "$tmp"
 
+# uninstall only deletes a directory that is really Aria's data
+tmp=$(mktemp -d)
+mkdir "$tmp/aria-data" "$tmp/empty" "$tmp/other" "$tmp/real"
+echo '{}' > "$tmp/aria-data/settings.json"
+echo x > "$tmp/other/notes.txt"
+echo '{}' > "$tmp/real/auth.json"
+ln -s "$tmp/real" "$tmp/link"
+can_delete() { sh "$installer" --can-delete "$1" >/dev/null 2>&1; }
+expect_yes() { if can_delete "$1"; then pass "may delete $2"; else fail "refused to delete $2"; fi; }
+expect_no() { if can_delete "$1"; then fail "would delete $2"; else pass "refuses to delete $2"; fi; }
+expect_yes "$tmp/aria-data" "a directory with settings.json"
+expect_yes "$tmp/real" "a directory with auth.json"
+expect_yes "$tmp/empty" "an empty directory"
+expect_no "$tmp/other" "a directory with someone else's files"
+expect_no "$tmp/link" "a symlink, even to Aria data"
+expect_no "$tmp/missing" "a path that does not exist"
+expect_no "/" "the filesystem root"
+expect_no "$HOME" "the home directory"
+expect_no "$HOME/" "the home directory with a trailing slash"
+expect_no "$HOME/." "the home directory spelled with a dot"
+rm -r "$tmp/link" "$tmp/aria-data" "$tmp/empty" "$tmp/other" "$tmp/real" "$tmp"
+
 # unknown flags are refused
 if sh "$installer" --frobnicate >/dev/null 2>&1; then fail "an unknown flag was accepted"; else pass "unknown flags are refused"; fi
 

@@ -29,6 +29,7 @@ function request(message, onProgress) {
 
 const handlers = {
   open: () => {
+    onboarding.onOpen() // after a finished setup, show the settings again
     document.body.classList.remove('show-notice')
     document.body.classList.remove('open')
     void document.body.offsetWidth
@@ -45,7 +46,7 @@ const handlers = {
   notice: () => booted.then(showNotice),
   problem: (message) =>
     booted.then(() => {
-      state.problem = message.code
+      state.problem = message.code || null // an empty code clears the banner
       renderProblem()
     }),
 }
@@ -69,9 +70,9 @@ window.aria = {
 const problem = document.getElementById('problem')
 
 function renderProblem() {
-  problem.innerHTML = state.problem
-    ? `<div class="problem"><b>${t('problem.title')}</b>${t('problem.' + state.problem)}</div>`
-    : ''
+  // Settings problems are not "Aria can't start": it started, and it is protecting your file.
+  const title = state.problem?.startsWith('settings-') ? t('problem.settings.title') : t('problem.title')
+  problem.innerHTML = state.problem ? `<div class="problem"><b>${title}</b>${t('problem.' + state.problem)}</div>` : ''
 }
 
 const NOTICE_MS = 8000

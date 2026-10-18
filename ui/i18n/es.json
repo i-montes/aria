@@ -315,5 +315,9 @@
   "ob.done.title": "{name} está lista",
   "ob.done.desc": "Presiona Super A cuando quieras abrir a {name}.",
   "ob.done.close": "Cerrar",
-  "ob.addItem": "Añadir"
+  "ob.addItem": "Añadir",
+  "problem.settings.title": "Hay un problema con tu archivo de ajustes",
+  "problem.settings-invalid": "Aria encontró ~/.aria/settings.json pero no pudo usarlo. No lo va a sobrescribir: arréglalo o muévelo y vuelve a abrir Aria.",
+  "problem.settings-unreadable": "Aria no pudo leer ~/.aria/settings.json. Revisa sus permisos y vuelve a abrir Aria.",
+  "ob.signin.oauth.cancel": "Cancelar"
 }

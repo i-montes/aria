@@ -2,9 +2,9 @@
 //! `{ "<provider>": { "type": "api_key", "key": … } }` or
 //! `{ "<provider>": { "type": "oauth", "access": …, "refresh": …, "expires": <ms epoch> } }`.
 
-use crate::json_file::{merge_preserving, read_json, write_json_atomic, JsonFileError};
+use crate::json_file::{read_json, write_json_atomic, JsonFileError};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,12 +48,20 @@ impl AuthStore {
         matches!(self.get(provider), Ok(Some(_)))
     }
 
-    /// Adds or replaces one provider; every other provider and unknown field stays as it was.
-    /// A file that exists but does not parse is left untouched and reported.
+    /// Adds or replaces one provider; every OTHER provider and its unknown fields stay as they were.
+    /// The provider's own entry is replaced whole (a merge would keep the old key inside a new
+    /// sign-in, or the old tokens inside a new key). A file that does not parse is left untouched.
     pub fn set(&self, provider: &str, credential: &Credential) -> Result<(), AuthError> {
-        let original = read_json(&self.path)?.unwrap_or_else(|| json!({}));
-        let ours = json!({ provider: serde_json::to_value(credential).map_err(|_| AuthError::BadCredential { provider: provider.into() })? });
-        write_json_atomic(&self.path, &merge_preserving(original, ours), 0o600)?;
+        let mut providers = match read_json(&self.path)? {
+            None => serde_json::Map::new(),
+            Some(Value::Object(map)) => map,
+            Some(_) => {
+                return Err(JsonFileError::Invalid { path: self.path.clone(), message: "expected a JSON object".into() }.into());
+            }
+        };
+        let value = serde_json::to_value(credential).map_err(|_| AuthError::BadCredential { provider: provider.into() })?;
+        providers.insert(provider.to_string(), value);
+        write_json_atomic(&self.path, &Value::Object(providers), 0o600)?;
         Ok(())
     }
 }
@@ -95,6 +103,18 @@ mod tests {
         assert_eq!(value["opencode"], json!({"type": "api_key", "key": "z"}));
         assert_eq!(value["x"], json!({"type": "api_key", "key": "y", "extra": 1}));
         assert_eq!(value["anthropic"]["type"], "oauth");
+    }
+
+    #[test]
+    fn switching_a_provider_between_key_and_sign_in_leaves_no_stale_secret() {
+        let (_dir, store) = store();
+        store.set("anthropic", &Credential::ApiKey { key: "old-key".into() }).unwrap();
+        store.set("anthropic", &Credential::OAuth { access: "a".into(), refresh: "r".into(), expires: 7 }).unwrap();
+        let after_oauth: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(store.path()).unwrap()).unwrap();
+        assert_eq!(after_oauth["anthropic"], json!({"type": "oauth", "access": "a", "refresh": "r", "expires": 7}));
+        store.set("anthropic", &Credential::ApiKey { key: "new-key".into() }).unwrap();
+        let after_key: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(store.path()).unwrap()).unwrap();
+        assert_eq!(after_key["anthropic"], json!({"type": "api_key", "key": "new-key"}));
     }
 
     #[test]
