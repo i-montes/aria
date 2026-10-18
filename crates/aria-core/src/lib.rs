@@ -11,6 +11,7 @@ pub mod oauth;
 pub mod bridge;
 pub mod pi;
 pub mod agent;
+pub mod files;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
