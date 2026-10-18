@@ -77,6 +77,16 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
                 (ctx.opener)(&url);
             }
         }
+        // The chat messages are handled by `chat::Chat`, not here.
+        PageMessage::ChatSend { .. }
+        | PageMessage::ChatAbort
+        | PageMessage::ChatNew
+        | PageMessage::ChatLoad
+        | PageMessage::UiAnswer { .. }
+        | PageMessage::ListCommands { .. }
+        | PageMessage::ListModels { .. }
+        | PageMessage::SetModel { .. }
+        | PageMessage::ListFiles { .. } => {}
     }
 }
 
