@@ -48,6 +48,22 @@ pub fn is_blocking(message: &PageMessage) -> bool {
     matches!(message, PageMessage::SaveKey { .. } | PageMessage::StartOAuth { .. } | PageMessage::StartMcpOAuth { .. })
 }
 
+/// Messages for the chat (`chat::Chat`), which has its own worker.
+pub fn is_chat(message: &PageMessage) -> bool {
+    matches!(
+        message,
+        PageMessage::ChatSend { .. }
+            | PageMessage::ChatAbort
+            | PageMessage::ChatNew
+            | PageMessage::ChatLoad
+            | PageMessage::UiAnswer { .. }
+            | PageMessage::ListCommands { .. }
+            | PageMessage::ListModels { .. }
+            | PageMessage::SetModel { .. }
+            | PageMessage::ListFiles { .. }
+    )
+}
+
 pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
     match message {
         PageMessage::Ready | PageMessage::Opened | PageMessage::CloseRequest => {}

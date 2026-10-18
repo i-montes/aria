@@ -13,6 +13,8 @@ use include_dir::{include_dir, Dir};
 use javascriptcore::ValueExt;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use webkit2gtk::{
     SecurityManagerExt, SettingsExt, URISchemeRequest, URISchemeRequestExt, UserContentManager, UserContentManagerExt, WebContext,
@@ -46,13 +48,15 @@ pub struct Dock {
     notice_visible: Cell<bool>,
     notice_generation: Cell<u64>,
     notice_wanted: Cell<bool>,
+    /// Is the dock on screen? Read by the chat (a prompt that nobody can see needs a notification).
+    visible: Arc<AtomicBool>,
     on_message: OnMessage,
 }
 
 impl Dock {
     /// `on_message` receives every page message the dock does not handle itself
     /// (everything except `ready`, `opened` and `closeRequest`).
-    pub fn new(on_message: OnMessage) -> Rc<Dock> {
+    pub fn new(visible: Arc<AtomicBool>, on_message: OnMessage) -> Rc<Dock> {
         let window = build_window();
         let ucm = UserContentManager::new();
         ucm.register_script_message_handler("aria");
@@ -89,6 +93,7 @@ impl Dock {
             notice_visible: Cell::new(false),
             notice_generation: Cell::new(0),
             notice_wanted: Cell::new(false),
+            visible,
             on_message,
         });
 
@@ -191,10 +196,18 @@ impl Dock {
         apply_input_region(&self.window, allocation.width(), allocation.height(), self.click_through.get());
     }
 
+    /// Opens the dock when it is not open (`aria show`); does nothing when it already is.
+    pub fn show(self: &Rc<Self>) {
+        if matches!(self.state.get(), State::Hidden | State::Closing) {
+            self.feed(Event::Toggle);
+        }
+    }
+
     pub fn feed(self: &Rc<Self>, event: Event) {
         let previous = self.state.get();
         let (next, command) = visibility::step(previous, event);
         self.state.set(next);
+        self.visible.store(next != State::Hidden, Ordering::SeqCst);
         if std::env::var_os("ARIA_DEBUG").is_some() {
             eprintln!("aria: {previous:?} + {event:?} -> {next:?} ({command:?})");
         }

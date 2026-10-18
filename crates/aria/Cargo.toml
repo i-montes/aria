@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 aria-core = { path = "../aria-core" }
 aria-hyprland = { path = "../aria-hyprland" }
+aria-engine = { path = "../aria-engine" }
 gtk = "0.18"
 gdk = "0.18"
 glib = "0.18"

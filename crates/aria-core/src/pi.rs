@@ -97,6 +97,10 @@ pub fn path_with_bin(paths: &AriaPaths, path_var: &str) -> String {
 mod tests {
     use super::*;
 
+    // Executing a script another test thread just wrote can fail with "text file busy" (a concurrent
+    // fork inherits the open write handle), so the tests that run a fake node take turns.
+    static NODE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn paths() -> (tempfile::TempDir, AriaPaths) {
         let dir = tempfile::tempdir().unwrap();
         let paths = AriaPaths { root: dir.path().to_path_buf() };
@@ -160,6 +164,7 @@ mod tests {
 
     #[test]
     fn node_is_found_on_the_path_and_its_version_checked() {
+        let _turn = NODE.lock().unwrap_or_else(|e| e.into_inner());
         let (dir, paths) = paths();
         let bin = dir.path().join("elsewhere");
         fake_node(&bin, "v22.23.2");
@@ -171,6 +176,7 @@ mod tests {
 
     #[test]
     fn the_installers_node_link_wins_over_the_path() {
+        let _turn = NODE.lock().unwrap_or_else(|e| e.into_inner());
         let (dir, paths) = paths();
         fake_node(&paths.bin(), "v22.23.2");
         let old = dir.path().join("old");
