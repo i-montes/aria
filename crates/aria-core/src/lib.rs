@@ -7,3 +7,4 @@ pub mod providers;
 pub mod settings;
 pub mod validate;
 pub mod oauth;
+pub mod bridge;

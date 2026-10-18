@@ -1,0 +1,35 @@
+/* Timings and curves measured from the design (design/Aria.html, "Open Aria" / "Close Aria"). */
+:root {
+  --accent: #B9A8FF; --text: #F4F4F5; --muted: #A1A1AA;
+  --out: cubic-bezier(0.16, 1, 0.3, 1); --in: cubic-bezier(0.4, 0, 1, 1); --content: cubic-bezier(0.22, 1, 0.36, 1);
+}
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+body { font-family: Geist, Inter, system-ui, sans-serif; color: var(--text); }
+
+/* The 700 px veil: dark against the screen edge, clear towards the left. */
+.veil {
+  position: absolute; inset: 0;
+  background: linear-gradient(to left, rgba(4, 4, 5, 0.78) 0%, rgba(4, 4, 5, 0.78) 52%, rgba(4, 4, 5, 0) 100%);
+  opacity: 0; transition: opacity 140ms var(--in) 20ms;
+}
+body.open .veil { opacity: 1; transition: opacity 180ms ease-out; }
+
+/* The 470 px dock column on the right. */
+aside {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 470px;
+  opacity: 0; transform: translateX(24px);
+  transition: opacity 120ms var(--in), transform 140ms var(--in);
+}
+body.open aside { opacity: 1; transform: none; transition: opacity 200ms var(--out), transform 240ms var(--out); }
+
+.content { position: absolute; top: 24px; right: 28px; left: 0; }
+body.open .content { animation: enter 300ms var(--content) both; }
+@keyframes enter { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+
+.dot { display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: glow 2400ms ease-in-out infinite; }
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 14px rgba(185, 168, 255, 0.5); }
+  50% { box-shadow: 0 0 26px rgba(185, 168, 255, 0.85); }
+}
+h1 { font-size: 28px; font-weight: 600; margin: 26px 0 10px; letter-spacing: -0.01em; }
+p { color: #D4D4D8; font-size: 14px; line-height: 1.6; margin: 0 0 20px; }

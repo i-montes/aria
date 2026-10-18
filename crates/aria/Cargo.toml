@@ -1,0 +1,21 @@
+[package]
+name = "aria"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aria-core = { path = "../aria-core" }
+aria-hyprland = { path = "../aria-hyprland" }
+gtk = "0.18"
+gdk = "0.18"
+glib = "0.18"
+gio = "0.18"
+gtk-layer-shell = { version = "0.8", features = ["v0_6"] }
+webkit2gtk = { version = "2.0", features = ["v2_40"] }
+javascriptcore-rs = "1.1"
+include_dir = "0.7"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
