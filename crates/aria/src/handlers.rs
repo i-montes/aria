@@ -5,6 +5,7 @@
 use aria_core::auth::AuthStore;
 use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::json_file::JsonFileError;
+use aria_core::mcp::{self, McpError};
 use aria_core::oauth::{self, OAuthError};
 use aria_core::paths::AriaPaths;
 use aria_core::providers;
@@ -24,6 +25,8 @@ pub struct Ctx {
     pub opener: Opener,
     /// How long the browser sign-in may take.
     pub oauth_timeout: Duration,
+    /// Notion's MCP address (a parameter so tests can point it at a fake server).
+    pub notion_url: String,
 }
 
 impl Ctx {
@@ -35,13 +38,14 @@ impl Ctx {
                 let _ = Command::new("xdg-open").arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
             }),
             oauth_timeout: Duration::from_secs(300),
+            notion_url: mcp::NOTION_URL.to_string(),
         }
     }
 }
 
 /// Messages that wait on the network or the browser: run them off the GTK thread.
 pub fn is_blocking(message: &PageMessage) -> bool {
-    matches!(message, PageMessage::SaveKey { .. } | PageMessage::StartOAuth { .. })
+    matches!(message, PageMessage::SaveKey { .. } | PageMessage::StartOAuth { .. } | PageMessage::StartMcpOAuth { .. })
 }
 
 pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
@@ -60,6 +64,14 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
             let _ = ctx.paths.ensure_root();
             oauth_flow(id, ctx, emit);
         }
+        PageMessage::StartMcpOAuth { id, service } => {
+            let _ = ctx.paths.ensure_root();
+            if service == "notion" {
+                notion_flow(id, ctx, emit);
+            } else {
+                emit(DockMessage::Error { id, code: "unknown-service".into() });
+            }
+        }
         PageMessage::OpenUrl { url } => {
             if url.starts_with("https://") {
                 (ctx.opener)(&url);
@@ -68,16 +80,25 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
     }
 }
 
+/// What is really set up on disk (names only): the credentials in `auth.json` and the MCP services.
+fn connected(ctx: &Ctx) -> Vec<String> {
+    let mut found = AuthStore::new(ctx.paths.auth()).summary();
+    found.extend(mcp::connected(&ctx.paths));
+    found.sort();
+    found
+}
+
 fn load_settings(id: u64, ctx: &Ctx) -> DockMessage {
+    let connected = connected(ctx);
     match settings::load(&ctx.paths) {
-        Ok(Some(settings)) => DockMessage::Settings { id, settings: serde_json::to_value(settings).ok(), exists: true, problem: None },
-        Ok(None) => DockMessage::Settings { id, settings: None, exists: false, problem: None },
+        Ok(Some(settings)) => DockMessage::Settings { id, settings: serde_json::to_value(settings).ok(), exists: true, problem: None, connected },
+        Ok(None) => DockMessage::Settings { id, settings: None, exists: false, problem: None, connected },
         Err(error) => {
             let problem = match error {
                 SettingsError::File(JsonFileError::Io { .. }) => "settings-unreadable",
                 _ => "settings-invalid",
             };
-            DockMessage::Settings { id, settings: None, exists: true, problem: Some(problem.into()) }
+            DockMessage::Settings { id, settings: None, exists: true, problem: Some(problem.into()), connected }
         }
     }
 }
@@ -103,6 +124,8 @@ fn key_target(provider: &str) -> Option<(KeyKind, Vec<&'static str>)> {
             providers::provider(provider).map(|module| (kind, module.auth_entries.to_vec()))
         }
         "typesafe" => Some((KeyKind::TypeSafe, vec!["typesafe"])),
+        // Tavily's key is not a credential for the agent's provider: it goes in mcp.json (see save_key).
+        "tavily" => Some((KeyKind::Tavily, vec![])),
         _ => None,
     }
 }
@@ -126,6 +149,12 @@ fn save_key(id: u64, provider: &str, key: &str, ctx: &Ctx) -> DockMessage {
         KeyCheck::Rejected => return key_result(id, Some("key-rejected")),
         KeyCheck::Unavailable(_) => return key_result(id, Some("network-unavailable")),
     }
+    if provider == "tavily" {
+        return match mcp::set_tavily_key(&ctx.paths, key) {
+            Ok(()) => key_result(id, None),
+            Err(McpError::File(_) | McpError::Write(_)) => key_result(id, Some("mcp-file-broken")),
+        };
+    }
     let store = AuthStore::new(ctx.paths.auth());
     for entry in entries {
         if store.set(entry, &aria_core::auth::Credential::ApiKey { key: key.to_string() }).is_err() {
@@ -141,8 +170,26 @@ fn oauth_error_key(error: &OAuthError) -> &'static str {
         OAuthError::Denied(_) => "oauth-denied",
         OAuthError::Timeout => "oauth-timeout",
         OAuthError::Network(_) => "network-unavailable",
-        OAuthError::NoCode | OAuthError::BadToken(_) | OAuthError::Io(_) => "oauth-failed",
+        OAuthError::NoCode | OAuthError::BadToken(_) | OAuthError::Io(_) | OAuthError::Setup(_) => "oauth-failed",
     }
+}
+
+/// Notion's sign-in: discover, register, open the browser, wait, then store the record in Pi's
+/// `mcp-auth.json` and list Notion in `mcp.json`. Nothing is written unless it all succeeds.
+fn notion_flow(id: u64, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
+    let result = |error: Option<&str>| DockMessage::OAuthResult { id, ok: error.is_none(), error: error.map(str::to_string) };
+    let sign_in = match oauth::mcp::start(&ctx.notion_url) {
+        Ok(sign_in) => sign_in,
+        Err(error) => return emit(result(Some(oauth_error_key(&error)))),
+    };
+    emit(DockMessage::OAuthUrl { id, url: sign_in.url.clone() });
+    (ctx.opener)(&sign_in.url);
+    let record = match sign_in.wait(ctx.oauth_timeout) {
+        Ok(record) => record,
+        Err(error) => return emit(result(Some(oauth_error_key(&error)))),
+    };
+    let stored = mcp::store_oauth_record(&ctx.paths, "notion", &ctx.notion_url, record).and_then(|()| mcp::add_notion_server(&ctx.paths));
+    emit(result(stored.err().map(|_| "mcp-file-broken")));
 }
 
 fn oauth_flow(id: u64, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
@@ -191,6 +238,7 @@ mod tests {
             }),
             opener: Arc::new(move |url| o.lock().unwrap().push(url.to_string())),
             oauth_timeout: Duration::from_millis(150),
+            notion_url: "http://127.0.0.1:9/mcp".into(),
         };
         Harness { dir, ctx, opened, seen_keys }
     }
@@ -210,7 +258,7 @@ mod tests {
         let h = harness(KeyCheck::Valid);
         assert_eq!(
             run(&h, PageMessage::LoadSettings { id: 1 }),
-            vec![DockMessage::Settings { id: 1, settings: None, exists: false, problem: None }]
+            vec![DockMessage::Settings { id: 1, settings: None, exists: false, problem: None, connected: vec![] }]
         );
     }
 
@@ -220,7 +268,7 @@ mod tests {
         std::fs::write(h.ctx.paths.settings(), "{ nope").unwrap();
         assert_eq!(
             run(&h, PageMessage::LoadSettings { id: 1 }),
-            vec![DockMessage::Settings { id: 1, settings: None, exists: true, problem: Some("settings-invalid".into()) }]
+            vec![DockMessage::Settings { id: 1, settings: None, exists: true, problem: Some("settings-invalid".into()), connected: vec![] }]
         );
     }
 
@@ -233,7 +281,7 @@ mod tests {
         assert_eq!(run(&h, PageMessage::SaveSettings { id: 2, settings: value.clone() }), vec![DockMessage::Saved { id: 2 }]);
         assert_eq!(
             run(&h, PageMessage::LoadSettings { id: 3 }),
-            vec![DockMessage::Settings { id: 3, settings: Some(value), exists: true, problem: None }]
+            vec![DockMessage::Settings { id: 3, settings: Some(value), exists: true, problem: None, connected: vec![] }]
         );
     }
 
@@ -332,6 +380,106 @@ mod tests {
         }
         assert_eq!(replies[1], DockMessage::OAuthResult { id: 11, ok: false, error: Some("oauth-timeout".into()) });
         assert!(!h.ctx.paths.auth().exists());
+    }
+
+    #[test]
+    fn a_tavily_key_is_checked_and_written_to_mcp_json_not_to_auth_json() {
+        let h = harness(KeyCheck::Valid);
+        let replies = run(&h, PageMessage::SaveKey { id: 20, provider: "tavily".into(), key: " tvly-1 ".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 20, ok: true, error: None }]);
+        assert_eq!(h.seen_keys.lock().unwrap().as_slice(), [(KeyKind::Tavily, "tvly-1".to_string())]);
+        let mcp: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(h.ctx.paths.mcp()).unwrap()).unwrap();
+        assert_eq!(mcp["mcpServers"]["tavily"]["headers"]["Authorization"], "Bearer tvly-1");
+        assert!(!h.ctx.paths.auth().exists());
+    }
+
+    #[test]
+    fn a_rejected_tavily_key_writes_nothing() {
+        let h = harness(KeyCheck::Rejected);
+        let replies = run(&h, PageMessage::SaveKey { id: 21, provider: "tavily".into(), key: "bad".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 21, ok: false, error: Some("key-rejected".into()) }]);
+        assert!(!h.ctx.paths.mcp().exists());
+    }
+
+    #[test]
+    fn a_broken_mcp_file_is_reported_and_kept() {
+        let h = harness(KeyCheck::Valid);
+        std::fs::write(h.ctx.paths.mcp(), "{ nope").unwrap();
+        let replies = run(&h, PageMessage::SaveKey { id: 22, provider: "tavily".into(), key: "k".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 22, ok: false, error: Some("mcp-file-broken".into()) }]);
+        assert_eq!(std::fs::read_to_string(h.ctx.paths.mcp()).unwrap(), "{ nope");
+    }
+
+    #[test]
+    fn the_settings_reply_says_what_is_really_connected() {
+        let h = harness(KeyCheck::Valid);
+        run(&h, PageMessage::SaveKey { id: 1, provider: "opencode-go".into(), key: "k".into() });
+        run(&h, PageMessage::SaveKey { id: 2, provider: "tavily".into(), key: "t".into() });
+        AuthStore::new(h.ctx.paths.auth())
+            .set("anthropic", &Credential::OAuth { access: "a".into(), refresh: "r".into(), expires: 1 })
+            .unwrap();
+        match &run(&h, PageMessage::LoadSettings { id: 3 })[0] {
+            DockMessage::Settings { connected, .. } => {
+                let expected: Vec<String> = ["anthropic:oauth", "mcp:tavily", "opencode-go:api_key", "opencode:api_key"].map(String::from).to_vec();
+                assert_eq!(connected, &expected);
+            }
+            other => panic!("expected settings, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn notion_signs_in_through_the_browser_and_is_stored_in_pis_files() {
+        use aria_core::testing::fake;
+        let server = fake(true, 201);
+        let mut h = harness(KeyCheck::Valid);
+        h.ctx.notion_url = format!("{}/mcp", server.base);
+        h.ctx.oauth_timeout = Duration::from_secs(5);
+        let out = Mutex::new(Vec::new());
+        let browser = Mutex::new(None);
+        handle(PageMessage::StartMcpOAuth { id: 30, service: "notion".into() }, &h.ctx, &|m| {
+            if let DockMessage::OAuthUrl { url, .. } = &m {
+                // the user finishes in the browser: it comes back to the loopback address with the state
+                let q: std::collections::HashMap<String, String> = url::Url::parse(url).unwrap().query_pairs().into_owned().collect();
+                let (redirect, state) = (q["redirect_uri"].clone(), q["state"].clone());
+                *browser.lock().unwrap() = Some(std::thread::spawn(move || {
+                    use std::io::{Read, Write};
+                    let port: u16 = redirect.rsplit(':').next().unwrap().split('/').next().unwrap().parse().unwrap();
+                    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+                    write!(stream, "GET /callback?code=abc&state={state} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+                    let mut sink = String::new();
+                    let _ = stream.read_to_string(&mut sink);
+                }));
+            }
+            out.lock().unwrap().push(m);
+        });
+        browser.lock().unwrap().take().unwrap().join().unwrap();
+        let replies = out.into_inner().unwrap();
+        assert!(matches!(&replies[0], DockMessage::OAuthUrl { id: 30, .. }));
+        assert_eq!(replies[1], DockMessage::OAuthResult { id: 30, ok: true, error: None });
+        assert_eq!(h.opened.lock().unwrap().len(), 1);
+        // Pi's files: the record under Pi's key, and Notion listed as a server (no secret in mcp.json)
+        let auth: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(h.ctx.paths.mcp_auth()).unwrap()).unwrap();
+        let key = format!("mcp__notion|{}/mcp", server.base);
+        assert_eq!(auth[&key]["tokens"]["access_token"], "at");
+        let mcp: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(h.ctx.paths.mcp()).unwrap()).unwrap();
+        assert!(mcp["mcpServers"]["notion"]["url"].as_str().unwrap().ends_with("/mcp"));
+        assert!(mcp["mcpServers"]["notion"].get("headers").is_none());
+    }
+
+    #[test]
+    fn an_unreachable_notion_is_a_network_error_and_writes_nothing() {
+        let h = harness(KeyCheck::Valid); // notion_url points at a closed port
+        let replies = run(&h, PageMessage::StartMcpOAuth { id: 31, service: "notion".into() });
+        assert_eq!(replies, vec![DockMessage::OAuthResult { id: 31, ok: false, error: Some("network-unavailable".into()) }]);
+        assert!(!h.ctx.paths.mcp_auth().exists());
+        assert!(!h.ctx.paths.mcp().exists());
+    }
+
+    #[test]
+    fn only_notion_signs_in_this_way() {
+        let h = harness(KeyCheck::Valid);
+        let replies = run(&h, PageMessage::StartMcpOAuth { id: 32, service: "figma".into() });
+        assert_eq!(replies, vec![DockMessage::Error { id: 32, code: "unknown-service".into() }]);
     }
 
     #[test]

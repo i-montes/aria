@@ -17,6 +17,7 @@ dependencies = [
  "javascriptcore-rs",
  "serde_json",
  "tempfile",
+ "url",
  "webkit2gtk",
 ]
 

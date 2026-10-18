@@ -44,6 +44,24 @@ impl AuthStore {
         Ok(map.get(provider).and_then(|v| serde_json::from_value(v.clone()).ok()))
     }
 
+    /// `provider:type` for every credential that is really there (`anthropic:oauth`,
+    /// `opencode-go:api_key`), sorted. Never the secret itself. An unreadable file lists nothing.
+    pub fn summary(&self) -> Vec<String> {
+        let Ok(Some(Value::Object(map))) = read_json(&self.path) else { return Vec::new() };
+        let mut found: Vec<String> = map
+            .iter()
+            .filter_map(|(provider, value)| {
+                let kind = match serde_json::from_value::<Credential>(value.clone()).ok()? {
+                    Credential::ApiKey { .. } => "api_key",
+                    Credential::OAuth { .. } => "oauth",
+                };
+                Some(format!("{provider}:{kind}"))
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
     pub fn has(&self, provider: &str) -> bool {
         matches!(self.get(provider), Ok(Some(_)))
     }
@@ -115,6 +133,19 @@ mod tests {
         store.set("anthropic", &Credential::ApiKey { key: "new-key".into() }).unwrap();
         let after_key: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(store.path()).unwrap()).unwrap();
         assert_eq!(after_key["anthropic"], json!({"type": "api_key", "key": "new-key"}));
+    }
+
+    #[test]
+    fn summary_names_each_credential_by_provider_and_type_and_never_the_secret() {
+        let (_dir, store) = store();
+        assert!(store.summary().is_empty());
+        store.set("opencode-go", &Credential::ApiKey { key: "k".into() }).unwrap();
+        store.set("anthropic", &Credential::OAuth { access: "a".into(), refresh: "r".into(), expires: 1 }).unwrap();
+        let summary = store.summary();
+        assert_eq!(summary, vec!["anthropic:oauth".to_string(), "opencode-go:api_key".to_string()]);
+        assert!(summary.iter().all(|s| !s.contains('k') || s.contains("api_key") || s.contains("opencode")));
+        std::fs::write(store.path(), "{ nope").unwrap();
+        assert!(store.summary().is_empty());
     }
 
     #[test]

@@ -133,7 +133,7 @@ async function boot() {
   if (reply.problem) state.problem = reply.problem
   if (reply.settings?.assistant?.language) i18n.setLanguage(reply.settings.assistant.language)
   renderProblem()
-  onboarding.start(reply.settings)
+  onboarding.start(reply.settings, reply.connected)
   if (document.body.classList.contains('open')) document.querySelector('#flow [data-nav]')?.focus()
 }
 

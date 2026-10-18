@@ -3,11 +3,11 @@
 // delegated listener, and talks to the dock through `env.request`. Widgets live in components.js.
 import * as c from './components.js'
 import {
-  applyProvider, canContinue, defaultSettings, finish, languageChoice, nextStep, previousStep, PROVIDERS,
-  providerModule, setLanguageChoice, setRouter, skip, stepIds,
+  applyProvider, canContinue, credentialFor, defaultSettings, finish, isSignedIn, languageChoice, nextStep,
+  previousStep, PROVIDERS, providerModule, setLanguageChoice, setRouter, skip, stepIds,
 } from './steps.js'
 
-const SERVICES = ['notion', 'tavily', 'figma', 'openpencil', 'rea', 'other']
+const SERVICES = ['notion', 'tavily']
 const SKILLS = ['brainstorming', 'writing-plans', 'test-driven-development', 'systematic-debugging', 'requesting-code-review', 'verification-before-completion']
 const STYLES = ['very-short', 'brief', 'detailed', 'technical', 'teaching']
 const LEVELS = ['low', 'medium', 'high']
@@ -24,7 +24,13 @@ export function createOnboarding(env) {
     saving: false,
     error: null,
     settings: defaultSettings('en'),
+    connected: new Set(), // what the dock found on disk, plus what this session set up
+    svc: freshServices(), // Notion and Tavily do not depend on the provider, so they live apart from `ui`
     ui: freshUi(),
+  }
+
+  function freshServices() {
+    return { tavily: { status: 'idle', error: null, draft: '' }, notion: { status: 'idle', error: null, url: null, token: 0 } }
   }
 
   function freshUi() {
@@ -39,6 +45,12 @@ export function createOnboarding(env) {
     }
   }
 
+  const uiFlags = () => ({
+    signedIn: state.ui.signedIn,
+    typesafeSaved: state.ui.typesafeSaved,
+    servicesConnected: SERVICES.filter((id) => state.connected.has(`mcp:${id}`)),
+  })
+
   const update = (mutate) => {
     const next = structuredClone(state.settings)
     mutate(next)
@@ -50,9 +62,11 @@ export function createOnboarding(env) {
 
   // ---- entry points ---------------------------------------------------------------------------
 
-  /** `settings` is what the dock loaded (null on a first run). */
-  function start(settings) {
+  /** `settings` is what the dock loaded (null on a first run); `connected` is what it found on disk. */
+  function start(settings, connected = []) {
     state.error = null
+    state.connected = new Set(connected)
+    state.svc = freshServices()
     state.ui = freshUi()
     if (settings?.setup?.completed) {
       state.settings = settings
@@ -60,13 +74,13 @@ export function createOnboarding(env) {
       state.mode = 'full'
       state.view = 'step'
       state.step = 'review'
-      state.ui.signedIn = true
-      state.ui.typesafeSaved = true
     } else {
       state.settings = settings ?? defaultSettings(env.browserLanguage())
       state.editing = false
       state.view = 'welcome'
     }
+    state.ui.signedIn = isSignedIn(state.settings, connected)
+    state.ui.typesafeSaved = state.connected.has('typesafe:api_key')
     render()
   }
 
@@ -129,7 +143,7 @@ export function createOnboarding(env) {
       <div class="fields">${fields()}</div>
       <div class="nav">
         <button class="secondary" data-nav data-action="back">${c.esc(t('ob.back'))}</button>
-        <button class="primary" data-nav data-action="next" data-key="next" ${canContinue(state.step, state.settings, state.ui) && !state.saving ? '' : 'disabled'}>${c.esc(nextLabel)}</button>
+        <button class="primary" data-nav data-action="next" data-key="next" ${canContinue(state.step, state.settings, uiFlags()) && !state.saving ? '' : 'disabled'}>${c.esc(nextLabel)}</button>
       </div>
       ${showDefaults ? `<button class="link center" data-nav data-action="defaults">${c.esc(t('ob.defaults'))}</button>` : ''}`
   }
@@ -304,22 +318,55 @@ export function createOnboarding(env) {
   }
 
   const serviceOf = (id) => state.settings.integrations.services.find((s) => s.id === id)
+  const isConnected = (id) => state.connected.has(`mcp:${id}`)
+
+  /** Tavily: its key is checked with Tavily and stored in mcp.json. */
+  function tavilyBlock() {
+    const tavily = state.svc.tavily
+    const connected = isConnected('tavily')
+    const checking = tavily.status === 'checking'
+    const stateText = checking ? t('ob.signin.checking') : tavily.error ? t(`ob.error.${tavily.error}`) : connected ? t('ob.integrations.connected') : ''
+    return (
+      c.textField('tavilyKey', t('ob.integrations.tavily.keyLabel'), tavily.draft, {
+        secret: true,
+        revealed: !!state.ui.reveal.tavilyKey,
+        placeholder: t('ob.signin.keyPlaceholder'),
+        showText: t('ob.signin.show'),
+        hideText: t('ob.signin.hide'),
+        description: t('ob.integrations.tavily.keyDesc'),
+        indent: true,
+      }) +
+      c.actionButton('save-tavilyKey', checking ? t('ob.signin.checking') : t('ob.signin.check'), stateText, {
+        disabled: checking || !tavily.draft.trim(),
+        tone: connected && !tavily.error ? 'ok' : tavily.error ? 'error' : '',
+      })
+    )
+  }
+
+  /** Notion: sign in through the browser; the tokens go to mcp-auth.json. */
+  function notionBlock() {
+    const notion = state.svc.notion
+    const connected = isConnected('notion')
+    const waiting = notion.status === 'waiting'
+    const stateText = waiting ? t('ob.integrations.notion.waiting') : notion.error ? t(`ob.error.${notion.error}`) : connected ? t('ob.integrations.connected') : t('ob.integrations.notion.hint')
+    let html = c.actionButton('mcp-oauth-start', t(connected ? 'ob.integrations.notion.again' : 'ob.integrations.notion.signin'), stateText, {
+      disabled: waiting,
+      tone: connected && !notion.error ? 'ok' : notion.error ? 'error' : '',
+    })
+    if (waiting) {
+      html += `<div class="action-row">${notion.url ? `<button class="link" data-nav data-action="mcp-oauth-reopen" data-key="mcp-oauth-reopen">${c.esc(t('ob.signin.oauth.reopen'))}</button>` : ''}<button class="link" data-nav data-action="mcp-oauth-cancel" data-key="mcp-oauth-cancel">${c.esc(t('ob.signin.oauth.cancel'))}</button></div>`
+    }
+    return html
+  }
 
   function integrationsStep() {
     const s = state.settings
     let html = c.section(t('ob.integrations.section.services'))
     for (const id of SERVICES) {
-      const service = serviceOf(id)
-      html += c.toggle(`service:${id}`, t(`ob.integrations.${id}`), t(`ob.integrations.${id}.desc`), !!service)
-      if (service) {
-        if (id === 'other') html += c.textField('otherName', t('ob.integrations.otherName'), service.name === 'other' ? '' : service.name, { mono: true, indent: true, placeholder: t('ob.integrations.otherName.placeholder') })
-        html += c.segments(`serviceAuth:${id}`, '', [
-          { value: 'oauth', label: t('ob.integrations.auth.oauth') },
-          { value: 'key', label: t('ob.integrations.auth.key') },
-        ], service.auth, '', true)
-      }
+      html += c.toggle(`service:${id}`, t(`ob.integrations.${id}`), t(`ob.integrations.${id}.desc`), !!serviceOf(id))
+      if (serviceOf(id)) html += id === 'notion' ? notionBlock() : tavilyBlock()
     }
-    if (s.integrations.services.length) html += c.info('lavender', t('ob.integrations.recorded.title'), t('ob.integrations.recorded.desc'))
+    if (s.integrations.services.some((service) => !isConnected(service.id))) html += c.info('amber', '', t('ob.integrations.needConnect'))
     const p = s.integrations.packages
     html += c.section(t('ob.integrations.section.packages'))
     html += c.segments('packageSource', t('ob.integrations.packageSource'), ['gallery', 'npm', 'git', 'local'].map((v) => ({ value: v, label: t(`ob.integrations.source.${v}`) })), p.source, t('ob.integrations.packageSource.desc'))
@@ -386,7 +433,7 @@ export function createOnboarding(env) {
         ? t('ob.val.quota', { a: q.switchAt, b: q.planSwitchAt, ask: q.askFirst ? t('ob.val.quotaAsk', { n: q.countdownMinutes }) : t('ob.val.quotaNoAsk') })
         : t('ob.val.quotaNone')
       const effort = s.effort.mode === 'auto' ? t('ob.val.effortAuto') : t(`ob.level.${s.effort.fixedLevel}`)
-      const services = s.integrations.services.map((x) => (x.id === 'other' && x.name !== 'other' ? x.name : t(`ob.integrations.${x.id}`)))
+      const services = s.integrations.services.map((x) => t(`ob.integrations.${x.id}`))
       const experts = s.subagents.experts.filter((e) => e.enabled).length
       rows.splice(1, 0, ['quota', quota])
       rows.push(
@@ -453,7 +500,7 @@ export function createOnboarding(env) {
   }
 
   const next = () => {
-    if (!canContinue(state.step, state.settings, state.ui) || state.saving) return
+    if (!canContinue(state.step, state.settings, uiFlags()) || state.saving) return
     const following = nextStep(ids(), state.step)
     following ? go(following) : saveAll()
   }
@@ -461,12 +508,17 @@ export function createOnboarding(env) {
   // ---- changing settings ----------------------------------------------------------------------
 
   function pick(field, value) {
-    const [name, id] = field.split(':')
+    const [name] = field.split(':')
     if (name === 'provider') {
       if (value === state.settings.provider.id) return
       state.settings = applyProvider(state.settings, value)
       const keep = state.ui.drafts
-      state.ui = { ...freshUi(), drafts: { ...keep, key: '' } }
+      state.ui = {
+        ...freshUi(),
+        drafts: { ...keep, key: '' },
+        signedIn: isSignedIn(state.settings, [...state.connected]),
+        typesafeSaved: state.connected.has('typesafe:api_key'),
+      }
     } else if (name === 'language') {
       state.settings = setLanguageChoice(state.settings, value, languageChoice(state.settings.assistant.language) === 'other' ? state.settings.assistant.language : '')
       if (value !== 'other') env.setLanguage(value)
@@ -475,10 +527,6 @@ export function createOnboarding(env) {
     } else if (name === 'effort') {
       update((s) => {
         s.effort = value === 'auto' ? { ...s.effort, mode: 'auto', fixedLevel: null } : { ...s.effort, mode: 'fixed', fixedLevel: value }
-      })
-    } else if (name === 'serviceAuth') {
-      update((s) => {
-        s.integrations.services.find((x) => x.id === id).auth = value
       })
     } else {
       update((s) => {
@@ -501,7 +549,7 @@ export function createOnboarding(env) {
       if (name === 'service') {
         const at = s.integrations.services.findIndex((x) => x.id === id)
         if (at > -1) s.integrations.services.splice(at, 1)
-        else s.integrations.services.push({ id, name: id, auth: id === 'tavily' || id === 'rea' ? 'key' : 'oauth' })
+        else s.integrations.services.push({ id, name: id, auth: id === 'tavily' ? 'key' : 'oauth' })
       } else if (name === 'askFirst') s.provider.quota.askFirst = !s.provider.quota.askFirst
       else if (name === 'payPerUse') s.models.allowPayPerUse = !s.models.allowPayPerUse
       else if (name === 'maxOnFree') s.effort.maxOnFree = !s.effort.maxOnFree
@@ -522,6 +570,15 @@ export function createOnboarding(env) {
 
   /** Typing never re-renders (it would drop the cursor); it updates the state and the Continue button. */
   function typed(field, value) {
+    if (field === 'tavilyKey') {
+      const tavily = state.svc.tavily
+      tavily.draft = value
+      if (tavily.status !== 'checking') tavily.status = 'idle'
+      tavily.error = null
+      const button = root.querySelector('[data-action="save-tavilyKey"]')
+      if (button) button.disabled = !value.trim()
+      return
+    }
     if (field === 'key' || field === 'typesafeKey') {
       state.ui.drafts[field] = value
       const status = field === 'key' ? state.ui.key : state.ui.typesafe
@@ -538,10 +595,6 @@ export function createOnboarding(env) {
       else if (field === 'memoryProject') s.memory.project = value
       else if (field === 'projectsDir') s.sandbox.projectsDir = value
       else if (field === 'packagePath') s.integrations.packages.path = value
-      else if (field === 'otherName') {
-        const other = s.integrations.services.find((x) => x.id === 'other')
-        if (other) other.name = value || 'other'
-      }
     })
   }
 
@@ -571,7 +624,9 @@ export function createOnboarding(env) {
     status.error = null
     render()
     const provider = field === 'typesafeKey' ? 'typesafe' : module().keyProvider
+    const credential = field === 'typesafeKey' ? 'typesafe:api_key' : credentialFor(state.settings.provider.id)
     const reply = await request({ type: 'saveKey', provider, key: draft })
+    if (reply.type === 'keyResult' && reply.ok) state.connected.add(credential) // it IS stored, whatever the page shows now
     if (state.ui !== ui) return
     if (reply.type === 'keyResult' && reply.ok) {
       status.status = 'saved'
@@ -590,6 +645,7 @@ export function createOnboarding(env) {
     const o = ui.oauth
     if (o.status === 'waiting') return
     const token = ++o.token
+    const credential = credentialFor(state.settings.provider.id)
     const current = () => state.ui === ui && o.token === token
     o.status = 'waiting'
     o.error = null
@@ -600,7 +656,9 @@ export function createOnboarding(env) {
       o.url = progress.url
       render()
     })
-    if (!current()) return
+    if (o.token !== token) return // cancelled or replaced by a newer attempt: ignored
+    if (reply.type === 'oauthResult' && reply.ok) state.connected.add(credential)
+    if (state.ui !== ui) return
     if (reply.type === 'oauthResult' && reply.ok) {
       o.status = 'done'
       ui.signedIn = true
@@ -608,6 +666,59 @@ export function createOnboarding(env) {
       o.status = 'idle'
       o.error = reply.error ?? reply.code ?? 'oauth-failed'
     }
+    render()
+  }
+
+  async function saveTavily() {
+    const tavily = state.svc.tavily
+    if (tavily.status === 'checking' || !tavily.draft.trim()) return
+    tavily.status = 'checking'
+    tavily.error = null
+    render()
+    const reply = await request({ type: 'saveKey', provider: 'tavily', key: tavily.draft })
+    if (reply.type === 'keyResult' && reply.ok) {
+      tavily.status = 'saved'
+      tavily.draft = ''
+      state.connected.add('mcp:tavily')
+    } else {
+      tavily.status = 'idle'
+      tavily.error = reply.error ?? reply.code ?? 'generic'
+    }
+    render()
+  }
+
+  // Notion signs in through the browser. Like the provider's sign-in, a cancelled attempt is ignored
+  // when it ends; unlike it, a provider change does not matter (the service does not depend on it).
+  async function startNotion() {
+    const notion = state.svc.notion
+    if (notion.status === 'waiting') return
+    const token = ++notion.token
+    notion.status = 'waiting'
+    notion.error = null
+    notion.url = null
+    render()
+    const reply = await request({ type: 'startMcpOauth', service: 'notion' }, (progress) => {
+      if (notion.token !== token) return
+      notion.url = progress.url
+      render()
+    })
+    if (notion.token !== token) return
+    if (reply.type === 'oauthResult' && reply.ok) {
+      notion.status = 'done'
+      state.connected.add('mcp:notion')
+    } else {
+      notion.status = 'idle'
+      notion.error = reply.error ?? reply.code ?? 'oauth-failed'
+    }
+    render()
+  }
+
+  function cancelNotion() {
+    const notion = state.svc.notion
+    notion.token++
+    notion.status = 'idle'
+    notion.error = null
+    notion.url = null
     render()
   }
 
@@ -626,7 +737,7 @@ export function createOnboarding(env) {
   async function onOpen() {
     if (state.view !== 'done') return
     const reply = await request({ type: 'loadSettings' })
-    if (state.view === 'done') start(reply.settings)
+    if (state.view === 'done') start(reply.settings, reply.connected)
   }
 
   // ---- events ---------------------------------------------------------------------------------
@@ -651,6 +762,10 @@ export function createOnboarding(env) {
     if (action === 'save-typesafeKey') return saveKey('typesafeKey')
     if (action === 'oauth-start') return startOauth()
     if (action === 'oauth-cancel') return cancelOauth()
+    if (action === 'save-tavilyKey') return saveTavily()
+    if (action === 'mcp-oauth-start') return startNotion()
+    if (action === 'mcp-oauth-cancel') return cancelNotion()
+    if (action === 'mcp-oauth-reopen') return post({ type: 'openUrl', url: state.svc.notion.url })
     if (action === 'oauth-reopen') return post({ type: 'openUrl', url: state.ui.oauth.url })
     if (action === 'step') {
       update((s) => {
@@ -713,6 +828,8 @@ export function createOnboarding(env) {
     mode: state.mode,
     editing: state.editing,
     signedIn: state.ui.signedIn,
+    canContinue: canContinue(state.step, state.settings, uiFlags()),
+    connected: [...state.connected].sort(),
     typesafeSaved: state.ui.typesafeSaved,
     oauth: state.ui.oauth.status,
     key: state.ui.key.status,

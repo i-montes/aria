@@ -3,13 +3,11 @@
 
 use super::OAuthError;
 use crate::auth::Credential;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use rand::RngCore;
+use super::loopback::wait_for_code;
+use super::pkce::{pkce, Pkce};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::time::{Duration, Instant};
+use std::net::TcpListener;
+use std::time::Duration;
 
 const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
@@ -20,22 +18,6 @@ const PREFERRED_PORT: u16 = 53692;
 const CALLBACK_PATH: &str = "/callback";
 /// Tokens are treated as expired five minutes early.
 const EXPIRY_MARGIN_MS: i64 = 300_000;
-
-pub struct Pkce {
-    pub verifier: String,
-    pub challenge: String,
-}
-
-pub fn challenge_for(verifier: &str) -> String {
-    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
-}
-
-pub fn pkce() -> Pkce {
-    let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    let verifier = URL_SAFE_NO_PAD.encode(bytes);
-    Pkce { challenge: challenge_for(&verifier), verifier }
-}
 
 pub fn authorize_url(pkce: &Pkce, redirect_uri: &str) -> String {
     let params = [
@@ -49,19 +31,6 @@ pub fn authorize_url(pkce: &Pkce, redirect_uri: &str) -> String {
         ("state", pkce.verifier.as_str()),
     ];
     url::Url::parse_with_params(AUTHORIZE_URL, params).expect("static URL").into()
-}
-
-/// The authorization code from the browser's request line target (`/callback?code=…&state=…`).
-pub fn parse_callback(request_target: &str, expected_state: &str) -> Result<String, OAuthError> {
-    let url = url::Url::parse(&format!("http://localhost{request_target}")).map_err(|_| OAuthError::NoCode)?;
-    let param = |name: &str| url.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v.into_owned());
-    if let Some(error) = param("error") {
-        return Err(OAuthError::Denied(error));
-    }
-    if param("state").as_deref() != Some(expected_state) {
-        return Err(OAuthError::StateMismatch);
-    }
-    param("code").filter(|c| !c.is_empty()).ok_or(OAuthError::NoCode)
 }
 
 pub fn token_request_body(code: &str, state: &str, pkce: &Pkce, redirect_uri: &str) -> Value {
@@ -108,47 +77,8 @@ pub fn start() -> Result<SignIn, OAuthError> {
 impl SignIn {
     /// Waits for the browser to come back (up to `timeout`), then exchanges the code for tokens.
     pub fn wait(self, timeout: Duration) -> Result<Credential, OAuthError> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            match self.listener.accept() {
-                Ok((stream, _)) => {
-                    if let Some(result) = self.handle(stream) {
-                        return result;
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        return Err(OAuthError::Timeout);
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(e) => return Err(OAuthError::Io(e.to_string())),
-            }
-        }
-    }
-
-    /// One browser request. `None` means it was not the callback (a favicon, say): keep waiting.
-    fn handle(&self, mut stream: TcpStream) -> Option<Result<Credential, OAuthError>> {
-        let _ = stream.set_nonblocking(false);
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-        let mut buffer = [0u8; 4096];
-        let read = stream.read(&mut buffer).unwrap_or(0);
-        let request = String::from_utf8_lossy(&buffer[..read]);
-        let target = request.lines().next()?.split_whitespace().nth(1)?.to_string();
-        if !target.starts_with(CALLBACK_PATH) {
-            respond(&mut stream, "404 Not Found", "Not found.");
-            return None;
-        }
-        match parse_callback(&target, &self.pkce.verifier) {
-            Ok(code) => {
-                respond(&mut stream, "200 OK", "Signed in. You can close this tab and go back to Aria.");
-                Some(self.exchange(&code))
-            }
-            Err(error) => {
-                respond(&mut stream, "400 Bad Request", "Sign-in failed. You can close this tab and try again in Aria.");
-                Some(Err(error))
-            }
-        }
+        let code = wait_for_code(&self.listener, CALLBACK_PATH, &self.pkce.verifier, timeout)?;
+        self.exchange(&code)
     }
 
     fn exchange(&self, code: &str) -> Result<Credential, OAuthError> {
@@ -170,18 +100,11 @@ impl SignIn {
     }
 }
 
-fn respond(stream: &mut TcpStream, status: &str, message: &str) {
-    let html = format!("<!doctype html><meta charset=utf-8><title>Aria</title><body style=\"font:16px system-ui;padding:3rem\">{message}</body>");
-    let _ = write!(
-        stream,
-        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
-        html.len()
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::oauth::loopback::parse_callback;
+    use crate::oauth::pkce::challenge_for;
     use serde_json::json;
     use std::net::TcpListener;
     use std::sync::Mutex;

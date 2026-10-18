@@ -63,12 +63,14 @@ Order and content as agreed with the owner. Defaults in parentheses are the owne
 6. **Effort:** auto by route (only with the router) or a fixed level; top level on free models.
 7. **Compaction:** at what % of the context (40%).
 8. **Memory:** Engram on or off, and its project name.
-9. **Integrations:** services (Notion | Tavily web search | Figma | OpenPencil | rea | Other MCP), each with its key or OAuth; and Pi packages (gallery, npm, git or local folder). Packages that chosen features need are installed without asking; a third-party package shows its source and asks before installing, since packages run code.
+9. **Integrations:** services and Pi packages.
+   - **Services (MCP), configured right there.** Only **Notion** and **Tavily** for now (the owner's call; more later). Turning one on in this step also connects it, and Continue stays closed until it is: **Tavily** asks for its API key, checks it with Tavily (`GET https://api.tavily.com/usage`, free; Tavily's MCP endpoint accepts any key, so it cannot validate one) and stores it in `~/.aria/mcp.json`; **Notion** signs in through the browser (MCP OAuth: discovery from the server's 401, a public client registered by dynamic registration as "Aria", PKCE, loopback callback on `127.0.0.1`) and stores the result in `~/.aria/mcp-auth.json`. To skip a service, turn it off. Both files are in **Pi's own formats** (`mcp.json` with `mcpServers`, `mcp-auth.json` keyed `mcp__<name>|<url>`) and mode `600`; Pi was checked to read them (`pi mcp list` with `PI_CODING_AGENT_DIR` pointing at a copy). How the bundled Pi of phase 2 is pointed at `~/.aria` (Pi keeps its own `settings.json` in its agent directory, which would collide with Aria's) is a phase-2 decision.
+   - **Pi packages:** gallery, npm, git or a local folder. Packages that chosen features need are installed without asking; a third-party package shows its source and asks before installing, since packages run code. (Recorded in phase 1, installed in phase 2.)
 10. **Sandbox:** projects folder (`~/Projects`); extra writable folders; whether leaving the sandbox asks; whether Jev reviews the command (router only).
 11. **Git and way of working:** commit without asking; push or merge; ask before touching someone else's changes; deliver what wasn't asked for as proposals.
 12. **Subagents and planning:** which experts, which are read-only; save subagent sessions; turn limit; `/plan` and `/execute` on, and which auto skills.
 
-Steps whose features only exist from phase 2 on are still asked and saved now, so phase 2 just reads them. In particular, phase 1 **records** integrations (choices and keys/tokens) but does not install packages or connect MCP servers; that happens in phase 2 with the bundled Pi.
+Steps whose features only exist from phase 2 on are still asked and saved now, so phase 2 just reads them. In particular, phase 1 **records** the Pi-package choices but does not install them; that happens in phase 2 with the bundled Pi. (Notion and Tavily are the exception: they are configured in the setup, see step 9.)
 
 **Defaults:** where the prototype's defaults differ from the owner's current setup, the owner's setup wins (parity rule): no subagent turn limit, subagent sessions not saved, ask before committing, only `systematic-debugging` and `verification-before-completion` as auto skills. Compaction defaults to 40% (agreed as the default; the owner's own value today is 90%).
 
@@ -82,7 +84,7 @@ Steps whose features only exist from phase 2 on are still asked and saved now, s
 
 ### `~/.aria/` layout
 
-- `settings.json`, `auth.json`
+- `settings.json`, `auth.json`, and, once Notion or Tavily is set up, `mcp.json` and `mcp-auth.json` (Pi's formats, mode 600)
 - room for phase 2+: sessions, logs, the workspace where Aria works, the bundled Pi's agent directory.
 
 The exact sub-folders beyond the two files are the builder's call, documented in the repo.

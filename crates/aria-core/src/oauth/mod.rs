@@ -1,6 +1,9 @@
 //! OAuth sign-ins. Only Anthropic (Claude Pro/Max) in phase 1.
 
 pub mod anthropic;
+pub mod loopback;
+pub mod mcp;
+pub mod pkce;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum OAuthError {
@@ -18,4 +21,6 @@ pub enum OAuthError {
     Network(String),
     #[error("could not listen for the browser callback: {0}")]
     Io(String),
+    #[error("the server's sign-in could not be set up: {0}")]
+    Setup(String),
 }

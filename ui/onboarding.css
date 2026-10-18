@@ -116,3 +116,6 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 
 .chip-add { flex: none; width: 34px; height: 34px; border-radius: 8px; background: var(--surface); border: 1px solid var(--line-strong); cursor: pointer; font-size: 18px; line-height: 1; }
 .chip-add:hover, .chip-add:focus-visible { border-color: var(--accent-border); outline: none; }
+
+.action-row .primary { white-space: nowrap; }
+.action-row .state { line-height: 1.4; }

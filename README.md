@@ -31,6 +31,7 @@ sh install/install.sh --local target/release/aria
 |---|---|
 | `~/.aria/settings.json` | Every setting of the project, in one file ([reference](docs/settings.md)) |
 | `~/.aria/auth.json` | Credentials, mode `600`, in Pi's format |
+| `~/.aria/mcp.json`, `mcp-auth.json` | Notion and Tavily, once you connect them in the setup (Pi's MCP formats, mode `600`) |
 | `~/.local/bin/aria` | The binary |
 | `~/.config/systemd/user/aria.service` | Starts the dock at login |
 

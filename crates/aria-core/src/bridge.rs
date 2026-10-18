@@ -21,12 +21,15 @@ pub enum PageMessage {
     LoadSettings { id: u64 },
     #[serde(rename = "saveSettings")]
     SaveSettings { id: u64, settings: Value },
-    /// `provider` is `opencode-go`, `anthropic-api` or `typesafe`.
+    /// `provider` is `opencode-go`, `anthropic-api`, `typesafe` or `tavily`.
     #[serde(rename = "saveKey")]
     SaveKey { id: u64, provider: String, key: String },
     /// Start the Anthropic OAuth sign-in.
     #[serde(rename = "startOauth")]
     StartOAuth { id: u64 },
+    /// Start an MCP server's OAuth sign-in (`service` is `notion`).
+    #[serde(rename = "startMcpOauth")]
+    StartMcpOAuth { id: u64, service: String },
     #[serde(rename = "openUrl")]
     OpenUrl { url: String },
 }
@@ -41,8 +44,10 @@ pub enum DockMessage {
     /// Show the corner notice ("Aria is installed — press Super A to set it up").
     #[serde(rename = "notice")]
     Notice,
+    /// `connected` names what is really set up, never a secret: `provider:type` for each credential in
+    /// `auth.json` (`anthropic:oauth`) and `mcp:<service>` for each configured MCP service.
     #[serde(rename = "settings")]
-    Settings { id: u64, settings: Option<Value>, exists: bool, problem: Option<String> },
+    Settings { id: u64, settings: Option<Value>, exists: bool, problem: Option<String>, connected: Vec<String> },
     #[serde(rename = "saved")]
     Saved { id: u64 },
     /// `error` is a UI string key: `key-rejected`, `network-unavailable`, `auth-file-broken`.
@@ -84,6 +89,10 @@ mod tests {
             PageMessage::SaveKey { id: 3, provider: "typesafe".into(), key: "k".into() }
         );
         assert_eq!(page(r#"{"type":"startOauth","id":4}"#), PageMessage::StartOAuth { id: 4 });
+        assert_eq!(
+            page(r#"{"type":"startMcpOauth","id":5,"service":"notion"}"#),
+            PageMessage::StartMcpOAuth { id: 5, service: "notion".into() }
+        );
         assert_eq!(page(r#"{"type":"openUrl","url":"https://x"}"#), PageMessage::OpenUrl { url: "https://x".into() });
     }
 
@@ -103,8 +112,8 @@ mod tests {
         assert_eq!(value(DockMessage::Close), json!({"type": "close"}));
         assert_eq!(value(DockMessage::Notice), json!({"type": "notice"}));
         assert_eq!(
-            value(DockMessage::Settings { id: 1, settings: None, exists: false, problem: None }),
-            json!({"type": "settings", "id": 1, "settings": null, "exists": false, "problem": null})
+            value(DockMessage::Settings { id: 1, settings: None, exists: false, problem: None, connected: vec!["mcp:tavily".into()] }),
+            json!({"type": "settings", "id": 1, "settings": null, "exists": false, "problem": null, "connected": ["mcp:tavily"]})
         );
         assert_eq!(value(DockMessage::Saved { id: 2 }), json!({"type": "saved", "id": 2}));
         assert_eq!(

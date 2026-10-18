@@ -1,7 +1,7 @@
 # Settings
 
 Everything Aria can be configured to do lives in one file: `~/.aria/settings.json` (or `$ARIA_HOME/settings.json`).
-Secrets never go here; they go in `~/.aria/auth.json` (mode `600`, same format as Pi's `auth.json`).
+Secrets never go here; they go in `~/.aria/auth.json` (mode `600`, same format as Pi's `auth.json`), or for Notion and Tavily in `~/.aria/mcp.json` and `mcp-auth.json` (Pi's MCP formats, mode `600`).
 
 Aria keeps keys it does not know when it saves, and refuses to overwrite a file it cannot parse.
 The model lives in `crates/aria-core/src/settings.rs`; the defaults are the owner's own setup.
@@ -48,7 +48,7 @@ The model lives in `crates/aria-core/src/settings.rs`; the defaults are the owne
 | `effort.*` | `auto` (by route) or `fixed` at `fixedLevel` (`off` … `max`); `maxOnFree` runs free models at their top level | phase 2 |
 | `compaction.percent` | Compact the context at this % of the window (0 turns it off) | phase 2 |
 | `memory.*` | Engram on/off and its project name | phase 2 |
-| `integrations.services` | MCP services you chose: `{ id, name, auth }` | phase 2 |
+| `integrations.services` | MCP services you turned on: `{ id, name, auth }`; for now `notion` (`oauth`) and `tavily` (`key`). They are connected during setup; their credentials live in `~/.aria/mcp.json` and `mcp-auth.json`, never here | phase 1 (connected), phase 2 (used) |
 | `integrations.packages` | Where extra Pi packages come from, and whether third-party ones are trusted | phase 2 |
 | `sandbox.*` | Projects folder, extra writable folders, ask before leaving the sandbox, let Jev review commands | phase 2 |
 | `git.*` | Commit/push/merge without asking, ask before touching other people's changes, deliver unrequested work as proposals | phase 2 |

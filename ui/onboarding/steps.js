@@ -159,10 +159,19 @@ export function previousStep(ids, current) {
   return at > 0 ? ids[at - 1] : 'welcome'
 }
 
-/** `ui` is what the page knows beyond the settings: `signedIn`, `typesafeSaved`. */
+/** The credential `auth.json` must hold for each provider (named `provider:type`, as the dock reports it). */
+const CREDENTIAL = { 'opencode-go': 'opencode-go:api_key', 'anthropic-api': 'anthropic:api_key', 'anthropic-oauth': 'anthropic:oauth' }
+
+/** Is the chosen provider's credential really there? `connected` is what the dock found on disk. */
+export const credentialFor = (providerId) => CREDENTIAL[providerId]
+export const isSignedIn = (settings, connected) => connected.includes(credentialFor(settings.provider.id))
+
+/** `ui` is what the page knows beyond the settings: `signedIn`, `typesafeSaved`, `servicesConnected`. */
 export function canContinue(step, settings, ui) {
   if (step === 'provider') return settings.provider.id !== null
   if (step === 'auth') return ui.signedIn === true
+  // A service you turned on has to be connected; to skip one, turn it off.
+  if (step === 'integrations') return settings.integrations.services.every((service) => ui.servicesConnected?.includes(service.id))
   if (step === 'router') {
     const module = providerModule(settings.provider.id)
     return !(settings.router.enabled && !module?.jevIncluded && !ui.typesafeSaved)

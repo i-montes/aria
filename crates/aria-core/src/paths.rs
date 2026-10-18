@@ -27,6 +27,16 @@ impl AriaPaths {
         self.root.join("auth.json")
     }
 
+    /// MCP servers, in Pi's `mcp.json` format (it holds Tavily's key, so mode 600).
+    pub fn mcp(&self) -> PathBuf {
+        self.root.join("mcp.json")
+    }
+
+    /// MCP OAuth state (registered client, tokens), in Pi's `mcp-auth.json` format.
+    pub fn mcp_auth(&self) -> PathBuf {
+        self.root.join("mcp-auth.json")
+    }
+
     /// Creates the root directory (mode 0700) when it is missing.
     pub fn ensure_root(&self) -> io::Result<()> {
         std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&self.root)

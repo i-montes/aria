@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import {
-  applyProvider, canContinue, defaultSettings, finish, languageChoice, nextStep, previousStep,
+  applyProvider, canContinue, defaultSettings, finish, isSignedIn, languageChoice, nextStep, previousStep,
   setLanguageChoice, setRouter, skip, stepIds,
 } from './steps.js'
 
@@ -130,5 +130,40 @@ describe('when Continue is allowed', () => {
   test('every other step always continues', () => {
     expect(canContinue('models', opencode, {})).toBe(true)
     expect(canContinue('git', opencode, {})).toBe(true)
+  })
+})
+
+describe('what is already set up on disk', () => {
+  const settingsFor = (id) => applyProvider(defaultSettings('en'), id)
+  test('a key for the provider counts, a sign-in for another does not', () => {
+    expect(isSignedIn(settingsFor('opencode-go'), ['opencode-go:api_key'])).toBe(true)
+    expect(isSignedIn(settingsFor('opencode-go'), ['anthropic:oauth'])).toBe(false)
+    expect(isSignedIn(settingsFor('opencode-go'), [])).toBe(false)
+  })
+  test('Anthropic with a key and with a sign-in are different credentials', () => {
+    expect(isSignedIn(settingsFor('anthropic-api'), ['anthropic:api_key'])).toBe(true)
+    expect(isSignedIn(settingsFor('anthropic-api'), ['anthropic:oauth'])).toBe(false)
+    expect(isSignedIn(settingsFor('anthropic-oauth'), ['anthropic:oauth'])).toBe(true)
+    expect(isSignedIn(settingsFor('anthropic-oauth'), ['anthropic:api_key'])).toBe(false)
+  })
+  test('no provider chosen is never signed in', () => {
+    expect(isSignedIn(defaultSettings('en'), ['opencode-go:api_key'])).toBe(false)
+  })
+})
+
+describe('the integrations step', () => {
+  const withServices = (...ids) => {
+    const s = defaultSettings('en')
+    s.integrations.services = ids.map((id) => ({ id, name: id, auth: id === 'notion' ? 'oauth' : 'key' }))
+    return s
+  }
+  test('no service chosen: always continues', () => expect(canContinue('integrations', withServices(), { servicesConnected: [] })).toBe(true))
+  test('a service you turned on must be connected first', () => {
+    expect(canContinue('integrations', withServices('notion'), { servicesConnected: [] })).toBe(false)
+    expect(canContinue('integrations', withServices('notion'), { servicesConnected: ['notion'] })).toBe(true)
+  })
+  test('every chosen service counts', () => {
+    expect(canContinue('integrations', withServices('notion', 'tavily'), { servicesConnected: ['notion'] })).toBe(false)
+    expect(canContinue('integrations', withServices('notion', 'tavily'), { servicesConnected: ['notion', 'tavily'] })).toBe(true)
   })
 })

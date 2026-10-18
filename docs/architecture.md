@@ -22,8 +22,10 @@ Aria is a small Rust program that hosts a web page. The page is the interface; R
   - `settings` — the `Settings` model and its defaults, load and save ([reference](settings.md)).
   - `auth` — `auth.json`, in Pi's exact format so the bundled Pi can read it later.
   - `providers` — one module per provider; the rest of Aria only reads what a module declares ([how to add one](adding-a-provider.md)).
-  - `validate` — one cheap request per provider to tell a valid key from a rejected one.
-  - `oauth::anthropic` — the Claude Pro/Max sign-in (authorization code + PKCE, localhost callback).
+  - `validate` — one cheap request per provider (and for Tavily) to tell a valid key from a rejected one.
+  - `mcp` — the MCP services the setup configures (Notion, Tavily), in Pi's `mcp.json` and `mcp-auth.json` formats.
+  - `oauth` — sign-ins by authorization code + PKCE with a loopback callback: `anthropic` (Claude Pro/Max), `mcp` (Notion: discovery from the 401, dynamic client registration), and the `pkce` and `loopback` pieces they share.
+  - `testing` (feature `testing`) — a fake Notion-like server so the OAuth flow can be tested without the network.
   - `bridge` — the messages between the dock and the page (below).
 - **`aria-hyprland`** is the Hyprland adapter: it registers the hotkey at run time, asks which monitor has the focus, and reports config reloads. A Mac adapter would sit next to it with the same three jobs.
 - **`aria`** is the binary. `main.rs` wires things, `control.rs` keeps one instance, `visibility.rs` decides when the dock is shown or closing (a pure state machine), `dock.rs` is the window, `handlers.rs` answers the page.
@@ -60,19 +62,19 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 |---|---|
 | `ready`, `opened`, `closeRequest` | the bridge is up; the open transition ended; Esc |
 | `loadSettings`, `saveSettings` | read and write `settings.json` |
-| `saveKey` | check a key with its provider and, only if it is accepted, store it |
-| `startOauth` | start the Anthropic sign-in |
+| `saveKey` | check a key with its provider and, only if it is accepted, store it (`opencode-go`, `anthropic-api`, `typesafe` in `auth.json`; `tavily` in `mcp.json`) |
+| `startOauth`, `startMcpOauth` | start the Anthropic sign-in, or an MCP server's (`notion`) |
 | `openUrl` | open an `https://` link in the browser |
 
 | Dock → page | Meaning |
 |---|---|
 | `open`, `close`, `notice` | animate the dock; show the first-run corner notice |
-| `settings`, `saved`, `keyResult`, `oauthUrl`, `oauthResult`, `error` | answers; failures carry a string key such as `key-rejected` |
+| `settings`, `saved`, `keyResult`, `oauthUrl`, `oauthResult`, `error` | answers; failures carry a string key such as `key-rejected`. `settings` also lists what is really connected (`opencode-go:api_key`, `anthropic:oauth`, `mcp:notion`…), never a secret, so the setup does not have to assume it |
 | `problem` | something prevents Aria from working (for example `hyprland-classic-config`) |
 
 ## Data and safety
 
-- Everything Aria stores is under `~/.aria/`. `settings.json` never holds a secret; `auth.json` is mode `600`.
+- Everything Aria stores is under `~/.aria/`. `settings.json` never holds a secret; `auth.json`, `mcp.json` and `mcp-auth.json` are mode `600`.
 - Files are written atomically (temp file and rename), and a file that cannot be parsed is reported, never overwritten.
 - A key is validated against its provider before it is stored, and a rejected or unreachable check writes nothing.
 - The installer never edits `~/.config/hypr/`.

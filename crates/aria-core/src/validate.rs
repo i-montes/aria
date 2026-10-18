@@ -8,6 +8,7 @@ pub enum KeyKind {
     OpenCodeGo,
     AnthropicApi,
     TypeSafe,
+    Tavily,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,6 +42,14 @@ pub fn probe_for(kind: KeyKind, key: &str) -> ProbeRequest {
             method: "GET",
             url: "https://api.anthropic.com/v1/models".into(),
             headers: vec![header("x-api-key", key.to_string()), header("anthropic-version", "2023-06-01".into())],
+            body: None,
+        },
+        // Tavily's MCP endpoint accepts any key when a session starts, so it cannot validate one.
+        // `/usage` answers 401 for a bad key and costs no credits.
+        KeyKind::Tavily => ProbeRequest {
+            method: "GET",
+            url: "https://api.tavily.com/usage".into(),
+            headers: vec![header("Authorization", format!("Bearer {key}"))],
             body: None,
         },
         KeyKind::TypeSafe => ProbeRequest {
@@ -122,6 +131,15 @@ mod tests {
                 "questions": { "ok": { "type": "noul", "instructions": "The state is a short test message" } }
             })
         );
+    }
+
+    #[test]
+    fn probe_tavily_uses_the_free_usage_endpoint() {
+        // The MCP endpoint accepts any key at initialize; /usage is the call that checks it, for free.
+        let p = probe_for(KeyKind::Tavily, "tvly-1");
+        assert_eq!((p.method, p.url.as_str()), ("GET", "https://api.tavily.com/usage"));
+        assert_eq!(p.headers, h(&[("Authorization", "Bearer tvly-1")]));
+        assert!(p.body.is_none());
     }
 
     #[test]

@@ -146,3 +146,111 @@ describe('reopening Aria', () => {
     expect(h.ob.snapshot()).toMatchObject({ view: 'step', step: 'provider' })
   })
 })
+
+describe('what is really connected', () => {
+  test('editing a setup knows whether its credential is on disk', () => {
+    const h = harness()
+    h.ob.start(completed, [])
+    expect(h.ob.snapshot().signedIn).toBe(false)
+    h.ob.start(completed, ['opencode-go:api_key'])
+    expect(h.ob.snapshot().signedIn).toBe(true)
+  })
+})
+
+describe('the integrations step', () => {
+  const connected = ['opencode-go:api_key']
+  const open = () => {
+    const h = harness()
+    h.ob.start(completed, connected)
+    h.click('edit', undefined, 'integrations')
+    expect(h.ob.snapshot().step).toBe('integrations')
+    return h
+  }
+  const tavilyOk = { type: 'keyResult', ok: true, error: null }
+
+  test('with no service turned on, Continue is open', () => {
+    expect(open().ob.snapshot().canContinue).toBe(true)
+  })
+
+  test('Tavily: turned on it blocks Continue until its key is checked and saved', async () => {
+    const h = open()
+    h.click('toggle', 'service:tavily')
+    expect(h.ob.snapshot().canContinue).toBe(false)
+    h.type('tavilyKey', 'tvly-1')
+    h.click('save-tavilyKey')
+    expect(h.lastRequest().message).toMatchObject({ type: 'saveKey', provider: 'tavily', key: 'tvly-1' })
+    h.lastRequest().resolve(tavilyOk)
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ canContinue: true })
+    expect(h.ob.snapshot().connected).toContain('mcp:tavily')
+  })
+
+  test('Tavily: a rejected key keeps Continue closed', async () => {
+    const h = open()
+    h.click('toggle', 'service:tavily')
+    h.type('tavilyKey', 'bad')
+    h.click('save-tavilyKey')
+    h.lastRequest().resolve({ type: 'keyResult', ok: false, error: 'key-rejected' })
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ canContinue: false })
+    expect(h.ob.snapshot().connected).not.toContain('mcp:tavily')
+  })
+
+  test('Notion: the sign-in opens the browser flow and, once done, Continue opens', async () => {
+    const h = open()
+    h.click('toggle', 'service:notion')
+    expect(h.ob.snapshot().canContinue).toBe(false)
+    h.click('mcp-oauth-start', undefined, 'notion')
+    expect(h.lastRequest().message).toMatchObject({ type: 'startMcpOauth', service: 'notion' })
+    h.lastRequest().resolve(oauthOk)
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ canContinue: true })
+    expect(h.ob.snapshot().connected).toContain('mcp:notion')
+  })
+
+  test('Notion: cancelling lets you start again and the abandoned attempt is ignored', async () => {
+    const h = open()
+    h.click('toggle', 'service:notion')
+    h.click('mcp-oauth-start', undefined, 'notion')
+    const first = h.lastRequest()
+    h.click('mcp-oauth-cancel', undefined, 'notion')
+    h.click('mcp-oauth-start', undefined, 'notion')
+    const second = h.lastRequest()
+    expect(second).not.toBe(first)
+    first.resolve(oauthOk)
+    await flush()
+    expect(h.ob.snapshot().connected).not.toContain('mcp:notion')
+    second.resolve(oauthOk)
+    await flush()
+    expect(h.ob.snapshot().connected).toContain('mcp:notion')
+  })
+
+  test('a service stays connected when the provider changes meanwhile', async () => {
+    const h = open()
+    h.click('toggle', 'service:notion')
+    h.click('mcp-oauth-start', undefined, 'notion')
+    const signIn = h.lastRequest()
+    h.click('edit', undefined, 'provider')
+    h.click('pick', 'provider', 'anthropic-api')
+    signIn.resolve(oauthOk)
+    await flush()
+    expect(h.ob.snapshot().connected).toContain('mcp:notion')
+  })
+
+  test('a service that is already connected on disk lets you continue', () => {
+    const h = harness()
+    const withNotion = structuredClone(completed)
+    withNotion.integrations.services = [{ id: 'notion', name: 'notion', auth: 'oauth' }]
+    h.ob.start(withNotion, [...connected, 'mcp:notion'])
+    h.click('edit', undefined, 'integrations')
+    expect(h.ob.snapshot().canContinue).toBe(true)
+  })
+
+  test('turning a service off lets you continue without connecting it', () => {
+    const h = open()
+    h.click('toggle', 'service:tavily')
+    expect(h.ob.snapshot().canContinue).toBe(false)
+    h.click('toggle', 'service:tavily')
+    expect(h.ob.snapshot().canContinue).toBe(true)
+  })
+})
