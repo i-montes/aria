@@ -1,0 +1,95 @@
+{
+  "assistant": {
+    "language": "en",
+    "name": "Aria",
+    "style": "very-short",
+    "userName": ""
+  },
+  "compaction": {
+    "percent": 40
+  },
+  "effort": {
+    "fixedLevel": "medium",
+    "maxOnFree": true,
+    "mode": "fixed"
+  },
+  "git": {
+    "askBeforeOthersChanges": true,
+    "commitWithoutAsking": false,
+    "pushOrMergeWithoutAsking": false,
+    "unaskedAsProposals": true
+  },
+  "integrations": {
+    "packages": {
+      "path": "",
+      "source": "gallery",
+      "thirdPartyTrusted": false
+    },
+    "services": []
+  },
+  "memory": {
+    "enabled": true,
+    "project": "aria"
+  },
+  "models": {
+    "allowPayPerUse": false,
+    "daily": "anthropic/claude-sonnet-5-5",
+    "planning": "anthropic/claude-opus-5-5",
+    "planningEffort": "high"
+  },
+  "provider": {
+    "id": "anthropic-api",
+    "quota": null
+  },
+  "router": {
+    "backend": "typesafe",
+    "enabled": false
+  },
+  "sandbox": {
+    "askToLeave": true,
+    "extraWritable": [],
+    "jevReview": false,
+    "projectsDir": "~/Projects"
+  },
+  "setup": {
+    "completed": false,
+    "mode": null
+  },
+  "subagents": {
+    "autoSkills": [
+      "systematic-debugging",
+      "verification-before-completion"
+    ],
+    "experts": [
+      {
+        "enabled": true,
+        "name": "frontend",
+        "readOnly": false
+      },
+      {
+        "enabled": true,
+        "name": "backend",
+        "readOnly": false
+      },
+      {
+        "enabled": true,
+        "name": "security",
+        "readOnly": true
+      },
+      {
+        "enabled": true,
+        "name": "reviewer",
+        "readOnly": true
+      },
+      {
+        "enabled": true,
+        "name": "researcher",
+        "readOnly": true
+      }
+    ],
+    "planExecute": true,
+    "saveSessions": false,
+    "turnLimit": null
+  },
+  "version": 1
+}

@@ -190,6 +190,40 @@ mod tests {
         assert!(!s.sandbox.jev_review);
     }
 
+    // Golden files: the web UI (ui/onboarding/steps.js) is tested against the same JSON, so the two
+    // implementations of the provider defaults cannot drift apart. Regenerate after an intended
+    // change with `cargo test -p aria-core regenerate_golden -- --ignored`.
+    fn after_provider(id: &str) -> serde_json::Value {
+        let mut settings = Settings::defaults("en");
+        apply_provider(&mut settings, id);
+        serde_json::to_value(settings).unwrap()
+    }
+
+    fn golden(text: &str) -> serde_json::Value {
+        serde_json::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn settings_after_each_provider_match_the_golden_files() {
+        assert_eq!(after_provider("opencode-go"), golden(include_str!("../tests/golden/settings-provider-opencode-go.json")));
+        assert_eq!(after_provider("anthropic-api"), golden(include_str!("../tests/golden/settings-provider-anthropic-api.json")));
+        assert_eq!(after_provider("anthropic-oauth"), golden(include_str!("../tests/golden/settings-provider-anthropic-oauth.json")));
+    }
+
+    #[test]
+    #[ignore = "rewrites the golden files"]
+    fn regenerate_golden() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, value: serde_json::Value| {
+            std::fs::write(dir.join(name), serde_json::to_string_pretty(&value).unwrap() + "\n").unwrap();
+        };
+        write("settings-defaults-en.json", serde_json::to_value(Settings::defaults("en")).unwrap());
+        for id in ["opencode-go", "anthropic-api", "anthropic-oauth"] {
+            write(&format!("settings-provider-{id}.json"), after_provider(id));
+        }
+    }
+
     #[test]
     fn opencode_go_writes_both_auth_entries() {
         assert_eq!(provider("opencode-go").unwrap().auth_entries, ["opencode-go", "opencode"]);

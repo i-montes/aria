@@ -355,6 +355,12 @@ mod tests {
     }
 
     #[test]
+    fn defaults_match_the_golden_file_the_ui_is_tested_against() {
+        let golden: serde_json::Value = serde_json::from_str(include_str!("../tests/golden/settings-defaults-en.json")).unwrap();
+        assert_eq!(serde_json::to_value(Settings::defaults("en")).unwrap(), golden);
+    }
+
+    #[test]
     fn language_from_locale_picks_supported_codes() {
         assert_eq!(language_from_locale("es_CO.UTF-8"), "es");
         assert_eq!(language_from_locale("pt_BR.UTF-8"), "pt");

@@ -1,0 +1,95 @@
+{
+  "assistant": {
+    "language": "en",
+    "name": "Aria",
+    "style": "very-short",
+    "userName": ""
+  },
+  "compaction": {
+    "percent": 40
+  },
+  "effort": {
+    "fixedLevel": null,
+    "maxOnFree": true,
+    "mode": "auto"
+  },
+  "git": {
+    "askBeforeOthersChanges": true,
+    "commitWithoutAsking": false,
+    "pushOrMergeWithoutAsking": false,
+    "unaskedAsProposals": true
+  },
+  "integrations": {
+    "packages": {
+      "path": "",
+      "source": "gallery",
+      "thirdPartyTrusted": false
+    },
+    "services": []
+  },
+  "memory": {
+    "enabled": true,
+    "project": "aria"
+  },
+  "models": {
+    "allowPayPerUse": false,
+    "daily": null,
+    "planning": null,
+    "planningEffort": "high"
+  },
+  "provider": {
+    "id": null,
+    "quota": null
+  },
+  "router": {
+    "backend": "opencode",
+    "enabled": true
+  },
+  "sandbox": {
+    "askToLeave": true,
+    "extraWritable": [],
+    "jevReview": true,
+    "projectsDir": "~/Projects"
+  },
+  "setup": {
+    "completed": false,
+    "mode": null
+  },
+  "subagents": {
+    "autoSkills": [
+      "systematic-debugging",
+      "verification-before-completion"
+    ],
+    "experts": [
+      {
+        "enabled": true,
+        "name": "frontend",
+        "readOnly": false
+      },
+      {
+        "enabled": true,
+        "name": "backend",
+        "readOnly": false
+      },
+      {
+        "enabled": true,
+        "name": "security",
+        "readOnly": true
+      },
+      {
+        "enabled": true,
+        "name": "reviewer",
+        "readOnly": true
+      },
+      {
+        "enabled": true,
+        "name": "researcher",
+        "readOnly": true
+      }
+    ],
+    "planExecute": true,
+    "saveSessions": false,
+    "turnLimit": null
+  },
+  "version": 1
+}

@@ -22,7 +22,7 @@
 - Before `gtk::init`: `WEBKIT_DISABLE_DMABUF_RENDERER=1`. Size the window with `set_size_request`, never `set_default_size`.
 - Dock geometry: surface 700 px wide anchored top/bottom/right; dock column 470 px on the right; only the column takes input.
 - Motion (from the design): open — veil opacity 180 ms `ease-out`; dock opacity 200 ms + translateX(24px→0) 240 ms `cubic-bezier(0.16, 1, 0.3, 1)`; content translateX(16px→0) + opacity 300 ms `cubic-bezier(0.22, 1, 0.36, 1)`; accent dot glow 2400 ms loop. Close — dock opacity 120 ms / transform 140 ms, veil 140 ms after 20 ms, `cubic-bezier(0.4, 0, 1, 1)`; unmap after `CLOSE_MS = 180`.
-- Accent `#B9A8FF`; font Geist (fallback `system-ui`); veil `linear-gradient(to left, rgba(4,4,5,0.78) 0%, rgba(4,4,5,0.78) 52%, rgba(4,4,5,0) 100%)`.
+- Accent `#B9A8FF`; font Geist (fallback `system-ui`); veil `linear-gradient(to left, rgba(4,4,5,.94) 0, .94 43%, .80 53%, .55 63%, .28 71%, .10 77%, 0 81%)` (eased tint, no backdrop blur; approved by the owner); buttons and cards have solid backgrounds that never change on hover, focus or selection (only the border takes the accent).
 - Phase 1 has no chat and runs no agent; integrations and packages are recorded, not installed or connected.
 
 ## Review Focus
