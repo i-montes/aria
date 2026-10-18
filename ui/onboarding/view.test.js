@@ -254,3 +254,57 @@ describe('the integrations step', () => {
     expect(h.ob.snapshot().canContinue).toBe(true)
   })
 })
+
+describe('a service that is connected shows no way to connect it again', () => {
+  const withServices = (...ids) => {
+    const settings = structuredClone(completed)
+    settings.integrations.services = ids.map((id) => ({ id, name: id, auth: id === 'tavily' ? 'key' : 'oauth' }))
+    return settings
+  }
+  const open = (connected, ...services) => {
+    const h = harness()
+    h.ob.start(withServices(...services), ['opencode-go:api_key', ...connected])
+    h.click('edit', undefined, 'integrations')
+    return h
+  }
+  const tavilyControls = ['data-field="tavilyKey"', 'save-tavilyKey']
+  const notionControls = ['mcp-oauth-start', 'mcp-oauth-cancel']
+
+  test('Tavily connected: no key field and no button, only that it is connected', () => {
+    const { root } = open(['mcp:tavily'], 'tavily')
+    for (const control of tavilyControls) expect(root.innerHTML).not.toContain(control)
+    expect(root.innerHTML).toContain('ob.integrations.connected')
+  })
+
+  test('Notion connected: no sign-in button, not even "sign in again"', () => {
+    const { root } = open(['mcp:notion'], 'notion')
+    for (const control of notionControls) expect(root.innerHTML).not.toContain(control)
+    expect(root.innerHTML).not.toContain('ob.integrations.notion.again')
+    expect(root.innerHTML).toContain('ob.integrations.connected')
+  })
+
+  test('not connected yet: the key field and the sign-in button are there', () => {
+    const { root } = open([], 'tavily', 'notion')
+    for (const control of [...tavilyControls, 'mcp-oauth-start']) expect(root.innerHTML).toContain(control)
+  })
+
+  test('saving the Tavily key makes its controls disappear', async () => {
+    const h = open([], 'tavily')
+    h.type('tavilyKey', 'tvly-1')
+    h.click('save-tavilyKey')
+    h.lastRequest().resolve({ type: 'keyResult', ok: true, error: null })
+    await flush()
+    for (const control of tavilyControls) expect(h.root.innerHTML).not.toContain(control)
+    expect(h.root.innerHTML).toContain('ob.integrations.connected')
+  })
+
+  test('finishing the Notion sign-in makes its controls disappear', async () => {
+    const h = open([], 'notion')
+    h.click('mcp-oauth-start', undefined, 'notion')
+    expect(h.root.innerHTML).toContain('mcp-oauth-cancel') // while it waits, you can still cancel
+    h.lastRequest().resolve(oauthOk)
+    await flush()
+    for (const control of notionControls) expect(h.root.innerHTML).not.toContain(control)
+    expect(h.root.innerHTML).toContain('ob.integrations.connected')
+  })
+})

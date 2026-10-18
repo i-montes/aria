@@ -320,12 +320,15 @@ export function createOnboarding(env) {
   const serviceOf = (id) => state.settings.integrations.services.find((s) => s.id === id)
   const isConnected = (id) => state.connected.has(`mcp:${id}`)
 
+  const connectedLine = () => c.info('green', '', t('ob.integrations.connected'), true)
+
   /** Tavily: its key is checked with Tavily and stored in mcp.json. */
   function tavilyBlock() {
+    // Connected is the end of it: nothing left to type or press.
+    if (isConnected('tavily')) return connectedLine()
     const tavily = state.svc.tavily
-    const connected = isConnected('tavily')
     const checking = tavily.status === 'checking'
-    const stateText = checking ? t('ob.signin.checking') : tavily.error ? t(`ob.error.${tavily.error}`) : connected ? t('ob.integrations.connected') : ''
+    const stateText = checking ? t('ob.signin.checking') : tavily.error ? t(`ob.error.${tavily.error}`) : ''
     return (
       c.textField('tavilyKey', t('ob.integrations.tavily.keyLabel'), tavily.draft, {
         secret: true,
@@ -338,20 +341,20 @@ export function createOnboarding(env) {
       }) +
       c.actionButton('save-tavilyKey', checking ? t('ob.signin.checking') : t('ob.signin.check'), stateText, {
         disabled: checking || !tavily.draft.trim(),
-        tone: connected && !tavily.error ? 'ok' : tavily.error ? 'error' : '',
+        tone: tavily.error ? 'error' : '',
       })
     )
   }
 
   /** Notion: sign in through the browser; the tokens go to mcp-auth.json. */
   function notionBlock() {
+    if (isConnected('notion')) return connectedLine()
     const notion = state.svc.notion
-    const connected = isConnected('notion')
     const waiting = notion.status === 'waiting'
-    const stateText = waiting ? t('ob.integrations.notion.waiting') : notion.error ? t(`ob.error.${notion.error}`) : connected ? t('ob.integrations.connected') : t('ob.integrations.notion.hint')
-    let html = c.actionButton('mcp-oauth-start', t(connected ? 'ob.integrations.notion.again' : 'ob.integrations.notion.signin'), stateText, {
+    const stateText = waiting ? t('ob.integrations.notion.waiting') : notion.error ? t(`ob.error.${notion.error}`) : t('ob.integrations.notion.hint')
+    let html = c.actionButton('mcp-oauth-start', t('ob.integrations.notion.signin'), stateText, {
       disabled: waiting,
-      tone: connected && !notion.error ? 'ok' : notion.error ? 'error' : '',
+      tone: notion.error ? 'error' : '',
     })
     if (waiting) {
       html += `<div class="action-row">${notion.url ? `<button class="link" data-nav data-action="mcp-oauth-reopen" data-key="mcp-oauth-reopen">${c.esc(t('ob.signin.oauth.reopen'))}</button>` : ''}<button class="link" data-nav data-action="mcp-oauth-cancel" data-key="mcp-oauth-cancel">${c.esc(t('ob.signin.oauth.cancel'))}</button></div>`

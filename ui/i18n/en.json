@@ -307,7 +307,6 @@
   "problem.settings-unreadable": "Aria could not read ~/.aria/settings.json. Check its permissions, then open Aria again.",
   "ob.signin.oauth.cancel": "Cancel",
   "ob.integrations.notion.signin": "Sign in with Notion",
-  "ob.integrations.notion.again": "Sign in again",
   "ob.integrations.notion.hint": "Opens your browser, where you choose what Aria can see.",
   "ob.integrations.notion.waiting": "Waiting for your browser…",
   "ob.integrations.connected": "Connected",
