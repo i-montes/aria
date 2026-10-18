@@ -3,11 +3,14 @@
 
 mod control;
 mod dock;
+mod handlers;
 mod visibility;
 
+use aria_core::bridge::DockMessage;
+use aria_core::paths::AriaPaths;
 use aria_hyprland::{ConfigKind, HyprError};
 use dock::Dock;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use visibility::Event;
 
@@ -46,7 +49,29 @@ fn run_dock() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
     gtk::init().expect("gtk");
-    let dock = Dock::new(Box::new(|_message, _dock| {}));
+
+    // Replies from any thread come back to the GTK thread through this channel.
+    let (reply_sender, reply_receiver) = mpsc::channel::<DockMessage>();
+    let paths = AriaPaths::from_env();
+    let first_run = !paths.settings().exists();
+    let ctx = Arc::new(handlers::Ctx::real(paths));
+    let dock = {
+        let reply_sender = reply_sender.clone();
+        Dock::new(Box::new(move |message, _dock| {
+            let (ctx, sender) = (ctx.clone(), reply_sender.clone());
+            let emit = move |reply: DockMessage| {
+                let _ = sender.send(reply);
+            };
+            if handlers::is_blocking(&message) {
+                std::thread::spawn(move || handlers::handle(message, &ctx, &emit));
+            } else {
+                handlers::handle(message, &ctx, &emit);
+            }
+        }))
+    };
+    if first_run {
+        dock.send(&DockMessage::Notice);
+    }
 
     let exe = std::env::current_exe().expect("own path");
     match aria_hyprland::detect_config() {
@@ -84,6 +109,9 @@ fn run_dock() {
             if command == "toggle" {
                 dock.feed(Event::Toggle);
             }
+        }
+        while let Ok(reply) = reply_receiver.try_recv() {
+            dock.send(&reply);
         }
         glib::ControlFlow::Continue
     });

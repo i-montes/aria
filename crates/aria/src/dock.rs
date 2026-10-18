@@ -36,6 +36,9 @@ pub struct Dock {
     /// Bumped on every show and close, so a close timer from an earlier close is ignored.
     generation: Cell<u64>,
     problem: RefCell<Option<String>>,
+    /// The page has loaded and can take messages; until then they wait in `queued`.
+    ready: Cell<bool>,
+    queued: RefCell<Vec<String>>,
     on_message: OnMessage,
 }
 
@@ -65,6 +68,8 @@ impl Dock {
             state: Cell::new(State::Hidden),
             generation: Cell::new(0),
             problem: RefCell::new(None),
+            ready: Cell::new(false),
+            queued: RefCell::new(Vec::new()),
             on_message,
         });
 
@@ -73,7 +78,7 @@ impl Dock {
             let Some(dock) = weak.upgrade() else { return };
             let Some(json) = result.js_value().and_then(|value| value.to_json(0)) else { return };
             match serde_json::from_str::<PageMessage>(&json) {
-                Ok(PageMessage::Ready) => {}
+                Ok(PageMessage::Ready) => dock.page_ready(),
                 Ok(PageMessage::Opened) => dock.feed(Event::Opened),
                 Ok(PageMessage::CloseRequest) => dock.feed(Event::Escape),
                 Ok(message) => (dock.on_message)(message, &dock),
@@ -99,9 +104,25 @@ impl Dock {
         *self.problem.borrow_mut() = Some(code.to_string());
     }
 
+    /// Sends a message to the page; before the page has loaded it waits in a queue.
     pub fn send(&self, message: &DockMessage) {
         let Ok(json) = serde_json::to_string(message) else { return };
+        if self.ready.get() {
+            self.deliver(&json);
+        } else {
+            self.queued.borrow_mut().push(json);
+        }
+    }
+
+    fn deliver(&self, json: &str) {
         self.webview.evaluate_javascript(&format!("window.aria.receive({json})"), None, None, None::<&gio::Cancellable>, |_| {});
+    }
+
+    fn page_ready(&self) {
+        self.ready.set(true);
+        for json in self.queued.take() {
+            self.deliver(&json);
+        }
     }
 
     pub fn feed(self: &Rc<Self>, event: Event) {
