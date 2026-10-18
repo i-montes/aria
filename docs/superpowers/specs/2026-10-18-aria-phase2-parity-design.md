@@ -24,7 +24,7 @@ Parts 2a–2c depend on each other only loosely: 2a alone gives a plain chat; 2b
 ## Goals, non-goals, anti-goals
 
 - **Goals:** the dock is a usable chat for a full working day; every behaviour of today's Pi is reachable from it; changing a setting changes the behaviour without editing files; Aria does not depend on a Pi installed by the user or on `~/.pi`.
-- **Non-goals:** autonomous goals and worktrees (phase 3), the state socket and external extensions (phase 4), Mac (phase 5), the design's memory panel, task dock, document cards and notes (new features, not parity), several chats in tabs, replacing Pi.
+- **Non-goals:** autonomous goals and worktrees (phase 3), the state socket and external extensions (phase 4), Mac (phase 5), the design's memory panel, task dock, document cards and notes (new features, not parity), several chats in tabs, replacing Pi. Also left out by the owner for this phase: his personal integrations `rea`, OpenPencil and Figma (MCP servers) and the local `meeting` package; the parity check marks those items of `ARIA-SETUP.md` out of scope, and Aria never edits or removes entries it did not write in `mcp.json`.
 - **Anti-goals:** Aria doing less than the Pi it replaces; the dock freezing or losing a run when it is hidden; a secret in a log or in `settings.json`; rewriting the owner's extensions beyond what running under Aria needs (small diffs keep future Pi upgrades easy); a Pi upgrade that was never tested.
 
 ## Constraints
@@ -37,6 +37,9 @@ Parts 2a–2c depend on each other only loosely: 2a alone gives a plain chat; 2b
 
 ## Decided by the owner
 
+- **Where Aria works:** Pi runs with `sandbox.projectsDir` (`~/Projects` unless the setup says otherwise) as its working folder, as the setup already implies. **The dock shows that path all the time**, so it is always clear where Aria is working.
+- **Prompts while the dock is hidden:** when Aria needs an answer (a question, a permission, the quota choice) and the dock is hidden, it sends a **persistent desktop notification** that stays until the owner dismisses it or clicks it; clicking opens the dock on that prompt. The prompt waits for the answer (the quota countdown keeps running, as today); answering it, from the dock, removes the notification.
+- **Out of this phase:** the owner's `rea`, OpenPencil, Figma and `meeting` (see non-goals).
 - The roadmap order and the four-part split above.
 - Aria ships its **own** Pi, pinned, independent of `~/.pi` (phase 1 spec).
 - The design to build the dock from is `design/Aria.html` and its components; proto-1's structure and look are not used.
@@ -54,7 +57,7 @@ Parts 2a–2c depend on each other only loosely: 2a alone gives a plain chat; 2b
 
 ### The dock as chat (2a)
 
-Built from the owner's design components. Phase 2 uses: user and assistant messages with streaming, tool chips shown in execution order, the working indicator, the composer with the command, model and file pickers, the question card (`ask_user`), the sandbox permission card (with Jev's review), the quota card (with its countdown), and the subagents panel. Slash commands are sent as ordinary prompts (Pi runs extension commands immediately); the picker lists them from Pi (`get_commands`).
+Built from the owner's design components, with the working folder shown at all times. Phase 2 uses: user and assistant messages with streaming, tool chips shown in execution order, the working indicator, the composer with the command, model and file pickers, the question card (`ask_user`), the sandbox permission card (with Jev's review), the quota card (with its countdown), and the subagents panel. Slash commands are sent as ordinary prompts (Pi runs extension commands immediately); the picker lists them from Pi (`get_commands`).
 
 ### Extensions (2b)
 
@@ -102,6 +105,10 @@ The extensions read one config file in the agent directory instead of constants 
 - **Claude Max is part of parity** (item 11 of `ARIA-SETUP.md`): `anthropic-oauth` installs `pi-claude-agent-sdk` at a pinned version, and the installer and Aria's start-up check also cover Claude Code, which that package runs.
 - **The TypeSafe router backend is not built in phase 2.** Today only the OpenCode Jev exists, so it is not parity. The setup still accepts the TypeSafe key; with a provider that has no Jev, the router stays off (as phase 1 already defaults) until the backend is built.
 - **The `@` file picker is in scope**, as a plain, `.gitignore`-aware directory walk in Rust, relative to the chat's folder.
+
+### Notifications for a hidden dock (2a)
+
+Omarchy's own `omarchy-notification-send` is used (urgency `critical`, and a click action that opens the dock; `omarchy-notification-dismiss` removes it when the prompt is answered). Whether `critical` alone keeps a notification on screen indefinitely, or an expiry of `0` is also needed, is checked on the owner's shell by the builder.
 
 ## Left to the builder
 
