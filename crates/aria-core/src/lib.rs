@@ -6,3 +6,4 @@ pub mod auth;
 pub mod providers;
 pub mod settings;
 pub mod validate;
+pub mod oauth;
