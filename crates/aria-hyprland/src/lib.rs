@@ -11,7 +11,7 @@ use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HyprError {
-    #[error("Hyprland is not running (HYPRLAND_INSTANCE_SIGNATURE is not set)")]
+    #[error("Hyprland is not running (no live instance found)")]
     NotRunning,
     #[error("hyprctl eval failed: {0}")]
     Eval(String),
@@ -47,13 +47,42 @@ pub fn registration_lua(exe: &Path) -> String {
     )
 }
 
+fn runtime_dir() -> PathBuf {
+    PathBuf::from(std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into()))
+}
+
+/// The newest Hyprland instance under `<runtime>/hypr/` that still has its request socket.
+pub fn discover_signature(runtime: &Path) -> Option<String> {
+    std::fs::read_dir(runtime.join("hypr"))
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let modified = std::fs::metadata(entry.path().join(".socket.sock")).ok()?.modified().ok()?;
+            Some((modified, entry.file_name().to_string_lossy().into_owned()))
+        })
+        .max()
+        .map(|(_, name)| name)
+}
+
+/// `$HYPRLAND_INSTANCE_SIGNATURE` while that instance is alive. A service that outlives its Hyprland
+/// (or starts without the variable) finds the live instance instead.
 fn instance_signature() -> Result<String, HyprError> {
-    std::env::var("HYPRLAND_INSTANCE_SIGNATURE").map_err(|_| HyprError::NotRunning)
+    let runtime = runtime_dir();
+    if let Ok(signature) = std::env::var("HYPRLAND_INSTANCE_SIGNATURE") {
+        if runtime.join("hypr").join(&signature).join(".socket.sock").exists() {
+            return Ok(signature);
+        }
+    }
+    discover_signature(&runtime).ok_or(HyprError::NotRunning)
 }
 
 fn hyprctl_eval(lua: &str) -> Result<String, HyprError> {
-    instance_signature()?;
-    let output = Command::new("hyprctl").args(["eval", lua]).output().map_err(|e| HyprError::Io(e.to_string()))?;
+    let signature = instance_signature()?;
+    let output = Command::new("hyprctl")
+        .env("HYPRLAND_INSTANCE_SIGNATURE", signature)
+        .args(["eval", lua])
+        .output()
+        .map_err(|e| HyprError::Io(e.to_string()))?;
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
@@ -78,8 +107,7 @@ pub fn detect_config() -> Result<ConfigKind, HyprError> {
 
 /// One of Hyprland's two sockets: `.socket.sock` (requests) or `.socket2.sock` (events).
 pub fn socket_path(name: &str) -> Result<PathBuf, HyprError> {
-    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-    Ok(PathBuf::from(runtime).join("hypr").join(instance_signature()?).join(name))
+    Ok(runtime_dir().join("hypr").join(instance_signature()?).join(name))
 }
 
 /// The monitor marked `focused` in the output of `hyprctl monitors -j`.
@@ -147,6 +175,31 @@ mod tests {
         {"id":0,"name":"DP-1","width":1920,"height":1080,"x":0,"y":0,"scale":1.25,"focused":false},
         {"id":1,"name":"DP-2","width":1920,"height":1080,"x":1536,"y":0,"scale":1.25,"focused":true}
     ]"#;
+
+    #[test]
+    fn discovers_the_newest_live_instance() {
+        let runtime = tempfile::tempdir().unwrap();
+        let hypr = runtime.path().join("hypr");
+        let make = |name: &str, with_socket: bool| {
+            std::fs::create_dir_all(hypr.join(name)).unwrap();
+            if with_socket {
+                std::fs::write(hypr.join(name).join(".socket.sock"), "").unwrap();
+                std::thread::sleep(Duration::from_millis(20)); // distinct modification times
+            }
+        };
+        make("old_instance", true);
+        make("dead_instance", false);
+        make("new_instance", true);
+        assert_eq!(discover_signature(runtime.path()), Some("new_instance".to_string()));
+    }
+
+    #[test]
+    fn discovers_nothing_without_instances() {
+        let runtime = tempfile::tempdir().unwrap();
+        assert_eq!(discover_signature(runtime.path()), None);
+        std::fs::create_dir_all(runtime.path().join("hypr").join("dead")).unwrap();
+        assert_eq!(discover_signature(runtime.path()), None);
+    }
 
     #[test]
     fn lua_is_exact() {
