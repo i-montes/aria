@@ -206,7 +206,10 @@ impl Dock {
                     self.window.hide();
                 }
                 let monitor = self.place_on_focused_monitor();
-                self.window.set_keyboard_mode(KeyboardMode::Exclusive);
+                // On demand, not exclusive: Hyprland still focuses the dock when it maps (so you can type at
+                // once), but a click on another window takes the keyboard away. Exclusive made every other
+                // window impossible to focus while Aria was open.
+                self.window.set_keyboard_mode(KeyboardMode::OnDemand);
                 self.window.show_all();
                 self.window.present();
                 self.send(&DockMessage::Open { monitor });

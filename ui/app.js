@@ -1,10 +1,12 @@
-// The dock's page: the bridge to the Rust side, the corner notice, and the screens. Everything the
-// dock sends arrives through `window.aria.receive(message)` (see crates/aria-core/src/bridge.rs).
-import { createI18n } from './i18n.js'
+// The dock's page: the bridge to the Rust side, the corner notice, the problem banner and the
+// onboarding. Everything the dock sends arrives through `window.aria.receive(message)` (see
+// crates/aria-core/src/bridge.rs).
+import { createI18n, normalizeLanguage } from './i18n.js'
+import { createOnboarding } from './onboarding/view.js'
 
 let i18n = createI18n({})
 const t = (key, vars) => i18n.t(key, vars)
-const state = { settings: null, view: 'welcome', problem: null }
+const state = { problem: null }
 
 // ---- bridge ----------------------------------------------------------------------------------
 
@@ -17,7 +19,7 @@ const pending = new Map()
 
 /** Sends a request and resolves with the dock's reply (matched by `id`). `onProgress` gets
  * intermediate messages, such as the sign-in URL. */
-export function request(message, onProgress) {
+function request(message, onProgress) {
   const id = nextId++
   return new Promise((resolve) => {
     pending.set(id, { resolve, onProgress })
@@ -34,7 +36,7 @@ const handlers = {
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         document.body.classList.add('open')
-        focusFirst()
+        document.querySelector('#flow [data-nav]')?.focus()
       }),
     )
   },
@@ -44,7 +46,7 @@ const handlers = {
   problem: (message) =>
     booted.then(() => {
       state.problem = message.code
-      render()
+      renderProblem()
     }),
 }
 
@@ -62,40 +64,15 @@ window.aria = {
   },
 }
 
-// ---- screens ---------------------------------------------------------------------------------
+// ---- problem banner and notice ---------------------------------------------------------------
 
-const content = document.getElementById('content')
+const problem = document.getElementById('problem')
 
-function render() {
-  const problem = state.problem
+function renderProblem() {
+  problem.innerHTML = state.problem
     ? `<div class="problem"><b>${t('problem.title')}</b>${t('problem.' + state.problem)}</div>`
     : ''
-  content.innerHTML = problem + welcomeView()
-  content.querySelectorAll('[data-choice]').forEach((el) =>
-    el.addEventListener('click', () => document.dispatchEvent(new CustomEvent('aria:choose', { detail: el.dataset.choice }))),
-  )
 }
-
-function welcomeView() {
-  return `
-    <span class="dot"></span>
-    <h1>${t('welcome.title')}</h1>
-    <p class="intro">${t('welcome.intro')}</p>
-    <button class="card" data-nav data-choice="quick">
-      <div class="row"><b>${t('welcome.quick.title')}</b><span class="meta">${t('welcome.quick.time')}</span></div>
-      <div class="description">${t('welcome.quick.description')}</div>
-    </button>
-    <button class="card" data-nav data-choice="customize">
-      <div class="row"><b>${t('welcome.customize.title')}</b><span class="meta">${t('welcome.customize.steps')}</span></div>
-      <div class="description">${t('welcome.customize.description')}</div>
-    </button>
-    <div class="footer">
-      <span>${t('welcome.later')}</span>
-      <button class="link" data-nav data-choice="skip">${t('welcome.skip')}</button>
-    </div>`
-}
-
-// ---- notice ----------------------------------------------------------------------------------
 
 const NOTICE_MS = 8000
 
@@ -107,17 +84,31 @@ function showNotice() {
   setTimeout(() => document.body.classList.remove('show-notice'), NOTICE_MS)
 }
 
+// ---- onboarding ------------------------------------------------------------------------------
+
+const onboarding = createOnboarding({
+  root: document.getElementById('flow'),
+  t,
+  request,
+  post,
+  browserLanguage: () => normalizeLanguage(navigator.language),
+  // The interface follows the conversation language as soon as it is picked.
+  setLanguage: (code) => {
+    i18n.setLanguage(code)
+    renderProblem()
+    onboarding.render()
+  },
+})
+
 // ---- keyboard --------------------------------------------------------------------------------
 
-const navigable = () => [...document.querySelectorAll('[data-nav]')]
-
-function focusFirst() {
-  navigable()[0]?.focus()
-}
+// Disabled controls cannot take focus, so the arrows have to skip them.
+const navigable = () => [...document.querySelectorAll('#flow [data-nav]:not(:disabled)')]
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') return post({ type: 'closeRequest' })
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+  if (event.target instanceof HTMLInputElement && event.target.type === 'range') return
   const items = navigable()
   if (!items.length) return
   event.preventDefault()
@@ -138,11 +129,11 @@ async function boot() {
   i18n = createI18n({ en, es })
   i18n.setLanguage(navigator.language)
   const reply = await request({ type: 'loadSettings' })
-  state.settings = reply.settings
   if (reply.problem) state.problem = reply.problem
   if (reply.settings?.assistant?.language) i18n.setLanguage(reply.settings.assistant.language)
-  render()
-  if (document.body.classList.contains('open')) focusFirst()
+  renderProblem()
+  onboarding.start(reply.settings)
+  if (document.body.classList.contains('open')) document.querySelector('#flow [data-nav]')?.focus()
 }
 
 // `ready` means the bridge is up (the dock holds its messages until then), so it goes out before

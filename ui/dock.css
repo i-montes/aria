@@ -69,7 +69,7 @@ p.intro { color: #D4D4D8; font-size: 14px; line-height: 1.6; margin: 0 0 20px; }
 /* Hover, focus and selection never change the background: only the border takes the accent. */
 .card:hover, .card:focus-visible { border-color: var(--card-focus); outline: none; }
 .footer { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); margin-top: 22px; }
-.link { background: none; border: 0; padding: 4px 2px; color: var(--muted); text-decoration: underline; cursor: pointer; }
+.link { background: none; border: 0; padding: 4px 2px; font-size: 13px; color: var(--muted); text-decoration: underline; cursor: pointer; }
 .link:hover, .link:focus-visible { color: var(--text); outline: none; }
 .problem {
   margin-bottom: 18px; padding: 12px 14px; border-radius: 10px; font-size: 13px; line-height: 1.5;

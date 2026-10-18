@@ -81,13 +81,13 @@ export const stepper = (field, text, description, value, min, max, step, unit) =
   </div>`
 
 /** A list of removable chips plus a field to add one. */
-export const chips = (field, text, items, draft, placeholder, removeLabel) => `
+export const chips = (field, text, items, draft, placeholder, removeLabel, addLabel = '+') => `
   <div class="group">
     ${label(text)}
     ${items.length ? `<div class="chips">${items.map((item, i) => `<span class="chip">${esc(item)}<button type="button" class="chip-x" data-nav data-action="remove-chip" data-field="${esc(field)}" data-value="${i}" ${key('remove-chip', field, i)} aria-label="${esc(removeLabel)}">×</button></span>`).join('')}</div>` : ''}
     <div class="input-row">
-      <input data-nav data-action="chip-draft" data-field="${esc(field)}" ${key('chip-draft', field)} class="mono" value="${esc(draft)}" placeholder="${esc(placeholder)}" spellcheck="false" autocomplete="off">
-      <button type="button" class="link" data-nav data-action="add-chip" data-field="${esc(field)}" ${key('add-chip', field)}>+</button>
+      <input data-nav data-action="chip-draft" data-field="${esc(field)}" ${key('chip-draft', field)} type="text" class="mono" value="${esc(draft)}" placeholder="${esc(placeholder)}" spellcheck="false" autocomplete="off">
+      <button type="button" class="chip-add" data-nav data-action="add-chip" data-field="${esc(field)}" ${key('add-chip', field)} aria-label="${esc(addLabel)}">+</button>
     </div>
   </div>`
 
