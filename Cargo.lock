@@ -18,6 +18,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aria-hyprland"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
