@@ -91,4 +91,5 @@ Check kinds:
 | 36 | The router eval | eval | `extensions/jev-router/eval.ts` | — |
 | 36 | The sandbox review eval | eval | `extensions/sandbox/review-eval.ts` | — |
 | 36 | The sandbox acceptance | script | `extensions/sandbox/accept.sh` | — |
+| 37 | `pi -p "hola"` answers short and in Spanish | script | `tools/parity/smoke.sh` | — |
 | 37 | With a `claude-bridge` model it answers on the Max plan | manual | The smoke test with `ARIA_SMOKE_MODEL` set to a `claude-bridge` model, once the provider is connected. | — |
