@@ -14,7 +14,74 @@ use std::path::{Path, PathBuf};
 /// SDK, uses Pi's Anthropic credential (OAuth = the subscription, an API key = per token) and is about 300 MB.
 pub const CLAUDE_BRIDGE_PACKAGE: &str = "npm:pi-claude-agent-sdk@0.9.2";
 
-const DEFAULT_SYSTEM: &str = "You are Aria, a personal desktop assistant. Keep answers short and direct.\n";
+/// The one-line persona earlier versions wrote; it is replaced by the owner's.
+const PLACEHOLDER_SYSTEM: &str = "You are Aria, a personal desktop assistant. Keep answers short and direct.\n";
+
+/// The owner's persona and experts (`agent-files/` in the repo), written into the agent directory.
+static AGENT_FILES: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../agent-files");
+
+/// Which files Aria wrote, with the sha256 of what it wrote: a file whose content still has that hash was not edited by
+/// the owner and may follow a new version; any other content is the owner's and is kept.
+const MARKER: &str = ".aria-files";
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn read_marker(agent: &Path) -> serde_json::Map<String, Value> {
+    read_json(&agent.join(MARKER)).ok().flatten().and_then(|v| v.as_object().cloned()).unwrap_or_default()
+}
+
+/// Notes that Aria wrote `bytes` at `rel` (relative to the agent directory).
+pub fn record_written(agent: &Path, rel: &str, bytes: &[u8]) -> io::Result<()> {
+    let mut marker = read_marker(agent);
+    marker.insert(rel.to_string(), json!(sha256_hex(bytes)));
+    write_json_atomic(&agent.join(MARKER), &Value::Object(marker), 0o600)
+}
+
+/// Writes every file of `dir` under `agent/<prefix>`, except one the owner edited (see `MARKER`). Files whose name ends
+/// with `README.md` or `.test.ts` are not installed.
+pub fn install_embedded(agent: &Path, dir: &include_dir::Dir, prefix: &str, extra_replaceable: &[&str]) -> io::Result<()> {
+    let mut marker = read_marker(agent);
+    let mut files = Vec::new();
+    collect(dir, &mut files);
+    for file in files {
+        let rel_in_dir = file.path().to_string_lossy().into_owned();
+        if rel_in_dir.ends_with("README.md") || rel_in_dir.ends_with(".test.ts") {
+            continue;
+        }
+        let rel = if prefix.is_empty() { rel_in_dir } else { format!("{prefix}/{rel_in_dir}") };
+        let target = agent.join(&rel);
+        let wanted = file.contents();
+        let replaceable = match std::fs::read(&target) {
+            Err(_) => true,
+            Ok(current) if current == wanted => true,
+            Ok(current) => {
+                let hash = sha256_hex(&current);
+                marker.get(&rel).and_then(Value::as_str) == Some(hash.as_str()) || extra_replaceable.iter().any(|h| *h == hash)
+            }
+        };
+        if !replaceable {
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&target, wanted)?;
+        marker.insert(rel, json!(sha256_hex(wanted)));
+    }
+    write_json_atomic(&agent.join(MARKER), &Value::Object(marker), 0o600)
+}
+
+fn collect<'a>(dir: &'a include_dir::Dir<'a>, out: &mut Vec<&'a include_dir::File<'a>>) {
+    for file in dir.files() {
+        out.push(file);
+    }
+    for sub in dir.dirs() {
+        collect(sub, out);
+    }
+}
 
 /// Where Pi works: `sandbox.projectsDir` with `~` expanded, `~/Projects` when there are no settings.
 pub fn workdir(settings: Option<&Settings>) -> PathBuf {
@@ -101,10 +168,8 @@ pub fn prepare(paths: &AriaPaths, settings: Option<&Settings>) -> io::Result<()>
 
     gather_sessions(paths)?;
 
-    let system = agent.join("SYSTEM.md");
-    if !system.exists() {
-        std::fs::write(&system, DEFAULT_SYSTEM)?;
-    }
+    // The owner's persona and experts; one the owner edited is kept.
+    install_embedded(&agent, &AGENT_FILES, "", &[&sha256_hex(PLACEHOLDER_SYSTEM.as_bytes())])?;
     Ok(())
 }
 
@@ -218,15 +283,55 @@ mod tests {
     }
 
     #[test]
-    fn leaves_an_existing_system_md_alone() {
+    fn writes_the_owners_persona_and_experts() {
+        let (_dir, paths) = paths();
+        prepare(&paths, None).unwrap();
+        let system = std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap();
+        assert_eq!(system, include_str!("../../../agent-files/SYSTEM.md"));
+        assert!(system.contains("No tables"), "the answer-style rule is there");
+        for expert in ["frontend", "backend", "security", "reviewer", "researcher"] {
+            assert!(paths.agent().join("agents").join(format!("{expert}.md")).is_file(), "{expert}");
+        }
+    }
+
+    #[test]
+    fn replaces_the_placeholder_persona_of_earlier_versions() {
         let (_dir, paths) = paths();
         std::fs::create_dir_all(paths.agent()).unwrap();
-        std::fs::write(paths.agent().join("SYSTEM.md"), "custom").unwrap();
+        std::fs::write(paths.agent().join("SYSTEM.md"), PLACEHOLDER_SYSTEM).unwrap();
         prepare(&paths, None).unwrap();
-        assert_eq!(std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap(), "custom");
-        let (_dir2, paths2) = self::paths();
-        prepare(&paths2, None).unwrap();
-        assert!(std::fs::read_to_string(paths2.agent().join("SYSTEM.md")).unwrap().contains("Aria"));
+        assert_eq!(std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap(), include_str!("../../../agent-files/SYSTEM.md"));
+    }
+
+    #[test]
+    fn keeps_a_persona_the_owner_edited() {
+        let (_dir, paths) = paths();
+        prepare(&paths, None).unwrap();
+        std::fs::write(paths.agent().join("SYSTEM.md"), "my own rules").unwrap();
+        std::fs::write(paths.agent().join("agents/security.md"), "my security expert").unwrap();
+        prepare(&paths, None).unwrap();
+        assert_eq!(std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap(), "my own rules");
+        assert_eq!(std::fs::read_to_string(paths.agent().join("agents/security.md")).unwrap(), "my security expert");
+    }
+
+    #[test]
+    fn a_file_nobody_edited_follows_a_new_version_of_aria() {
+        let (_dir, paths) = paths();
+        std::fs::create_dir_all(paths.agent().join("agents")).unwrap();
+        // what an older Aria wrote, and recorded as its own
+        std::fs::write(paths.agent().join("agents/reviewer.md"), "old reviewer").unwrap();
+        record_written(&paths.agent(), "agents/reviewer.md", b"old reviewer").unwrap();
+        prepare(&paths, None).unwrap();
+        assert_eq!(std::fs::read_to_string(paths.agent().join("agents/reviewer.md")).unwrap(), include_str!("../../../agent-files/agents/reviewer.md"));
+    }
+
+    #[test]
+    fn the_marker_lists_what_aria_wrote() {
+        let (_dir, paths) = paths();
+        prepare(&paths, None).unwrap();
+        let marker = read_json(&paths.agent().join(".aria-files")).unwrap().unwrap();
+        assert!(marker["SYSTEM.md"].as_str().is_some_and(|h| h.len() == 64));
+        assert!(marker["agents/frontend.md"].is_string());
     }
 
     #[test]
