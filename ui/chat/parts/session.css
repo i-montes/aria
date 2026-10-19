@@ -1,7 +1,7 @@
 /* An agent's session view. Port of design/components/agent-session.dc.html. */
 .p-session { width: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; }
 .p-session-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.p-session-back { min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 11px 0 5px; margin-left: -6px; background: var(--surface, #16161a); border: 1px solid transparent; border-radius: 10px;
+.p-session-back { min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 4px; margin-left: -6px; background: transparent; border: 1px solid transparent; border-radius: 10px;
   color: #D6D6DC; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13.5px; cursor: pointer; }
 .p-session-back:hover, .p-session-back:focus-visible { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); }
 .p-session-back:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 2px; }
@@ -13,17 +13,18 @@
 .p-session.kind-done .p-session-dot { background: #F4F4F5; }
 .p-session-head { display: flex; flex-direction: column; gap: 4px; }
 .p-session-role { margin: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 15px; font-weight: 500; color: #F4F4F5; overflow-wrap: anywhere; }
-.p-session-task { margin: 0; font-size: 14px; line-height: 1.5; color: #B4B4BC; overflow-wrap: anywhere; }
+.p-session-task { margin: 0; font-size: 14px; line-height: 1.5; color: #B4B4BC; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 .p-session-rule { height: 1px; background: #1E1E22; }
 .p-session-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 12px; }
 .p-session-step { display: flex; flex-direction: column; }
 .p-session-tool { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 10px; align-items: start; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; line-height: 19px; color: #B4B4BC; }
 .p-session-icon { color: #8A8A94; padding-top: 2px; display: flex; min-height: 16px; }
-.p-session-call { min-width: 0; overflow-wrap: anywhere; }
+.p-session-call { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .p-session-verb { color: #F4F4F5; }
 .p-session-meta { white-space: nowrap; color: #9A9AA3; }
 .p-session-msg { margin: 0; max-width: 94%; box-sizing: border-box; background: #111114; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 16px 16px 16px 4px;
-  padding: 12px 14px; font-size: 14px; line-height: 1.55; color: #EDEDEF; overflow-wrap: anywhere; }
+  padding: 12px 14px; font-size: 14px; line-height: 1.55; color: #EDEDEF; overflow-wrap: anywhere; white-space: pre-line; }
 .p-session-code { background: #0A0A0C; border-radius: 10px; padding: 12px 14px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; line-height: 19px; display: flex; flex-direction: column; }
 .p-session-line { display: grid; grid-template-columns: 12px minmax(0, 1fr); column-gap: 8px; color: #C8C8CE; }
 .p-session-line.line-del { color: #FF9A8B; }

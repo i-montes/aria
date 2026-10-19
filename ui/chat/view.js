@@ -385,20 +385,31 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     for (const name of ['chat', 'agents', 'session', 'memory']) $(`view-${name}`).hidden = name !== view
     if (view === 'chat') return
     if (view === 'agents') {
-      $('view-agents').innerHTML = `
-        <div class="chat-panel-scroll">
-          ${current().agents.length ? renderSubagents({ agents: current().agents, footnote: t('chat.agents.footnote') }, {}, t) : `<p class="chat-panel-empty">${esc(t('chat.agents.empty'))}</p>`}
-        </div>
-        <button type="button" class="chat-back" data-chat="panel-back"><kbd>Alt</kbd><kbd>A</kbd><span>${esc(t('chat.agents.back'))}</span></button>`
+      const list = current().agents.length ? renderSubagents({ agents: current().agents, footnote: t('chat.agents.footnote') }, {}, t) : `<p class="chat-panel-empty">${esc(t('chat.agents.empty'))}</p>`
+      drawPanel($('view-agents'), list, `<button type="button" class="chat-back" data-chat="panel-back"><kbd>Alt</kbd><kbd>A</kbd><span>${esc(t('chat.agents.back'))}</span></button>`)
     } else if (view === 'session') {
       const agents = current().agents
       const agent = agents.find((a) => (a.id ?? a.role) === ui.agent) ?? agents[0]
-      $('view-session').innerHTML = `<div class="chat-panel-scroll">${agent ? renderAgentSession({ agent }, { now: Date.now() }, t) : ''}</div>`
+      drawPanel($('view-session'), agent ? renderAgentSession({ agent }, { now: Date.now() }, t) : '')
     } else if (view === 'memory') {
       keepingFocus($('view-memory'), () => {
         $('view-memory').innerHTML = renderMemory({ memories: data.memory, now: Date.now() }, ui.memory, t)
       })
     }
+  }
+
+  /** A panel's scrolling body is kept between updates: an agent writing never sends the reader back to the top, and a
+   * reader at the bottom follows what it writes (like the thread). */
+  function drawPanel(section, body, after = '') {
+    let pane = section.querySelector(':scope > .chat-panel-scroll')
+    if (!pane) {
+      section.innerHTML = `<div class="chat-panel-scroll"></div>${after}`
+      pane = section.querySelector(':scope > .chat-panel-scroll')
+    }
+    const atBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 40
+    const top = pane.scrollTop
+    patchHtml(pane, body)
+    pane.scrollTop = atBottom ? pane.scrollHeight : top
   }
 
   function drawToast() {

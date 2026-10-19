@@ -1,6 +1,7 @@
 // Run: bun test ui/chat/parts/session.test.js
 import { describe, expect, test } from 'bun:test'
 import { TEXTS, formatElapsed, renderAgentSession } from './session.js'
+import { TEXTS as AGENT_TEXTS } from './subagents.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const EVIL = `<script>alert("x")</script> & 'q'`
@@ -98,4 +99,36 @@ describe('the session view', () => {
 test('texts: both languages have the same keys, prefixed', () => {
   expect(Object.keys(TEXTS.en).sort()).toEqual(Object.keys(TEXTS.es).sort())
   for (const key of Object.keys(TEXTS.en)) expect(key.startsWith('chat.session.')).toBe(true)
+})
+
+describe('what the subagent socket sends (crates/aria/src/watch.rs)', () => {
+  // the app merges every part's texts (ui/chat/texts.js)
+  const es = (key) => ({ ...TEXTS.en, ...AGENT_TEXTS.en, ...TEXTS.es, ...AGENT_TEXTS.es })[key] ?? key
+  const agent = (steps) => ({ role: 'researcher', task: 'Count the files', status: 'reading', kind: 'active', steps })
+
+  test('a tool step is named in the reader\'s language with its icon', () => {
+    const html = renderAgentSession({ agent: agent([{ kind: 'tool', tool: 'bash', target: 'ls src' }]) }, {}, es)
+    expect(html).toContain('Ejecutar')
+    expect(html).toContain('icon-run')
+    expect(html).toContain('ls src')
+  })
+
+  test('read, edit and search tools get their icons; an unknown tool keeps its name', () => {
+    const html = renderAgentSession({ agent: agent([{ kind: 'tool', tool: 'read', target: 'a' }, { kind: 'tool', tool: 'edit', target: 'b' }, { kind: 'tool', tool: 'grep', target: 'c' }, { kind: 'tool', tool: 'codemode', target: 'd' }]) }, {}, t)
+    expect(html).toContain('icon-read')
+    expect(html).toContain('icon-edit')
+    expect(html).toContain('icon-search')
+    expect(html).toContain('Codemode')
+  })
+
+  test('the status word is translated', () => {
+    expect(renderAgentSession({ agent: agent([]) }, {}, es)).toContain('leyendo')
+  })
+
+  test('what the agent says keeps its lines and code spans, without markdown heading marks', () => {
+    const html = renderAgentSession({ agent: agent([{ kind: 'msg', text: 'There are 23.\n\n## Learnings\n- use `find`' }]) }, {}, t)
+    expect(html).not.toContain('## ')
+    expect(html).toContain('Learnings')
+    expect(html).toContain('<code')
+  })
 })

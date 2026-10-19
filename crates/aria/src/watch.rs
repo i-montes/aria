@@ -34,7 +34,8 @@ struct Agent {
     status: Status,
     steps: Vec<Value>,
     started_ms: i64,
-    tools: usize,
+    /// One word for what it is doing now (the design's status: reading, writing, running…).
+    doing: &'static str,
 }
 
 #[derive(Default)]
@@ -64,14 +65,20 @@ fn clip(text: &str, max: usize) -> String {
     }
 }
 
-fn icon_for(tool: &str) -> Option<&'static str> {
+/// The design's one-word status for a tool the agent runs.
+fn doing_for(tool: &str) -> &'static str {
     match tool {
-        "read" => Some("read"),
-        "write" | "edit" => Some("edit"),
-        "bash" => Some("run"),
-        "grep" | "find" | "ls" => Some("search"),
-        _ => None,
+        "read" => "reading",
+        "write" | "edit" => "writing",
+        "bash" => "running",
+        "grep" | "find" | "ls" => "searching",
+        _ => "working",
     }
+}
+
+/// The first line of a tool's target, short enough for one row.
+fn one_line(text: &str) -> String {
+    clip(text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or(""), 120)
 }
 
 /// A Unix socket path holds at most 104 bytes on macOS (108 on Linux). The usual name is `watch-<session>.sock`; in a
@@ -190,9 +197,9 @@ impl Watch {
                 .iter()
                 .map(|a| {
                     let (status, kind) = match a.status {
-                        Status::Running => (format!("working · {} tool{}", a.tools, if a.tools == 1 { "" } else { "s" }), "active"),
-                        Status::Done => ("done".to_string(), "done"),
-                        Status::Failed => ("failed".to_string(), "done"),
+                        Status::Running => (a.doing, "active"),
+                        Status::Done => ("done", "done"),
+                        Status::Failed => ("failed", "done"),
                     };
                     let mut steps = a.steps.clone();
                     if a.status == Status::Running {
@@ -218,7 +225,7 @@ fn serve(stream: UnixStream, state: Arc<Mutex<State>>) {
         let mut s = state.lock().unwrap();
         s.next_id += 1;
         let id = s.next_id;
-        s.agents.push(Agent { id, name: format!("#{id}"), task: String::new(), status: Status::Running, steps: Vec::new(), started_ms: now_ms(), tools: 0 });
+        s.agents.push(Agent { id, name: format!("#{id}"), task: String::new(), status: Status::Running, steps: Vec::new(), started_ms: now_ms(), doing: "starting" });
         if s.agents.len() > MAX_AGENTS {
             let extra = s.agents.len() - MAX_AGENTS;
             s.agents.drain(0..extra);
@@ -257,7 +264,7 @@ fn serve(stream: UnixStream, state: Arc<Mutex<State>>) {
     let mut s = state.lock().unwrap();
     if let Some(agent) = s.agents.iter_mut().find(|a| a.id == id) {
         if agent.status == Status::Running {
-            agent.status = if agent.steps.len() > 1 { Status::Done } else { Status::Failed };
+            agent.status = if agent.steps.is_empty() { Status::Failed } else { Status::Done };
         }
     }
     s.dirty = true;
@@ -274,8 +281,11 @@ fn push_step(agent: &mut Agent, step: Value) {
 fn apply(agent: &mut Agent, m: &Value) {
     let text = |key: &str| m[key].as_str().unwrap_or_default();
     match m["t"].as_str() {
-        Some("prompt") => push_step(agent, json!({"kind": "note", "label": "task", "text": clip(text("text"), 600)})),
+        // The prompt names the agent and its task (the header); it is not a step.
+        Some("prompt") => {}
+        Some("thinking") => agent.doing = "thinking",
         Some("text") => {
+            agent.doing = "answering";
             let delta = text("delta");
             match agent.steps.last_mut() {
                 Some(last) if last["kind"] == "msg" => {
@@ -285,14 +295,11 @@ fn apply(agent: &mut Agent, m: &Value) {
                 _ => push_step(agent, json!({"kind": "msg", "text": delta})),
             }
         }
+        // The page names the tool and picks its icon (ui/chat/parts/session.js), in the reader's language.
         Some("tool") => {
-            agent.tools += 1;
             let name = text("name");
-            let mut step = json!({"kind": "tool", "verb": name, "target": clip(text("args"), 160)});
-            if let Some(icon) = icon_for(name) {
-                step["icon"] = json!(icon);
-            }
-            push_step(agent, step);
+            agent.doing = doing_for(name);
+            push_step(agent, json!({"kind": "tool", "tool": name, "target": one_line(text("args"))}));
         }
         Some("result") if m["error"] == json!(true) => push_step(agent, json!({"kind": "note", "label": "error", "text": clip(text("text"), 600)})),
         Some("end") => agent.status = Status::Done,
@@ -405,13 +412,34 @@ mod tests {
                 json!({"t": "result", "text": "boom", "error": true}),
             ],
         );
-        let agents = eventually(&w, "steps", |a| a[0]["steps"].as_array().is_some_and(|s| s.len() >= 4));
+        let agents = eventually(&w, "steps", |a| a[0]["steps"].as_array().is_some_and(|s| s.len() >= 3));
         let steps = agents[0]["steps"].as_array().unwrap();
-        assert_eq!(steps[1], json!({"kind": "msg", "text": "Looking."}));
-        assert_eq!(steps[2], json!({"kind": "tool", "verb": "read", "target": "src/main.rs", "icon": "read"}));
-        assert_eq!(steps[3], json!({"kind": "note", "label": "error", "text": "boom"}));
+        assert_eq!(steps[0], json!({"kind": "msg", "text": "Looking."}), "the prompt is not a step: the task is in the header");
+        assert_eq!(steps[1], json!({"kind": "tool", "tool": "read", "target": "src/main.rs"}));
+        assert_eq!(steps[2], json!({"kind": "note", "label": "error", "text": "boom"}));
         assert_eq!(steps.last().unwrap()["kind"], "live", "a running agent shows what it is doing now");
-        assert_eq!(agents[0]["status"], "working · 1 tool");
+    }
+
+    #[test]
+    fn a_long_or_multiline_target_is_one_short_line() {
+        let (_d, w, _) = watch();
+        let code = format!("const a = 1;\n{}", "x".repeat(300));
+        let _c = child(&w, &[json!({"t": "tool", "name": "codemode", "args": code})]);
+        let agents = eventually(&w, "the tool", |a| a[0]["steps"].as_array().is_some_and(|s| !s.is_empty()));
+        assert_eq!(agents[0]["steps"][0]["target"], "const a = 1;");
+    }
+
+    #[test]
+    fn the_status_is_one_word_for_what_it_does_now() {
+        let (_d, w, _) = watch();
+        let _a = child(&w, &[]);
+        eventually(&w, "starting", |a| a[0]["status"] == "starting");
+        let _b = child(&w, &[json!({"t": "tool", "name": "read", "args": "a"})]);
+        eventually(&w, "reading", |a| a.as_array().unwrap().iter().any(|x| x["status"] == "reading"));
+        let _c = child(&w, &[json!({"t": "tool", "name": "edit", "args": "a"})]);
+        eventually(&w, "writing", |a| a.as_array().unwrap().iter().any(|x| x["status"] == "writing"));
+        let _d2 = child(&w, &[json!({"t": "tool", "name": "bash", "args": "ls"})]);
+        eventually(&w, "running", |a| a.as_array().unwrap().iter().any(|x| x["status"] == "running"));
     }
 
     #[test]
@@ -449,7 +477,7 @@ mod tests {
         c.write_all(&vec![b'x'; 200 * 1024]).unwrap();
         writeln!(c).unwrap();
         writeln!(c, "{}", json!({"t": "tool", "name": "ls", "args": "."})).unwrap();
-        eventually(&w, "the line after the long one", |a| a[0]["status"] == "working · 1 tool");
+        eventually(&w, "the line after the long one", |a| a[0]["steps"].as_array().is_some_and(|s| s.iter().any(|x| x["tool"] == "ls")));
     }
 
     #[test]
@@ -463,6 +491,6 @@ mod tests {
         writeln!(bad, "not json").unwrap();
         writeln!(bad, "{}", json!({"t": "tool", "name": "bash", "args": "ls"})).unwrap();
         eventually(&w, "twenty", |a| a.as_array().is_some_and(|l| l.len() == 20));
-        eventually(&w, "the good line after the garbage", |a| a.as_array().unwrap().iter().any(|x| x["status"] == "working · 1 tool"));
+        eventually(&w, "the good line after the garbage", |a| a.as_array().unwrap().iter().any(|x| x["status"] == "running"));
     }
 }

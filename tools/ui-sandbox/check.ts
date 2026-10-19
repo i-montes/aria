@@ -59,6 +59,21 @@ const script = `(async () => {
   check('the card is fully inside the dock', popBox().right <= window.innerWidth && popBox().left >= 0, JSON.stringify(popBox()))
   document.activeElement.blur()
 
+  // 8c. an agent's session keeps the reader's place while the agent writes, and follows it when at the bottom
+  const longSteps = Array.from({ length: 40 }, (_, i) => ({ kind: 'tool', tool: 'read', target: 'src/file' + i + '.ts' }))
+  const agentWith = (steps) => [{ id: 'w1', role: 'researcher', task: 'Count the files', status: 'reading', kind: 'active', steps }]
+  window.aria.chat.setAgents(agentWith(longSteps)); if ($('#chat-body').dataset.view !== 'agents') window.aria.chat.toggleAgents(); await wait(60)
+  $('#view-agents [data-chat="agent-select"]').click(); await wait(80)
+  const pane = () => $('#view-session .chat-panel-scroll')
+  pane().scrollTop = 120; await wait(20)
+  window.aria.chat.setAgents(agentWith([...longSteps, { kind: 'msg', text: 'more' }])); await wait(60)
+  check('a new step does not send the agent session back to the top', pane().scrollTop >= 100, pane().scrollTop)
+  pane().scrollTop = pane().scrollHeight; await wait(20)
+  window.aria.chat.setAgents(agentWith([...longSteps, { kind: 'msg', text: 'more' }, { kind: 'msg', text: 'and more' }])); await wait(60)
+  check('at the bottom, the session follows what the agent writes', pane().scrollHeight - pane().scrollTop - pane().clientHeight < 4, [pane().scrollTop, pane().scrollHeight, pane().clientHeight].join(' '))
+  window.aria.chat.toggleAgents(); await wait(40)
+
+
   // 1. the textarea survives a run starting, text appearing and the model changing
   typeIn('half-typed')
   const mark = $('#chat-input'); mark.__mark = 1

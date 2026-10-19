@@ -29,6 +29,17 @@ export const TEXTS = {
     'chat.agents.open': 'Open the {role} session',
     'chat.agents.footnote': 'select an agent to open its session',
     'chat.agents.empty': 'No subagents are working',
+    'chat.agents.status.starting': 'starting',
+    'chat.agents.status.thinking': 'thinking',
+    'chat.agents.status.reading': 'reading',
+    'chat.agents.status.writing': 'writing',
+    'chat.agents.status.running': 'running',
+    'chat.agents.status.searching': 'searching',
+    'chat.agents.status.answering': 'answering',
+    'chat.agents.status.working': 'working',
+    'chat.agents.status.done': 'done',
+    'chat.agents.status.failed': 'failed',
+    'chat.agents.status.queued': 'queued',
   },
   es: {
     'chat.agents.title': 'Subagentes',
@@ -37,11 +48,29 @@ export const TEXTS = {
     'chat.agents.open': 'Abrir la sesión de {role}',
     'chat.agents.footnote': 'elige un agente para abrir su sesión',
     'chat.agents.empty': 'No hay subagentes trabajando',
+    'chat.agents.status.starting': 'empezando',
+    'chat.agents.status.thinking': 'pensando',
+    'chat.agents.status.reading': 'leyendo',
+    'chat.agents.status.writing': 'escribiendo',
+    'chat.agents.status.running': 'ejecutando',
+    'chat.agents.status.searching': 'buscando',
+    'chat.agents.status.answering': 'respondiendo',
+    'chat.agents.status.working': 'trabajando',
+    'chat.agents.status.done': 'terminado',
+    'chat.agents.status.failed': 'falló',
+    'chat.agents.status.queued': 'en cola',
   },
 }
 
 const KINDS = ['active', 'done', 'queued']
 const CHEVRON = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A8A94" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top: 3px"><path d="M9 6l6 6-6 6"></path></svg>'
+
+/** The status word the socket sends (`reading`, `done`…) in the reader's language; free text stays as it is. */
+export const statusLabel = (status, t) => {
+  const key = `chat.agents.status.${status}`
+  const text = t(key)
+  return text && text !== key && !text.startsWith(`${key} `) ? text : String(status ?? '')
+}
 
 export const agentKind = (kind) => (KINDS.includes(kind) ? kind : 'queued')
 const agentsOf = (agents) => (Array.isArray(agents) ? agents.filter((a) => a && typeof a === 'object') : [])
@@ -59,7 +88,7 @@ function item(a, t) {
       <span class="p-agents-dot" aria-hidden="true"></span>
       <span class="p-agents-role">${esc(a.role)}</span>
       <span class="p-agents-task">${esc(a.task)}</span>
-      <span class="p-agents-status">${esc(a.status)}</span>
+      <span class="p-agents-status">${esc(statusLabel(a.status, t))}</span>
       ${CHEVRON}
     </button></li>`
 }

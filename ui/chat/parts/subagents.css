@@ -11,7 +11,8 @@
 .p-agents-row:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 2px; }
 .p-agents-dot { width: 7px; height: 7px; margin-top: 7px; border-radius: 50%; background: #55555E; }
 .p-agents-role { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; color: #F4F4F5; overflow-wrap: anywhere; }
-.p-agents-task { min-width: 0; font-size: 13.5px; color: #B4B4BC; overflow-wrap: anywhere; }
+.p-agents-task { min-width: 0; font-size: 13.5px; color: #B4B4BC; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
 .p-agents-status { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; white-space: nowrap; color: #9A9AA3; }
 .p-agents-row.kind-active .p-agents-dot { background: var(--accent, #B9A8FF); }
 .p-agents-row.kind-active .p-agents-status { color: var(--accent, #B9A8FF); }

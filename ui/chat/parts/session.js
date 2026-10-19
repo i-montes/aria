@@ -14,6 +14,7 @@
 //     } | null,
 //   }
 //   Step =
+//     { kind: 'tool', tool: string, target: string }              // from the socket: verb and icon come from `tool`
 //     { kind: 'tool', icon?: 'read' | 'edit' | 'run' | 'search',   // unknown icon: none
 //       verb: string, target: string, meta?: string, metaColor?: '#rrggbb' | 'rgb(...)' }  // a tool call row
 //     { kind: 'msg',  text: string }                                // what the agent said
@@ -28,6 +29,8 @@
 //   data-chat="agent-back"                   back to the subagents list
 
 import { esc } from '../../onboarding/components.js'
+import { renderInline } from './assistant.js'
+import { statusLabel } from './subagents.js'
 
 export const TEXTS = {
   en: {
@@ -36,6 +39,13 @@ export const TEXTS = {
     'chat.session.code': 'Code change',
     'chat.session.empty': 'Nothing yet',
     'chat.session.missing': 'This session is not available',
+    'chat.session.verb.read': 'Read',
+    'chat.session.verb.write': 'Write',
+    'chat.session.verb.edit': 'Edit',
+    'chat.session.verb.bash': 'Run',
+    'chat.session.verb.grep': 'Search',
+    'chat.session.verb.find': 'Find',
+    'chat.session.verb.ls': 'List',
   },
   es: {
     'chat.session.back': 'Subagentes',
@@ -43,6 +53,13 @@ export const TEXTS = {
     'chat.session.code': 'Cambio de código',
     'chat.session.empty': 'Todavía nada',
     'chat.session.missing': 'Esta sesión no está disponible',
+    'chat.session.verb.read': 'Leer',
+    'chat.session.verb.write': 'Escribir',
+    'chat.session.verb.edit': 'Editar',
+    'chat.session.verb.bash': 'Ejecutar',
+    'chat.session.verb.grep': 'Buscar',
+    'chat.session.verb.find': 'Buscar',
+    'chat.session.verb.ls': 'Listar',
   },
 }
 
@@ -66,10 +83,27 @@ export function formatElapsed(ms) {
 /** Only a plain hex or rgb()/rgba() colour reaches a style attribute. */
 const safeColor = (value) => (/^(#[0-9a-f]{3,8}|rgba?\(\s*[\d.,\s%]+\))$/i.test(String(value ?? '')) ? String(value) : '')
 
+/** The icon for a tool the socket names (`tool`), as the design's session shows them. */
+const TOOL_ICONS = { read: 'read', write: 'edit', edit: 'edit', bash: 'run', grep: 'search', find: 'search', ls: 'search' }
+
+/** The verb for a tool: the design's short word in the reader's language; another tool keeps its name, humanised. */
+function toolVerb(tool, t) {
+  const key = `chat.session.verb.${tool}`
+  const text = t(key)
+  if (text && text !== key && !text.startsWith(`${key} `)) return text
+  const name = String(tool ?? '').split('__').pop().replace(/[_-]+/g, ' ').trim()
+  return name ? name[0].toUpperCase() + name.slice(1) : ''
+}
+
+/** What the agent said: its lines and `code` spans; markdown heading marks (its "## Learnings") are dropped. */
+const messageHtml = (text) => renderInline(String(text ?? '').replace(/^#{1,6}\s+/gm, ''))
+
 const capitalize = (text) => String(text ?? '').charAt(0).toUpperCase() + String(text ?? '').slice(1)
 
 function step(s, ui, t) {
   if (s.kind === 'tool') {
+    // The socket sends the tool's name (`tool`); a step built by hand may still carry `verb` and `icon`.
+    if (s.tool) s = { ...s, verb: toolVerb(s.tool, t), icon: TOOL_ICONS[s.tool] }
     const icon = ICONS[s.icon]
     const color = safeColor(s.metaColor)
     return `<li class="p-session-step"><div class="p-session-tool">
@@ -78,7 +112,7 @@ function step(s, ui, t) {
       <span class="p-session-meta"${color ? ` style="color:${color}"` : ''}>${esc(s.meta)}</span>
     </div></li>`
   }
-  if (s.kind === 'msg') return `<li class="p-session-step"><p class="p-session-msg">${esc(s.text)}</p></li>`
+  if (s.kind === 'msg') return `<li class="p-session-step"><p class="p-session-msg">${messageHtml(s.text)}</p></li>`
   if (s.kind === 'code') {
     const lines = (Array.isArray(s.lines) ? s.lines : []).filter((l) => l && typeof l === 'object')
     const body = lines
@@ -104,7 +138,7 @@ export function renderAgentSession(props, ui, t) {
     ? `<ol class="p-session-steps" aria-label="${esc(t('chat.session.activity'))}">${steps}</ol>`
     : `<p class="p-session-empty">${esc(t('chat.session.empty'))}</p>`
   return `<div class="p-session kind-${kind}">
-  <div class="p-session-top">${back}<span class="p-session-status"><span class="p-session-dot" aria-hidden="true"></span>${esc(agent.status)}</span></div>
+  <div class="p-session-top">${back}<span class="p-session-status"><span class="p-session-dot" aria-hidden="true"></span>${esc(statusLabel(agent.status, t))}</span></div>
   <div class="p-session-head"><h2 class="p-session-role">${esc(agent.role)}</h2><p class="p-session-task">${esc(agent.task)}</p></div>
   <div class="p-session-rule" aria-hidden="true"></div>
   ${log}

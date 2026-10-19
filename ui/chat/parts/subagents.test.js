@@ -63,3 +63,10 @@ test('texts: both languages have the same keys, prefixed', () => {
   expect(Object.keys(TEXTS.en).sort()).toEqual(Object.keys(TEXTS.es).sort())
   for (const key of Object.keys(TEXTS.en)) expect(key.startsWith('chat.agents.')).toBe(true)
 })
+
+describe('the status word from the socket', () => {
+  test('is translated in the list', () => {
+    const es = (key, vars) => ({ ...TEXTS.en, ...TEXTS.es })[key]?.replace(/\{(\w+)\}/g, (_, n) => vars?.[n] ?? '') ?? key
+    expect(renderSubagents({ agents: [{ id: 'a', role: 'backend', task: 'x', status: 'writing', kind: 'active' }] }, {}, es)).toContain('escribiendo')
+  })
+})
