@@ -1,0 +1,109 @@
+/* Memory panel. Port of design/components/memory-panel.dc.html.
+   Owner's rule: buttons and cards are SOLID and never change fill on hover, focus, selection or "pressed";
+   only the border takes the accent. */
+.p-memory { display: flex; flex-direction: column; gap: 12px; width: 100%; height: 100%; min-height: 0; box-sizing: border-box; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; }
+.p-memory-top { display: flex; align-items: center; gap: 8px; }
+.p-memory-back { display: flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; height: 44px; margin-left: -10px; padding: 0; border: 1px solid transparent; border-radius: 12px;
+  background: var(--surface, #16161a); color: #B4B4BC; cursor: pointer; }
+.p-memory-back:hover, .p-memory-back:focus-visible { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); color: #F4F4F5; }
+.p-memory-back:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 2px; }
+.p-memory-heading { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
+.p-memory-h { margin: 0; font-size: 16px; font-weight: 600; color: #F4F4F5; }
+.p-memory-store { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #9A9AA3; overflow-wrap: anywhere; }
+.p-memory-active { flex: 0 0 auto; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; font-variant-numeric: tabular-nums; color: #B4B4BC; }
+
+.p-memory-search { position: relative; display: flex; align-items: center; gap: 8px; min-height: 44px; box-sizing: border-box; padding: 0 6px 0 12px; border-radius: 12px;
+  background: var(--field, #0f0f12); border: 1px solid rgba(255, 255, 255, 0.1); }
+.p-memory-search:focus-within { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); }
+.p-memory-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.p-memory-input { flex: 1 1 auto; min-width: 0; height: 42px; padding: 0; border: 0; outline: none; background: transparent; color: #F4F4F5; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 14px; }
+.p-memory-input::placeholder { color: #8A8A94; }
+.p-memory-clear { display: flex; align-items: center; justify-content: center; flex: 0 0 32px; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: 8px; background: var(--field, #0f0f12); color: #8A8A94; cursor: pointer; }
+.p-memory-clear:hover, .p-memory-clear:focus-visible { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); color: #F4F4F5; }
+.p-memory-clear:focus-visible { outline: 2px solid #B9A8FF; outline-offset: -2px; }
+.p-memory-badge { flex: 0 0 auto; padding: 1px 8px; border-radius: 999px; background: #232328; color: #B4B4BC; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px; }
+
+.p-memory-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.p-memory-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; box-sizing: border-box; padding: 0 10px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 999px;
+  background: var(--surface, #16161a); color: #B4B4BC; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12px; font-weight: 500; cursor: pointer; }
+.p-memory-chip:hover, .p-memory-chip:focus-visible, .p-memory-chip[aria-pressed='true'] { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); }
+.p-memory-chip[aria-pressed='true'] { color: #F4F4F5; }
+.p-memory-chip:focus-visible, .p-memory-toggle:focus-visible, .p-memory-sort:focus-visible, .p-memory-btn:focus-visible, .p-memory-undo-btn:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 2px; }
+.p-memory-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: #B4B4BC; }
+.p-memory-n { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.75; }
+
+.p-memory-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.p-memory-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; box-sizing: border-box; padding: 0 10px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px;
+  background: var(--surface, #16161a); color: #B4B4BC; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12px; font-weight: 500; cursor: pointer; }
+.p-memory-toggle:hover, .p-memory-toggle:focus-visible, .p-memory-toggle[aria-pressed='true'] { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); }
+.p-memory-toggle[aria-pressed='true'] { color: #F4F4F5; }
+.p-memory-sort { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; margin-left: auto; padding: 0 8px; border: 1px solid transparent; border-radius: 8px;
+  background: var(--surface, #16161a); color: #9A9AA3; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; cursor: pointer; }
+.p-memory-sort:hover, .p-memory-sort:focus-visible { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); color: #F4F4F5; }
+
+.p-memory-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; overflow-x: hidden; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.28) transparent; }
+.p-memory-row { flex: 0 0 auto; overflow: hidden; border-radius: 14px; background: #111114; border: 1px solid rgba(255, 255, 255, 0.07); transition: border-color 200ms ease; }
+.p-memory-row.is-enter { animation: p-memory-up 260ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.p-memory-row.is-open { border-color: rgba(185, 168, 255, 0.35); }
+.p-memory-row:hover { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); }
+.p-memory-head { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; column-gap: 12px; align-items: start; width: 100%; min-height: 44px; box-sizing: border-box; margin: 0; padding: 11px 12px;
+  border: 0; background: #111114; color: inherit; font-family: Geist, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; }
+.p-memory-head:focus-visible { outline: 2px solid #B9A8FF; outline-offset: -2px; }
+.p-memory-dot { width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: #B4B4BC; }
+.p-memory-main { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.p-memory-title { min-width: 0; font-size: 13.5px; font-weight: 500; line-height: 20px; color: #F4F4F5; overflow-wrap: anywhere; }
+.p-memory-title .hit { color: #B9A8FF; font-weight: 600; }
+.p-memory-preview { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-width: 0; font-size: 12.5px; line-height: 1.5; color: #9A9AA3; font-weight: 400; overflow-wrap: anywhere; }
+.p-memory-preview .hit { color: #F4F4F5; font-weight: 500; }
+.p-memory-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.p-memory-type { padding: 0 7px; border-radius: 6px; background: #232328; color: #B4B4BC; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px; }
+.p-memory-key { padding: 0 7px; border-radius: 6px; background: #1c1c20; color: #B4B4BC; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px; overflow-wrap: anywhere; }
+.p-memory-key .hit { color: #B9A8FF; font-weight: 600; }
+.p-memory-rev { color: #8A8A94; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; }
+.p-memory-personal { padding: 0 7px; border-radius: 6px; background: #2c2029; color: #F0A8D8; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px; }
+.p-memory-when { display: flex; align-items: center; gap: 6px; padding-top: 2px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #8A8A94; white-space: nowrap; }
+/* the type colour: dot and type label */
+.p-memory-row.type-finding .p-memory-dot, .p-memory-chip.type-finding .p-memory-chip-dot { background: #7DD3FC; }
+.p-memory-row.type-decision .p-memory-dot, .p-memory-chip.type-decision .p-memory-chip-dot { background: #B9A8FF; }
+.p-memory-row.type-pattern .p-memory-dot, .p-memory-chip.type-pattern .p-memory-chip-dot { background: #9BE7C4; }
+.p-memory-row.type-session_summary .p-memory-dot, .p-memory-chip.type-session_summary .p-memory-chip-dot { background: #F0B44C; }
+.p-memory-row.type-manual .p-memory-dot, .p-memory-chip.type-manual .p-memory-chip-dot { background: #FF9A8B; }
+.p-memory-row.type-learning .p-memory-dot, .p-memory-chip.type-learning .p-memory-chip-dot { background: #F0A8D8; }
+.p-memory-row.type-identity .p-memory-dot, .p-memory-chip.type-identity .p-memory-chip-dot { background: #F4F4F5; }
+.p-memory-row.type-finding .p-memory-type { color: #7DD3FC; }
+.p-memory-row.type-decision .p-memory-type { color: #B9A8FF; }
+.p-memory-row.type-pattern .p-memory-type { color: #9BE7C4; }
+.p-memory-row.type-session_summary .p-memory-type { color: #F0B44C; }
+.p-memory-row.type-manual .p-memory-type { color: #FF9A8B; }
+.p-memory-row.type-learning .p-memory-type { color: #F0A8D8; }
+.p-memory-row.type-identity .p-memory-type { color: #F4F4F5; }
+
+.p-memory-detail { display: flex; flex-direction: column; gap: 12px; padding: 2px 12px 12px 32px; animation: p-memory-open 300ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.p-memory-content { margin: 0; font-size: 13px; line-height: 1.55; color: #D6D6DC; white-space: pre-wrap; overflow-wrap: anywhere; }
+.p-memory-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 17px; }
+.p-memory-fields dt { color: #8A8A94; }
+.p-memory-fields dd { margin: 0; color: #D6D6DC; overflow-wrap: anywhere; }
+.p-memory-fields dd.is-dim { color: #8A8A94; }
+.p-memory-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.p-memory-btn { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 10px; background: var(--surface, #16161a);
+  color: #EDEDEF; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13px; cursor: pointer; }
+.p-memory-btn.is-danger { color: #FF9A8B; border-color: rgba(255, 154, 139, 0.3); }
+.p-memory-btn:hover, .p-memory-btn:focus-visible { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); }
+
+.p-memory-empty { display: flex; flex-direction: column; gap: 4px; padding: 18px 4px; }
+.p-memory-empty-title { font-size: 13.5px; line-height: 1.45; color: #C8C8CE; overflow-wrap: anywhere; }
+.p-memory-empty-hint { font-size: 12.5px; line-height: 1.45; color: #8A8A94; }
+
+.p-memory-undo { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 6px 4px 14px; border-radius: 12px; background: var(--surface-2, #1f1f24); border: 1px solid rgba(255, 255, 255, 0.1);
+  animation: p-memory-up 240ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.p-memory-undo-text { min-width: 0; font-size: 13px; line-height: 1.4; color: #D6D6DC; overflow-wrap: anywhere; }
+.p-memory-undo-btn { flex: 0 0 auto; min-height: 40px; padding: 0 14px; border: 1px solid transparent; border-radius: 10px; background: var(--surface-2, #1f1f24); color: #B9A8FF;
+  font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13px; font-weight: 600; cursor: pointer; }
+.p-memory-undo-btn:hover, .p-memory-undo-btn:focus-visible { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); }
+
+.p-memory-foot { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 2px 2px 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 16px; color: #8A8A94; }
+
+@keyframes p-memory-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes p-memory-open { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .p-memory, .p-memory * { animation: none !important; transition: none !important; } }

@@ -1,0 +1,72 @@
+/* Task dock and inline task log. Port of design/components/task-dock.dc.html.
+   Owner's rule: solid backgrounds that never change on hover/focus/selection; only the border takes the accent. */
+.p-tasks { position: relative; z-index: 1; display: grid; grid-template-rows: 1fr; opacity: 1; visibility: visible;
+  transition: grid-template-rows 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease, visibility 0s linear 0ms;
+  font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; }
+.p-tasks.is-hidden { grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition-delay: 0s, 0s, 320ms; }
+.p-tasks.is-inline { animation: p-tasks-fade-up 320ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.p-tasks-clip { min-height: 0; clip-path: inset(0 -24px -1px -24px); }
+.p-tasks-align { display: flex; justify-content: center; }
+.p-tasks.is-inline .p-tasks-align { justify-content: flex-start; }
+.p-tasks-dock { position: relative; display: flex; flex-direction: column; width: 264px; max-width: 100%; box-sizing: border-box; margin-bottom: -1px;
+  overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.1); border-bottom: 0; border-radius: 14px 14px 0 0; background: var(--surface, #16161a);
+  transition: width 360ms cubic-bezier(0.22, 1, 0.36, 1); }
+.p-tasks.is-open .p-tasks-dock { width: 100%; }
+.p-tasks.is-inline .p-tasks-dock { flex-direction: column-reverse; max-width: 360px; margin-bottom: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.1); border-radius: 14px; }
+
+.p-tasks-list-wrap { display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden;
+  transition: grid-template-rows 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease, visibility 0s linear 320ms; }
+.p-tasks.is-open .p-tasks-list-wrap { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s, 0s, 0s; }
+.p-tasks-list-clip { min-height: 0; overflow: hidden; }
+.p-tasks-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 10px 8px 4px; list-style: none; max-height: 232px; overflow-x: hidden; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.28) transparent; }
+.p-tasks.is-inline .p-tasks-list { padding: 2px 8px 8px; }
+.p-tasks-item { opacity: 0; transform: translateY(6px);
+  transition: opacity 240ms ease var(--p-tasks-delay, 0ms), transform 300ms cubic-bezier(0.22, 1, 0.36, 1) var(--p-tasks-delay, 0ms); }
+.p-tasks.is-open .p-tasks-item { opacity: 1; transform: none; }
+
+.p-tasks-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 10px; align-items: start; width: 100%; box-sizing: border-box; margin: 0;
+  padding: 5px 7px; border: 1px solid transparent; border-radius: 10px; background: var(--surface, #16161a); color: inherit;
+  font-family: Geist, ui-sans-serif, system-ui, sans-serif; text-align: left; }
+button.p-tasks-row { cursor: pointer; }
+button.p-tasks-row:hover, button.p-tasks-row:focus-visible { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); }
+button.p-tasks-row:focus-visible { outline: 2px solid #B9A8FF; outline-offset: -2px; }
+.p-tasks-row.status-active { background: #23222c; } /* the design's 8% lavender tint, as the opaque colour on the dock */
+.p-tasks-icon { display: flex; align-items: center; justify-content: center; width: 16px; height: 18px; }
+.p-tasks-check { display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background: #26322f; color: #8BE0B0; }
+.p-tasks-spin { width: 13px; height: 13px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid #34343B; border-top-color: #B9A8FF; animation: p-tasks-spin 700ms linear infinite; }
+.p-tasks-ring { width: 13px; height: 13px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid #34343B; }
+.p-tasks-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.p-tasks-primary { font-size: 13px; line-height: 18px; color: #B4B4BC; overflow-wrap: anywhere; font-weight: 400; transition: color 300ms ease; }
+.p-tasks-second { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 16px; color: #9A9AA3; overflow-wrap: anywhere; }
+.p-tasks-status { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 18px; color: #8A8A94; white-space: nowrap; }
+.p-tasks-row.status-done .p-tasks-primary { color: #8A8A94; }
+.p-tasks-row.status-done .p-tasks-status { color: #8BE0B0; }
+.p-tasks-row.status-active .p-tasks-primary { color: #F4F4F5; font-weight: 500; }
+.p-tasks-row.status-active .p-tasks-status { color: #B9A8FF; }
+.p-tasks.kind-agents .p-tasks-primary { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; }
+.p-tasks.kind-agents .p-tasks-second { font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12.5px; }
+
+.p-tasks-toggle { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; box-sizing: border-box; margin: 0; padding: 0 14px; border: 0;
+  background: var(--surface, #16161a); color: inherit; font-family: Geist, ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
+.p-tasks-toggle:hover, .p-tasks-toggle:focus-visible { box-shadow: inset 0 0 0 1px var(--accent-border, rgba(185, 168, 255, 0.7)); }
+.p-tasks-toggle:focus-visible { outline: 2px solid #B9A8FF; outline-offset: -2px; }
+.p-tasks-chev { flex: 0 0 14px; transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1); transform: rotate(0deg); }
+.p-tasks-chev.chev-flip { transform: rotate(180deg); }
+.p-tasks-kind { flex: 0 0 auto; font-size: 12px; font-weight: 500; line-height: 16px; color: #D6D6DC; }
+.p-tasks-bar { position: relative; flex: 1 1 auto; min-width: 0; height: 4px; overflow: hidden; border-radius: 999px; background: #2b2b31; }
+.p-tasks-fill { position: absolute; top: 0; left: 0; bottom: 0; border-radius: 999px; background: linear-gradient(90deg, #B9A8FF, #E4DDFF, #B9A8FF); background-size: 200% 100%;
+  transition: width 700ms cubic-bezier(0.22, 1, 0.36, 1), background-color 300ms ease, filter 350ms ease; }
+.p-tasks-fill.is-live { animation: p-tasks-sheen 2.4s linear infinite; }
+.p-tasks-fill.is-complete { background: #8BE0B0; }
+.p-tasks.is-pulse .p-tasks-fill { filter: brightness(1.5) saturate(1.2); }
+.p-tasks-count { flex: 0 0 auto; display: inline-block; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; font-variant-numeric: tabular-nums; color: #B4B4BC;
+  transition: color 300ms ease, transform 350ms cubic-bezier(0.22, 1, 0.36, 1); }
+.p-tasks-count.is-complete { color: #8BE0B0; }
+.p-tasks.is-pulse .p-tasks-count { transform: scale(1.25); }
+
+@keyframes p-tasks-sheen { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes p-tasks-spin { to { transform: rotate(360deg); } }
+@keyframes p-tasks-fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .p-tasks, .p-tasks * { animation: none !important; transition: none !important; } }
+.p-tasks.is-static, .p-tasks.is-static * { animation: none !important; }

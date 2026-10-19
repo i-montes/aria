@@ -1,0 +1,96 @@
+/* The session tabs (design/components/session-tabs). Solid fills: hover and selection never change a
+   background's opacity, only the border takes the accent. Translucent fills of the design are replaced
+   by the equivalent opaque colours. */
+.p-tabs { display: flex; flex-direction: column; gap: 6px; width: 100%; box-sizing: border-box; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; }
+.p-tabs-bar { position: relative; display: flex; align-items: center; gap: 2px; min-height: 36px; }
+.p-tabs-list { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; gap: 2px; }
+.p-tabs-tab { position: relative; display: flex; align-items: center; flex: 1 1 0; min-width: 0; max-width: 156px; height: 34px; box-sizing: border-box; border-radius: 10px;
+  background: var(--surface, #16161a); border: 1px solid var(--line, rgba(255, 255, 255, 0.08)); transition: border-color 140ms ease; }
+.p-tabs-tab.on { background: var(--surface-2, #1f1f24); border-color: var(--accent-border, #B9A8FF); }
+.p-tabs-tab:not(.on):hover, .p-tabs-tab:not(.on):focus-within { border-color: var(--line-strong, rgba(255, 255, 255, 0.1)); }
+.p-tabs-main { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; height: 100%; box-sizing: border-box; margin: 0; padding: 0 11px; border: 0; border-radius: 10px;
+  background: transparent; color: #9A9AA3; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12.5px; font-weight: 400; text-align: left; cursor: pointer; }
+.p-tabs-tab.closable .p-tabs-main { padding-right: 30px; }
+.p-tabs-tab.unread .p-tabs-main { color: #E4E4E8; font-weight: 500; }
+.p-tabs-tab.on .p-tabs-main { color: #F4F4F5; font-weight: 500; }
+.p-tabs-main:focus-visible { outline: 2px solid #B9A8FF; outline-offset: -2px; }
+.p-tabs-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-tabs-dot { flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%; background: #4A4A52; }
+.p-tabs-tab.tone-working > .p-tabs-main .p-tabs-dot, .p-tabs-menu-row.tone-working .p-tabs-dot { background: #B9A8FF; animation: p-tabs-pulse 1.4s ease-in-out infinite; }
+.p-tabs-tab.tone-needs > .p-tabs-main .p-tabs-dot, .p-tabs-menu-row.tone-needs .p-tabs-dot { background: var(--warn, #F0B44C); }
+.p-tabs-tab.tone-done > .p-tabs-main .p-tabs-dot, .p-tabs-menu-row.tone-done .p-tabs-dot { background: var(--ok, #8BE0B0); }
+.p-tabs-x { position: absolute; top: 50%; right: 4px; width: 24px; height: 24px; margin: -12px 0 0; padding: 0; display: flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 7px; background: inherit; color: #9A9AA3; cursor: pointer; opacity: 0; transition: opacity 120ms ease, border-color 120ms ease; }
+.p-tabs-tab.on .p-tabs-x, .p-tabs-tab:hover .p-tabs-x, .p-tabs-tab:focus-within .p-tabs-x { opacity: 1; }
+.p-tabs-x:hover, .p-tabs-x:focus-visible { border-color: var(--accent-border, #B9A8FF); color: #F4F4F5; }
+.p-tabs-x:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 1px; }
+.p-tabs-input { flex: 1 1 auto; min-width: 0; height: 28px; box-sizing: border-box; margin: 0 4px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--accent-border, #B9A8FF);
+  background: var(--field, #0f0f12); color: #F4F4F5; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12.5px; outline: none; }
+.p-tabs-input::selection { background: #4A4268; }
+
+/* The tooltip: model, context and quota of the session under the pointer or focus. */
+.p-tabs-tip { position: absolute; top: 40px; left: 0; z-index: 40; display: flex; flex-direction: column; gap: 10px; width: 240px; box-sizing: border-box; padding: 12px 14px; border-radius: 14px;
+  background: #141417; border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.1)); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55); text-align: left; cursor: default;
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 100ms ease, visibility 0s linear 100ms; }
+.p-tabs-tip.is-right { left: auto; right: 0; }
+.p-tabs-tab:hover .p-tabs-tip, .p-tabs-tab:focus-within .p-tabs-tip { opacity: 1; visibility: visible; transition: opacity 140ms ease 280ms, visibility 0s linear 280ms; }
+.p-tabs-tt-head { display: flex; flex-direction: column; gap: 3px; }
+.p-tabs-tt-title { font-size: 13px; font-weight: 600; line-height: 1.35; color: #F4F4F5; overflow-wrap: anywhere; }
+.p-tabs-tt-state { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #8A8A94; }
+.p-tabs-tt-state.tone-working { color: #B9A8FF; }
+.p-tabs-tt-state.tone-needs { color: var(--warn, #F0B44C); }
+.p-tabs-tt-state.tone-done { color: var(--ok, #8BE0B0); }
+.p-tabs-tt-quota { display: flex; flex-direction: column; gap: 8px; }
+.p-tabs-tt-label { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; color: #8A8A94; }
+.p-tabs-tt-bar { position: relative; height: 6px; overflow: hidden; border-radius: 999px; background: #2C2C2F; }
+.p-tabs-tt-acct, .p-tabs-tt-sess { position: absolute; top: 0; left: 0; bottom: 0; }
+.p-tabs-tt-acct { background: #5D5778; }
+.p-tabs-tt-sess { background: #B9A8FF; }
+.p-tabs-tt-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; color: #B4B4BC; }
+.p-tabs-tt-line.is-session { color: #D6D6DC; }
+.p-tabs-tt-key { display: inline-flex; align-items: center; gap: 7px; }
+.p-tabs-tt-swatch { width: 7px; height: 7px; border-radius: 50%; }
+.p-tabs-tt-swatch.is-session { background: #B9A8FF; }
+.p-tabs-tt-swatch.is-account { background: #5D5778; }
+.p-tabs-tt-num { font-family: 'Geist Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.p-tabs-tt-note { font-size: 12.5px; line-height: 1.45; color: #B4B4BC; }
+.p-tabs-tt-facts { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; border-top: 1px solid #26262B; font-size: 12.5px; color: #9A9AA3; }
+.p-tabs-tt-fact { display: flex; justify-content: space-between; gap: 10px; }
+.p-tabs-tt-val { color: #D6D6DC; text-align: right; overflow-wrap: anywhere; }
+.p-tabs-tt-val.is-mono { font-family: 'Geist Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+/* Overflow button, its menu, and the plus. */
+.p-tabs-menu-wrap { position: relative; flex: 0 0 auto; }
+.p-tabs-more, .p-tabs-add { display: flex; align-items: center; justify-content: center; height: 34px; box-sizing: border-box; margin: 0; border-radius: 10px;
+  background: var(--surface, #16161a); border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.1)); color: #B4B4BC; cursor: pointer; transition: border-color 120ms ease, color 120ms ease; }
+.p-tabs-more { min-width: 40px; padding: 0 8px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; }
+.p-tabs-add { flex: 0 0 auto; width: 36px; padding: 0; }
+.p-tabs-more:hover, .p-tabs-add:hover:not(:disabled), .p-tabs-more[aria-expanded='true'] { border-color: var(--accent-border, #B9A8FF); color: #F4F4F5; }
+.p-tabs-more:focus-visible, .p-tabs-add:focus-visible { outline: 2px solid #B9A8FF; outline-offset: -2px; }
+.p-tabs-more.needs { border-color: var(--warn, #F0B44C); color: var(--warn, #F0B44C); }
+.p-tabs-more.unread { border-color: var(--ok, #8BE0B0); color: var(--ok, #8BE0B0); }
+.p-tabs-add:disabled { cursor: not-allowed; color: #5D5D66; border-color: #26262B; }
+.p-tabs-menu { position: absolute; top: 40px; right: 0; z-index: 20; display: flex; flex-direction: column; gap: 2px; width: 264px; box-sizing: border-box; padding: 6px; border-radius: 14px;
+  background: #141417; border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.1)); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55); animation: p-tabs-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.p-tabs-menu-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; box-sizing: border-box; margin: 0; padding: 0 10px; border: 1px solid transparent; border-radius: 9px;
+  background: #141417; color: #D6D6DC; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13px; text-align: left; cursor: pointer; transition: border-color 100ms; }
+.p-tabs-menu-row:hover, .p-tabs-menu-row:focus-visible { border-color: var(--accent-border, #B9A8FF); }
+.p-tabs-menu-row:focus-visible { outline: 2px solid #B9A8FF; outline-offset: -2px; }
+.p-tabs-menu-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-tabs-menu-state { flex: 0 0 auto; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; color: #8A8A94; }
+.p-tabs-menu-row.tone-working .p-tabs-menu-state { color: #B9A8FF; }
+.p-tabs-menu-row.tone-needs .p-tabs-menu-state { color: var(--warn, #F0B44C); }
+.p-tabs-menu-row.tone-done .p-tabs-menu-state { color: var(--ok, #8BE0B0); }
+
+/* The undo bar after a tab is closed. */
+.p-tabs-undo { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 36px; box-sizing: border-box; padding: 0 6px 0 12px; border-radius: 10px;
+  background: var(--surface, #16161a); border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.1)); animation: p-tabs-pop 200ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.p-tabs-undo-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: #B4B4BC; }
+.p-tabs-undo-btn { flex: 0 0 auto; min-height: 30px; padding: 0 10px; border: 1px solid transparent; border-radius: 8px; background: var(--surface, #16161a); color: #B9A8FF;
+  font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12.5px; font-weight: 500; cursor: pointer; transition: border-color 100ms; }
+.p-tabs-undo-btn:hover { border-color: var(--accent-border, #B9A8FF); }
+.p-tabs-undo-btn:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 1px; }
+
+@keyframes p-tabs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes p-tabs-pop { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .p-tabs, .p-tabs * { animation: none !important; transition: none !important; } }

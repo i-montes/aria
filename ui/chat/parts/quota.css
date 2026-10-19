@@ -1,0 +1,16 @@
+/* Quota card (design/components/quota). Solid fills: only the border takes the accent. */
+.p-quota { width: 100%; box-sizing: border-box; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; background: #1A1409; border: 1px solid rgba(240, 180, 76, 0.42); border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.p-quota-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.p-quota-head { display: flex; align-items: center; gap: 8px; color: #F0B44C; font-size: 13.5px; font-weight: 600; }
+.p-quota-head svg { flex: none; }
+.p-quota-pct { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #F0B44C; white-space: nowrap; }
+.p-quota-bar { height: 3px; border-radius: 2px; background: #3A2E17; overflow: hidden; }
+.p-quota-fill { height: 100%; background: #F0B44C; }
+.p-quota-question { margin: 0; font-size: 13.5px; line-height: 1.5; color: #D6D6DC; }
+.p-quota-meta { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #9A9AA3; }
+.p-quota-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.p-quota-btn { box-sizing: border-box; min-height: 44px; padding: 0 14px; border-radius: 10px; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13.5px; cursor: pointer; }
+.p-quota-primary { padding: 0 16px; border: 1px solid #F0B44C; background: #F0B44C; color: #1A1205; font-weight: 600; }
+.p-quota-secondary { border: 1px solid rgba(255, 255, 255, 0.14); background: #1A1409; color: #EDEDEF; }
+.p-quota-btn:hover, .p-quota-btn:focus-visible { border-color: #B9A8FF; }
+.p-quota-btn:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 2px; }

@@ -1,0 +1,51 @@
+/* Message index (render: index.js, design: design/components/message-index.dc.html).
+   The chips are solid; only their border takes the accent. */
+.p-index {
+  --p-index-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --p-index-accent: var(--accent, #B9A8FF);
+  position: relative; width: 100%; height: 100%;
+  font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF;
+}
+.p-index-panel { position: absolute; top: 0; right: 0; width: 300px; visibility: hidden; pointer-events: none; transition: visibility 0s linear 260ms; }
+.p-index-panel.is-open { visibility: visible; pointer-events: auto; transition-delay: 0s; }
+
+/* a soft blur and a dark fade behind the chips, strongest at the edge */
+.p-index-blur, .p-index-veil { position: absolute; inset: 0; opacity: 0; transition: opacity 220ms ease; }
+.p-index-blur {
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  -webkit-mask-image: linear-gradient(to left, #000 0%, #000 55%, transparent 100%);
+  mask-image: linear-gradient(to left, #000 0%, #000 55%, transparent 100%);
+}
+.p-index-veil { background: linear-gradient(to left, rgba(5, 5, 6, 0.94) 0%, rgba(5, 5, 6, 0.82) 50%, rgba(5, 5, 6, 0) 100%); }
+.p-index-panel.is-open .p-index-blur, .p-index-panel.is-open .p-index-veil { opacity: 1; }
+
+.p-index-list { position: absolute; inset: 0; margin: 0; padding: 0; list-style: none; overflow: hidden; }
+.p-index-list.is-overflow {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+}
+.p-index-item {
+  position: absolute; right: 8px; display: flex; align-items: center; justify-content: flex-end;
+  transition: top 140ms var(--p-index-ease), height 140ms var(--p-index-ease);
+}
+.p-index-btn {
+  display: flex; align-items: center; gap: 8px; height: 30px; max-width: 190px; box-sizing: border-box; margin: 0; padding: 0 12px 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px; background: #141417; color: #C8C8CE;
+  font: inherit; font-size: 12.5px; font-weight: 500; line-height: 16px; cursor: pointer; transform-origin: right center;
+  /* opaque at rest and under the pointer; the chips only grow and lighten */
+  opacity: 0;
+  transition: transform 140ms var(--p-index-ease) var(--d, 0ms), opacity 140ms ease var(--d, 0ms), background-color 140ms ease, border-color 140ms ease;
+}
+.p-index-panel.is-open .p-index-btn { opacity: 1; }
+.p-index-btn.is-near { background: #1e1e24; color: #F4F4F5; }
+.p-index-btn:hover, .p-index-btn.is-active { border-color: var(--p-index-accent); }
+.p-index-btn:focus-visible { outline: 2px solid var(--p-index-accent); outline-offset: 2px; }
+.p-index-dot { flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: #55555E; transition: background-color 140ms ease; }
+.p-index-btn.is-active .p-index-dot { background: var(--p-index-accent); }
+.p-index-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.p-index-thumb { position: absolute; right: 2px; width: 3px; border-radius: 999px; background: var(--p-index-accent); transition: top 100ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .p-index, .p-index * { transition: none !important; }
+}

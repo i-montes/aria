@@ -1,0 +1,14 @@
+/* Assistant message (design/components/aria-message + the "Proposed change" group). The card is the
+   opaque equivalent of the design's rgba(17,17,20,.94) fill and rgba(255,255,255,.07) border. */
+.p-assistant { width: 100%; display: flex; justify-content: flex-start; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; }
+.p-assistant-card { max-width: 94%; box-sizing: border-box; background: #111114; border: 1px solid #222225; border-radius: 16px 16px 16px 4px; padding: 14px 16px; font-size: 14.5px; line-height: 1.55; color: #EDEDEF; display: flex; flex-direction: column; gap: 10px; }
+.p-assistant-card p { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
+.p-assistant-detail { color: #B4B4BC; }
+.p-assistant-source { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #9A9AA3; }
+.p-assistant-code { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; color: #FFFFFF; }
+.p-assistant-diff { background: #0A0A0C; border-radius: 10px; padding: 12px 14px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; line-height: 19px; display: flex; flex-direction: column; }
+.p-assistant-line { display: grid; grid-template-columns: 12px minmax(0, 1fr); column-gap: 8px; min-height: 19px; color: #9A9AA3; }
+.p-assistant-line.is-del { color: #FF9A8B; }
+.p-assistant-line.is-add { color: #8BE0B0; }
+.p-assistant-mark { user-select: none; white-space: pre; }
+.p-assistant-code-text { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }

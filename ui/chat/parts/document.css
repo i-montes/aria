@@ -1,0 +1,27 @@
+/* Document card. Port of design/components/document-card.dc.html. */
+.p-doc { width: 100%; max-width: 400px; box-sizing: border-box; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF;
+  animation: p-doc-up 300ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.p-doc-card { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border-radius: 16px 16px 16px 4px; background: #111114; border: 1px solid rgba(255, 255, 255, 0.07); }
+.p-doc-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.p-doc-kind { display: inline-flex; align-items: center; gap: 8px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; color: #B4B4BC; }
+.p-doc-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px 1px 7px; border-radius: 999px; font-size: 11.5px; font-weight: 500; line-height: 18px;
+  transition: background-color 300ms ease, color 300ms ease; }
+.p-doc-chip.is-draft { background: rgba(240, 180, 76, 0.12); color: #F0B44C; }
+.p-doc-chip.is-approved { background: rgba(139, 224, 176, 0.14); color: #8BE0B0; animation: p-doc-pop 360ms cubic-bezier(0.22, 1, 0.36, 1); }
+.p-doc-draft-dot { width: 6px; height: 6px; border-radius: 50%; background: #F0B44C; }
+.p-doc-head { display: flex; flex-direction: column; gap: 3px; }
+.p-doc-title { margin: 0; font-size: 14.5px; font-weight: 600; line-height: 1.35; color: #F4F4F5; overflow-wrap: anywhere; }
+.p-doc-path { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 16px; color: #9A9AA3; overflow-wrap: anywhere; }
+.p-doc-sections { display: flex; flex-direction: column; gap: 12px; }
+.p-doc-section { display: flex; flex-direction: column; gap: 6px; animation: p-doc-up 320ms cubic-bezier(0.22, 1, 0.36, 1) var(--p-doc-delay, 0ms) both; }
+.p-doc-heading { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; color: #8A8A94; }
+.p-doc-text { margin: 0; font-size: 13.5px; line-height: 1.5; color: #D6D6DC; overflow-wrap: anywhere; }
+.p-doc-items { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.p-doc-item { display: grid; grid-template-columns: 10px minmax(0, 1fr); column-gap: 8px; align-items: start; font-size: 13.5px; line-height: 1.5; color: #D6D6DC; }
+.p-doc-dot { width: 4px; height: 4px; margin: 9px 0 0 3px; border-radius: 50%; background: #55555E; }
+.p-doc-item-text { min-width: 0; overflow-wrap: anywhere; }
+
+@keyframes p-doc-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes p-doc-pop { 0% { transform: scale(0.9); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .p-doc, .p-doc * { animation: none !important; transition: none !important; } }
+.p-doc.is-static, .p-doc.is-static * { animation: none !important; }
