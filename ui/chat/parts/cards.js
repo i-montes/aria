@@ -31,7 +31,9 @@ const str = (value) => (typeof value === 'string' ? value : '')
 /** The options the extension accepts back (`ctx.ui.select`'s strings): `{ value, label, primary? }`, bad entries dropped. */
 const options = (list) =>
   Array.isArray(list)
-    ? list.filter((o) => isObject(o) && typeof o.value === 'string' && typeof o.label === 'string').map((o) => (o.primary === true ? { value: o.value, label: o.label, primary: true } : { value: o.value, label: o.label }))
+    ? list
+        .filter((o) => isObject(o) && typeof o.value === 'string' && typeof o.label === 'string')
+        .map((o) => ({ value: o.value, label: o.label, ...(o.primary === true ? { primary: true } : {}), ...(o.role === 'free' || o.role === 'keep' ? { role: o.role } : {}) }))
     : []
 
 const FIELDS = {

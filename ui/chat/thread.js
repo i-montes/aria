@@ -23,7 +23,7 @@ export const renderEmptyThread = (t) =>
 function renderCard(dialog, t) {
   const card = dialog.card
   if (card.kind === 'quota') {
-    return renderQuota({ id: dialog.id, percent: card.percent, freeModel: card.freeModel, secondsLeft: card.countdown }, {}, t)
+    return renderQuota({ id: dialog.id, percent: card.percent, freeModel: card.freeModel, secondsLeft: card.countdown, options: card.options }, {}, t)
   }
   return renderPermission({ id: dialog.id, kind: card.kind, summary: card.summary, detail: card.detail || card.path, jev: card.jev, options: card.options }, {}, t)
 }

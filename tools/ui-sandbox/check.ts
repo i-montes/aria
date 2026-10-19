@@ -236,6 +236,14 @@ const script = `(async () => {
   permButtons[3].click(); await wait(60)
   check('choosing sends that exact option back', sent().some((m) => m.type === 'uiAnswer' && m.value === 'No'), JSON.stringify(sent().slice(-1)))
   check('and leaves its label as the note', $('#chat-list').textContent.includes('No') && !$('[data-chat="permission"]'))
+  // 16. the quota card answers with the extension's string and notes the decision in the chat's words
+  await reset(); window.__sent.length = 0
+  ;[...document.querySelectorAll('nav button')].find((b) => b.textContent === 'Quota almost out').click(); await wait(80)
+  const quotaButtons = [...document.querySelectorAll('[data-chat="quota"]')]
+  check("the quota card has its two choices in the chat's words", quotaButtons.length === 2 && !quotaButtons[0].textContent.includes('cat-jam'), quotaButtons.map((b) => b.textContent).join(' | '))
+  quotaButtons[0].click(); await wait(60)
+  check("choosing free sends the extension's own string", sent().some((m) => m.type === 'uiAnswer' && m.value === 'Switch to cat-jam-free now'))
+  check('the note says it switched to the free model', $('#chat-list').textContent.includes('switched to the free model'))
   // 9. no model button next to the working folder
   document.querySelector('[data-chat="add"]').click(); await wait(60)
   check('no model button beside the working folder, with one session or several', !$('.chat-path-row .p-meter') && !$('.chat-path-row .p-composer-model'))

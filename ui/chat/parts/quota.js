@@ -1,7 +1,9 @@
 // The quota card (design/components/quota.dc.html): the subscription is almost used up; switch to a
 // free model for the rest of the task? Fed by a dialog title `{"aria":1,"kind":"quota",…}` (cards.js).
 //
-// Props: { id, percent, freeModel?, secondsLeft? }
+// Props: { id, percent, freeModel?, secondsLeft?, options? }
+//   options  [{ value, label, role?: 'free'|'keep', primary? }]: the extension's own choices; a known role shows the
+//            chat's words, and the button answers with `value`
 //   id           the extension dialog's id
 //   percent      quota used, 0-100 (clamped, rounded)
 //   freeModel    name of the free model that would be used; shown when given
@@ -18,12 +20,12 @@ const percentOf = (value) => {
   return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0
 }
 
-export function renderQuota({ id, percent, freeModel, secondsLeft } = {}, ui, t) {
+export function renderQuota({ id, percent, freeModel, secondsLeft, options } = {}, ui, t) {
   const p = percentOf(percent)
   const hasModel = typeof freeModel === 'string' && freeModel !== ''
   const hasCountdown = secondsLeft !== undefined && secondsLeft !== null && secondsLeft !== ''
-  const choice = (name, label, cls) =>
-    `<button type="button" class="p-quota-btn ${cls}" data-chat="quota" data-id="${esc(id)}" data-choice="${name}">${esc(label)}</button>`
+  const choice = (name, label, cls, role) =>
+    `<button type="button" class="p-quota-btn ${cls}" data-chat="quota" data-id="${esc(id)}" data-choice="${esc(name)}"${role ? ` data-role="${role}"` : ''}>${esc(label)}</button>`
   return `<div class="p-quota" role="group" aria-label="${esc(t('chat.quota.title'))}">
   <div class="p-quota-top">
     <div class="p-quota-head">${clock}<span>${esc(t('chat.quota.title'))}</span></div>
@@ -33,8 +35,15 @@ export function renderQuota({ id, percent, freeModel, secondsLeft } = {}, ui, t)
   <p class="p-quota-question">${esc(t('chat.quota.question'))}</p>
   ${hasModel || hasCountdown ? `<p class="p-quota-meta">${hasModel ? `<span>${esc(t('chat.quota.free_model', { model: freeModel }))}</span>` : ''}${hasCountdown ? `<span>${esc(t('chat.quota.countdown', { n: secondsLeft }))}</span>` : ''}</p>` : ''}
   <div class="p-quota-actions">
-    ${choice('free', t('chat.quota.free'), 'p-quota-primary')}
-    ${choice('keep', t('chat.quota.keep'), 'p-quota-secondary')}
+    ${Array.isArray(options) && options.length
+      ? options
+          .map((o, i) => {
+            const role = o.role === 'free' || o.role === 'keep' ? o.role : null
+            const label = role ? t(`chat.quota.${role}`) : o.label
+            return choice(o.value, label, o.primary || (i === 0 && !options.some((x) => x.primary)) ? 'p-quota-primary' : 'p-quota-secondary', role)
+          })
+          .join('\n    ')
+      : `${choice('free', t('chat.quota.free'), 'p-quota-primary')}\n    ${choice('keep', t('chat.quota.keep'), 'p-quota-secondary')}`}
   </div>
 </div>`
 }

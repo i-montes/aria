@@ -1099,7 +1099,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       }
       case 'index-jump': return jumpTo(id)
       case 'permission': return answer(id, { value: choice }, choice)
-      case 'quota': return answer(id, { value: choice }, choice)
+      // The note says what was decided in the chat's words (free / keep), whatever string the extension used.
+      case 'quota': return answer(id, { value: choice }, el.dataset.role || choice)
       case 'question': return onQuestion(el)
       case 'connect': return connectOp(el)
       case 'tasks-toggle':

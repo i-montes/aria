@@ -46,3 +46,24 @@ describe('quota card', () => {
     for (const key of Object.keys(TEXTS.en)) expect(key.startsWith('chat.quota.')).toBe(true)
   })
 })
+
+describe('the options an extension gives', () => {
+  const options = [
+    { value: 'Switch to cat-jam-free now', label: 'Switch to cat-jam-free now', role: 'free', primary: true },
+    { value: 'Stay on glm-5.3', label: 'Stay on glm-5.3', role: 'keep' },
+  ]
+
+  test('the buttons send the extension\'s strings, with the chat\'s own words for the known roles', () => {
+    const html = renderQuota({ id: 'q1', percent: 98, options }, {}, t)
+    const choices = [...html.matchAll(/data-choice="([^"]*)"/g)].map((m) => m[1])
+    expect(choices).toEqual(['Switch to cat-jam-free now', 'Stay on glm-5.3'])
+    expect(html).toContain('data-role="free"')
+    expect(html).toContain('chat.quota.free')
+    expect(html).toContain('chat.quota.keep')
+  })
+
+  test('without options it keeps free / keep', () => {
+    const html = renderQuota({ id: 'q1', percent: 98 }, {}, t)
+    expect([...html.matchAll(/data-choice="([^"]*)"/g)].map((m) => m[1])).toEqual(['free', 'keep'])
+  })
+})
