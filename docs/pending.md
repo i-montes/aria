@@ -39,6 +39,16 @@ them yet. Each row says what is missing and which part of the roadmap brings it.
 - Message index: chips grow with the pointer but do not fade by distance (the owner's solid-fill rule).
 - Settings changes do not restart a running Pi (applied at the next start); see the phase 2 spec, part 2c.
 
+## Known limits of the page (from the review, deferred)
+
+- The thread is redrawn on every streamed fragment, so text cannot be selected or copied while a run streams; the other regions only redraw when they change.
+- The quota card's countdown ("Times out in 300s") is static; the real timeout is Pi's.
+- Choosing `model` from the command picker only types `/model `; the model list opens once a space follows (or from the chip under the input).
+- Closing the active tab does not save its unsent draft; a language change drops unsent drafts.
+- `rows` of the composer counts only explicit newlines; a long wrapped line does not grow it (WebKitGTK's `field-sizing` support was not checked).
+- The working phase keeps the last tool's name ("Reading files") while the answer streams.
+- The browser checks (`tools/ui-sandbox/check.ts`) cover the controller's riskiest flows but are not part of `bun test` (they need Chrome).
+
 ## Deliberate differences from the design
 
 - The working folder row and the settings button (owner's decisions).

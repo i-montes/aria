@@ -10,3 +10,8 @@ bun tools/ui-sandbox/serve.ts          # http://127.0.0.1:8770/   (?lang=es for 
 
 The page talks to its host only through `window.webkit.messageHandlers.aria` and `window.aria.receive`
 (see `crates/aria-core/src/bridge.rs`); the sandbox plays the host.
+
+```sh
+bun tools/ui-sandbox/serve.ts 8770 &
+bun tools/ui-sandbox/check.ts          # needs Chrome; checks the controller's focus, queue, Esc and picker behaviour
+```

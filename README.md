@@ -63,6 +63,7 @@ Start with [docs/architecture.md](docs/architecture.md).
 
 ```sh
 bun tools/ui-sandbox/serve.ts      # the dock's page with a stubbed bridge and the design's simulate buttons (permission, quota, ask, tools, tabs…)
+bun tools/ui-sandbox/check.ts      # drives the chat in headless Chrome against it: queue, focus, Esc order, pickers, question card
 cargo test --workspace      # Rust: core, Hyprland, engine, dock
 cargo test -p aria --test live_pi -- --ignored   # the real Pi answering a prompt (needs the setup done)
 bun test ui                 # the UI's logic and its strings
