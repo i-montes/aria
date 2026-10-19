@@ -1,7 +1,7 @@
 // Run: bun test ~/.pi/agent/extensions/sandbox
 import { afterAll, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { bwrapArgs, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, shellQuote, subagentProblem, wrapCommand, writableRoots, isAgentCode } from './policy.ts'
@@ -209,4 +209,28 @@ describe('extra writable folders (settings)', () => {
   })
   test('without it nothing changes', () =>
     withExtra([], () => expect(isWritable('/srv/shared/notes.md', '/home/u/Projects/app', '/home/u', all)).toBe(false)))
+})
+
+// Aria links its agent dir's credentials to the files in ~/.aria; bwrap cannot mount over a symlink, so the link's
+// target is what gets hidden. Runs the real bwrap when there is one.
+describe.skipIf(!existsSync('/usr/bin/bwrap'))('a credential that is a symlink', () => {
+  const fake = realpathSync(mkdtempSync('/tmp/sbx-link-home-'))
+  mkdirSync(join(fake, '.aria', 'agent'), { recursive: true })
+  writeFileSync(join(fake, '.aria', 'auth.json'), 'SECRET-123')
+  symlinkSync(join(fake, '.aria', 'auth.json'), join(fake, '.aria', 'agent', 'auth.json'))
+  const project = mkdtempSync('/tmp/sbx-link-repo-')
+  afterAll(() => rmSync(fake, { recursive: true, force: true }) || rmSync(project, { recursive: true, force: true }))
+  const run = (cmd: string) => {
+    try {
+      return execFileSync('bash', ['-c', wrapCommand(cmd, project, { home: fake, runtimeDir: '/nonexistent' })], { stdio: 'pipe' }).toString()
+    } catch (error: any) {
+      return `${error.stdout ?? ''}${error.stderr ?? ''}`
+    }
+  }
+  test('commands still run in the box', () => expect(run('echo inside')).toBe('inside\n'))
+  test('neither the link nor its target can be read', () => {
+    const out = run(`cat ${fake}/.aria/agent/auth.json ${fake}/.aria/auth.json; echo done`)
+    expect(out).toContain('done')
+    expect(out).not.toContain('SECRET-123')
+  })
 })

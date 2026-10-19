@@ -244,6 +244,19 @@ export function subagentProblem(input: unknown, cwd: string, home = HOME, runtim
   return walk(input)
 }
 
+/** Where to mount over each path: bwrap cannot mount on a symlink, so a link (Aria's agent dir links its credentials
+ * to the files in ~/.aria) is replaced by its target. Each mount point appears once. */
+function mountPoints(paths: string[]): string[] {
+  const isLink = (p: string) => {
+    try {
+      return lstatSync(p).isSymbolicLink()
+    } catch {
+      return false
+    }
+  }
+  return [...new Set(paths.map((p) => (isLink(p) ? realish(p) : p)))]
+}
+
 export function bwrapArgs(
   cwd: string,
   opts: { home?: string; runtimeDir?: string; exists?: (p: string) => boolean } = {},
@@ -252,8 +265,8 @@ export function bwrapArgs(
   const exists = opts.exists ?? existsSync
   const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc']
   for (const root of writableRoots(cwd, home, exists)) args.push('--bind', root, root)
-  for (const dir of [...secretDirs(home, opts.runtimeDir ?? RUNTIME), ...HOST_DIRS].filter(exists)) args.push('--tmpfs', dir)
-  for (const file of [...secretFiles(home), ...HOST_FILES].filter(exists)) args.push('--ro-bind', '/dev/null', file)
+  for (const dir of mountPoints([...secretDirs(home, opts.runtimeDir ?? RUNTIME), ...HOST_DIRS]).filter(exists)) args.push('--tmpfs', dir)
+  for (const file of mountPoints([...secretFiles(home), ...HOST_FILES]).filter(exists)) args.push('--ro-bind', '/dev/null', file)
   for (const path of protectedPaths(cwd, home).filter(exists)) args.push('--ro-bind', path, path)
   args.push('--unsetenv', 'DISPLAY', '--chdir', resolve(cwd))
   return args
