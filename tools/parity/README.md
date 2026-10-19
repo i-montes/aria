@@ -9,6 +9,7 @@ item, its check and its last result is `docs/parity.md`.
   touched. Its test is `scratch-home.test.sh`.
 - `matrix.ts` and `matrix.test.ts` keep `docs/parity.md` honest: every setup item has a row, and every file and test a
   row names exists (`bun test tools/parity`).
+- `suites.sh` runs every offline suite, one crate at a time.
 - `smoke.sh` is the setup's smoke test: Aria's Pi answers "hola" short and in Spanish.
 
 The evals that need real models live beside the extension they check, as in the owner's Pi:
