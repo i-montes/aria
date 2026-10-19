@@ -299,7 +299,7 @@ impl Chat {
         if let Some(watch) = self.inner.lock().unwrap().watch.clone() {
             return Some(watch);
         }
-        let path = self.ctx.run_dir.join(format!("watch-{}.sock", self.session));
+        let path = crate::watch::socket_path(&self.ctx.run_dir, &self.session);
         let slot: Arc<std::sync::OnceLock<std::sync::Weak<crate::watch::Watch>>> = Arc::new(std::sync::OnceLock::new());
         let (chat, seen) = (self.clone(), slot.clone());
         let watch = Arc::new(

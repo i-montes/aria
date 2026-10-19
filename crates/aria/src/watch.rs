@@ -74,6 +74,20 @@ fn icon_for(tool: &str) -> Option<&'static str> {
     }
 }
 
+/// A Unix socket path holds at most 104 bytes on macOS (108 on Linux). The usual name is `watch-<session>.sock`; in a
+/// folder deep enough to pass the limit, the session id is replaced by a short hash of it.
+pub fn socket_path(dir: &Path, session: &str) -> PathBuf {
+    const LIMIT: usize = 100;
+    let path = dir.join(format!("watch-{session}.sock"));
+    if path.as_os_str().len() <= LIMIT {
+        return path;
+    }
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    session.hash(&mut hasher);
+    dir.join(format!("w-{:016x}.sock", hasher.finish()))
+}
+
 impl Watch {
     /// Listens on `path` (mode 0600, replacing a stale file). `on_change` runs at most every 250 ms while something changed.
     pub fn bind(path: &Path, on_change: Arc<dyn Fn() + Send + Sync>) -> std::io::Result<Watch> {
@@ -340,6 +354,17 @@ mod tests {
         eventually(&w, "an active agent", |a| a[0]["kind"] == "active");
         std::thread::sleep(Duration::from_millis(400));
         assert!(changes.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[test]
+    fn a_socket_path_fits_the_unix_limit_even_in_a_deep_folder() {
+        let short = socket_path(Path::new("/run/user/1000/aria"), "s1");
+        assert_eq!(short, PathBuf::from("/run/user/1000/aria/watch-s1.sock"), "the usual name when it fits");
+        let deep = PathBuf::from(format!("/Users/someone/{}/.aria/run", "x".repeat(40)));
+        let session = "0".repeat(36);
+        let path = socket_path(&deep, &session);
+        assert!(path.as_os_str().len() <= 100, "{}", path.display());
+        assert_ne!(path, socket_path(&deep, &"1".repeat(36)), "two sessions never share a socket");
     }
 
     #[test]

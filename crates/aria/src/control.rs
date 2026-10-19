@@ -1,5 +1,5 @@
 //! One dock at a time, reached through a Unix socket. On Omarchy it lives in `$XDG_RUNTIME_DIR/aria/`
-//! (or the temp directory); on macOS it lives in `~/.aria/run/`, so a dock started by the LaunchAgent
+//! (or `/tmp/aria/`); on macOS it lives in `~/.aria/run/`, so a dock started by the LaunchAgent
 //! and a dock started from a terminal agree on the same path. `aria toggle` sends a line to the running
 //! dock, and starts the dock first when nothing answers.
 
@@ -28,9 +28,7 @@ impl std::fmt::Display for ControlError {
 pub fn control_socket_path() -> PathBuf {
     #[cfg(target_os = "linux")]
     {
-        let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp"));
         runtime.join("aria").join("control.sock")
     }
     #[cfg(target_os = "macos")]
