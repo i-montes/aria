@@ -1498,6 +1498,10 @@ mod tests {
         let s = sessions_harness();
         s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
         wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        // the first message's own run (start and settle) must not be mistaken for the one below
+        wait_session(&s, "the first run settled", "aa", |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "agent_settled"));
+        std::thread::sleep(Duration::from_millis(100));
+        while s.messages.try_recv().is_ok() {}
         s.sessions.test_send_raw("aa", "start"); // a run that has not settled
         wait_session(&s, "the run", "aa", |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "agent_start"));
         s.sessions.settings_changed();
