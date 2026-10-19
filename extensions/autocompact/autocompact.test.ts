@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { applyPercent, compactPercent, DEFAULT_PERCENT, MIN_RESERVE, parsePercent, readPercent, reserveFor, syncSettings, writePercent } from './autocompact.ts'
+import { applyPercent, compactPercent, savePercent, DEFAULT_PERCENT, MIN_RESERVE, parsePercent, readPercent, reserveFor, syncSettings, writePercent } from './autocompact.ts'
 
 const big = { provider: 'opencode-go', id: 'big', contextWindow: 1_000_000 }
 const small = { provider: 'opencode-go', id: 'small', contextWindow: 128_000 }
@@ -72,4 +72,33 @@ describe("compaction follows Aria's settings", () => {
     writeFileSync(join(dir, 'autocompact.json'), JSON.stringify({ percent: 90 }))
     expect(compactPercent(join(dir, 'autocompact.json'))).toBe(90)
   }))
+})
+
+describe('/autocompact under Aria', () => {
+  test('writes compaction.percent in Aria’s settings and not autocompact.json', () => {
+    const dir = mkdtempSync(join(require('node:os').tmpdir(), 'aria-ac-'))
+    const settings = join(dir, 'settings.json')
+    writeFileSync(settings, JSON.stringify({ compaction: { percent: 40 } }))
+    const savedA = process.env.ARIA_SETTINGS
+    process.env.ARIA_SETTINGS = settings
+    try {
+      savePercent(70, join(dir, 'autocompact.json'))
+      expect(JSON.parse(readFileSync(settings, 'utf8')).compaction.percent).toBe(70)
+      expect(require('node:fs').existsSync(join(dir, 'autocompact.json'))).toBe(false)
+    } finally {
+      if (savedA === undefined) delete process.env.ARIA_SETTINGS
+      else process.env.ARIA_SETTINGS = savedA
+    }
+  })
+  test('outside Aria it writes autocompact.json as before', () => {
+    const dir = mkdtempSync(join(require('node:os').tmpdir(), 'aria-ac-'))
+    const savedA = process.env.ARIA_SETTINGS
+    delete process.env.ARIA_SETTINGS
+    try {
+      savePercent(70, join(dir, 'autocompact.json'))
+      expect(readPercent(join(dir, 'autocompact.json'))).toBe(70)
+    } finally {
+      if (savedA !== undefined) process.env.ARIA_SETTINGS = savedA
+    }
+  })
 })

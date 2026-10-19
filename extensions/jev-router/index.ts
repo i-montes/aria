@@ -22,7 +22,7 @@
 // Only the main agent is routed (TUI and print modes); `parallel` subagents run in JSON mode and are
 // left alone. Any failure (no classifier, no credential, a slow answer) sends the message unlabelled
 // and leaves the guard off.
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
@@ -66,7 +66,7 @@ import { exhausted, fetchGoUsage } from './usage.ts'
 import { confirmFreeSwitch } from '../quota-fallback/ask.ts'
 import { freeModel, isFree } from '../quota-fallback/fallback.ts'
 import { ariaConfig, hasAriaConfig } from '../lib/config.ts'
-import { effortFor, RANK } from './effort.ts'
+import { EFFORT_FILE, effortFor, RANK, saveEffort } from './effort.ts'
 import { agentDir } from '../lib/agent-dir.ts'
 
 const CLASSIFY_TIMEOUT_MS = 3000
@@ -74,8 +74,6 @@ const CLASSIFY_TIMEOUT_MS = 3000
 // ignored by smaller models (the user wants short, direct answers).
 const STYLE_NOTE =
   'Answer style: very short and direct, the answer first, at most ~80 words. No tables, no headings, no closing summary ("en resumen…") or offer. Longer only if the user asked for detail.'
-// The fixed reasoning effort the user picked, shared by every session until `/effort auto`.
-const EFFORT_FILE = join(agentDir(), 'jev-router-effort.json')
 
 function readFixedEffort(): string | null {
   try {
@@ -86,14 +84,6 @@ function readFixedEffort(): string | null {
   }
 }
 
-function writeFixedEffort(level: string | null) {
-  try {
-    if (level) writeFileSync(EFFORT_FILE, JSON.stringify({ level }) + '\n')
-    else rmSync(EFFORT_FILE, { force: true })
-  } catch {
-    // stays for this session only
-  }
-}
 const TMP_DIRS = [...new Set(['/tmp', tmpdir()])]
 const EXPERTS_DIR = join(agentDir(), 'agents')
 
@@ -148,7 +138,7 @@ export default function (pi: ExtensionAPI) {
   }
   const fix = (level: string | null, ctx: any) => {
     fixed = level
-    writeFixedEffort(level)
+    saveEffort(level)
     showEffort(ctx)
   }
   pi.on('thinking_level_select', (event: any, ctx: any) => {

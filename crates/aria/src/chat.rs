@@ -419,6 +419,8 @@ impl Chat {
                 ("PI_SKIP_VERSION_CHECK".into(), "1".into()),
                 // The extensions' projects folder (jev-router's plan mode) is the working folder.
                 ("ARIA_PROJECTS_DIR".into(), workdir.display().to_string()),
+                // `/effort` and `/autocompact` write Aria's settings instead of their own files (extensions/lib/config.ts).
+                ("ARIA_SETTINGS".into(), self.ctx.paths.settings().display().to_string()),
             ],
             cwd: workdir.clone(),
         };
@@ -792,7 +794,47 @@ pub struct Sessions {
     closed: Arc<Mutex<HashSet<String>>>,
 }
 
+/// Watches `settings.json` by content: a change from the settings screen, from `/effort` or `/autocompact` in Pi, or
+/// from an editor is seen once, and the same content written again is not a change.
+pub struct SettingsWatch {
+    path: PathBuf,
+    last: Option<u64>,
+}
+
+impl SettingsWatch {
+    pub fn new(path: PathBuf) -> SettingsWatch {
+        let last = Self::hash(&path);
+        SettingsWatch { path, last }
+    }
+
+    fn hash(path: &std::path::Path) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let bytes = std::fs::read(path).ok()?;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        Some(hasher.finish())
+    }
+
+    pub fn changed(&mut self) -> bool {
+        let now = Self::hash(&self.path);
+        if now.is_none() || now == self.last {
+            return false;
+        }
+        self.last = now;
+        true
+    }
+}
+
 impl Sessions {
+    /// The settings (or the credentials) changed: every session's Pi starts again, a busy one when its run settles,
+    /// never during it (spec: "Settings changes never restart a run"); the next start prepares the agent directory.
+    pub fn settings_changed(&self) {
+        let chats: Vec<Chat> = self.chats.lock().unwrap().values().cloned().collect();
+        for chat in chats {
+            chat.restart_when_idle();
+        }
+    }
+
     /// `ctx.notifier` is wrapped so that one session's answer does not remove another's notification.
     pub fn new(ctx: ChatCtx, emit: Emit) -> Sessions {
         let notifier: Arc<dyn Notifier> = Arc::new(CountingNotifier::new(ctx.notifier.clone()));
@@ -833,13 +875,8 @@ impl Sessions {
                 let _ = self.ctx.paths.ensure_root();
                 let _ = sessions::save(&self.ctx.paths, &SessionList { sessions: entries, active });
             }
-            PageMessage::EnginesRestart => {
-                // Credentials or packages changed: every Pi restarts, a busy one when its run settles (never cut).
-                let chats: Vec<Chat> = self.chats.lock().unwrap().values().cloned().collect();
-                for chat in chats {
-                    chat.restart_when_idle();
-                }
-            }
+            // Credentials or packages changed.
+            PageMessage::EnginesRestart => self.settings_changed(),
             PageMessage::ChatShown { shown } => {
                 self.ctx.chat_shown.store(shown, Ordering::SeqCst);
                 if !shown {
@@ -1457,6 +1494,39 @@ mod tests {
     }
 
     #[test]
+    fn a_settings_change_waits_for_the_run_then_restarts_pi() {
+        let s = sessions_harness();
+        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        s.sessions.test_send_raw("aa", "start"); // a run that has not settled
+        wait_session(&s, "the run", "aa", |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "agent_start"));
+        s.sessions.settings_changed();
+        std::thread::sleep(Duration::from_millis(200));
+        let mut cut = false;
+        while let Ok(m) = s.messages.try_recv() {
+            cut |= matches!(m, DockMessage::Session { ref message, .. } if matches!(**message, DockMessage::ChatEngine { ref state } if state == "stopped"));
+        }
+        assert!(!cut, "the run is not cut");
+        s.sessions.test_send_raw("aa", "settle");
+        wait_session(&s, "stopped once the run settled", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "stopped"));
+    }
+
+    #[test]
+    fn a_change_to_the_settings_file_is_seen_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        let mut watch = SettingsWatch::new(file.clone());
+        assert!(!watch.changed(), "no file yet: nothing changed");
+        std::fs::write(&file, "{\"a\":1}").unwrap();
+        assert!(watch.changed());
+        assert!(!watch.changed(), "the same content is not a change");
+        std::fs::write(&file, "{\"a\":1}").unwrap();
+        assert!(!watch.changed(), "written again with the same content: still no change");
+        std::fs::write(&file, "{\"a\":2}").unwrap();
+        assert!(watch.changed());
+    }
+
+    #[test]
     fn the_session_list_persists_across_restarts() {
         let s = sessions_harness();
         let entries = vec![aria_core::sessions::SessionEntry { id: "aa".into(), title: "Fix the build".into() }];
@@ -1699,6 +1769,17 @@ mod tests {
         h.chat.test_send_raw("env_projects");
         match wait_for(&h, "the env echo", |m| event_of(m, "env")) {
             DockMessage::ChatEvent { event } => assert_eq!(event["projects"], json!(h.workdir.display().to_string())),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn pi_gets_aria_settings_in_its_env() {
+        let h = harness();
+        ready(&h);
+        h.chat.test_send_raw("env_settings");
+        match wait_for(&h, "the env echo", |m| event_of(m, "env")) {
+            DockMessage::ChatEvent { event } => assert_eq!(event["settings"], json!(h.paths.settings().display().to_string())),
             _ => unreachable!(),
         }
     }

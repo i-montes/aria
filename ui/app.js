@@ -53,6 +53,16 @@ const handlers = {
   platform: (message) => {
     if (message.hotkey) state.hotkey = message.hotkey
   },
+  // settings.json changed outside the page (/effort or /autocompact in a session, an editor): read it again. An open
+  // settings screen is refreshed only on its summary, never under the reader's hands in the middle of a step.
+  settingsChanged: () =>
+    booted.then(async () => {
+      const reply = await request({ type: 'loadSettings' })
+      if (!reply.settings) return
+      chat.setSettings(reply.settings)
+      const at = onboarding.snapshot()
+      if (state.mode === 'setup' && at.editing && at.step === 'review') onboarding.start(reply.settings, reply.connected)
+    }),
   // These need the catalogs, so they wait for the boot to finish.
   notice: () => booted.then(showNotice),
   problem: (message) =>

@@ -52,5 +52,7 @@ Tests: `bun test extensions`.
   - `quota-fallback`: the free model, the threshold, the countdown, asking first and what no answer does (`freeModel`,
     `switchThreshold`, `askTimeoutMs`; `choiceFrom` gained `onNoAnswer`).
   - `autocompact`: the share comes from the settings (`compactPercent`); outside Aria, `autocompact.json`.
+  - `/effort` and `/autocompact` write Aria's settings (`ARIA_SETTINGS`, `writeAriaSetting` in `lib/config.ts`) instead
+    of `jev-router-effort.json` and `autocompact.json`; the dock applies the change when the run settles.
 - **Left out:** `jev-router/eval.ts`, `sandbox/review-eval.ts` and `sandbox/accept.sh`, which run real models against the
   owner's own Pi.

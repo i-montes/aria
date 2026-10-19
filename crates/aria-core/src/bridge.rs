@@ -125,6 +125,9 @@ pub enum DockMessage {
     ChatEvent { event: Value },
     /// How much of the provider's quota is spent, for the model in use (empty when the provider has none to read).
     /// The subagents this session's Pi started (see crates/aria/src/watch.rs and ui/chat/parts/subagents.js).
+    /// `settings.json` changed outside the page (`/effort`, `/autocompact`, an editor): the page reads it again.
+    #[serde(rename = "settingsChanged")]
+    SettingsChanged,
     #[serde(rename = "chatAgents")]
     ChatAgents { agents: Value },
     #[serde(rename = "chatQuota")]
@@ -284,6 +287,7 @@ mod tests {
             json!({"type": "chatQuota", "windows": [{"id": "5h", "label": "5h", "percent": 42.0, "resetsAt": "2026-10-19T03:00:00Z"}]})
         );
         assert_eq!(value(DockMessage::ChatAgents { agents: json!([]) }), json!({"type": "chatAgents", "agents": []}));
+        assert_eq!(value(DockMessage::SettingsChanged), json!({"type": "settingsChanged"}));
         assert_eq!(value(DockMessage::ChatDialogClosed { id: "u1".into() }), json!({"type": "chatDialogClosed", "id": "u1"}));
         assert_eq!(value(DockMessage::ChatEngine { state: "ready".into() }), json!({"type": "chatEngine", "state": "ready"}));
         assert_eq!(value(DockMessage::Commands { id: 7, commands: json!([]) }), json!({"type": "commands", "id": 7, "commands": []}));

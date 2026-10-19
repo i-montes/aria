@@ -74,6 +74,11 @@ const script = `(async () => {
   window.aria.chat.toggleAgents(); await wait(40)
 
 
+  // 0b. a settings change from outside the page (/effort, /autocompact) makes the page read the settings again
+  const loadsBefore = window.__sent.filter((m) => m.type === 'loadSettings').length
+  window.aria.receive({ type: 'settingsChanged' }); await wait(80)
+  check('the page reads the settings again when they change outside it', window.__sent.filter((m) => m.type === 'loadSettings').length === loadsBefore + 1)
+
   // 1. the textarea survives a run starting, text appearing and the model changing
   typeIn('half-typed')
   const mark = $('#chat-input'); mark.__mark = 1

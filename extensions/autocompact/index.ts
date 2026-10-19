@@ -3,7 +3,7 @@
 // start). `/autocompact <0-100>` changes the share and reloads Pi so it applies right away;
 // `/autocompact` alone shows it.
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
-import { compactPercent, DEFAULT_PERCENT, parsePercent, syncSettings, writePercent } from './autocompact.ts'
+import { compactPercent, DEFAULT_PERCENT, parsePercent, savePercent, syncSettings } from './autocompact.ts'
 
 export default function (pi: ExtensionAPI) {
   const models = (ctx: any) => {
@@ -36,7 +36,7 @@ export default function (pi: ExtensionAPI) {
         return
       }
       try {
-        writePercent(percent)
+        savePercent(percent)
         syncSettings(models(ctx), percent)
       } catch (e) {
         ctx.ui.notify(`Could not update settings.json: ${e instanceof Error ? e.message : String(e)}`, 'error')

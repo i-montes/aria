@@ -2,7 +2,7 @@
 // compacts when the context passes `contextWindow - reserveTokens`, so the share becomes a
 // per-model `compaction.modelOverrides[...].reserveTokens` in settings.json. 0 turns automatic
 // compaction off. Pure functions here; index.ts reads and writes the files.
-import { ariaConfig, DEFAULTS, hasAriaConfig } from '../lib/config.ts'
+import { ariaConfig, DEFAULTS, hasAriaConfig, writeAriaSetting } from '../lib/config.ts'
 import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentDir } from '../lib/agent-dir.ts'
@@ -57,6 +57,11 @@ export function readPercent(file = PERCENT_FILE): number {
   } catch {
     return DEFAULT_PERCENT
   }
+}
+
+/** `/autocompact <n>`: Aria's settings under Aria, autocompact.json otherwise. */
+export function savePercent(percent: number, file = PERCENT_FILE): void {
+  if (!writeAriaSetting(['compaction', 'percent'], percent)) writePercent(percent, file)
 }
 
 export function writePercent(percent: number, file = PERCENT_FILE): void {

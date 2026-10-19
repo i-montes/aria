@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ariaConfig } from './config.ts'
+import { ariaConfig, writeAriaSetting } from './config.ts'
 
 const TODAY = {
   version: 1,
@@ -61,5 +61,37 @@ describe("the extensions' settings (aria.json)", () => {
     expect(ariaConfig().compaction.percent).toBe(70)
     write({ compaction: { percent: 55 } })
     expect(ariaConfig().compaction.percent).toBe(55)
+  })
+})
+
+describe("writing Aria's settings (ARIA_SETTINGS)", () => {
+  const savedSettings = process.env.ARIA_SETTINGS
+  afterEach(() => {
+    if (savedSettings === undefined) delete process.env.ARIA_SETTINGS
+    else process.env.ARIA_SETTINGS = savedSettings
+  })
+
+  test('keeps every other key and writes atomically', () => {
+    const file = join(dir, 'settings.json')
+    writeFileSync(file, JSON.stringify({ version: 1, effort: { mode: 'auto', fixedLevel: null, maxOnFree: true }, extra: { kept: true } }))
+    process.env.ARIA_SETTINGS = file
+    expect(writeAriaSetting(['effort', 'fixedLevel'], 'high')).toBe(true)
+    const after = JSON.parse(require('node:fs').readFileSync(file, 'utf8'))
+    expect(after).toEqual({ version: 1, effort: { mode: 'auto', fixedLevel: 'high', maxOnFree: true }, extra: { kept: true } })
+    expect(require('node:fs').statSync(file).mode & 0o777).toBe(0o600)
+    expect(require('node:fs').readdirSync(dir).filter((f: string) => f.includes('.tmp'))).toEqual([])
+  })
+
+  test('outside Aria it writes nothing', () => {
+    delete process.env.ARIA_SETTINGS
+    expect(writeAriaSetting(['compaction', 'percent'], 70)).toBe(false)
+  })
+
+  test('a settings file that does not parse is left alone', () => {
+    const file = join(dir, 'settings.json')
+    writeFileSync(file, '{ nope')
+    process.env.ARIA_SETTINGS = file
+    expect(writeAriaSetting(['compaction', 'percent'], 70)).toBe(false)
+    expect(require('node:fs').readFileSync(file, 'utf8')).toBe('{ nope')
   })
 })

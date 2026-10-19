@@ -53,6 +53,8 @@ while IFS= read -r line; do
       printf '{"type":"args","args":"%s"}\n' "$ARIA_TEST_ARGS" ;;
     env_projects)
       printf '{"type":"env","projects":"%s"}\n' "$ARIA_PROJECTS_DIR" ;;
+    env_settings)
+      printf '{"type":"env","settings":"%s"}\n' "$ARIA_SETTINGS" ;;
     env_watch)
       printf '{"type":"env","watch":"%s"}\n' "$PI_WATCH_SOCK" ;;
     parallel_call)

@@ -59,6 +59,7 @@ fn run_dock() {
     let (reply_sender, reply_receiver) = mpsc::channel::<DockMessage>();
     let paths = AriaPaths::from_env();
     let first_run = !paths.settings().exists();
+    let mut settings_watch = chat::SettingsWatch::new(paths.settings());
     let ctx = Arc::new(handlers::Ctx::real(paths.clone()));
 
     // The chat owns Pi. Its messages go through one worker thread, in order, so a send is never
@@ -84,6 +85,7 @@ fn run_dock() {
     };
     let (chat_sender, chat_receiver) = mpsc::channel::<PageMessage>();
     let chat_for_visibility = chat.clone();
+    let chat_for_settings = chat.clone();
     std::thread::spawn(move || {
         for message in chat_receiver {
             chat.handle(message);
@@ -156,7 +158,15 @@ fn run_dock() {
     }
 
     let mut was_visible = false;
+    let mut ticks: u32 = 0;
     ui::every(16, move || {
+        // About once a second: a settings change (the settings screen, `/effort`, `/autocompact`, an editor) reaches
+        // every session's Pi when its run settles, and the page reads the settings again.
+        ticks = ticks.wrapping_add(1);
+        if ticks % 60 == 0 && settings_watch.changed() {
+            chat_for_settings.settings_changed();
+            dock.send(&DockMessage::SettingsChanged);
+        }
         // A dock that just hid with a question still open needs its notification.
         let visible = visible_now.load(std::sync::atomic::Ordering::SeqCst);
         if was_visible && !visible {
