@@ -250,7 +250,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       ? renderSessionTabs({ ...tabs, sessions }, { maxVisible: 3, hideNew: true, hideUndo: true, menuOpen: ui.menuOpen, renaming: ui.renaming }, t)
       : `<div class="chat-identity"><span class="chat-dot" aria-hidden="true"></span><span class="chat-name">${esc(assistantName())}</span>${renderQuotaBars({ windows: current().quota, provider: providerLabel((current().model ?? '').split('/')[0]), facts: { model: modelLabel(current().model), context: current().context } }, {}, t)}</div>`
     $('chat-header').innerHTML = `${left}
-      <button type="button" class="icon-btn chat-new" data-chat="add" ${full ? 'disabled' : ''} aria-label="${esc(t('chat.new'))}" title="${esc(t('chat.new'))}">${ICON.plus}</button>
+      <button type="button" class="icon-btn chat-new" data-chat="add" ${full ? 'disabled' : ''} aria-label="${esc(t('chat.new'))}">${ICON.plus}</button>
       <button type="button" class="icon-btn" data-chat="close-dock" aria-label="${esc(t('chat.close'))}" title="${esc(t('chat.close'))}">${ICON.close}</button>`
   }
 

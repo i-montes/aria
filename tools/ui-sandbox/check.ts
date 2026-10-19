@@ -224,6 +224,7 @@ const script = `(async () => {
   // 9. no model button next to the working folder
   document.querySelector('[data-chat="add"]').click(); await wait(60)
   check('no model button beside the working folder, with one session or several', !$('.chat-path-row .p-meter') && !$('.chat-path-row .p-composer-model'))
+  check('no native tooltip says the session name: not on the tabs, not on the plus', ![...document.querySelectorAll('#chat-header .p-tabs-main, #chat-header [data-chat="add"]')].some((el) => el.hasAttribute('title')))
   check('no model button in the header, with one session or several', !$('#chat-header .p-meter') && !$('#chat-header .p-composer-model') && !$('#chat-header [data-chat="open-models"]'), $('#chat-header').innerHTML.slice(0, 160))
   // the quota card is reused as the hover card of each tab
   const tabCards = document.querySelectorAll('#chat-header .p-tabs-tip .p-qb-card')

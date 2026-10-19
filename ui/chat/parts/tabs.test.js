@@ -150,6 +150,16 @@ describe('the design behaviours', () => {
     expect(free).toContain('chat.quotabars.free')
   })
 
+  test('a tab has no native tooltip of its own (its card is the hover), only an accessible name', () => {
+    const html = render(bar([tab('a', { title: '' }), tab('b', { title: 'Plan' })]))
+    const mains = html.match(/<button[^>]*class="p-tabs-main"[^>]*>/g)
+    expect(mains).toHaveLength(2)
+    for (const main of mains) {
+      expect(main).not.toMatch(/\stitle=/)
+      expect(main).toContain('aria-label=')
+    }
+  })
+
   test('tooltips of the right half of the bar open to the left', () => {
     const html = render(bar([tab('a'), tab('b'), tab('c'), tab('d')]))
     const tips = html.match(/class="p-tabs-tip[^"]*"/g)
