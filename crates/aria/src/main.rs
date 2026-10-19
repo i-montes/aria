@@ -7,6 +7,7 @@ mod control;
 mod dock;
 mod handlers;
 mod visibility;
+mod watch;
 
 use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::paths::AriaPaths;
@@ -72,6 +73,7 @@ fn run_dock() {
                 notifier: Arc::new(OmarchyNotifier),
                 dock_visible: dock_visible.clone(),
                 chat_shown: Arc::new(AtomicBool::new(true)),
+                run_dir: control::control_socket_path().parent().map(std::path::Path::to_path_buf).unwrap_or_else(std::env::temp_dir),
                 path_var: std::env::var("PATH").unwrap_or_default(),
                 quota_fetcher: Arc::new(aria_core::quota::real_fetcher),
             },

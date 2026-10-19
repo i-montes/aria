@@ -147,7 +147,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   let picker = null // { kind, items, query, active, start }
   let dismissed = null // { kind, text }: Esc closed the picker for this text
   let settings = null
-  const data = { agents: [], tasks: null, tasksKind: 'tasks', memory: [] }
+  const data = { tasks: null, tasksKind: 'tasks', memory: [] }
   const ui = { connect: null, menuOpen: false, renaming: null, view: 'chat', agent: null, memory: initialMemoryUi(), tasksOpen: true, index: { expanded: false, my: null, off: 0, height: 360, settled: false } }
   let toast = null
   let connectToken = 0 // a connection in progress that was closed or replaced must not act when its reply arrives
@@ -372,11 +372,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     if (view === 'agents') {
       $('view-agents').innerHTML = `
         <div class="chat-panel-scroll">
-          ${data.agents.length ? renderSubagents({ agents: data.agents, footnote: t('chat.agents.footnote') }, {}, t) : `<p class="chat-panel-empty">${esc(t('chat.agents.empty'))}</p>`}
+          ${current().agents.length ? renderSubagents({ agents: current().agents, footnote: t('chat.agents.footnote') }, {}, t) : `<p class="chat-panel-empty">${esc(t('chat.agents.empty'))}</p>`}
         </div>
         <button type="button" class="chat-back" data-chat="panel-back"><kbd>Alt</kbd><kbd>A</kbd><span>${esc(t('chat.agents.back'))}</span></button>`
     } else if (view === 'session') {
-      const agent = data.agents.find((a) => (a.id ?? a.role) === ui.agent) ?? data.agents[0]
+      const agents = current().agents
+      const agent = agents.find((a) => (a.id ?? a.role) === ui.agent) ?? agents[0]
       $('view-session').innerHTML = `<div class="chat-panel-scroll">${agent ? renderAgentSession({ agent }, { now: Date.now() }, t) : ''}</div>`
     } else if (view === 'memory') {
       keepingFocus($('view-memory'), () => {
@@ -1157,8 +1158,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       render()
     },
     /** Backend feeds that do not exist yet (subagents, tasks, memory): the UI is ready for them. */
+    /** The active session's subagents (the dock sends them as `chatAgents`; the UI sandbox calls this). */
     setAgents(list) {
-      data.agents = list ?? []
+      chats.set(tabs.active, reduce(current(), { type: 'chatAgents', agents: list ?? [] }))
       render()
     },
     setTasks(tasks, kind = 'tasks') {

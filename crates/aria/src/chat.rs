@@ -104,6 +104,8 @@ pub struct ChatCtx {
     pub dock_visible: Arc<AtomicBool>,
     /// Is the chat what the dock shows? False while the settings are open: a prompt then needs a notification too.
     pub chat_shown: Arc<AtomicBool>,
+    /// Where the sessions' subagent sockets live (`$XDG_RUNTIME_DIR/aria`).
+    pub run_dir: PathBuf,
     /// The `PATH` Pi inherits (the shim directory goes in front of it).
     pub path_var: String,
     /// Reads a provider's quota (a fake in tests).
@@ -127,6 +129,8 @@ struct Inner {
     /// The provider's quota windows as last read, and when (so a run that follows another does not ask again).
     quota: Option<Vec<aria_core::quota::Window>>,
     quota_at: Option<std::time::Instant>,
+    /// The socket this session's subagents stream to (kept across Pi restarts, removed when the tab closes).
+    watch: Option<Arc<crate::watch::Watch>>,
     /// A restart was asked while a run was going: it happens when the run settles.
     restart_pending: bool,
     /// Prompts sent and not yet accepted, by command id, so a refusal can name its text.
@@ -253,6 +257,32 @@ impl Chat {
         self.inner.lock().unwrap().engine.as_deref().is_some_and(|e| std::ptr::eq(e, engine))
     }
 
+    /// The session's subagent socket, opened the first time it is needed. Without one the subagents still run, unwatched.
+    fn watch(&self) -> Option<Arc<crate::watch::Watch>> {
+        if let Some(watch) = self.inner.lock().unwrap().watch.clone() {
+            return Some(watch);
+        }
+        let path = self.ctx.run_dir.join(format!("watch-{}.sock", self.session));
+        let slot: Arc<std::sync::OnceLock<std::sync::Weak<crate::watch::Watch>>> = Arc::new(std::sync::OnceLock::new());
+        let (chat, seen) = (self.clone(), slot.clone());
+        let watch = Arc::new(
+            crate::watch::Watch::bind(&path, Arc::new(move || {
+                if let Some(watch) = seen.get().and_then(std::sync::Weak::upgrade) {
+                    chat.emit(DockMessage::ChatAgents { agents: watch.agents() });
+                }
+            }))
+            .ok()?,
+        );
+        let _ = slot.set(Arc::downgrade(&watch));
+        self.inner.lock().unwrap().watch = Some(watch.clone());
+        Some(watch)
+    }
+
+    /// The tab closed: its subagent socket goes away.
+    pub fn forget_watch(&self) {
+        self.inner.lock().unwrap().watch = None;
+    }
+
     fn current_engine(&self) -> Option<Arc<Engine>> {
         self.inner.lock().unwrap().engine.clone().filter(|engine| engine.is_alive())
     }
@@ -262,6 +292,9 @@ impl Chat {
         self.emit(self.state_message(problem));
         if let Some(windows) = self.inner.lock().unwrap().quota.clone() {
             self.emit(DockMessage::ChatQuota { windows });
+        }
+        if let Some(watch) = self.inner.lock().unwrap().watch.clone() {
+            self.emit(DockMessage::ChatAgents { agents: watch.agents() });
         }
         if problem.is_none() {
             // Showing a session wakes its Pi: that is what brings the conversation (and its model) back.
@@ -335,6 +368,10 @@ impl Chat {
             ],
             cwd: workdir.clone(),
         };
+        let mut spec = spec;
+        if let Some(watch) = self.watch() {
+            spec.env.push(("PI_WATCH_SOCK".into(), watch.path().display().to_string()));
+        }
         let spec_args = spec.args.clone();
         let (engine, events) = Engine::spawn(spec).map_err(|_| "pi-failed")?;
         let engine = Arc::new(engine);
@@ -499,6 +536,12 @@ impl Chat {
                 EngineEvent::Event(raw) => {
                     match raw["type"].as_str() {
                         Some("agent_start") => self.inner.lock().unwrap().running = true,
+                        // The tasks of a `parallel` call name the subagents that connect next.
+                        Some("tool_execution_start") if raw["toolName"] == "parallel" => {
+                            if let Some(watch) = self.inner.lock().unwrap().watch.clone() {
+                                watch.expect_tasks(&raw["args"]);
+                            }
+                        }
                         Some("agent_settled") => {
                             // Pi drops a run's dialogs silently when the run is aborted: they go here too.
                             let (open, restart) = {
@@ -754,6 +797,7 @@ impl Sessions {
                 let chat = self.chats.lock().unwrap().remove(&session);
                 if let Some(chat) = chat {
                     chat.shutdown();
+                    chat.forget_watch();
                 }
             }
             _ => {}
@@ -823,6 +867,7 @@ mod tests {
         messages: Receiver<DockMessage>,
         quota_calls: Arc<std::sync::atomic::AtomicUsize>,
         chat_shown: Arc<AtomicBool>,
+        run_dir: PathBuf,
         notifier: Arc<TestNotifier>,
         visible: Arc<AtomicBool>,
         workdir: PathBuf,
@@ -869,8 +914,9 @@ mod tests {
             Some(json!({"usage": {"rolling": {"status": "ok", "percent": 42}, "weekly": {"status": "ok", "percent": 17}, "monthly": {"status": "ok", "percent": 6}}}))
         });
         let chat_shown = Arc::new(AtomicBool::new(true));
-        let ctx = ChatCtx { paths: paths.clone(), notifier: notifier.clone(), dock_visible: visible.clone(), chat_shown: chat_shown.clone(), path_var: "/usr/bin:/bin".into(), quota_fetcher };
-        Harness { _turn: turn, quota_calls, chat_shown, backlog: Mutex::new(Vec::new()), _dir: dir, paths, chat: Chat::new(Arc::new(ctx), emit, "s1".into()), messages, notifier, visible, workdir }
+        let run_dir = dir.path().join("run");
+        let ctx = ChatCtx { paths: paths.clone(), notifier: notifier.clone(), dock_visible: visible.clone(), chat_shown: chat_shown.clone(), run_dir: run_dir.clone(), path_var: "/usr/bin:/bin".into(), quota_fetcher };
+        Harness { _turn: turn, quota_calls, chat_shown, run_dir, backlog: Mutex::new(Vec::new()), _dir: dir, paths, chat: Chat::new(Arc::new(ctx), emit, "s1".into()), messages, notifier, visible, workdir }
     }
 
     fn harness() -> Harness {
@@ -1097,7 +1143,7 @@ mod tests {
         let h = harness();
         std::fs::remove_file(h.paths.bin().join("node")).unwrap();
         // /usr/bin:/bin may hold a real node on this machine; point the chat at an empty PATH instead.
-        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), chat_shown: Arc::new(AtomicBool::new(true)), path_var: "/nonexistent".into(), quota_fetcher: Arc::new(|_| None) };
+        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), chat_shown: Arc::new(AtomicBool::new(true)), run_dir: h.run_dir.clone(), path_var: "/nonexistent".into(), quota_fetcher: Arc::new(|_| None) };
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);
         let chat = Chat::new(Arc::new(ctx), Arc::new(move |m| { let _ = sender.lock().unwrap().send(m); }), "s1".into());
@@ -1236,7 +1282,7 @@ mod tests {
         let emit: Emit = Arc::new(move |m| {
             let _ = sender.lock().unwrap().send(m);
         });
-        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), chat_shown: Arc::new(AtomicBool::new(true)), path_var: "/usr/bin:/bin".into(), quota_fetcher: Arc::new(|_| None) };
+        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), chat_shown: Arc::new(AtomicBool::new(true)), run_dir: h.run_dir.clone(), path_var: "/usr/bin:/bin".into(), quota_fetcher: Arc::new(|_| None) };
         let sessions = Sessions::new(ctx, emit);
         SessionsHarness { h, sessions, messages }
     }
@@ -1588,6 +1634,39 @@ mod tests {
             DockMessage::ChatEvent { event } => assert_eq!(event["projects"], json!(h.workdir.display().to_string())),
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn the_subagents_of_a_session_reach_the_page() {
+        use std::io::Write;
+        let h = harness();
+        ready(&h);
+        h.chat.test_send_raw("env_watch");
+        let path = match wait_for(&h, "the socket path", |m| event_of(m, "env")) {
+            DockMessage::ChatEvent { event } => event["watch"].as_str().unwrap().to_string(),
+            _ => unreachable!(),
+        };
+        assert!(path.ends_with("watch-s1.sock"), "{path}");
+        h.chat.test_send_raw("parallel_call"); // names the child that connects next
+        wait_for(&h, "the parallel call", |m| event_of(m, "tool_execution_start"));
+        let mut child = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        writeln!(child, "{}", json!({"t": "prompt", "text": "Task: Review the policy"})).unwrap();
+        match wait_for(&h, "the agents", |m| matches!(m, DockMessage::ChatAgents { agents } if agents[0]["role"] == "security")) {
+            DockMessage::ChatAgents { agents } => assert_eq!(agents[0]["kind"], "active"),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn closing_the_tab_removes_its_socket() {
+        let s = sessions_harness();
+        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        let path = s.h.run_dir.join("watch-aa.sock");
+        assert!(path.exists());
+        s.sessions.handle(PageMessage::SessionClose { session: "aa".into() });
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!path.exists());
     }
 
     #[test]

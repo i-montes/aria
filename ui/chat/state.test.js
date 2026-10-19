@@ -440,3 +440,16 @@ describe('the route line from the router (a status)', () => {
     expect(run(before, ev({ type: 'ui_notice', request: { method: 'setStatus', statusKey: 'sandbox', statusText: '🔒 sandbox' } })).messages).toEqual(before.messages)
   })
 })
+
+describe('the subagents of a session', () => {
+  const agents = [{ id: 'a1', role: 'security', task: 'Review', status: 'working · 1 tool', kind: 'active', steps: [] }]
+
+  test('chatAgents stores them for the session', () => {
+    expect(reduce(createChat(), { type: 'chatAgents', agents }).agents).toEqual(agents)
+  })
+
+  test('a malformed list is ignored, and a new chat starts with none', () => {
+    expect(createChat().agents).toEqual([])
+    expect(reduce(createChat(), { type: 'chatAgents', agents: 'x' }).agents).toEqual([])
+  })
+})

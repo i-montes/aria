@@ -53,6 +53,10 @@ while IFS= read -r line; do
       printf '{"type":"args","args":"%s"}\n' "$ARIA_TEST_ARGS" ;;
     env_projects)
       printf '{"type":"env","projects":"%s"}\n' "$ARIA_PROJECTS_DIR" ;;
+    env_watch)
+      printf '{"type":"env","watch":"%s"}\n' "$PI_WATCH_SOCK" ;;
+    parallel_call)
+      printf '{"type":"tool_execution_start","toolCallId":"p1","toolName":"parallel","args":{"tasks":[{"agent":"security","task":"Review the policy"}]}}\n' ;;
     crash) exit 3 ;;
     silent) : ;;
   esac
