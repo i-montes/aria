@@ -59,3 +59,10 @@ Notes: the desktop notification for a prompt that nobody can see is sent with `o
 | `~/.aria/agent/npm/node_modules/pi-parallel-agents`, `~/.aria/agent/git/github.com/obra/superpowers` (at `bb92a77741419a4ab5f06e711a283343f1ada0c3`) | the packages the extensions use, installed by `install.sh` with `pi install`; listed in `~/.aria/agent/settings.json` (`packages`, superpowers filtered to two skills) | none, new | `pi remove` with `PI_CODING_AGENT_DIR=~/.aria/agent` |
 | `~/.aria/agent/sessions/aria/` | every session's file in one folder; the files of the earlier per-folder layout were moved here (3 files) | none (moved, not copied) | move them back under `sessions/<per-folder name>/` |
 | `$XDG_RUNTIME_DIR/aria/watch-<session>.sock` | one socket per open tab for its subagents, mode 600, removed when the tab closes | none | stopping the dock removes them |
+
+## 2026-10-19 — macOS installer review
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| `~/Library/LaunchAgents/com.aria.dock.plist` | now also has `KeepAlive` (`SuccessfulExit` false): launchd starts the dock again if it crashes | the earlier plist, rewritten by the installer | `sh install/install.sh --uninstall`, or remove the `KeepAlive` key and `launchctl bootout`/`bootstrap` |
+| `~/.aria/run/w-<hash>.sock` | a subagent socket whose usual name (`watch-<session>.sock`) would pass macOS's 104-byte limit | none | removed when the tab closes |
