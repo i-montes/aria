@@ -42,6 +42,9 @@ const sandbox = `<script>
       if (m.type === 'loadSettings') r({ type: 'settings', settings, exists: !!settings, problem: null, connected: ['opencode-go:api_key'] })
       else if (m.type === 'sessionsLoad') r({ type: 'sessions', sessions: [{ id: 's1', title: 'Fix the failing build' }], active: 's1' })
       else if (m.type === 'saveSettings') r({ type: 'saved' })
+      else if (m.type === 'saveKey') r({ type: 'keyResult', ok: m.key !== 'bad', error: m.key === 'bad' ? 'key-rejected' : null })
+      else if (m.type === 'startOauth') { r({ type: 'oauthUrl', url: 'https://claude.ai/oauth/authorize?x=1' }); setTimeout(() => r({ type: 'oauthResult', ok: true, error: null }), 300) }
+      else if (m.type === 'installClaudeBridge') setTimeout(() => (window.sim.installError ? r({ type: 'error', code: window.sim.installError }) : r({ type: 'saved' })), 300)
       else if (m.type === 'closeRequest') document.body.classList.remove('open')
       else if (m.type === 'session') {
         const inner = m.message

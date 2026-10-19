@@ -10,6 +10,10 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+/// The provider for Claude Pro/Max sign-in (`claude-bridge`), pinned like Pi itself. It runs Claude Code through the Agent
+/// SDK, uses Pi's Anthropic credential (OAuth = the subscription, an API key = per token) and is about 300 MB.
+pub const CLAUDE_BRIDGE_PACKAGE: &str = "npm:pi-claude-agent-sdk@0.9.2";
+
 const DEFAULT_SYSTEM: &str = "You are Aria, a personal desktop assistant. Keep answers short and direct.\n";
 
 /// Where Pi works: `sandbox.projectsDir` with `~` expanded, `~/Projects` when there are no settings.
@@ -65,6 +69,39 @@ pub fn prepare(paths: &AriaPaths, settings: Option<&Settings>) -> io::Result<()>
         std::fs::write(&system, DEFAULT_SYSTEM)?;
     }
     Ok(())
+}
+
+/// Is the Claude provider listed in Pi's settings and downloaded?
+pub fn claude_bridge_installed(paths: &AriaPaths) -> bool {
+    let listed = read_json(&paths.agent().join("settings.json"))
+        .ok()
+        .flatten()
+        .and_then(|value| value["packages"].as_array().cloned())
+        .is_some_and(|packages| packages.iter().any(|p| p.as_str().is_some_and(|p| p.contains("pi-claude-agent-sdk"))));
+    listed && paths.agent().join("npm/node_modules/pi-claude-agent-sdk").is_dir()
+}
+
+/// What to run to install the Claude provider: `pi install` with Aria's agent directory, so Pi downloads the package and
+/// lists it in its own settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstallCommand {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub cwd: PathBuf,
+}
+
+pub fn claude_bridge_install_command(paths: &AriaPaths, install: &crate::pi::PiInstall, path_var: &str) -> InstallCommand {
+    InstallCommand {
+        program: install.binary.clone(),
+        args: vec!["install".into(), CLAUDE_BRIDGE_PACKAGE.into()],
+        env: vec![
+            ("PI_CODING_AGENT_DIR".into(), paths.agent().display().to_string()),
+            ("PATH".into(), crate::pi::path_with_bin(paths, path_var)),
+            ("PI_SKIP_VERSION_CHECK".into(), "1".into()),
+        ],
+        cwd: paths.agent(),
+    }
 }
 
 #[cfg(test)]
@@ -160,6 +197,42 @@ mod tests {
         let (_dir, paths) = paths();
         prepare(&paths, None).unwrap();
         assert_eq!(std::fs::metadata(paths.agent()).unwrap().permissions().mode() & 0o777, 0o700);
+    }
+
+    #[test]
+    fn the_claude_provider_is_installed_when_settings_list_it_and_its_files_exist() {
+        let (_dir, paths) = paths();
+        assert!(!claude_bridge_installed(&paths));
+        prepare(&paths, None).unwrap();
+        std::fs::write(paths.agent().join("settings.json"), format!(r#"{{"packages":["{CLAUDE_BRIDGE_PACKAGE}"]}}"#)).unwrap();
+        assert!(!claude_bridge_installed(&paths), "listed but not downloaded");
+        std::fs::create_dir_all(paths.agent().join("npm/node_modules/pi-claude-agent-sdk")).unwrap();
+        assert!(claude_bridge_installed(&paths));
+        std::fs::write(paths.agent().join("settings.json"), r#"{"packages":[]}"#).unwrap();
+        assert!(!claude_bridge_installed(&paths), "downloaded but not listed");
+    }
+
+    #[test]
+    fn the_install_command_runs_the_pinned_pi_in_aria_s_agent_dir_with_the_shims_first() {
+        let (_dir, paths) = paths();
+        let install = crate::pi::PiInstall { dir: paths.pi_install("1.3.0"), binary: paths.pi_install("1.3.0").join("node_modules/.bin/pi") };
+        let command = claude_bridge_install_command(&paths, &install, "/usr/bin");
+        assert_eq!(command.program, install.binary);
+        assert_eq!(command.args, vec!["install".to_string(), CLAUDE_BRIDGE_PACKAGE.to_string()]);
+        let env = |key: &str| command.env.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+        assert_eq!(env("PI_CODING_AGENT_DIR"), Some(paths.agent().display().to_string()));
+        assert_eq!(env("PATH"), Some(format!("{}:/usr/bin", paths.bin().display())));
+        assert_eq!(env("PI_SKIP_VERSION_CHECK"), Some("1".to_string()));
+    }
+
+    #[test]
+    fn preparing_keeps_the_packages_pi_installed() {
+        let (_dir, paths) = paths();
+        prepare(&paths, None).unwrap();
+        std::fs::write(paths.agent().join("settings.json"), format!(r#"{{"packages":["{CLAUDE_BRIDGE_PACKAGE}"]}}"#)).unwrap();
+        prepare(&paths, Some(&settings_with_daily("opencode-go/glm-5.3"))).unwrap();
+        let value = read_json(&paths.agent().join("settings.json")).unwrap().unwrap();
+        assert_eq!(value["packages"], json!([CLAUDE_BRIDGE_PACKAGE]));
     }
 
     #[test]

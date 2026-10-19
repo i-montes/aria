@@ -1,0 +1,21 @@
+/* The /connect card (render: connect.js). Solid fills; only the border takes the accent. */
+.p-connect { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 12px; background: #16161a; border: 1px solid rgba(185, 168, 255, 0.7); font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; }
+.p-connect-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.p-connect-title { font-size: 14px; font-weight: 600; }
+.p-connect-x { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #9A9AA3; cursor: pointer; font-size: 18px; line-height: 1; }
+.p-connect-x:hover, .p-connect-x:focus-visible { color: #F4F4F5; outline: none; }
+.p-connect-text { margin: 0; font-size: 13px; line-height: 1.5; color: #C8C8CE; overflow-wrap: anywhere; }
+.p-connect-opts { display: flex; flex-direction: column; gap: 8px; }
+.p-connect-opt { display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 11px 13px; text-align: left; cursor: pointer; border-radius: 10px; border: 1px solid #26262B; background: #1f1f24; color: inherit; font: inherit; }
+.p-connect-opt:hover, .p-connect-opt:focus-visible { border-color: #B9A8FF; outline: none; }
+.p-connect-opt-title { font-size: 13.5px; font-weight: 500; }
+.p-connect-opt-desc { font-size: 12px; line-height: 1.5; color: #9A9AA3; }
+.p-connect-field { display: flex; align-items: center; gap: 10px; }
+.p-connect-input { flex: 1; min-width: 0; padding: 9px 12px; border-radius: 8px; border: 1px solid #26262B; background: #0F0F12; color: #F4F4F5; font: 13px 'Geist Mono', ui-monospace, monospace; }
+.p-connect-input:focus { outline: none; border-color: #B9A8FF; }
+.p-connect-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.p-connect-link { padding: 4px 2px; border: 0; background: none; color: #9A9AA3; font: inherit; font-size: 12.5px; text-decoration: underline; cursor: pointer; }
+.p-connect-link:hover, .p-connect-link:focus-visible { color: #F4F4F5; outline: none; }
+.p-connect-primary { padding: 8px 14px; border-radius: 9px; border: 1px solid #B9A8FF; background: #B9A8FF; color: #0B0816; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+.p-connect-primary:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 2px; }
+.p-connect-error { margin: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid #5a2a30; background: #1d1214; color: #FF9A9A; font-size: 12.5px; line-height: 1.5; }

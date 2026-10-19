@@ -148,6 +148,42 @@ const script = `(async () => {
   check('the thread scrollbar is not covered by the index', hit && !hit.closest('.chat-index') && (hit.id === 'chat-list' || hit.closest('#chat-list')), hit?.className)
   move(listBox.left + 40, listBox.top + 100); await wait(300)
   check('the index closes after the pointer leaves', !$('.p-index-panel.is-open'))
+  // 12. /connect: Anthropic by API key, by Claude sign-in, and the failures
+  await reset()
+  window.__sent.length = 0
+  typeIn('/connect'); await wait(120); key($('#chat-input'), 'Enter'); await wait(40); key($('#chat-input'), 'Enter'); await wait(80) // pick the command, then run it
+  check('/connect opens the card at the provider choice', $('#chat-connect .p-connect') && $('[data-op="provider"][data-value="anthropic"]'), $('#chat-connect')?.textContent.slice(0, 60))
+  $('[data-op="provider"][data-value="anthropic"]').click(); await wait(40)
+  check('Anthropic offers Claude sign-in or a key', $('[data-op="method"][data-value="oauth"]') && $('[data-op="method"][data-value="key"]'))
+  $('[data-op="method"][data-value="key"]').click(); await wait(40)
+  const keyField = $('[data-chat-field="connect-key"]')
+  keyField.focus(); keyField.value = 'bad'; keyField.dispatchEvent(new Event('input', { bubbles: true })); await wait(30)
+  $('[data-op="save"]').click(); await wait(120)
+  check('a rejected key shows its reason and stays on the key step', $('.p-connect-error') && $('[data-chat-field="connect-key"]'), $('#chat-connect')?.textContent.slice(0, 120))
+  const field2 = $('[data-chat-field="connect-key"]')
+  field2.focus(); field2.value = 'sk-ant-good'; field2.dispatchEvent(new Event('input', { bubbles: true })); await wait(30)
+  window.__sent.length = 0
+  field2.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); await wait(200)
+  check('the key is saved as the Anthropic API key', window.__sent.some((m) => m.type === 'saveKey' && m.provider === 'anthropic-api' && m.key === 'sk-ant-good'), JSON.stringify(window.__sent.map((m) => m.type)))
+  check('every Pi is restarted after connecting', window.__sent.some((m) => m.type === 'enginesRestart'))
+  check('the card says it is connected and offers the models', $('[data-op="models"]') && $('#chat-list').textContent.includes('Anthropic is connected'), $('#chat-connect')?.textContent.slice(0, 80))
+  $('[data-op="models"]').click(); await wait(200)
+  check('"Choose a model" opens the model picker filtered to Claude', $('.p-models.is-open') && document.querySelector('[data-chat-field="model-search"]')?.value === 'claude')
+  window.aria.chat.escape(); await wait(40)
+  // by Claude sign-in
+  typeIn('/connect anthropic'); await wait(100); key($('#chat-input'), 'Enter'); await wait(60)
+  window.__sent.length = 0
+  $('[data-op="method"][data-value="oauth"]').click(); await wait(1100)
+  check('Claude sign-in starts the browser flow, then installs the Claude provider', window.__sent.map((m) => m.type).join() === 'startOauth,installClaudeBridge,enginesRestart,session' || window.__sent.map((m) => m.type).slice(0, 3).join() === 'startOauth,installClaudeBridge,enginesRestart', window.__sent.map((m) => m.type).join())
+  check('and ends connected', $('[data-op="models"]'))
+  $('[data-op="close"]').click(); await wait(40)
+  check('the X closes the card', !$('#chat-connect'))
+  window.sim.installError = 'claude-code-missing'
+  typeIn('/connect anthropic'); await wait(100); key($('#chat-input'), 'Enter'); await wait(60)
+  $('[data-op="method"][data-value="oauth"]').click(); await wait(1100)
+  check('a missing Claude Code is explained and the card goes back to the choice', $('.p-connect-error')?.textContent.includes('Claude Code') && $('[data-op="method"][data-value="key"]'), $('#chat-connect')?.textContent.slice(0, 120))
+  window.sim.installError = null
+  check('Esc closes the card first', window.aria.chat.escape() === true && !$('#chat-connect'))
   // 9. no model button next to the working folder
   document.querySelector('[data-chat="add"]').click(); await wait(60)
   check('no model button beside the working folder, with one session or several', !$('.chat-path-row .p-meter') && !$('.chat-path-row .p-composer-model'))

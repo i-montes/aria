@@ -2,7 +2,7 @@
 
 A personal assistant that lives on your desktop. Press **Super + A** and a dock opens over whatever you are doing, on the monitor you are looking at, to work with your files and tasks and to talk to you in your language.
 
-> **Status: phase 2 of 5, part 2a.** Aria installs, opens with its hotkey, runs the first-run setup, and the dock is now a chat backed by its own pinned [Pi](https://github.com/earendil-works/pi) engine, working in the folder shown at the top of the dock. The `+` opens another session as a tab (up to eight, each with its own Pi, so a background tab keeps working and tells you when it needs you). Your extensions, the settings-to-Pi sync and the parity check are the next parts. See [the roadmap](docs/superpowers/specs/2026-10-18-aria-base-design.md#roadmap) and [phase 2](docs/superpowers/specs/2026-10-18-aria-phase2-parity-design.md).
+> **Status: phase 2 of 5, part 2a.** Aria installs, opens with its hotkey, runs the first-run setup, and the dock is now a chat backed by its own pinned [Pi](https://github.com/earendil-works/pi) engine, working in the folder shown at the top of the dock. `/connect` connects a provider from the chat (Anthropic with your Claude plan or an API key, or OpenCode Go). The `+` opens another session as a tab (up to eight, each with its own Pi, so a background tab keeps working and tells you when it needs you). Your extensions, the settings-to-Pi sync and the parity check are the next parts. See [the roadmap](docs/superpowers/specs/2026-10-18-aria-base-design.md#roadmap) and [phase 2](docs/superpowers/specs/2026-10-18-aria-phase2-parity-design.md).
 
 Supported today: **Omarchy** (Hyprland 0.56+ with the Lua configuration). Mac is next.
 

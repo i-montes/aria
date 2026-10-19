@@ -6,6 +6,7 @@ import { esc } from '../onboarding/components.js'
 import { renderAgentSession } from './parts/session.js'
 import { renderCommandPicker, filterCommands, stepActive, clampActive } from './parts/commands.js'
 import { renderComposer } from './parts/composer.js'
+import { PROVIDERS, renderConnect } from './parts/connect.js'
 import { renderFilePicker, filterFiles } from './parts/files.js'
 import { indexItems, indexLayout, renderIndex } from './parts/index.js'
 import { renderMemory, initialMemoryUi, reduceMemoryUi } from './parts/memory.js'
@@ -19,7 +20,7 @@ import { formatElapsed } from './parts/working.js'
 import {
   MAX_SESSIONS, addSession, applyStatus, closeSession, createTabs, renameSession, selectSession, setTitleIfEmpty, toSaved, undoClose,
 } from './sessions.js'
-import { addQueued, addUser, answerDialog, answersForCard, clearQueue, createChat, reduce } from './state.js'
+import { addNote, addQueued, addUser, answerDialog, answersForCard, clearQueue, createChat, reduce } from './state.js'
 import { renderThread } from './thread.js'
 
 /** `/home/ana/Projects` -> `~/Projects` (Linux and Mac homes); anything else stays as it is. */
@@ -147,8 +148,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   let dismissed = null // { kind, text }: Esc closed the picker for this text
   let settings = null
   const data = { agents: [], tasks: null, tasksKind: 'tasks', memory: [] }
-  const ui = { menuOpen: false, renaming: null, view: 'chat', agent: null, memory: initialMemoryUi(), tasksOpen: true, index: { expanded: false, my: null, off: 0, height: 360, settled: false } }
+  const ui = { connect: null, menuOpen: false, renaming: null, view: 'chat', agent: null, memory: initialMemoryUi(), tasksOpen: true, index: { expanded: false, my: null, off: 0, height: 360, settled: false } }
   let toast = null
+  let connectToken = 0 // a connection in progress that was closed or replaced must not act when its reply arrives
   let undoTimer = null
   let toastTimer = null
   let tick = null
@@ -254,8 +256,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const list = $('chat-list')
     const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80
     const ex = expanded()
-    list.innerHTML = renderThread(state, { expanded: ex.open, openRows: ex.rows, moreOpen: ex.more, now: Date.now() }, t)
-    if (nearBottom) list.scrollTop = list.scrollHeight
+    const connectHtml = ui.connect ? `<div class="thread-item" id="chat-connect">${renderConnect(ui.connect, {}, t)}</div>` : ''
+    keepingFocus(list, () => {
+      list.innerHTML = renderThread(state, { expanded: ex.open, openRows: ex.rows, moreOpen: ex.more, now: Date.now() }, t) + connectHtml
+    })
+    if (nearBottom || (ui.connect && ui.connect.justOpened)) list.scrollTop = list.scrollHeight
+    if (ui.connect) ui.connect.justOpened = false
   }
 
   function drawIndex() {
@@ -511,6 +517,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       clearDraft()
       return openView('memory')
     }
+    const connect = /^\/connect(?:\s+(\S+))?\s*$/.exec(text)
+    if (connect) {
+      clearDraft()
+      drawComposer()
+      return openConnect(connect[1])
+    }
     if (/^\/model(\s|$)/.test(text)) return // the model picker answers this one
     const session = tabs.active
     const chat = chatOf(session)
@@ -578,6 +590,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const local = () => [
       { name: 'memory', description: t('chat.cmd.memory'), source: 'aria' },
       { name: 'model', description: t('chat.cmd.model'), source: 'aria' },
+      { name: 'connect', description: t('chat.cmd.connect'), source: 'aria' },
     ]
     if (asked.kind === 'command') {
       let items = commandsBy.get(session)
@@ -657,6 +670,110 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       submit()
     } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.stopPropagation() // the arrows move the caret here, not focus between controls
+    }
+  }
+
+  // ---- connecting a provider (`/connect`) --------------------------------------------------------------
+
+  const KEY_PROVIDER = { anthropic: 'anthropic-api', 'opencode-go': 'opencode-go' }
+
+  function redrawConnect() {
+    drawThread()
+  }
+
+  /** `/connect [provider]`: the card opens at the end of the thread. */
+  function openConnect(arg) {
+    const known = PROVIDERS.some((p) => p.id === arg)
+    connectToken++
+    ui.connect = { provider: known ? arg : null, step: !known ? 'pick' : arg === 'anthropic' ? 'anthropic' : 'key', error: null, keyDraft: '', revealed: false, justOpened: true }
+    render()
+    $('chat-list').querySelector('[data-chat="connect"], input')?.focus()
+  }
+
+  function closeConnect() {
+    connectToken++
+    ui.connect = null
+    drawThread()
+    input?.focus()
+  }
+
+  const connectFailed = (code) => {
+    // Back to the step the owner can retry from, with the reason.
+    const back = ui.connect.provider === 'anthropic' && ui.connect.step !== 'key' ? 'anthropic' : 'key'
+    ui.connect = { ...ui.connect, step: back, error: code ?? 'generic' }
+    redrawConnect()
+  }
+
+  /** The provider is connected: every Pi starts again (so it sees the credential and the package) and the card says so. */
+  function connected() {
+    const label = PROVIDERS.find((p) => p.id === ui.connect.provider)?.label ?? ''
+    send({ type: 'enginesRestart' })
+    chats.set(tabs.active, addNote(current(), 'aria', t('chat.connect.done', { provider: label })))
+    ui.connect = { ...ui.connect, step: 'done', error: null }
+    render()
+    post({ type: 'chatLoad' })
+  }
+
+  async function saveConnectKey() {
+    const c = ui.connect
+    const token = connectToken
+    const key = (c.keyDraft ?? '').trim()
+    if (!key) return connectFailed('key-rejected')
+    ui.connect = { ...c, error: null }
+    const reply = await request({ type: 'saveKey', provider: KEY_PROVIDER[c.provider], key })
+    if (token !== connectToken) return
+    if (reply.type === 'keyResult' && reply.ok) return connected()
+    connectFailed(reply.error ?? reply.code)
+  }
+
+  async function signInWithClaude() {
+    const token = connectToken
+    ui.connect = { ...ui.connect, step: 'waiting', error: null, url: null }
+    redrawConnect()
+    const reply = await request({ type: 'startOauth' }, (progress) => {
+      if (token === connectToken && progress.url) {
+        ui.connect = { ...ui.connect, url: progress.url }
+        redrawConnect()
+      }
+    })
+    if (token !== connectToken) return
+    if (!(reply.type === 'oauthResult' && reply.ok)) return connectFailed(reply.error ?? reply.code)
+    ui.connect = { ...ui.connect, step: 'installing' }
+    redrawConnect()
+    const installed = await request({ type: 'installClaudeBridge' })
+    if (token !== connectToken) return
+    if (installed.type !== 'saved') return connectFailed(installed.code)
+    connected()
+  }
+
+  function connectOp(el) {
+    const c = ui.connect
+    if (!c) return
+    const { op, value, url } = el.dataset
+    if (op === 'close') return closeConnect()
+    if (op === 'provider') {
+      ui.connect = { ...c, provider: value, step: value === 'anthropic' ? 'anthropic' : 'key', error: null }
+      return redrawConnect()
+    }
+    if (op === 'method') {
+      if (value === 'oauth') return signInWithClaude()
+      ui.connect = { ...c, step: 'key', error: null }
+      return redrawConnect()
+    }
+    if (op === 'back') {
+      ui.connect = { ...c, step: c.step === 'key' && c.provider === 'anthropic' ? 'anthropic' : 'pick', error: null }
+      return redrawConnect()
+    }
+    if (op === 'reveal') {
+      ui.connect = { ...c, revealed: !c.revealed }
+      return redrawConnect()
+    }
+    if (op === 'save') return saveConnectKey()
+    if (op === 'open-url') return send({ type: 'openUrl', url })
+    if (op === 'models') {
+      const query = c.provider === 'anthropic' ? 'claude' : ''
+      closeConnect()
+      return openModelPicker(query)
     }
   }
 
@@ -852,6 +969,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     if (el === input) {
       drawComposer()
       updatePicker()
+    } else if (el?.dataset?.chatField === 'connect-key' && ui.connect) {
+      ui.connect.keyDraft = el.value // no redraw: the field keeps its focus and caret
     } else if (el?.dataset?.chatField === 'model-search' && picker?.kind === 'model') {
       picker = { ...picker, query: el.value, active: 0 }
       drawOverlay()
@@ -893,7 +1012,11 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       }
       return // Escape is not handled here: the page calls escape(), which closes just this picker
     }
-    if (event.target?.dataset?.op === 'other' && event.key === 'Enter' && !event.isComposing) {
+    if (event.target?.dataset?.chatField === 'connect-key' && event.key === 'Enter' && !event.isComposing) {
+      event.preventDefault()
+      return saveConnectKey()
+    }
+        if (event.target?.dataset?.op === 'other' && event.key === 'Enter' && !event.isComposing) {
       event.preventDefault()
       const { id, q } = event.target.dataset
       const dialog = current().dialogs.find((d) => d.id === id)
@@ -971,6 +1094,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       case 'permission': return answer(id, { value: choice }, choice)
       case 'quota': return answer(id, { value: choice }, choice)
       case 'question': return onQuestion(el)
+      case 'connect': return connectOp(el)
       case 'tasks-toggle':
         ui.tasksOpen = !ui.tasksOpen
         return drawTasks()
@@ -1069,6 +1193,10 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       if (picker) {
         dismissed = { kind: picker.kind, text: input?.value ?? '' }
         closePicker()
+        return true
+      }
+      if (ui.connect) {
+        closeConnect()
         return true
       }
       if (current().running && ui.view === 'chat') {

@@ -31,6 +31,12 @@ them yet. Each row says what is missing and which part of the roadmap brings it.
 |---|---|
 | Memory panel (`/memory`): list, search, filters, pin, forget with undo | a read of Engram's memories into `chat.setMemory([...])` and the actions (pin, forget) written back; the contract is in `ui/chat/parts/memory.js` |
 
+## The Claude provider
+
+- `/connect` installs the Claude provider (`claude-bridge`) for the sign-in route and needs Claude Code on the machine; the quota of a Claude plan is not readable yet, so the header meter shows none for it.
+- Showing the sign-in's email or plan in the card needs a profile call the sign-in does not make today.
+- Disconnecting a provider (removing its credential or the package) has no command yet.
+
 ## Smaller gaps
 
 - The agent-session view has no composer (the design has one): there is no way to steer a subagent yet.

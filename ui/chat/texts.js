@@ -4,6 +4,7 @@ import * as answers from './parts/answers.js'
 import * as assistant from './parts/assistant.js'
 import * as commands from './parts/commands.js'
 import * as composer from './parts/composer.js'
+import * as connect from './parts/connect.js'
 import * as divider from './parts/divider.js'
 import * as doc from './parts/document.js'
 import * as files from './parts/files.js'
@@ -25,7 +26,7 @@ import * as tools from './parts/tools.js'
 import * as user from './parts/user.js'
 import * as working from './parts/working.js'
 
-export const PARTS = [answers, assistant, commands, composer, divider, doc, files, index, jev, memory, meter, models, note, permission, phases, question, quota, session, subagents, tabs, tasks, tools, user, working]
+export const PARTS = [answers, assistant, commands, composer, connect, divider, doc, files, index, jev, memory, meter, models, note, permission, phases, question, quota, session, subagents, tabs, tasks, tools, user, working]
 
 const OWN = {
   en: {
@@ -50,6 +51,7 @@ const OWN = {
     'chat.meter.noModel': 'no model',
     'chat.cmd.memory': 'Open the memory panel',
     'chat.cmd.model': 'Switch the model',
+    'chat.cmd.connect': 'Connect a provider (Anthropic, OpenCode Go)',
   },
   es: {
     'chat.empty.title': 'SESIÓN NUEVA',
@@ -73,6 +75,7 @@ const OWN = {
     'chat.meter.noModel': 'sin modelo',
     'chat.cmd.memory': 'Abrir el panel de memoria',
     'chat.cmd.model': 'Cambiar de modelo',
+    'chat.cmd.connect': 'Conectar un proveedor (Anthropic, OpenCode Go)',
   },
 }
 
