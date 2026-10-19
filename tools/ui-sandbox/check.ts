@@ -225,6 +225,11 @@ const script = `(async () => {
   document.querySelector('[data-chat="add"]').click(); await wait(60)
   check('no model button beside the working folder, with one session or several', !$('.chat-path-row .p-meter') && !$('.chat-path-row .p-composer-model'))
   check('no model button in the header, with one session or several', !$('#chat-header .p-meter') && !$('#chat-header .p-composer-model') && !$('#chat-header [data-chat="open-models"]'), $('#chat-header').innerHTML.slice(0, 160))
+  // the quota card is reused as the hover card of each tab
+  const tabCards = document.querySelectorAll('#chat-header .p-tabs-tip .p-qb-card')
+  check('each session tab opens the same quota card on hover', tabCards.length === 2, tabCards.length)
+  check('the tab card has the quota hero, the tab title and the facts', tabCards[0].querySelector('.p-qb-hero') && tabCards[0].querySelector('.p-qb-heading-title') && tabCards[0].querySelector('.p-qb-facts'), tabCards[0].innerHTML.slice(0, 160))
+  document.querySelector('#chat-header .p-tabs-tab').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
   check('with several sessions the header has tabs and no quota bar', !$('#chat-header .p-qb'), $('#chat-header').innerHTML.slice(0, 120))
   // 8. the textarea is not replaced just because text appeared
   const before = $('#chat-input'); typeIn('abc'); typeIn('abc\\ndef'); await wait(40)

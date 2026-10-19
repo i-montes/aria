@@ -6,7 +6,7 @@
 //   status   'working' | 'needs' | 'done' | 'idle'; `unread` (finished while away) looks like done
 //   model    display name of the model, shown in the tooltip
 //   context  context window used by that session, 0..100 (percent)
-//   quota    share of the account's quota that session used, 0..100 (percent)
+//   quotaWindows  the provider's quota windows for that session's model (see quotabars.js); provider: its readable name
 //   free     the session runs on a free model: the tooltip says it uses no quota
 //   closed   { entry, index } of the tab just closed (from sessions.js), for the undo bar
 // ui: { menuOpen, renaming, maxVisible, hideNew, hideUndo, quota, hasQuota }
@@ -28,6 +28,7 @@
 //   [data-chat-rename]     data-session  the title field (Enter commits, Escape cancels, blur commits);
 //                                        the controller opens it on double click of `.p-tabs-main`
 import { esc } from '../../onboarding/components.js'
+import { renderQuotaCard } from './quotabars.js'
 import { MAX_SESSIONS, visibleTabs } from '../sessions.js'
 
 export const TEXTS = {
@@ -48,13 +49,6 @@ export const TEXTS = {
     'chat.undo': 'Undo',
     'chat.tabs.moreLabel': '{n} more sessions',
     'chat.tabs.limit': 'Close a session to open another',
-    'chat.tabs.quota': 'QUOTA',
-    'chat.tabs.session': 'This session',
-    'chat.tabs.account': 'Account',
-    'chat.tabs.freeModel': 'Free model. This session uses no quota.',
-    'chat.tabs.noQuota': 'This provider has no quota to read.',
-    'chat.tabs.model': 'Model',
-    'chat.tabs.context': 'Context',
   },
   es: {
     'chat.untitled': 'Sesión nueva',
@@ -73,13 +67,6 @@ export const TEXTS = {
     'chat.undo': 'Deshacer',
     'chat.tabs.moreLabel': '{n} sesiones más',
     'chat.tabs.limit': 'Cierra una sesión para abrir otra',
-    'chat.tabs.quota': 'CUOTA',
-    'chat.tabs.session': 'Esta sesión',
-    'chat.tabs.account': 'Cuenta',
-    'chat.tabs.freeModel': 'Modelo gratuito. Esta sesión no usa cuota.',
-    'chat.tabs.noQuota': 'Este proveedor no tiene cuota que leer.',
-    'chat.tabs.model': 'Modelo',
-    'chat.tabs.context': 'Contexto',
   },
 }
 
@@ -101,31 +88,16 @@ export function renderSessionTabs(tabs, ui = {}, t = (key) => key) {
   const max = Math.max(2, Math.round(Number(ui.maxVisible)) || 4)
   const { visible, overflow } = visibleTabs(tabs, max)
   const multi = tabs.sessions.length > 1
-  const hasQuota = ui.hasQuota ?? ui.quota !== undefined
-  const account = pct(ui.quota)
   const titleOf = (s) => s.title || t('chat.untitled')
 
-  const tooltip = (s, i, tone) => {
-    const used = pct(s.quota)
-    const block = s.free
-      ? `<span class="p-tabs-tt-note">${esc(t('chat.tabs.freeModel'))}</span>`
-      : hasQuota
-        ? `<div class="p-tabs-tt-quota">
-            <span class="p-tabs-tt-label">${esc(t('chat.tabs.quota'))}</span>
-            <div class="p-tabs-tt-bar" aria-hidden="true"><span class="p-tabs-tt-acct" style="width: ${account}%"></span><span class="p-tabs-tt-sess" style="width: ${Math.min(used, account)}%"></span></div>
-            <div class="p-tabs-tt-line is-session"><span class="p-tabs-tt-key"><span class="p-tabs-tt-swatch is-session" aria-hidden="true"></span>${esc(t('chat.tabs.session'))}</span><span class="p-tabs-tt-num">${used}%</span></div>
-            <div class="p-tabs-tt-line is-account"><span class="p-tabs-tt-key"><span class="p-tabs-tt-swatch is-account" aria-hidden="true"></span>${esc(t('chat.tabs.account'))}</span><span class="p-tabs-tt-num">${account}%</span></div>
-          </div>`
-        : `<span class="p-tabs-tt-note">${esc(t('chat.tabs.noQuota'))}</span>`
-    return `<div class="p-tabs-tip${i >= Math.ceil(visible.length / 2) ? ' is-right' : ''}" role="tooltip">
-      <div class="p-tabs-tt-head"><span class="p-tabs-tt-title">${esc(titleOf(s))}</span><span class="p-tabs-tt-state tone-${tone}">${esc(t(`chat.status.${tone}`))}</span></div>
-      ${block}
-      <div class="p-tabs-tt-facts">
-        <div class="p-tabs-tt-fact"><span>${esc(t('chat.tabs.model'))}</span><span class="p-tabs-tt-val">${esc(s.model || '—')}</span></div>
-        <div class="p-tabs-tt-fact"><span>${esc(t('chat.tabs.context'))}</span><span class="p-tabs-tt-val is-mono">${pct(s.context)}%</span></div>
-      </div>
-    </div>`
-  }
+  // The tooltip is the quota card (see quotabars.js), led by the tab's title and state.
+  const tooltip = (s, i, tone) => `<div class="p-tabs-tip${i >= Math.ceil(visible.length / 2) ? ' is-right' : ''}" role="tooltip">${renderQuotaCard({
+    windows: s.quotaWindows,
+    provider: s.provider,
+    facts: { model: s.model || '—', context: s.context ?? 0 },
+    heading: { title: titleOf(s), state: t(`chat.status.${tone}`), tone },
+    free: s.free === true,
+  }, {}, t)}</div>`
 
   const tab = (s, i) => {
     const on = s.id === tabs.active

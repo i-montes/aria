@@ -29,35 +29,10 @@
 .p-tabs-input::selection { background: #4A4268; }
 
 /* The tooltip: model, context and quota of the session under the pointer or focus. */
-.p-tabs-tip { position: absolute; top: 40px; left: 0; z-index: 40; display: flex; flex-direction: column; gap: 10px; width: 240px; box-sizing: border-box; padding: 12px 14px; border-radius: 14px;
-  background: #141417; border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.1)); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55); text-align: left; cursor: default;
+.p-tabs-tip { position: absolute; top: 40px; left: 0; z-index: 40; cursor: default;
   opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 100ms ease, visibility 0s linear 100ms; }
 .p-tabs-tip.is-right { left: auto; right: 0; }
 .p-tabs-tab:hover .p-tabs-tip, .p-tabs-tab:focus-within .p-tabs-tip { opacity: 1; visibility: visible; transition: opacity 140ms ease 280ms, visibility 0s linear 280ms; }
-.p-tabs-tt-head { display: flex; flex-direction: column; gap: 3px; }
-.p-tabs-tt-title { font-size: 13px; font-weight: 600; line-height: 1.35; color: #F4F4F5; overflow-wrap: anywhere; }
-.p-tabs-tt-state { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #8A8A94; }
-.p-tabs-tt-state.tone-working { color: #B9A8FF; }
-.p-tabs-tt-state.tone-needs { color: var(--warn, #F0B44C); }
-.p-tabs-tt-state.tone-done { color: var(--ok, #8BE0B0); }
-.p-tabs-tt-quota { display: flex; flex-direction: column; gap: 8px; }
-.p-tabs-tt-label { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; color: #8A8A94; }
-.p-tabs-tt-bar { position: relative; height: 6px; overflow: hidden; border-radius: 999px; background: #2C2C2F; }
-.p-tabs-tt-acct, .p-tabs-tt-sess { position: absolute; top: 0; left: 0; bottom: 0; }
-.p-tabs-tt-acct { background: #5D5778; }
-.p-tabs-tt-sess { background: #B9A8FF; }
-.p-tabs-tt-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; color: #B4B4BC; }
-.p-tabs-tt-line.is-session { color: #D6D6DC; }
-.p-tabs-tt-key { display: inline-flex; align-items: center; gap: 7px; }
-.p-tabs-tt-swatch { width: 7px; height: 7px; border-radius: 50%; }
-.p-tabs-tt-swatch.is-session { background: #B9A8FF; }
-.p-tabs-tt-swatch.is-account { background: #5D5778; }
-.p-tabs-tt-num { font-family: 'Geist Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
-.p-tabs-tt-note { font-size: 12.5px; line-height: 1.45; color: #B4B4BC; }
-.p-tabs-tt-facts { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; border-top: 1px solid #26262B; font-size: 12.5px; color: #9A9AA3; }
-.p-tabs-tt-fact { display: flex; justify-content: space-between; gap: 10px; }
-.p-tabs-tt-val { color: #D6D6DC; text-align: right; overflow-wrap: anywhere; }
-.p-tabs-tt-val.is-mono { font-family: 'Geist Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 
 /* Overflow button, its menu, and the plus. */
 .p-tabs-menu-wrap { position: relative; flex: 0 0 auto; }

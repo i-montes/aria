@@ -1,6 +1,6 @@
 // Run: bun test ui/chat/parts/quotabars.test.js
 import { describe, expect, test } from 'bun:test'
-import { TEXTS, formatReset, renderQuotaBars } from './quotabars.js'
+import { TEXTS, formatReset, renderQuotaBars, renderQuotaCard } from './quotabars.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const NOW = Date.parse('2026-10-19T00:00:00Z')
@@ -125,6 +125,46 @@ describe('the card on hover', () => {
     expect(html).not.toContain('<script>')
     expect(html).not.toContain('<i>x')
     expect(html).toContain('&lt;script&gt;')
+  })
+})
+
+describe('the card as a component of its own', () => {
+  test('it is the same markup the header chip opens', () => {
+    const card = renderQuotaCard({ windows: go, provider: 'OpenCode Go', now: NOW }, {}, t)
+    expect(card.startsWith('<div class="p-qb-card"')).toBe(true)
+    expect(renderQuotaBars({ windows: go, provider: 'OpenCode Go', now: NOW }, {}, t)).toContain(card)
+  })
+
+  test('facts (model, context) show at the bottom, and the context is clamped', () => {
+    const card = renderQuotaCard({ windows: go, facts: { model: 'GLM 5.3', context: 142 }, now: NOW }, {}, t)
+    expect(card).toContain('chat.quotabars.model')
+    expect(card).toContain('GLM 5.3')
+    expect(card).toContain('chat.quotabars.context')
+    expect(card).toContain('>100%<')
+    expect(card.indexOf('p-qb-list')).toBeLessThan(card.indexOf('p-qb-facts'))
+  })
+
+  test('a heading (a tab\'s title and state) leads the card', () => {
+    const card = renderQuotaCard({ windows: go, heading: { title: '<b>Plan</b>', state: 'working', tone: 'working' }, now: NOW }, {}, t)
+    expect(card.indexOf('p-qb-heading')).toBeLessThan(card.indexOf('p-qb-hero'))
+    expect(card).toContain('&lt;b&gt;Plan&lt;/b&gt;')
+    expect(card).toContain('tone-working')
+    expect(card).not.toContain('<b>Plan')
+  })
+
+  test('no windows: a note instead of bars, still with the facts; a free model says it uses no quota', () => {
+    const none = renderQuotaCard({ windows: [], facts: { model: 'X', context: 5 } }, {}, t)
+    expect(none).toContain('chat.quotabars.none')
+    expect(none).not.toContain('p-qb-hero')
+    expect(none).toContain('p-qb-facts')
+    const free = renderQuotaCard({ windows: [], free: true }, {}, t)
+    expect(free).toContain('chat.quotabars.free')
+    expect(free).not.toContain('chat.quotabars.none')
+  })
+
+  test('the header chip card shows the facts it is given', () => {
+    const html = renderQuotaBars({ windows: go, facts: { model: 'GLM 5.3', context: 30 }, now: NOW }, {}, t)
+    expect(html).toContain('GLM 5.3')
   })
 })
 
