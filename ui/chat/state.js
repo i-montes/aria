@@ -11,13 +11,13 @@ import { parseCardTitle } from './parts/cards.js'
 //   { kind: 'note', label, text?, key? }          a one-line fact (model changed, stopped, sandbox answer…)
 //   { kind: 'divider', key, vars? }                 a separator (the context was compacted)
 //   { kind: 'jev', mode, action }                   the router's route line before an answer
-//   { kind: 'answers', answers }                    what you answered to a question card
+//   { kind: 'answers', answers: [{ header, selected, talk }] }   what you answered to a question card
 // `queue` holds messages waiting behind the run; `phase` names what the run is doing now.
 
 export function createChat() {
   return {
     workdir: '', running: false, engine: 'idle', model: null, thinking: null, context: null, problem: null,
-    messages: [], dialogs: [], queue: [], phase: 'working', startedAt: null,
+    messages: [], dialogs: [], queue: [], delivered: [], phase: 'working', startedAt: null,
   }
 }
 
@@ -165,7 +165,7 @@ function reduceEvent(state, event) {
     case 'agent_start':
       return { ...state, running: true, startedAt: Date.now(), phase: 'working' }
     case 'agent_settled': {
-      const settled = { ...state, running: false, startedAt: null, phase: 'working' }
+      const settled = { ...state, running: false, startedAt: null, phase: 'working', delivered: [] }
       return event.aborted ? push(settled, { kind: 'note', label: 'aria', key: 'chat.stoppedByYou' }) : settled
     }
     case 'message_start':
@@ -173,15 +173,28 @@ function reduceEvent(state, event) {
         return push(state, { kind: 'assistant', text: '', thinking: '', done: false, texts: {}, thoughts: {} })
       }
       if (event.message?.role === 'user') {
-        // A message that waited in the queue is now being answered: it moves into the thread.
+        // A message that waited in the queue is now being answered: it moves into the thread. Pi takes it out of
+        // the queue (a `queue_update`) just BEFORE announcing it, so `delivered` remembers what left the queue.
         const text = textOf(event.message.content)
-        const at = state.queue.findIndex((q) => q.text === text)
-        if (at < 0) return state
-        return push({ ...state, queue: state.queue.filter((_, i) => i !== at) }, { kind: 'user', text })
+        const waiting = state.queue.findIndex((q) => q.text === text)
+        if (waiting >= 0) return push({ ...state, queue: state.queue.filter((_, i) => i !== waiting) }, { kind: 'user', text })
+        const left = state.delivered.indexOf(text)
+        if (left >= 0) return push({ ...state, delivered: state.delivered.filter((_, i) => i !== left) }, { kind: 'user', text })
+        return state // the echo of a message the page already showed
       }
       return state
-    case 'queue_update':
-      return { ...state, queue: [...(event.steering ?? []), ...(event.followUp ?? [])].map((text) => ({ text })) }
+    case 'queue_update': {
+      const queue = [...(event.steering ?? []), ...(event.followUp ?? [])].map((text) => ({ text }))
+      // What was queued and no longer is has been taken by the run (or cancelled by us, which `clearQueue` handles first).
+      const remaining = [...queue]
+      const gone = []
+      for (const old of state.queue) {
+        const at = remaining.findIndex((q) => q.text === old.text)
+        if (at >= 0) remaining.splice(at, 1)
+        else gone.push(old.text)
+      }
+      return { ...state, queue, delivered: [...state.delivered, ...gone] }
+    }
     case 'aria_jev':
       return push(state, { kind: 'jev', mode: event.mode, action: event.action })
     case 'message_update': {
@@ -216,7 +229,7 @@ function reduceEvent(state, event) {
       // Only into an empty page: it can arrive after the first message or while a reply streams.
       return state.messages.length ? state : withMessages(state, fromHistory(event.messages))
     case 'session_reset':
-      return withMessages(state, [])
+      return { ...withMessages(state, []), queue: [], delivered: [], dialogs: [] }
     default:
       return state
   }
@@ -257,7 +270,15 @@ export function reduce(state, message) {
 
 export const addUser = (state, text) => push(state, { kind: 'user', text })
 export const addQueued = (state, text) => ({ ...state, queue: [...state.queue, { text }] })
-export const clearQueue = (state) => ({ ...state, queue: [] })
+export const clearQueue = (state, at) => ({ ...state, queue: at === undefined ? [] : state.queue.filter((_, i) => i !== at) })
+
+/** The question card's answers as the answers card draws them: its header, what was picked, whether it was only talked about. */
+export function answersForCard(questions, answers) {
+  return (answers ?? []).map((a) => {
+    const asked = (questions ?? []).find((q) => q.question === a.question)
+    return { header: asked?.header || a.question, selected: a.answers ?? [], talk: a.talk === true }
+  })
+}
 
 const CARD_LABEL = { sandbox: 'sandbox', write: 'sandbox', quota: 'model', question: 'ask' }
 

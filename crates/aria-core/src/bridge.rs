@@ -41,9 +41,12 @@ pub enum PageMessage {
     /// The dock opened: tell the page where Aria works and how it is doing.
     #[serde(rename = "chatLoad")]
     ChatLoad,
-    /// Drop the messages queued behind the current run (the queued bubble's Cancel).
+    /// Cancel a queued message: Pi can only empty its queue, so the messages in `keep` are queued again, in order.
     #[serde(rename = "chatClearQueue")]
-    ChatClearQueue,
+    ChatClearQueue {
+        #[serde(default)]
+        keep: Vec<String>,
+    },
     /// The answer to a dialog (`id` is Pi's request id): a `value`, a `confirmed` flag or `cancelled`.
     #[serde(rename = "uiAnswer")]
     UiAnswer { id: String, value: Option<String>, confirmed: Option<bool>, cancelled: Option<bool> },
@@ -164,7 +167,11 @@ mod tests {
         assert_eq!(page(r#"{"type":"chatSend","text":"hi"}"#), PageMessage::ChatSend { text: "hi".into(), behavior: None });
         assert_eq!(page(r#"{"type":"chatAbort"}"#), PageMessage::ChatAbort);
         assert_eq!(page(r#"{"type":"chatLoad"}"#), PageMessage::ChatLoad);
-        assert_eq!(page(r#"{"type":"chatClearQueue"}"#), PageMessage::ChatClearQueue);
+        assert_eq!(page(r#"{"type":"chatClearQueue"}"#), PageMessage::ChatClearQueue { keep: vec![] });
+        assert_eq!(
+            page(r#"{"type":"chatClearQueue","keep":["a","b"]}"#),
+            PageMessage::ChatClearQueue { keep: vec!["a".into(), "b".into()] }
+        );
         assert_eq!(
             page(r#"{"type":"uiAnswer","id":"u1","value":"Allow"}"#),
             PageMessage::UiAnswer { id: "u1".into(), value: Some("Allow".into()), confirmed: None, cancelled: None }

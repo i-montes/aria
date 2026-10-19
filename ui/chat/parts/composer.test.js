@@ -64,10 +64,37 @@ describe('renderComposer', () => {
     expect(html).toContain('<kbd class="p-composer-kbd">/</kbd>')
     expect(html).toContain('chat.composer.hint.commands')
     expect(html).toContain('alt+a')
-    expect(html).toContain('shift+enter')
-    expect(html).toContain('chat.composer.hint.send')
-    expect(html).toContain('chat.composer.hint.newline')
     expect(renderComposer({ showHints: false }, {}, t)).not.toContain('p-composer-hints')
+  })
+
+  test('the "enter send · shift+enter new line" text is gone', () => {
+    const html = renderComposer({}, {}, t)
+    expect(html).not.toContain('shift+enter')
+    expect(html).not.toContain('chat.composer.hint.send')
+    expect(html).not.toContain('chat.composer.hint.newline')
+  })
+
+  test('the model sits under the input, first on the hints row, and opens the model picker', () => {
+    const html = renderComposer({ model: 'DeepSeek V4.1 Flash', modelTitle: 'opencode-go/deepseek-v4.1-flash' }, {}, t)
+    const hints = html.slice(html.indexOf('p-composer-hints'))
+    expect(hints.indexOf('p-composer-model')).toBeGreaterThan(-1)
+    expect(hints.indexOf('p-composer-model')).toBeLessThan(hints.indexOf('chat.composer.hint.commands'))
+    expect(html).toContain('data-chat="open-models"')
+    expect(html).toContain('DeepSeek V4.1 Flash')
+    expect(html).toContain('title="opencode-go/deepseek-v4.1-flash"')
+    expect(html.indexOf('p-composer-box')).toBeLessThan(html.indexOf('p-composer-model'))
+  })
+
+  test('no model known shows no chip, and the model name is escaped', () => {
+    expect(renderComposer({}, {}, t)).not.toContain('p-composer-model')
+    const html = renderComposer({ model: '<script>x</script>', modelTitle: 'a"b' }, {}, t)
+    expect(html).not.toContain('<script>x')
+    expect(html).toContain('&lt;script&gt;x&lt;/script&gt;')
+    expect(html).toContain('title="a&quot;b"')
+  })
+
+  test('the model stays with the hints while busy', () => {
+    expect(renderComposer({ busy: true, model: 'GLM 5.3' }, {}, t)).toContain('GLM 5.3')
   })
 
   test('while busy the hints say esc stops and enter queues', () => {
