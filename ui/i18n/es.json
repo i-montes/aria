@@ -354,5 +354,6 @@
   "chat.status.done": "lista",
   "chat.status.idle": "en reposo",
   "chat.undo.closed": "Se cerró \"{title}\"",
-  "chat.undo": "Deshacer"
+  "chat.undo": "Deshacer",
+  "chat.tab.moreNeeds": "+{n} · una sesión oculta te necesita"
 }

@@ -354,5 +354,6 @@
   "chat.status.done": "done",
   "chat.status.idle": "idle",
   "chat.undo.closed": "Closed \"{title}\"",
-  "chat.undo": "Undo"
+  "chat.undo": "Undo",
+  "chat.tab.moreNeeds": "+{n} · a hidden session needs you"
 }

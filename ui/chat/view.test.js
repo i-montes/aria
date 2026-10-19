@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { addUser, createChat, reduce } from './state.js'
-import { insertFile, pickerQuery, renderDialog, renderEmpty, renderMessages, renderPath, renderProblem, renderTabs, renderUndo, shortPath } from './view.js'
+import { insertFile, pickerQuery, renderDialog, renderEmpty, renderMessages, renderPath, renderProblem, keepRenameField, renderTabs, renderUndo, shortPath } from './view.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const ev = (event) => ({ type: 'chatEvent', event })
@@ -198,6 +198,32 @@ describe('the tab bar', () => {
     const open = renderTabs(bar(sessions), t, { menuOpen: true })
     expect(open).toContain('role="menu"')
     expect(open.match(/data-chat="select"[^>]*data-session="s[45]"/g)).toHaveLength(2)
+  })
+
+  test('a hidden session that needs you shows on the overflow button', () => {
+    const sessions = Array.from({ length: 6 }, (_, i) => tab(`s${i}`, i === 5 ? { status: 'needs' } : {}))
+    const html = renderTabs(bar(sessions), t)
+    expect(html).toMatch(/class="tab-more needs"/)
+    expect(html).toContain('chat.tab.moreNeeds')
+    const calm = renderTabs(bar(sessions.map((s) => ({ ...s, status: 'idle' }))), t)
+    expect(calm).not.toMatch(/tab-more needs/)
+  })
+
+  test('a hidden session that finished unread also shows on the overflow button', () => {
+    const sessions = Array.from({ length: 6 }, (_, i) => tab(`s${i}`, i === 4 ? { status: 'done', unread: true } : {}))
+    expect(renderTabs(bar(sessions), t)).toMatch(/class="tab-more unread"/)
+  })
+
+  test('the plus is disabled at eight sessions', () => {
+    const eight = Array.from({ length: 8 }, (_, i) => tab(`s${i}`))
+    expect(renderTabs(bar(eight), t)).toMatch(/data-chat="add"[^>]*disabled|disabled[^>]*data-chat="add"/)
+    expect(renderTabs(bar(eight.slice(0, 3)), t)).not.toMatch(/data-chat="add"[^>]*disabled/)
+  })
+
+  test('the tab bar is left alone while a rename field is open', () => {
+    expect(keepRenameField({ renaming: 'a' }, true)).toBe(true)
+    expect(keepRenameField({ renaming: 'a' }, false)).toBe(false) // the field has to be drawn first
+    expect(keepRenameField({ renaming: null }, true)).toBe(false)
   })
 
   test('a tab being renamed shows a field with its title', () => {

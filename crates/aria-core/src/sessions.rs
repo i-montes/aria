@@ -21,9 +21,11 @@ pub struct SessionList {
     pub active: Option<String>,
 }
 
-/// Ids become Pi session ids and file names: letters, digits and dashes only.
+/// Ids become Pi's `--session-id`: letters, digits and dashes, starting and ending with a letter or digit
+/// (Pi refuses anything else and exits).
 pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    let edge = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric());
+    id.len() <= 64 && edge(id.chars().next()) && edge(id.chars().last()) && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 impl SessionList {
@@ -105,6 +107,16 @@ mod tests {
         .sanitized();
         assert_eq!(list.sessions, vec![entry("ok-1", "a")]);
         assert_eq!(list.active.as_deref(), Some("ok-1"));
+    }
+
+    #[test]
+    fn ids_must_start_and_end_with_a_letter_or_digit_like_pi_requires() {
+        for good in ["a", "a1", "d6b71394-02c1-438f-aebd-7d26222c8bea", "a-b"] {
+            assert!(valid_id(good), "{good}");
+        }
+        for bad in ["-a", "a-", "-", "--", ""] {
+            assert!(!valid_id(bad), "{bad}");
+        }
     }
 
     #[test]
