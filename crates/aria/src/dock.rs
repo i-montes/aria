@@ -109,15 +109,8 @@ impl Dock {
                 Err(error) => eprintln!("aria: ignoring a page message: {error}"),
             }
         });
-        let weak = Rc::downgrade(&dock);
-        dock.window.connect_key_press_event(move |_, event| {
-            if event.keyval() == gdk::keys::constants::Escape {
-                if let Some(dock) = weak.upgrade() {
-                    dock.feed(Event::Escape);
-                }
-            }
-            glib::Propagation::Proceed
-        });
+        // Escape is the page's to interpret (it closes a picker, stops a run, leaves a panel, and only then asks to
+        // close with `closeRequest`): a window-level handler here would close the dock on every Escape.
 
         dock.webview.load_uri("aria://app/index.html");
         dock
@@ -229,6 +222,8 @@ impl Dock {
                 self.window.set_keyboard_mode(KeyboardMode::OnDemand);
                 self.window.show_all();
                 self.window.present();
+                // The page reads the keys (Escape included), so the keyboard must be in the web view.
+                self.webview.grab_focus();
                 self.send(&DockMessage::Open { monitor });
                 // Always tell the page: an empty code clears a banner from an earlier open.
                 let code = self.problem.borrow().clone().unwrap_or_default();

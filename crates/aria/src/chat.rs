@@ -116,6 +116,8 @@ struct Inner {
     notified: HashSet<String>,
     model: Option<String>,
     thinking: Option<String>,
+    /// How full the context window is (percent), from `get_session_stats`; `None` until known or just after a compaction.
+    context: Option<f64>,
     /// The folder the running Pi was started in (what the header must show, whatever the settings say now).
     workdir: Option<PathBuf>,
 }
@@ -168,6 +170,7 @@ impl Chat {
             running: inner.running,
             model: inner.model.clone().or_else(|| settings.as_ref().and_then(|s| s.models.daily.clone())),
             thinking: inner.thinking.clone(),
+            context: inner.context,
             problem: problem.map(str::to_string),
         }
     }
@@ -187,6 +190,17 @@ impl Chat {
         match message {
             PageMessage::ChatLoad => self.load(),
             PageMessage::ChatSend { text, behavior } => self.send_prompt(&text, behavior.as_deref()),
+            PageMessage::ChatClearQueue { keep } => {
+                if let Some(engine) = self.current_engine() {
+                    // Pi can only empty its queue; the messages that stay are queued again, in their order.
+                    std::thread::spawn(move || {
+                        let _ = engine.request("clear_queue", json!({}), REQUEST_TIMEOUT);
+                        for text in keep {
+                            let _ = engine.send("prompt", json!({"message": text, "streamingBehavior": "followUp"}));
+                        }
+                    });
+                }
+            }
             PageMessage::ChatAbort => {
                 if let Some(engine) = self.current_engine() {
                     let _ = engine.send("clear_queue", json!({}));
@@ -293,6 +307,16 @@ impl Chat {
         Ok(engine)
     }
 
+    /// Reads how full the context window is and tells the page.
+    fn refresh_context(&self, engine: &Engine) {
+        let Ok(response) = engine.request("get_session_stats", json!({}), REQUEST_TIMEOUT) else { return };
+        if !response.success {
+            return;
+        }
+        self.inner.lock().unwrap().context = response.data["contextUsage"]["percent"].as_f64();
+        self.emit(self.state_message(None));
+    }
+
     /// Tells the page what Pi is using and replays the session's history.
     fn announce(&self, engine: &Engine) {
         if let Ok(response) = engine.request("get_state", json!({}), REQUEST_TIMEOUT) {
@@ -306,6 +330,7 @@ impl Chat {
                 self.emit(DockMessage::ChatEvent { event: json!({"type": "history", "messages": response.data["messages"]}) });
             }
         }
+        self.refresh_context(engine);
     }
 
     fn list(&self, id: u64, command: &'static str, key: &'static str) {
@@ -389,7 +414,13 @@ impl Chat {
                 EngineEvent::Event(raw) => {
                     match raw["type"].as_str() {
                         Some("agent_start") => self.inner.lock().unwrap().running = true,
-                        Some("agent_settled") => self.inner.lock().unwrap().running = false,
+                        Some("agent_settled") => {
+                            self.inner.lock().unwrap().running = false;
+                            if let Some(engine) = self.current_engine() {
+                                let chat = self.clone();
+                                std::thread::spawn(move || chat.refresh_context(&engine));
+                            }
+                        }
                         _ => {}
                     }
                     self.emit(DockMessage::ChatEvent { event: raw });
@@ -1157,6 +1188,40 @@ mod tests {
         s.h.visible.store(false, Ordering::SeqCst);
         s.sessions.dock_visibility_changed();
         assert_eq!(s.h.notifier.log().len(), 2);
+    }
+
+
+    #[test]
+    fn the_context_usage_is_reported_when_pi_is_ready_and_after_every_run() {
+        let h = harness();
+        send(&h, "hello");
+        let first = wait_for(&h, "a state with the context", |m| matches!(m, DockMessage::ChatState { context: Some(_), .. }));
+        assert!(matches!(first, DockMessage::ChatState { context: Some(c), .. } if (c - 30.0).abs() < f64::EPSILON));
+        wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
+        // the settle triggers a fresh reading
+        wait_for(&h, "the state after the run", |m| matches!(m, DockMessage::ChatState { context: Some(_), .. }));
+    }
+
+    #[test]
+    fn clearing_the_queue_reaches_pi_and_is_ignored_without_one() {
+        let h = harness();
+        h.chat.handle(PageMessage::ChatClearQueue { keep: vec![] });
+        assert!(drain(&h).is_empty());
+        send(&h, "x");
+        wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        h.chat.handle(PageMessage::ChatClearQueue { keep: vec![] });
+        wait_for(&h, "Pi's queue update", |m| event_of(m, "queue_update"));
+    }
+
+    #[test]
+    fn cancelling_one_queued_message_queues_the_others_again() {
+        let h = harness();
+        send(&h, "x");
+        wait_for(&h, "first settle", |m| event_of(m, "agent_settled"));
+        drain(&h); // forget the first run's events: only the resend may satisfy the wait below
+        h.chat.handle(PageMessage::ChatClearQueue { keep: vec!["the one that stays".into()] });
+        // the fake Pi answers a prompt with agent_start: it was sent again after the queue was emptied
+        wait_for(&h, "the kept message sent again", |m| event_of(m, "agent_start"));
     }
 
     #[test]

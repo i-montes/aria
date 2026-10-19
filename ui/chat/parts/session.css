@@ -1,0 +1,50 @@
+/* An agent's session view. Port of design/components/agent-session.dc.html. */
+.p-session { width: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; }
+.p-session-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.p-session-back { min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 11px 0 5px; margin-left: -6px; background: var(--surface, #16161a); border: 1px solid transparent; border-radius: 10px;
+  color: #D6D6DC; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 13.5px; cursor: pointer; }
+.p-session-back:hover, .p-session-back:focus-visible { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); }
+.p-session-back:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 2px; }
+.p-session-status { display: flex; align-items: center; gap: 8px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; white-space: nowrap; color: #9A9AA3; }
+.p-session-dot { width: 7px; height: 7px; border-radius: 50%; background: #55555E; }
+.p-session.kind-active .p-session-status { color: var(--accent, #B9A8FF); }
+.p-session.kind-active .p-session-dot { background: var(--accent, #B9A8FF); }
+.p-session.kind-done .p-session-status { color: #F4F4F5; }
+.p-session.kind-done .p-session-dot { background: #F4F4F5; }
+.p-session-head { display: flex; flex-direction: column; gap: 4px; }
+.p-session-role { margin: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 15px; font-weight: 500; color: #F4F4F5; overflow-wrap: anywhere; }
+.p-session-task { margin: 0; font-size: 14px; line-height: 1.5; color: #B4B4BC; overflow-wrap: anywhere; }
+.p-session-rule { height: 1px; background: #1E1E22; }
+.p-session-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 12px; }
+.p-session-step { display: flex; flex-direction: column; }
+.p-session-tool { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 10px; align-items: start; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; line-height: 19px; color: #B4B4BC; }
+.p-session-icon { color: #8A8A94; padding-top: 2px; display: flex; min-height: 16px; }
+.p-session-call { min-width: 0; overflow-wrap: anywhere; }
+.p-session-verb { color: #F4F4F5; }
+.p-session-meta { white-space: nowrap; color: #9A9AA3; }
+.p-session-msg { margin: 0; max-width: 94%; box-sizing: border-box; background: #111114; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 16px 16px 16px 4px;
+  padding: 12px 14px; font-size: 14px; line-height: 1.55; color: #EDEDEF; overflow-wrap: anywhere; }
+.p-session-code { background: #0A0A0C; border-radius: 10px; padding: 12px 14px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; line-height: 19px; display: flex; flex-direction: column; }
+.p-session-line { display: grid; grid-template-columns: 12px minmax(0, 1fr); column-gap: 8px; color: #C8C8CE; }
+.p-session-line.line-del { color: #FF9A8B; }
+.p-session-line.line-add { color: #8BE0B0; }
+.p-session-mark { user-select: none; }
+.p-session-code-text { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.p-session-note { margin: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; line-height: 18px; color: #9A9AA3; overflow-wrap: anywhere; }
+.p-session-note-label { color: #D6D6DC; }
+.p-session-empty { margin: 0; font-size: 13px; color: #8A8A94; }
+
+/* "Working" line: nine dots and a shimmering label, as design/components/working.dc.html. */
+.p-session-live { display: flex; align-items: center; gap: 10px; width: fit-content; max-width: 100%; box-sizing: border-box; min-height: 20px; padding-left: 2px; }
+.p-session-cells { display: grid; grid-template-columns: repeat(3, 4px); gap: 1.5px; flex: 0 0 auto; }
+.p-session-cell { width: 4px; height: 4px; border-radius: 50%; background: #F4F4F5; opacity: 0.15; animation: p-session-pixel 650ms ease-in-out infinite; }
+.p-session-shimmer { min-width: 0; font-size: 13px; font-weight: 500; line-height: 20px; color: transparent; background-image: linear-gradient(90deg, #8A8A94 35%, #F4F4F5 50%, #8A8A94 65%);
+  background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; overflow-wrap: anywhere; animation: p-session-shimmer 1.4s linear infinite; }
+.p-session-timer { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; font-variant-numeric: tabular-nums; color: #9A9AA3; white-space: nowrap; }
+
+@keyframes p-session-pixel { 0%, 100% { opacity: 0.15; } 30% { opacity: 1; } }
+@keyframes p-session-shimmer { from { background-position: 130% 0; } to { background-position: -30% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .p-session-cell { animation: none !important; opacity: 0.15 !important; }
+  .p-session-shimmer { animation: none !important; background-position: 50% 0 !important; }
+}

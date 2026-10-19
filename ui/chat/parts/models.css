@@ -1,0 +1,55 @@
+/* The model picker (design/components/model-picker). Solid fills: rows never change their background, only the border
+   takes the accent. Open and closed are the same element: it fades and slides, then hides. */
+.p-models { width: 100%; box-sizing: border-box; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF;
+  transform-origin: bottom center; opacity: 0; transform: translateY(8px) scale(0.98); visibility: hidden; pointer-events: none;
+  transition: opacity 160ms ease, transform 200ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 200ms; }
+.p-models.is-open { opacity: 1; transform: translateY(0) scale(1); visibility: visible; pointer-events: auto;
+  transition: opacity 160ms ease, transform 200ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0ms; }
+.p-models-panel { overflow: hidden; border-radius: 14px; background: #141417; border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.1)); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55); }
+.p-models-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px 6px;
+  font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.08em; color: #8A8A94; }
+.p-models-count { letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.p-models-list { position: relative; margin: 0; padding: 2px 6px 6px; list-style: none; max-height: 288px; overflow-x: hidden; overflow-y: auto; }
+.p-models-list::-webkit-scrollbar { width: 14px; height: 14px; }
+.p-models-list::-webkit-scrollbar-track, .p-models-list::-webkit-scrollbar-corner { background: transparent; }
+.p-models-list::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.16); border: 4px solid transparent; background-clip: padding-box; border-radius: 999px; }
+.p-models-list:hover::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.28); }
+.p-models-list::-webkit-scrollbar-thumb:hover { background-color: rgba(185, 168, 255, 0.7); border-width: 2px; }
+.p-models-list::-webkit-scrollbar-thumb:active { background-color: #B9A8FF; border-width: 2px; }
+@supports not selector(::-webkit-scrollbar) { .p-models-list { scrollbar-width: auto; scrollbar-color: rgba(255, 255, 255, 0.28) transparent; } }
+.p-models-row { display: grid; column-gap: 10px; align-items: center; width: 100%; box-sizing: border-box; margin: 0; border: 1px solid transparent; border-radius: 10px;
+  background: #141417; color: inherit; font-family: Geist, ui-sans-serif, system-ui, sans-serif; text-align: left; cursor: pointer; transition: border-color 100ms; }
+.p-models-row.on { border-color: var(--accent-border, #B9A8FF); }
+.p-models-row:focus-visible { outline: 2px solid #B9A8FF; outline-offset: -2px; }
+.p-models-enter { flex: 0 0 14px; opacity: 0; transition: opacity 120ms; }
+.p-models-row.on .p-models-enter { opacity: 1; }
+.p-models-empty { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px 16px; }
+.p-models-empty-main { font-size: 13px; line-height: 1.45; color: #C8C8CE; overflow-wrap: anywhere; }
+.p-models-empty-hint { font-size: 12px; line-height: 1.45; color: #8A8A94; }
+.p-models-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 14px 10px; border-top: 1px solid #26262B;
+  font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #8A8A94; }
+.p-models-foot kbd { font-family: inherit; color: #D6D6DC; }
+@media (prefers-reduced-motion: reduce) { .p-models, .p-models * { transition: none !important; } }
+.p-models-row { grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 12px; min-height: 52px; padding: 8px; }
+.p-models-ring { display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #34343B; background: transparent;
+  transition: background-color 200ms, border-color 200ms; }
+.p-models-ring.is-current { border-color: #B9A8FF; background: #B9A8FF; }
+.p-models-ring-dot { width: 6px; height: 6px; border-radius: 50%; background: #0B0816; transform: scale(0); transition: transform 200ms; }
+.p-models-ring.is-current .p-models-ring-dot { transform: scale(1); }
+.p-models-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.p-models-name { min-width: 0; font-size: 13.5px; font-weight: 500; line-height: 18px; color: #F4F4F5; overflow-wrap: anywhere; }
+.p-models-hl { color: #B9A8FF; font-weight: 600; }
+.p-models-desc { min-width: 0; font-size: 12.5px; line-height: 1.45; color: #9A9AA3; overflow-wrap: anywhere; }
+.p-models-tail { display: flex; align-items: center; gap: 8px; }
+/* The tag pills use the opaque equivalents of the design's translucent fills on this background. */
+.p-models-tag { padding: 0 7px; border-radius: 999px; background: #26262A; color: #B4B4BC; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px; white-space: nowrap; }
+.p-models-tag.is-free { background: #26322F; color: #8BE0B0; }
+
+/* Provider groups and the search field. */
+.p-models-search { padding: 4px 10px 8px; }
+.p-models-search-input { width: 100%; box-sizing: border-box; padding: 8px 12px; border-radius: 9px; border: 1px solid #26262B; background: #0F0F12; color: #F4F4F5; font: 13px Geist, ui-sans-serif, system-ui, sans-serif; }
+.p-models-search-input:focus { outline: none; border-color: #B9A8FF; }
+.p-models-search-input::placeholder { color: #5D5D66; }
+.p-models-group { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 8px 4px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #8A8A94; }
+.p-models-group:first-child { padding-top: 2px; }
+.p-models-group-count { letter-spacing: 0; font-variant-numeric: tabular-nums; color: #5D5D66; }

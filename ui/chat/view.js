@@ -1,11 +1,26 @@
-// The chat's page: pure functions that build its HTML (tested without a browser) and a small
-// controller that wires them to the bridge. The state lives in `state.js`; everything dynamic is
-// escaped with `esc`.
+// The chat's page: the controller that composes the design's parts (header, thread, composer, pickers,
+// cards, panels) and wires them to the bridge, plus the few pure helpers it keeps (tested without a
+// browser). Conversations live in `state.js`, the tabs in `sessions.js`, the HTML of each element in
+// `parts/` and `thread.js`. Everything dynamic is escaped with `esc`.
 import { esc } from '../onboarding/components.js'
+import { renderAgentSession } from './parts/session.js'
+import { renderCommandPicker, filterCommands, stepActive, clampActive } from './parts/commands.js'
+import { renderComposer } from './parts/composer.js'
+import { renderFilePicker, filterFiles } from './parts/files.js'
+import { indexItems, indexLayout, renderIndex } from './parts/index.js'
+import { renderMemory, initialMemoryUi, reduceMemoryUi } from './parts/memory.js'
+import { renderMeter } from './parts/meter.js'
+import { renderModelPicker, orderedModels } from './parts/models.js'
+import { questionAnswers, questionInit, questionReduce, normalizeQuestions, renderQuestion } from './parts/question.js'
+import { renderSubagents } from './parts/subagents.js'
+import { renderSessionTabs } from './parts/tabs.js'
+import { renderTasks } from './parts/tasks.js'
+import { formatElapsed } from './parts/working.js'
 import {
-  MAX_SESSIONS, addSession, applyStatus, closeSession, createTabs, renameSession, selectSession, setTitleIfEmpty, toSaved, undoClose, visibleTabs,
+  MAX_SESSIONS, addSession, applyStatus, closeSession, createTabs, renameSession, selectSession, setTitleIfEmpty, toSaved, undoClose,
 } from './sessions.js'
-import { addUser, answerDialog, createChat, reduce } from './state.js'
+import { addQueued, addUser, answerDialog, answersForCard, clearQueue, createChat, reduce } from './state.js'
+import { renderThread } from './thread.js'
 
 /** `/home/ana/Projects` -> `~/Projects` (Linux and Mac homes); anything else stays as it is. */
 export const shortPath = (path) => String(path ?? '').replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, '~')
@@ -17,48 +32,6 @@ export function renderPath(state, t = (key) => key) {
     : `<span class="path-text muted">${esc(t('chat.path.unknown'))}</span>`
 }
 
-const GLYPH = { running: '', done: '✓', error: '!' }
-
-function toolGroup(entry, index, t, open) {
-  const rows = open
-    ? `<div class="tool-rows">${entry.calls
-        .map(
-          (call) => `
-      <div class="tool-row status-${call.status}" title="${esc(call.result)}">
-        <span class="tool-dot">${GLYPH[call.status]}</span><span class="tool-name">${esc(call.name)}</span><span class="tool-summary">${esc(call.summary === call.name ? '' : call.summary)}</span>
-      </div>`,
-        )
-        .join('')}</div>`
-    : ''
-  return `
-    <div class="tools">
-      <button type="button" class="tools-head" data-chat="toggle-tools" data-index="${index}" aria-expanded="${open}">
-        <span class="chev${open ? ' open' : ''}">›</span><span>${esc(t('chat.tools', { n: entry.calls.length }))}</span>
-      </button>${rows}
-    </div>`
-}
-
-const WORKING_CELLS = Array.from({ length: 9 }, (_, i) => `<i style="animation-delay:${(i % 3) * 90 + Math.floor(i / 3) * 90}ms"></i>`).join('')
-
-/** The conversation. `expanded` holds the indexes of the tool groups that are open. */
-export function renderMessages(state, t, expanded = new Set()) {
-  const entries = state.messages
-    .map((entry, index) => {
-      if (entry.kind === 'user') return `<div class="msg user"><p>${esc(entry.text)}</p></div>`
-      if (entry.kind === 'assistant') {
-        if (!entry.text && !entry.thinking) return ''
-        const thinking = entry.thinking && !entry.text ? `<p class="thinking">${esc(entry.thinking)}</p>` : ''
-        return `<div class="msg assistant">${thinking}${entry.text ? `<p>${esc(entry.text)}</p>` : ''}</div>`
-      }
-      if (entry.kind === 'tools') return toolGroup(entry, index, t, expanded.has(index))
-      return `<div class="notice tone-${esc(entry.tone)}">${esc(entry.key ? t(entry.key, entry.vars) : entry.text)}</div>`
-    })
-    .join('')
-  const working = state.running ? `<div class="working"><span class="cells">${WORKING_CELLS}</span><span class="working-label">${esc(t('chat.working'))}</span></div>` : ''
-  return entries + working
-}
-
-export const renderEmpty = (state, t) => (state.messages.length || state.running ? '' : `<p class="empty">${esc(t('chat.hint.empty'))}</p>`)
 
 export function renderProblem(state, t) {
   if (!state.problem) return ''
@@ -87,9 +60,14 @@ export function renderDialog(dialog, t) {
   return `<div class="dialog" role="dialog" aria-label="${esc(request.title ?? '')}">${title}${message}${body}</div>`
 }
 
-/** What the text before the caret asks for: a slash command at the very start, or an `@` file. */
+/**
+ * What the text before the caret asks for: `/model <query>` (the model picker), a slash command at the
+ * very start, or an `@` file token at the caret.
+ */
 export function pickerQuery(text, caret) {
   const before = text.slice(0, caret)
+  const model = /^\/model\s+(\S*)$/.exec(before)
+  if (model) return { kind: 'model', query: model[1], start: 0 }
   const command = /^\/([^\s/]*)$/.exec(before)
   if (command) return { kind: 'command', query: command[1], start: 0 }
   const file = /(?:^|\s)@([^\s]*)$/.exec(before)
@@ -105,58 +83,6 @@ export function insertFile(text, caret, start, path) {
   return { text: text.slice(0, start) + inserted + after, caret: start + inserted.length + (space ? 0 : 1) }
 }
 
-const modelLabel = (model) => (model ? model.split('/').pop() : '')
-
-function renderPicker(picker, t) {
-  if (!picker) return ''
-  const titleKey = { command: 'chat.picker.commands', file: 'chat.picker.files', model: 'chat.picker.models' }[picker.kind]
-  const rows = picker.items.length
-    ? picker.items
-        .map(
-          (item, i) => `
-      <button type="button" class="picker-row${i === picker.index ? ' active' : ''}" data-chat="pick" data-index="${i}">
-        <span class="picker-main">${esc(item.label)}</span>${item.hint ? `<span class="picker-hint">${esc(item.hint)}</span>` : ''}
-      </button>`,
-        )
-        .join('')
-    : `<div class="picker-empty">${esc(t('chat.picker.empty'))}</div>`
-  return `<div class="picker-title">${esc(t(titleKey))}</div>${rows}`
-}
-
-/** The tab bar: one tab per session with its state, an overflow menu, and the `+`. `ui`: { menuOpen, renaming }. */
-export function renderTabs(tabs, t, ui = {}) {
-  const { visible, overflow } = visibleTabs(tabs)
-  const closable = tabs.sessions.length > 1
-  const label = (s) => esc(s.title || t('chat.untitled'))
-  const tab = (s) => {
-    const on = s.id === tabs.active
-    const body =
-      ui.renaming === s.id
-        ? `<input class="tab-input" data-chat-rename data-session="${esc(s.id)}" value="${esc(s.title)}" aria-label="${esc(t('chat.tab.rename'))}" spellcheck="false" autocomplete="off">`
-        : `<button type="button" class="tab-main" role="tab" aria-selected="${on}" data-chat="select" data-session="${esc(s.id)}" title="${esc(`${s.title || t('chat.untitled')} · ${t(`chat.status.${s.status}`)}`)}">
-             <span class="tab-dot" aria-hidden="true"></span><span class="tab-title">${label(s)}</span>
-           </button>
-           ${closable ? `<button type="button" class="tab-x" data-chat="close-tab" data-session="${esc(s.id)}" aria-label="${esc(t('chat.tab.close', { title: s.title || t('chat.untitled') }))}">×</button>` : ''}`
-    return `<div class="tab status-${esc(s.status)}${on ? ' on' : ''}${s.unread ? ' unread' : ''}">${body}</div>`
-  }
-  const menu = ui.menuOpen
-    ? `<div class="tab-menu" role="menu" aria-label="${esc(t('chat.tab.menu'))}">${overflow
-        .map(
-          (s) => `<button type="button" role="menuitem" class="tab-menu-row status-${esc(s.status)}${s.unread ? ' unread' : ''}" data-chat="select" data-session="${esc(s.id)}">
-        <span class="tab-dot" aria-hidden="true"></span><span class="tab-title">${label(s)}</span><span class="tab-state">${esc(t(`chat.status.${s.status}`))}</span></button>`,
-        )
-        .join('')}</div>`
-    : ''
-  // A session in the overflow that needs you (or finished unseen) must show on the button that hides it.
-  const hiddenNeeds = overflow.some((s) => s.status === 'needs')
-  const hiddenUnread = !hiddenNeeds && overflow.some((s) => s.unread)
-  const moreLabel = hiddenNeeds ? t('chat.tab.moreNeeds', { n: overflow.length }) : t('chat.tab.more', { n: overflow.length })
-  const more = overflow.length
-    ? `<button type="button" class="tab-more${hiddenNeeds ? ' needs' : hiddenUnread ? ' unread' : ''}" data-chat="menu" aria-haspopup="true" aria-expanded="${!!ui.menuOpen}" aria-label="${esc(moreLabel)}" title="${esc(moreLabel)}">${esc(t('chat.tab.more', { n: overflow.length }))}</button>`
-    : ''
-  return `<div class="tabs" role="tablist" aria-label="${esc(t('chat.sessions'))}">${visible.map(tab).join('')}${more}<button type="button" class="tab-add" data-chat="add" ${tabs.sessions.length >= MAX_SESSIONS ? 'disabled' : ''} aria-label="${esc(t('chat.new'))}" title="${esc(t('chat.new'))}">+</button></div>${menu}`
-}
-
 /** While a rename field is open the tab bar is not redrawn (every streamed delta would rebuild the field and lose what was typed). */
 export const keepRenameField = (ui, fieldPresent) => !!ui.renaming && fieldPresent
 
@@ -167,139 +93,356 @@ export function renderUndo(tabs, t) {
   return `<div class="undo"><span>${esc(t('chat.undo.closed', { title }))}</span><button type="button" class="link" data-chat="undo">${esc(t('chat.undo'))}</button></div>`
 }
 
-const icon = {
-  send: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
-  stop: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="3"/></svg>',
-  plus: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+
+// ---- the controller ---------------------------------------------------------------------------------
+
+const UNDO_MS = 8000
+const TOAST_MS = 8000
+const modelLabel = (model) => (model ? model.split('/').pop() : '')
+
+const ICON = {
+  plus: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  close: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   gear: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
 }
 
-const UNDO_MS = 8000
+/** A selector that finds this control again after its container was redrawn. */
+const selectorFor = (el) => {
+  const d = el.dataset ?? {}
+  if (d.chatField) return `[data-chat-field="${d.chatField}"]`
+  if (d.op) return `[data-chat="question"][data-op="${d.op}"]${d.q !== undefined ? `[data-q="${d.q}"]` : ''}`
+  return null
+}
+
+/** Runs `redraw` (which replaces `container`'s HTML) and gives focus and caret back to the control that had them. */
+function keepingFocus(container, redraw) {
+  const active = document.activeElement
+  const selector = active && container.contains(active) ? selectorFor(active) : null
+  const caret = selector ? [active.selectionStart, active.selectionEnd] : null
+  redraw()
+  if (!selector) return
+  const again = container.querySelector(selector)
+  if (!again) return
+  again.focus()
+  try {
+    again.setSelectionRange(caret[0], caret[1])
+  } catch {
+    // not a text field
+  }
+}
 
 /**
- * `root` is the chat's container. `send(message)` posts to the dock; `request(message)` posts and
- * resolves with the reply; `onSettings()` opens the settings. Every chat message goes out wrapped
- * in `{ type: 'session', session, message }`: each tab is its own session and its own Pi.
+ * `root` is the chat's container. `send(message)` posts to the dock; `request(message)` posts and resolves
+ * with the reply; `onSettings()` opens the settings. Every chat message goes out wrapped in
+ * `{ type: 'session', session, message }`: each tab is its own session and its own Pi.
  */
 export function createChatView({ root, t, send, request, onSettings, makeId = () => crypto.randomUUID() }) {
   let tabs = createTabs(null, makeId)
   const chats = new Map() // session id -> its conversation (state.js)
   const drafts = new Map() // session id -> what was typed and not sent
-  let picker = null // { kind, items: [{label, hint, value}], index, start }
+  const expandedOf = new Map() // session id -> { open, rows, more }: which tool groups and rows are open
+  const wizards = new Map() // dialog id -> the question card's wizard state
   const commandsBy = new Map() // session id -> the slash commands its Pi offers
+  let picker = null // { kind, items, query, active, start }
+  let dismissed = null // { kind, text }: Esc closed the picker for this text
+  let settings = null
+  const data = { agents: [], tasks: null, tasksKind: 'tasks', memory: [] }
+  const ui = { menuOpen: false, renaming: null, view: 'chat', agent: null, memory: initialMemoryUi(), tasksOpen: true, index: { expanded: false, my: null, off: 0, height: 360, settled: false } }
+  let toast = null
+  let undoTimer = null
+  let toastTimer = null
+  let tick = null
+  let pendingClose = null // a closed tab whose Pi is only stopped when its undo window is over
   let fileToken = 0
   let fileTimer = null
-  let undoTimer = null
-  let pendingClose = null // a closed tab whose Pi is only stopped when its undo window is over
-  const ui = { menuOpen: false, renaming: null }
+  let composerKey = ''
+  let headerKey = ''
+  let indexKey = ''
+  let questionKey = ''
+  let input = null
+  let banner = ''
 
   const chatOf = (id) => chats.get(id) ?? createChat()
   const current = () => chatOf(tabs.active)
+  const expanded = () => {
+    if (!expandedOf.has(tabs.active)) expandedOf.set(tabs.active, { open: new Set(), rows: new Set(), more: new Set() })
+    return expandedOf.get(tabs.active)
+  }
   const post = (message, session = tabs.active) => send({ type: 'session', session, message })
   const ask = (message, session = tabs.active) => request({ type: 'session', session, message })
   const save = () => send({ type: 'sessionsSave', ...toSaved(tabs) })
-
-  let input = null
-  let banner = ''
-  let dialogsKey = ''
   const $ = (id) => root.querySelector(`#${id}`)
+  const assistantName = () => (settings?.assistant?.name || '').trim() || 'Aria'
+  const activeTab = () => tabs.sessions.find((s) => s.id === tabs.active)
 
   /** Builds the chat's HTML. Called once the texts are loaded (and again when the language changes). */
   function mount() {
     root.innerHTML = `
-    <div id="chat-tabs"></div>
+    <header class="chat-header" id="chat-header"></header>
     <div id="chat-undo"></div>
-    <header class="chat-head">
+    <div class="chat-path-row">
       <div class="chat-path" id="chat-path"></div>
-      <button type="button" class="icon-btn" data-chat="settings" data-nav aria-label="${esc(t('chat.settings'))}" title="${esc(t('chat.settings'))}">${icon.gear}</button>
-    </header>
+      <button type="button" class="icon-btn" data-chat="settings" data-nav aria-label="${esc(t('chat.settings'))}" title="${esc(t('chat.settings'))}">${ICON.gear}</button>
+    </div>
     <div id="chat-banner"></div>
     <div id="chat-problem"></div>
-    <div class="chat-list" id="chat-list"></div>
-    <div id="chat-dialogs"></div>
-    <div class="picker" id="chat-picker" hidden></div>
-    <div class="composer">
-      <textarea id="chat-input" rows="1" placeholder="${esc(t('chat.placeholder'))}" aria-label="${esc(t('chat.placeholder'))}" spellcheck="false"></textarea>
-      <button type="button" class="stop-btn" id="chat-stop" data-chat="stop" aria-label="${esc(t('chat.stop'))}" title="${esc(t('chat.stop'))}" hidden>${icon.stop}</button>
-      <button type="button" class="send-btn" id="chat-send" data-chat="send" aria-label="${esc(t('chat.send'))}">${icon.send}</button>
+    <div class="chat-body" id="chat-body" data-view="chat">
+      <section class="chat-view chat-view-chat" id="view-chat">
+        <div class="chat-stage">
+          <div class="chat-list" id="chat-list"></div>
+          <div class="chat-index" id="chat-index"></div>
+          <div class="chat-question" id="chat-question"></div>
+        </div>
+        <div id="chat-tasks"></div>
+        <div id="chat-dialogs"></div>
+        <div class="chat-overlay" id="chat-overlay"></div>
+        <div id="chat-composer"></div>
+      </section>
+      <section class="chat-view" id="view-agents" hidden></section>
+      <section class="chat-view" id="view-session" hidden></section>
+      <section class="chat-view" id="view-memory" hidden></section>
     </div>
-    <div class="chat-foot">
-      <button type="button" class="model-chip" id="chat-model" data-chat="model"></button>
-      <span class="hints"><kbd>/</kbd> ${esc(t('chat.hint.commands'))} · <kbd>@</kbd> ${esc(t('chat.hint.files'))}</span>
-    </div>`
-    input = $('chat-input')
-    input.value = drafts.get(tabs.active) ?? ''
-    dialogsKey = ''
-    bindInput()
+    <div id="chat-toast"></div>`
+    input = null
+    composerKey = ''
+    headerKey = ''
+    indexKey = ''
+    questionKey = ''
+    clearInterval(tick)
+    tick = setInterval(tickElapsed, 200)
     render()
   }
 
-  const expandedOf = new Map() // session id -> open tool groups
-  const expanded = () => {
-    if (!expandedOf.has(tabs.active)) expandedOf.set(tabs.active, new Set())
-    return expandedOf.get(tabs.active)
+  function tickElapsed() {
+    if (!input) return
+    for (const el of root.querySelectorAll('.p-working-time[data-since]')) {
+      el.textContent = formatElapsed(Date.now() - Number(el.dataset.since))
+    }
+  }
+
+  // ---- drawing --------------------------------------------------------------------------------
+
+  const meterHtml = () => {
+    const state = current()
+    return renderMeter(
+      { model: modelLabel(state.model) || t('chat.meter.noModel'), used: 0, context: state.context ?? 0, free: false, hasQuota: false, compactAt: settings?.compaction?.percent ?? 40 },
+      {},
+      t,
+    )
+  }
+
+  function drawHeader() {
+    const key = JSON.stringify([
+      tabs.sessions.map((s) => [s.id, s.title, s.status, s.unread, chatOf(s.id).model, chatOf(s.id).context]),
+      tabs.active, ui.menuOpen, ui.renaming, assistantName(), settings?.compaction?.percent,
+    ])
+    if (key === headerKey && $('chat-header').firstChild) return
+    headerKey = key
+    const multi = tabs.sessions.length > 1
+    const full = tabs.sessions.length >= MAX_SESSIONS
+    const sessions = tabs.sessions.map((s) => ({ ...s, model: modelLabel(chatOf(s.id).model), context: chatOf(s.id).context ?? 0, quota: 0, free: false }))
+    const left = multi
+      ? renderSessionTabs({ ...tabs, sessions }, { maxVisible: 3, hideNew: true, hideUndo: true, menuOpen: ui.menuOpen, renaming: ui.renaming, hasQuota: false }, t)
+      : `<div class="chat-identity"><span class="chat-dot" aria-hidden="true"></span><span class="chat-name">${esc(assistantName())}</span>${meterHtml()}</div>`
+    $('chat-header').innerHTML = `${left}
+      <button type="button" class="icon-btn chat-new" data-chat="add" ${full ? 'disabled' : ''} aria-label="${esc(t('chat.new'))}" title="${esc(t('chat.new'))}">${ICON.plus}</button>
+      <button type="button" class="icon-btn" data-chat="close-dock" aria-label="${esc(t('chat.close'))}" title="${esc(t('chat.close'))}">${ICON.close}</button>`
+  }
+
+  function drawThread() {
+    const state = current()
+    const list = $('chat-list')
+    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80
+    const ex = expanded()
+    list.innerHTML = renderThread(state, { expanded: ex.open, openRows: ex.rows, moreOpen: ex.more, now: Date.now() }, t)
+    if (nearBottom) list.scrollTop = list.scrollHeight
+  }
+
+  function drawIndex() {
+    const items = indexItems(current().messages)
+    const el = $('chat-index')
+    ui.index.height = $('chat-list').clientHeight || ui.index.height
+    const key = JSON.stringify([tabs.active, items.map((i) => i.id), ui.activeId, ui.index])
+    if (key === indexKey) return
+    indexKey = key
+    el.innerHTML = items.length > 1 ? renderIndex({ items, activeId: ui.activeId }, ui.index, t) : ''
+  }
+
+  /** `force`: the wizard changed. Otherwise the card is only drawn when another one shows up. */
+  function drawQuestion(force = false) {
+    const state = current()
+    const dialog = state.dialogs.find((d) => d.card?.kind === 'question')
+    const el = $('chat-question')
+    const key = `${tabs.active}:${dialog?.id ?? ''}`
+    if (!force && key === questionKey) return
+    questionKey = key
+    if (!dialog) {
+      el.innerHTML = ''
+      return
+    }
+    if (!wizards.has(dialog.id)) wizards.set(dialog.id, questionInit(dialog.card.questions))
+    keepingFocus(el, () => {
+      el.innerHTML = `<div class="question-fill">${renderQuestion({ id: dialog.id, questions: dialog.card.questions }, wizards.get(dialog.id), t)}</div>`
+    })
+  }
+
+  function drawDialogs() {
+    const state = current()
+    const plain = state.dialogs.filter((d) => !d.card)
+    const key = `${tabs.active}:${plain.map((d) => d.id).join('|')}`
+    const el = $('chat-dialogs')
+    if (el.dataset.key === key) return
+    el.dataset.key = key
+    el.innerHTML = plain.map((d) => renderDialog(d, t)).join('')
+    // Never take the keyboard from someone who is typing: the next Space or Enter would answer the dialog.
+    if (!(input?.value) && plain.length) el.querySelector('button, input, textarea')?.focus()
+  }
+
+  function drawOverlay() {
+    const el = $('chat-overlay')
+    if (!picker) {
+      el.innerHTML = ''
+      return
+    }
+    const props = { items: picker.items, query: picker.query, active: picker.active, open: true }
+    keepingFocus(el, () => {
+      el.innerHTML =
+        picker.kind === 'command' ? renderCommandPicker(props, {}, t)
+        : picker.kind === 'file' ? renderFilePicker(props, {}, t)
+        : renderModelPicker({ models: picker.items, current: current().model ?? '', query: picker.query, active: picker.active, open: true }, {}, t)
+    })
+    el.querySelector('.p-cmd-row.on, .p-files-row.on, .p-models-row.on')?.scrollIntoView?.({ block: 'nearest' })
+  }
+
+  function drawTasks() {
+    const el = $('chat-tasks')
+    el.innerHTML = data.tasks?.length ? renderTasks({ tasks: data.tasks, kind: data.tasksKind, show: true }, { open: ui.tasksOpen }, t) : ''
+  }
+
+  /** The composer is drawn once; later changes (busy, text, model) swap its buttons, rows and hints in place so the
+   * textarea keeps its value, caret, undo history and any composition in progress. */
+  function drawComposer() {
+    const el = $('chat-composer')
+    const value = input ? input.value : (drafts.get(tabs.active) ?? '')
+    const model = current().model
+    const props = {
+      busy: current().running,
+      hasText: value.trim().length > 0,
+      rows: Math.min(6, Math.max(1, value.split('\n').length)),
+      showHints: true,
+      model: modelLabel(model) || undefined,
+      modelTitle: model ?? undefined,
+    }
+    const key = JSON.stringify(props)
+    if (input && key === composerKey) return
+    composerKey = key
+    if (!input) {
+      el.innerHTML = renderComposer(props, {}, t)
+      input = $('chat-input')
+      input.value = value
+      return
+    }
+    const next = document.createElement('div')
+    next.innerHTML = renderComposer(props, {}, t)
+    for (const selector of ['.p-composer-actions', '.p-composer-hints']) {
+      const old = el.querySelector(selector)
+      const fresh = next.querySelector(selector)
+      if (old && fresh) old.replaceWith(fresh)
+      else if (old) old.remove()
+      else if (fresh) el.querySelector('.p-composer')?.appendChild(fresh)
+    }
+    input.rows = props.rows
+    input.placeholder = next.querySelector('textarea')?.placeholder ?? ''
+  }
+
+  function drawViews() {
+    const view = ui.view
+    $('chat-body').dataset.view = view
+    for (const name of ['chat', 'agents', 'session', 'memory']) $(`view-${name}`).hidden = name !== view
+    if (view === 'chat') return
+    if (view === 'agents') {
+      $('view-agents').innerHTML = `
+        <div class="chat-panel-scroll">
+          ${data.agents.length ? renderSubagents({ agents: data.agents, footnote: t('chat.agents.footnote') }, {}, t) : `<p class="chat-panel-empty">${esc(t('chat.agents.empty'))}</p>`}
+        </div>
+        <button type="button" class="chat-back" data-chat="panel-back"><kbd>Alt</kbd><kbd>A</kbd><span>${esc(t('chat.agents.back'))}</span></button>`
+    } else if (view === 'session') {
+      const agent = data.agents.find((a) => (a.id ?? a.role) === ui.agent) ?? data.agents[0]
+      $('view-session').innerHTML = `<div class="chat-panel-scroll">${agent ? renderAgentSession({ agent }, { now: Date.now() }, t) : ''}</div>`
+    } else if (view === 'memory') {
+      keepingFocus($('view-memory'), () => {
+        $('view-memory').innerHTML = renderMemory({ memories: data.memory, now: Date.now() }, ui.memory, t)
+      })
+    }
+  }
+
+  function drawToast() {
+    $('chat-toast').innerHTML = toast
+      ? `<div class="chat-toast" role="status"><span class="chat-dot" aria-hidden="true"></span><div><b>“${esc(toast.title)}”</b><span>${esc(toast.text)}</span></div><button type="button" class="chat-toast-open" data-chat="toast-open" data-session="${esc(toast.session)}">${esc(t('chat.toast.open'))}</button></div>`
+      : ''
   }
 
   function render() {
-    if (!input) return
-    const state = current()
-    if (!keepRenameField(ui, !!root.querySelector('[data-chat-rename]'))) $('chat-tabs').innerHTML = renderTabs(tabs, t, ui)
+    if (!$('chat-body')) return
+    if (!keepRenameField(ui, !!root.querySelector('[data-chat-rename]'))) drawHeader()
     $('chat-undo').innerHTML = renderUndo(tabs, t)
-    $('chat-path').innerHTML = renderPath(state, t)
-    $('chat-problem').innerHTML = renderProblem(state, t)
-    const list = $('chat-list')
-    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80
-    list.innerHTML = renderEmpty(state, t) + renderMessages(state, t, expanded())
-    if (nearBottom) list.scrollTop = list.scrollHeight
-    const key = `${tabs.active}:${state.dialogs.map((d) => d.id).join('|')}`
-    if (key !== dialogsKey) {
-      dialogsKey = key
-      $('chat-dialogs').innerHTML = state.dialogs.map((d) => renderDialog(d, t)).join('')
-      // Never take the keyboard from someone who is typing: the next Space or Enter would answer the dialog.
-      if (!input.value) $('chat-dialogs').querySelector('button, input, textarea')?.focus()
-    }
-    $('chat-stop').hidden = !state.running
-    $('chat-model').textContent = state.model ? modelLabel(state.model) : t('chat.model.none')
-    $('chat-model').title = state.model ?? ''
-    const pick = $('chat-picker')
-    pick.hidden = !picker
-    pick.innerHTML = renderPicker(picker, t)
+    $('chat-path').innerHTML = renderPath(current(), t)
+    $('chat-problem').innerHTML = renderProblem(current(), t)
     $('chat-banner').innerHTML = banner
+    drawThread()
+    drawIndex()
+    drawQuestion()
+    drawDialogs()
+    drawOverlay()
+    drawTasks()
+    drawComposer()
+    drawViews()
+    drawToast()
     if (ui.renaming) root.querySelector('[data-chat-rename]')?.focus()
   }
 
-  // ---- tabs -----------------------------------------------------------------------------------
+  // ---- views -----------------------------------------------------------------------------------
+
+  function openView(view) {
+    ui.view = view
+    if (view === 'memory') ui.memory = initialMemoryUi()
+    render()
+    if (view === 'chat') input?.focus()
+    else $(`view-${view}`).querySelector('button, input')?.focus()
+  }
+
+  // ---- tabs ------------------------------------------------------------------------------------
 
   /** Shows another session: its draft, its conversation, and a `chatLoad` so its Pi (and any dialog) wakes up. */
   function switchTo(next) {
     if (next === tabs.active) return
-    drafts.set(tabs.active, input.value)
-    closePickerSilently()
+    if (input) drafts.set(tabs.active, input.value)
+    closePicker(false)
     tabs = selectSession(tabs, next)
-    input.value = drafts.get(next) ?? ''
-    autosize()
     ui.menuOpen = false
+    ui.view = 'chat'
+    if (input) input.value = drafts.get(next) ?? ''
     save()
     post({ type: 'chatLoad' })
     render()
-    input.focus()
+    input?.focus()
   }
 
   function addTab() {
     if (tabs.sessions.length >= MAX_SESSIONS) return
     commitClose() // adding a session ends the undo window
     const id = makeId()
-    drafts.set(tabs.active, input.value)
+    if (input) drafts.set(tabs.active, input.value)
     tabs = addSession(tabs, id)
-    if (tabs.active !== id) return // already at the limit
-    closePickerSilently()
-    input.value = ''
-    autosize()
+    if (tabs.active !== id) return
+    closePicker(false)
+    if (input) input.value = ''
     ui.menuOpen = false
+    ui.view = 'chat'
     save()
     post({ type: 'chatLoad' })
     render()
-    input.focus()
+    input?.focus()
   }
 
   /** The undo window is over (or something else happened): the closed tab's Pi stops and its state goes. */
@@ -328,9 +471,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       render()
     }, UNDO_MS)
     if (wasActive) {
-      closePickerSilently()
-      input.value = drafts.get(tabs.active) ?? ''
-      autosize()
+      closePicker(false)
+      if (input) input.value = drafts.get(tabs.active) ?? ''
       post({ type: 'chatLoad' })
     }
     save()
@@ -350,199 +492,518 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     tabs = renameSession(tabs, id, title)
     save()
     render()
-    input.focus()
+    input?.focus()
   }
 
-  // ---- composer -------------------------------------------------------------------------------
+  // ---- composer --------------------------------------------------------------------------------
+
+  function clearDraft() {
+    input.value = ''
+    drafts.delete(tabs.active)
+    closePicker(false)
+    composerKey = ''
+  }
 
   function submit() {
     const text = input.value.trim()
     if (!text) return
+    if (/^\/memory(\s|$)/.test(text)) {
+      clearDraft()
+      return openView('memory')
+    }
+    if (/^\/model(\s|$)/.test(text)) return // the model picker answers this one
     const session = tabs.active
-    post({ type: 'chatSend', text, behavior: current().running ? 'steer' : null }, session)
-    chats.set(session, addUser(chatOf(session), text))
+    const chat = chatOf(session)
+    const slash = text.startsWith('/') // extension commands run at once, even during a run
+    if (chat.running && !slash) {
+      post({ type: 'chatSend', text, behavior: 'followUp' }, session)
+      chats.set(session, addQueued(chat, text))
+    } else {
+      post({ type: 'chatSend', text, behavior: null }, session)
+      chats.set(session, addUser(chat, text))
+    }
     const before = tabs
     tabs = setTitleIfEmpty(tabs, session, text)
     if (tabs !== before) save()
-    input.value = ''
-    drafts.delete(session)
-    autosize()
-    closePicker()
+    clearDraft()
     render()
     const list = $('chat-list')
     list.scrollTop = list.scrollHeight
   }
 
-  const autosize = () => {
-    input.style.height = 'auto'
-    input.style.height = `${Math.min(input.scrollHeight, 154)}px`
+  function stop() {
+    post({ type: 'chatAbort' })
   }
 
-  function closePickerSilently() {
+  function closePicker(draw = true) {
+    const hadModelPicker = picker?.kind === 'model'
     picker = null
     fileToken++
+    if (draw) drawOverlay()
+    if (hadModelPicker) input?.focus() // the search field is gone: the keyboard goes back to the composer
   }
 
-  function closePicker() {
-    closePickerSilently()
-    render()
+  /** The model picker opens at once (so Esc works even while Pi is still answering) and fills in when the list arrives. */
+  async function openModelPicker(query = '') {
+    const session = tabs.active
+    picker = { kind: 'model', items: [], query, active: 0, start: 0 }
+    drawOverlay()
+    $('chat-overlay').querySelector('[data-chat-field="model-search"]')?.focus()
+    const reply = await ask({ type: 'listModels' }, session)
+    if (picker?.kind !== 'model' || session !== tabs.active) return // closed or moved on meanwhile
+    picker = { ...picker, items: reply.models ?? [] }
+    drawOverlay()
+  }
+
+  const pickerSize = () => {
+    if (!picker) return 0
+    const { kind, items, query } = picker
+    return kind === 'command' ? filterCommands(items, query).length : kind === 'file' ? filterFiles(items, query).length : orderedModels(items, query).length
   }
 
   async function updatePicker() {
-    const ask_ = pickerQuery(input.value, input.selectionStart ?? input.value.length)
-    if (!ask_) return picker?.kind === 'model' ? undefined : closePicker()
+    const asked = pickerQuery(input.value, input.selectionStart ?? input.value.length)
+    if (!asked) {
+      dismissed = null
+      return closePicker()
+    }
+    if (dismissed && dismissed.kind === asked.kind && input.value.startsWith(dismissed.text)) return closePicker()
     const session = tabs.active
-    if (ask_.kind === 'command') {
-      if (!commandsBy.has(session)) {
+    // A reply that arrives after the owner changed tab or edited the text no longer applies.
+    const stale = () => {
+      if (session !== tabs.active) return true
+      const now = pickerQuery(input.value, input.selectionStart ?? input.value.length)
+      return !now || now.kind !== asked.kind || (now.kind !== 'file' && now.query !== asked.query)
+    }
+    const local = () => [
+      { name: 'memory', description: t('chat.cmd.memory'), source: 'aria' },
+      { name: 'model', description: t('chat.cmd.model'), source: 'aria' },
+    ]
+    if (asked.kind === 'command') {
+      let items = commandsBy.get(session)
+      if (!items) {
         const reply = await ask({ type: 'listCommands' }, session)
-        commandsBy.set(session, (reply.commands ?? []).map((c) => ({ label: `/${c.name}`, hint: c.description ?? '', value: c.name })))
+        items = [...local(), ...(reply.commands ?? [])]
+        // An empty list means Pi could not answer (not started yet, or busy): do not remember that.
+        if ((reply.commands ?? []).length) commandsBy.set(session, items)
       }
-      if (session !== tabs.active) return // the owner moved to another tab while Pi was starting
-      const items = commandsBy.get(session).filter((c) => c.value.toLowerCase().includes(ask_.query.toLowerCase())).slice(0, 8)
-      picker = { kind: 'command', items, index: 0, start: ask_.start }
-      return render()
+      if (stale()) return
+      picker = { kind: 'command', items, query: asked.query, active: 0, start: asked.start }
+      return drawOverlay()
+    }
+    if (asked.kind === 'model') {
+      // "/model " opens the model picker, which has its own search field: the text leaves the composer.
+      clearDraft()
+      drawComposer()
+      return openModelPicker(asked.query)
     }
     clearTimeout(fileTimer)
     const token = ++fileToken
     fileTimer = setTimeout(async () => {
-      const reply = await ask({ type: 'listFiles', query: ask_.query }, session)
+      const reply = await ask({ type: 'listFiles', query: asked.query }, session)
       if (token !== fileToken || session !== tabs.active) return // a newer keystroke, a closed picker or another tab
-      picker = { kind: 'file', items: (reply.files ?? []).slice(0, 8).map((f) => ({ label: f, hint: '', value: f })), index: 0, start: ask_.start }
-      render()
+      picker = { kind: 'file', items: reply.files ?? [], query: asked.query, active: 0, start: asked.start }
+      drawOverlay()
     }, 120)
   }
 
-  async function openModels() {
-    if (picker?.kind === 'model') return closePicker()
-    const session = tabs.active
-    const reply = await ask({ type: 'listModels' }, session)
-    if (session !== tabs.active) return
-    const items = (reply.models ?? []).map((m) => ({ label: m.name ?? m.id, hint: `${m.provider}/${m.id}`, value: `${m.provider}/${m.id}` }))
-    picker = { kind: 'model', items, index: Math.max(0, items.findIndex((i) => i.value === current().model)), start: 0 }
-    render()
-  }
-
   function choose(index) {
-    const item = picker?.items[index]
-    if (!item) return
-    if (picker.kind === 'model') {
+    if (!picker) return
+    const { kind, items, query } = picker
+    if (kind === 'model') {
+      const hit = orderedModels(items, query)[index]?.model
+      if (!hit) return
       closePicker()
-      ask({ type: 'setModel', model: item.value })
+      ask({ type: 'setModel', model: `${hit.provider}/${hit.id}` })
       return
     }
     const caret = input.selectionStart ?? input.value.length
-    if (picker.kind === 'command') {
-      input.value = `/${item.value} ${input.value.slice(caret)}`
-      input.selectionStart = input.selectionEnd = item.value.length + 2
+    if (kind === 'command') {
+      const hit = filterCommands(items, query)[index]?.item
+      if (!hit) return
+      input.value = `/${hit.name} ${input.value.slice(caret)}`
+      input.selectionStart = input.selectionEnd = hit.name.length + 2
     } else {
-      const next = insertFile(input.value, caret, picker.start, item.value)
+      const hit = filterFiles(items, query)[index]
+      if (!hit) return
+      const next = insertFile(input.value, caret, picker.start, hit.path)
       input.value = next.text
       input.selectionStart = input.selectionEnd = next.caret
     }
-    autosize()
-    closePicker()
+    closePicker(false)
+    composerKey = ''
+    drawOverlay()
+    drawComposer()
     input.focus()
   }
 
-  function bindInput() {
-    input.addEventListener('input', () => {
-      autosize()
-      updatePicker()
-    })
-
-    input.addEventListener('keydown', (event) => {
-      if (picker && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
+  function onComposerKey(event) {
+    if (event.isComposing) return // Escape belongs to `escape()` (called by the page), which also ignores a composition
+    if (picker) {
+      const size = pickerSize()
+      if (size && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
         event.preventDefault()
         event.stopPropagation()
-        const size = picker.items.length
-        if (size) picker = { ...picker, index: (picker.index + (event.key === 'ArrowDown' ? 1 : -1) + size) % size }
-        return render()
+        picker = { ...picker, active: stepActive(picker.active, size, event.key === 'ArrowDown' ? 1 : -1) }
+        return drawOverlay()
       }
-      if (picker && (event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && picker.items.length) {
+      if (size && (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey))) {
         event.preventDefault()
-        return choose(picker.index)
+        return choose(clampActive(picker.active, size))
       }
-      if (picker && event.key === 'Escape') {
-        event.stopPropagation()
-        return closePicker()
-      }
-      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-        event.preventDefault()
-        submit()
-      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.stopPropagation() // the arrows move the caret here, not focus between controls
-      }
-    })
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      submit()
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.stopPropagation() // the arrows move the caret here, not focus between controls
+    }
   }
 
-  // ---- clicks ---------------------------------------------------------------------------------
+  // ---- answers ---------------------------------------------------------------------------------
 
-  function answer(id, fields) {
+  function answer(id, fields, forNote) {
     post({ type: 'uiAnswer', id, ...fields })
-    chats.set(tabs.active, answerDialog(current(), id))
+    chats.set(tabs.active, answerDialog(current(), id, forNote))
+    wizards.delete(id)
     tabs = applyStatus(tabs, tabs.active, current(), true)
     render()
-    input.focus()
+    input?.focus()
   }
 
-  root.addEventListener('click', (event) => {
-    const el = event.target.closest('[data-chat]')
-    if (!el) {
-      if (ui.menuOpen) {
-        ui.menuOpen = false
-        render()
-      }
-      return
+  let autoAdvance = null
+
+  /** One step of a question card's wizard (`op` is the part's `data-op`). */
+  function questionStep(id, op, q, value) {
+    const state = wizards.get(id)
+    const dialog = current().dialogs.find((d) => d.id === id)
+    if (!state || !dialog) return
+    const list = normalizeQuestions(dialog.card.questions)
+    clearTimeout(autoAdvance)
+    const next = questionReduce(state, op, { q, value })
+    wizards.set(id, next)
+    if (next.outcome === 'submit') {
+      const given = questionAnswers(list, next)
+      return answer(id, { value: JSON.stringify(given) }, answersForCard(list, given))
     }
-    const { chat, id, value, index, session } = el.dataset
-    if (chat === 'send') return submit()
-    if (chat === 'stop') return post({ type: 'chatAbort' })
-    if (chat === 'settings') return onSettings?.()
-    if (chat === 'model') return openModels()
-    if (chat === 'pick') return choose(Number(index))
-    if (chat === 'select') return switchTo(session)
-    if (chat === 'add') return addTab()
-    if (chat === 'close-tab') return closeTab(session)
-    if (chat === 'undo') return undo()
-    if (chat === 'menu') {
-      ui.menuOpen = !ui.menuOpen
-      return render()
+    if (next.outcome === 'dismiss') return answer(id, { cancelled: true }, undefined)
+    drawQuestion(true)
+    // A single-choice pick moves on by itself after a beat (and sends, on the last question), as the design does.
+    if (op === 'pick' && !list[q]?.multi) {
+      autoAdvance = setTimeout(() => {
+        const cur = wizards.get(id)
+        if (cur && cur.step === q) questionStep(id, q < list.length - 1 ? 'next' : 'submit')
+      }, 480)
     }
-    if (chat === 'toggle-tools') {
-      const at = Number(index)
-      if (!expanded().delete(at)) expanded().add(at)
-      return render()
+  }
+
+  function onQuestion(el) {
+    const { id, op, q, value } = el.dataset
+    if (op === 'other') return // typing in the free-text field is handled by the input event, not by clicks
+    questionStep(id, op, q === undefined ? undefined : Number(q), value)
+  }
+
+  // ---- the thread's scroll and index -------------------------------------------------------------
+
+  // As the design's message index: it opens when the pointer reaches the right edge of the thread (the last 56 px),
+  // follows the pointer while it stays over the chips' area (300 px), and closes shortly after it leaves. The thread's
+  // own scrollbar stays usable: nothing of the index takes the pointer except the chips themselves.
+  const INDEX_OPEN_ZONE = 56
+  const INDEX_KEEP_ZONE = 300
+  const INDEX_HIDE_MS = 160
+  let indexHide = null
+  let indexSettle = null
+  let indexSuppressed = false
+
+  function updateActive() {
+    const items = indexItems(current().messages)
+    if (!items.length) return
+    const top = $('chat-list').getBoundingClientRect().top
+    let at = -1
+    for (let i = 0; i < items.length && at === -1; i++) {
+      const el = document.getElementById(items[i].id)
+      if (el && el.getBoundingClientRect().bottom > top + 8) at = i // the first message still reaching below the top edge
     }
-    if (chat === 'answer') return answer(id, { value })
-    if (chat === 'confirm') return answer(id, { confirmed: value === 'true' })
-    if (chat === 'cancel') return answer(id, { cancelled: true })
-    if (chat === 'submit') {
-      const field = [...root.querySelectorAll('[data-chat-field]')].find((f) => f.dataset.id === id)
-      return answer(id, { value: field?.value ?? '' })
+    const id = items[at === -1 ? items.length - 1 : at]?.id
+    if (id !== ui.activeId) {
+      ui.activeId = id
+      drawIndex()
+    }
+  }
+
+  root.addEventListener('scroll', (event) => {
+    if (event.target?.id === 'chat-list') updateActive()
+  }, true)
+
+  const indexGeometry = () => indexLayout(indexItems(current().messages).length, { ...ui.index, expanded: true })
+
+  function showIndex(my) {
+    clearTimeout(indexHide)
+    const height = $('chat-list').clientHeight || ui.index.height
+    const items = indexItems(current().messages)
+    if (!ui.index.expanded) {
+      // Opening: when the chips do not all fit, start with the active one in the middle.
+      const g = indexLayout(items.length, { height, expanded: true })
+      const at = Math.max(0, items.findIndex((i) => i.id === ui.activeId))
+      const off = g.overflow ? Math.min(g.maxOff, Math.max(0, 8 + at * 34 + 15 - height / 2)) : 0
+      ui.index = { ...ui.index, expanded: true, settled: false, my, off, height }
+      clearTimeout(indexSettle)
+      indexSettle = setTimeout(() => {
+        ui.index.settled = true
+      }, 450)
+    } else {
+      ui.index = { ...ui.index, my, height }
+    }
+    drawIndex()
+  }
+
+  function scheduleHideIndex() {
+    if (!ui.index.expanded) return
+    clearTimeout(indexHide)
+    indexHide = setTimeout(() => {
+      ui.index = { ...ui.index, expanded: false, my: null, settled: false }
+      drawIndex()
+    }, INDEX_HIDE_MS)
+  }
+
+  function hideIndexNow() {
+    clearTimeout(indexHide)
+    clearTimeout(indexSettle)
+    ui.index = { ...ui.index, expanded: false, my: null, settled: false }
+    drawIndex()
+  }
+
+  root.addEventListener('mousemove', (event) => {
+    const list = $('chat-list')
+    if (!list || ui.view !== 'chat' || indexItems(current().messages).length < 2) return
+    const rect = list.getBoundingClientRect()
+    const inside = event.clientY >= rect.top && event.clientY <= rect.bottom && event.clientX >= rect.left && event.clientX <= rect.right
+    const fromRight = rect.right - event.clientX
+    if (inside && ((ui.index.expanded && fromRight <= INDEX_KEEP_ZONE) || (!indexSuppressed && fromRight <= INDEX_OPEN_ZONE))) {
+      showIndex(event.clientY - rect.top)
+    } else {
+      if (!inside || fromRight > INDEX_OPEN_ZONE) indexSuppressed = false
+      scheduleHideIndex()
     }
   })
 
-  root.addEventListener('dblclick', (event) => {
-    const main = event.target.closest?.('.tab-main')
-    if (!main) return
-    ui.renaming = main.dataset.session
-    render()
+  // With the index open and more chips than fit, the wheel scrolls the chips; otherwise it scrolls the thread.
+  root.addEventListener(
+    'wheel',
+    (event) => {
+      if (!ui.index.expanded) return
+      const rect = $('chat-list').getBoundingClientRect()
+      if (rect.right - event.clientX > INDEX_KEEP_ZONE) return
+      const g = indexGeometry()
+      if (!g.overflow) return
+      event.preventDefault()
+      const dy = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY
+      ui.index = { ...ui.index, off: Math.min(g.maxOff, Math.max(0, (ui.index.off ?? 0) + dy)) }
+      drawIndex()
+    },
+    { passive: false },
+  )
+
+  /** Jump to a message you sent: the thread scrolls to it, and it gives a soft halo once it is there. */
+  function jumpTo(id) {
+    const el = document.getElementById(id)
+    if (!el) return
+    indexSuppressed = true // stay closed until the pointer leaves the edge and comes back
+    hideIndexNow()
+    const list = $('chat-list')
+    list.scrollBy({ top: el.getBoundingClientRect().top - list.getBoundingClientRect().top - 12, behavior: 'smooth' })
+    let quiet = null
+    const finish = () => {
+      list.removeEventListener('scroll', onScroll)
+      clearTimeout(quiet)
+      clearTimeout(cap)
+      flash(el)
+    }
+    const onScroll = () => {
+      clearTimeout(quiet)
+      quiet = setTimeout(finish, 110)
+    }
+    list.addEventListener('scroll', onScroll, { passive: true })
+    quiet = setTimeout(finish, 160)
+    const cap = setTimeout(finish, 1400)
+  }
+
+  function flash(el) {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    const bubble = el.querySelector('.p-user-bubble, p') ?? el
+    try {
+      bubble.animate(
+        [
+          { transform: 'scale(1)', transformOrigin: 'right center', boxShadow: '0 0 0 0 rgba(185, 168, 255, 0.5)', offset: 0 },
+          { transform: 'scale(1.035)', transformOrigin: 'right center', boxShadow: '0 0 0 4px rgba(185, 168, 255, 0.28)', offset: 0.3 },
+          { transform: 'scale(1)', transformOrigin: 'right center', boxShadow: '0 0 0 12px rgba(185, 168, 255, 0)', offset: 1 },
+        ],
+        { duration: 850, easing: 'ease-in-out' },
+      )
+    } catch {
+      // animations unavailable: the jump alone is enough
+    }
+  }
+
+  // ---- events ----------------------------------------------------------------------------------
+
+  root.addEventListener('input', (event) => {
+    const el = event.target
+    if (el === input) {
+      drawComposer()
+      updatePicker()
+    } else if (el?.dataset?.chatField === 'model-search' && picker?.kind === 'model') {
+      picker = { ...picker, query: el.value, active: 0 }
+      drawOverlay()
+    } else if (el?.dataset?.op === 'other') {
+      const id = el.dataset.id
+      const state = wizards.get(id)
+      if (state) {
+        wizards.set(id, questionReduce(state, 'other', { q: Number(el.dataset.q), value: el.value }))
+        drawQuestion(true) // the Continue button depends on whether something is picked or typed
+      }
+    } else if (el?.dataset?.chatField === 'memory-search') {
+      ui.memory = reduceMemoryUi(ui.memory, 'search', el.value)
+      drawViews()
+    }
   })
 
   root.addEventListener('keydown', (event) => {
     const field = event.target?.dataset?.chatRename !== undefined ? event.target : null
-    if (!field) return
-    if (event.key === 'Enter') commitRename(field.dataset.session, field.value)
-    else if (event.key === 'Escape') {
-      event.stopPropagation()
-      ui.renaming = null
-      render()
+    if (field) {
+      if (event.key === 'Enter' && !event.isComposing) commitRename(field.dataset.session, field.value)
+      else if (event.key === 'Escape') {
+        event.stopPropagation()
+        ui.renaming = null
+        render()
+      }
+      return
+    }
+    if (event.target === input) return onComposerKey(event)
+    if (event.target?.dataset?.chatField === 'model-search' && picker?.kind === 'model') {
+      const size = pickerSize()
+      if (size && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+        event.preventDefault()
+        picker = { ...picker, active: stepActive(picker.active, size, event.key === 'ArrowDown' ? 1 : -1) }
+        return drawOverlay()
+      }
+      if (size && (event.key === 'Enter' || event.key === 'Tab') && !event.isComposing) {
+        event.preventDefault()
+        return choose(clampActive(picker.active, size))
+      }
+      return // Escape is not handled here: the page calls escape(), which closes just this picker
+    }
+    if (event.target?.dataset?.op === 'other' && event.key === 'Enter' && !event.isComposing) {
+      event.preventDefault()
+      const { id, q } = event.target.dataset
+      const dialog = current().dialogs.find((d) => d.id === id)
+      const last = Number(q) >= normalizeQuestions(dialog?.card?.questions).length - 1
+      return questionStep(id, last ? 'submit' : 'next', Number(q))
     }
   })
 
   root.addEventListener('focusout', (event) => {
     const field = event.target?.dataset?.chatRename !== undefined ? event.target : null
     if (field && ui.renaming === field.dataset.session) commitRename(field.dataset.session, field.value)
+  })
+
+  root.addEventListener('dblclick', (event) => {
+    const main = event.target.closest?.('.p-tabs-main')
+    if (!main) return
+    ui.renaming = main.dataset.session
+    drawHeader()
+    render()
+  })
+
+  root.addEventListener('click', (event) => {
+    const el = event.target.closest('[data-chat]')
+    if (!el) {
+      if (ui.menuOpen) {
+        ui.menuOpen = false
+        drawHeader()
+      }
+      return
+    }
+    const { chat: action, id, session, index, choice } = el.dataset
+    switch (action) {
+      case 'send': return submit()
+      case 'stop': return stop()
+      case 'settings': return onSettings?.()
+      case 'close-dock': return send({ type: 'closeRequest' })
+      case 'open-models':
+        if (ui.view !== 'chat') openView('chat')
+        return picker?.kind === 'model' ? closePicker() : openModelPicker()
+      case 'pick': return choose(Number(index))
+      case 'picker-hover':
+        if (picker) picker = { ...picker, active: Number(index) }
+        return
+      case 'select': return switchTo(session)
+      case 'add': return addTab()
+      case 'close-tab': return closeTab(session)
+      case 'undo': return undo()
+      case 'menu':
+        ui.menuOpen = !ui.menuOpen
+        return drawHeader()
+      case 'cancel-queued': {
+        // Pi can only empty its queue: the other queued messages go back in, in order.
+        const at = Number(id)
+        const keep = current().queue.filter((_, i) => i !== at).map((q) => q.text)
+        post({ type: 'chatClearQueue', keep })
+        chats.set(tabs.active, clearQueue(current(), at))
+        return render()
+      }
+      case 'toggle-tools': {
+        const set = expanded().open
+        if (!set.delete(Number(index))) set.add(Number(index))
+        return drawThread()
+      }
+      case 'toggle-tool-row': {
+        const set = expanded().rows
+        if (!set.delete(id)) set.add(id)
+        return drawThread()
+      }
+      case 'toggle-tool-diffs': {
+        const set = expanded().more
+        if (!set.delete(Number(index))) set.add(Number(index))
+        return drawThread()
+      }
+      case 'index-jump': return jumpTo(id)
+      case 'permission': return answer(id, { value: choice }, choice)
+      case 'quota': return answer(id, { value: choice }, choice)
+      case 'question': return onQuestion(el)
+      case 'tasks-toggle':
+        ui.tasksOpen = !ui.tasksOpen
+        return drawTasks()
+      case 'agent-select':
+        ui.agent = id
+        return openView('session')
+      case 'agent-back': return openView('agents')
+      case 'panel-back': return openView('chat')
+      case 'memory-back': return openView('chat')
+      case 'toast-open':
+        toast = null
+        return switchTo(session)
+      case 'answer': return answer(id, { value: el.dataset.value }, el.dataset.value)
+      case 'confirm': return answer(id, { confirmed: el.dataset.value === 'true' }, undefined)
+      case 'cancel': return answer(id, { cancelled: true }, undefined)
+      case 'submit': {
+        const field = [...root.querySelectorAll('[data-chat-field]')].find((f) => f.dataset.id === id)
+        return answer(id, { value: field?.value ?? '' }, undefined)
+      }
+      default:
+        if (action?.startsWith('memory-')) {
+          ui.memory = reduceMemoryUi(ui.memory, action.slice('memory-'.length), el.dataset.value ?? id)
+          return drawViews()
+        }
+    }
+  })
+
+  root.addEventListener('mouseover', (event) => {
+    const li = event.target.closest?.('[data-chat="picker-hover"]')
+    if (li && picker && picker.active !== Number(li.dataset.index)) {
+      picker = { ...picker, active: Number(li.dataset.index) }
+      drawOverlay()
+    }
   })
 
   return {
@@ -552,11 +1013,46 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       if (!saved?.sessions?.length) save()
       render()
     },
+    /** What the page knows beyond the chat: the assistant's name and the compaction threshold. */
+    setSettings(next) {
+      settings = next
+      render()
+    },
+    /** Backend feeds that do not exist yet (subagents, tasks, memory): the UI is ready for them. */
+    setAgents(list) {
+      data.agents = list ?? []
+      render()
+    },
+    setTasks(tasks, kind = 'tasks') {
+      data.tasks = tasks
+      data.tasksKind = kind
+      render()
+    },
+    setMemory(memories) {
+      data.memory = memories ?? []
+      render()
+    },
     /** What a session said: its chat messages (`chatState`, `chatEvent`, `chatDialog`, …). */
     receive(session, message) {
       if (message.type === 'chatState' && message.model !== chatOf(session).model) commandsBy.delete(session)
-      chats.set(session, reduce(chatOf(session), message))
+      const before = chatOf(session)
+      chats.set(session, reduce(before, message))
       tabs = applyStatus(tabs, session, chatOf(session), session === tabs.active)
+      // A background session that starts waiting for an answer says so.
+      if (message.type === 'chatDialog' && session !== tabs.active) {
+        const tab = tabs.sessions.find((s) => s.id === session)
+        toast = { session, title: tab?.title || t('chat.untitled'), text: t('chat.toast.needs') }
+        clearTimeout(toastTimer)
+        toastTimer = setTimeout(() => {
+          toast = null
+          drawToast()
+        }, TOAST_MS)
+      }
+      if (session !== tabs.active) {
+        drawHeader()
+        drawToast()
+        return
+      }
       render()
     },
     mount,
@@ -565,10 +1061,39 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       render()
       input?.focus()
     },
+    /**
+     * Esc, in this order: close a picker, stop a run, leave a panel, close an open tab menu. Returns whether it
+     * did something; when it did not, the dock closes.
+     */
+    escape() {
+      if (picker) {
+        dismissed = { kind: picker.kind, text: input?.value ?? '' }
+        closePicker()
+        return true
+      }
+      if (current().running && ui.view === 'chat') {
+        stop()
+        return true
+      }
+      if (ui.view !== 'chat') {
+        openView('chat')
+        return true
+      }
+      if (ui.menuOpen) {
+        ui.menuOpen = false
+        drawHeader()
+        return true
+      }
+      return false
+    },
+    /** Alt+A: the subagents view and back. */
+    toggleAgents() {
+      openView(ui.view === 'agents' || ui.view === 'session' ? 'chat' : 'agents')
+    },
     render,
     setBanner(html) {
       banner = html
-      if (input) $('chat-banner').innerHTML = html
+      if ($('chat-banner')) $('chat-banner').innerHTML = html
     },
   }
 }

@@ -1,0 +1,133 @@
+/* Tool-call group (render: tools.js, design: design/components/tool-chips.dc.html).
+   Solid fills only: hover/focus change a solid colour or the border, never an opacity. */
+.p-tools {
+  --p-tools-ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --p-tools-hover: var(--surface, #16161a);
+  --p-tools-accent: var(--accent, #B9A8FF);
+  width: 100%; box-sizing: border-box; padding-bottom: 4px;
+  font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF;
+  transition: min-height 300ms var(--p-tools-ease);
+}
+/* room for the diff preview that opens above the chips */
+.p-tools.has-diffs { min-height: 220px; }
+
+.p-tools-head {
+  position: relative; display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%;
+  box-sizing: border-box; min-height: 28px; margin: 0 0 0 -6px; padding: 4px 6px; border: 0; border-radius: 8px;
+  background: transparent; color: #B4B4BC; font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+  transition: background-color 100ms;
+}
+.p-tools-head::after { content: ''; position: absolute; top: -8px; bottom: -8px; left: -4px; right: -4px; }
+.p-tools-head:hover { background: var(--p-tools-hover); }
+.p-tools-head:focus-visible, .p-tools-row:focus-visible, .p-tools-file:focus-visible, .p-tools-more:focus-visible {
+  outline: 2px solid var(--p-tools-accent); outline-offset: 2px;
+}
+.p-tools-hchev { flex: 0 0 12px; transform: rotate(-90deg); transition: transform 200ms; }
+.p-tools.is-open .p-tools-hchev { transform: rotate(0deg); }
+.p-tools-title { min-width: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.p-tools-pulse { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--p-tools-accent); animation: p-tools-pulse 1400ms ease-in-out infinite; }
+
+/* the whole list opens and closes with a height transition */
+.p-tools-region {
+  display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden;
+  transition: grid-template-rows 300ms var(--p-tools-ease), opacity 300ms var(--p-tools-ease), visibility 0s linear 300ms;
+}
+.p-tools.is-open .p-tools-region { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s, 0s, 0s; }
+.p-tools-body { min-height: 0; overflow: hidden; margin: 0 -6px; padding: 0 6px 4px; }
+
+.p-tools-list { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.p-tools-item.is-animated { animation: p-tools-fade-up 300ms var(--p-tools-ease) both; }
+
+.p-tools-row {
+  display: flex; align-items: center; gap: 8px; width: calc(100% + 6px); min-width: 0; min-height: 28px; box-sizing: border-box;
+  margin: 0 -3px; padding: 2px 3px; border: 0; border-radius: 8px; background: transparent; color: inherit;
+  font: inherit; text-align: left; cursor: pointer; transition: background-color 100ms;
+}
+.p-tools-row:hover { background: var(--p-tools-hover); }
+.p-tools-ico { position: relative; display: flex; align-items: center; justify-content: center; flex: 0 0 16px; width: 16px; height: 16px; color: #9A9AA3; }
+.p-tools-icon { display: flex; opacity: 1; transition: opacity 100ms; }
+.p-tools-chevron { position: absolute; opacity: 0; transform: rotate(-90deg); transition: opacity 150ms, transform 150ms; }
+/* the icon gives way to a chevron on hover, focus and while the row is open */
+.p-tools-row:hover .p-tools-icon, .p-tools-row:focus-visible .p-tools-icon, .p-tools-row.is-open .p-tools-icon { opacity: 0; }
+.p-tools-row:hover .p-tools-chevron, .p-tools-row:focus-visible .p-tools-chevron, .p-tools-row.is-open .p-tools-chevron { opacity: 1; }
+.p-tools-row.is-open .p-tools-chevron { transform: rotate(0deg); }
+.p-tools-row.status-running .p-tools-icon { animation: p-tools-pulse 1400ms ease-in-out infinite; }
+.p-tools-row.status-error .p-tools-ico { color: #FF9A8B; }
+
+.p-tools-label { flex: 0 1 auto; min-width: 0; font-size: 12.5px; font-weight: 500; line-height: 18px; color: #F4F4F5; overflow-wrap: anywhere; }
+.p-tools-cmd {
+  flex: 1 1 auto; min-width: 0; box-sizing: border-box; padding: 2px 6px; border-radius: 6px; background: #1C1C21;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08); font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px;
+  line-height: 18px; color: #B4B4BC; overflow-wrap: anywhere; transition: background-color 100ms;
+}
+.p-tools-cmd.is-sans { font-family: Geist, ui-sans-serif, system-ui, sans-serif; }
+.p-tools-row:hover .p-tools-cmd { background: #26262B; }
+.p-tools-row.status-error .p-tools-cmd { color: #FF9A8B; }
+
+/* a row's result */
+.p-tools-detail {
+  display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden;
+  transition: grid-template-rows 300ms var(--p-tools-ease), opacity 300ms var(--p-tools-ease), visibility 0s linear 300ms;
+}
+.p-tools-detail.is-open { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s, 0s, 0s; }
+.p-tools-clip { min-height: 0; overflow: hidden; }
+.p-tools-lines { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 4px 8px; padding: 2px 0 2px 14px; border-left: 1px solid #26262B; }
+.p-tools-line { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 1.6; color: #B4B4BC; white-space: pre-wrap; overflow-wrap: anywhere; }
+.p-tools-line.is-add { color: #8BE0B0; }
+.p-tools-line.is-del, .p-tools-line.is-err { color: #FF9A8B; }
+.p-tools-line.is-muted { color: #9A9AA3; font-family: Geist, ui-sans-serif, system-ui, sans-serif; }
+
+.p-tools-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* the files the group changed */
+.p-tools-diffs { position: relative; display: flex; flex-wrap: wrap; gap: 6px; max-width: 100%; margin-top: 10px; padding-top: 10px; border-top: 1px solid #26262B; }
+.p-tools-chipwrap { display: inline-flex; max-width: 100%; }
+.p-tools-file {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 100%; box-sizing: border-box; min-height: 28px; padding: 3px 8px;
+  border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); background: #141417; color: #F4F4F5;
+  font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 18px; text-align: left; cursor: pointer;
+  animation: p-tools-pop-in 250ms var(--p-tools-ease) both; transition: background-color 100ms;
+}
+.p-tools-file:hover { background: #1C1C21; }
+.p-tools-fname { min-width: 0; overflow-wrap: anywhere; }
+.p-tools-add, .p-tools-del { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.p-tools-add { color: #8BE0B0; }
+.p-tools-del { color: #FF9A8B; }
+.p-tools-more {
+  display: inline-flex; align-items: center; min-height: 28px; padding: 0 6px; border: 0; border-radius: 8px; background: transparent;
+  color: #9A9AA3; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; text-decoration: underline;
+  text-decoration-color: transparent; text-underline-offset: 2px; cursor: pointer; animation: p-tools-fade-in 300ms ease-out both;
+  transition: color 100ms, text-decoration-color 100ms;
+}
+.p-tools-more:hover { color: #B4B4BC; text-decoration-color: currentColor; }
+
+/* the preview opens over the chips while one is hovered or focused */
+.p-tools-preview {
+  display: none; position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 5; width: min(288px, 100%); box-sizing: border-box;
+  overflow: hidden; border-radius: 10px; background: #141417; border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6); transform-origin: bottom left; animation: p-tools-pop-in 160ms var(--p-tools-ease) both;
+}
+.p-tools-chipwrap:hover .p-tools-preview, .p-tools-chipwrap:focus-within .p-tools-preview { display: block; }
+.p-tools-phead {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid #26262B;
+  font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px;
+}
+.p-tools-pfile { min-width: 0; color: #B4B4BC; overflow-wrap: anywhere; }
+.p-tools-pnum { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.p-tools-pnum .is-add { color: #8BE0B0; }
+.p-tools-pnum .is-del { color: #FF9A8B; }
+.p-tools-pbody { padding: 4px 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 1.8; }
+.p-tools-pline { display: grid; grid-template-columns: 12px minmax(0, 1fr); column-gap: 8px; padding: 0 10px; color: #B4B4BC; }
+.p-tools-pline.is-add { color: #8BE0B0; background: #202826; }
+.p-tools-pline.is-del { color: #FF9A8B; background: #2b2123; }
+.p-tools-mark { user-select: none; }
+.p-tools-ptext { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@keyframes p-tools-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes p-tools-fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes p-tools-pop-in { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
+@keyframes p-tools-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .p-tools, .p-tools * { animation: none !important; }
+}

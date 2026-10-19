@@ -1,0 +1,4 @@
+/* Divider (design/components/divider). */
+.p-divider { width: 100%; display: flex; align-items: center; gap: 10px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; line-height: 18px; color: #9A9AA3; }
+.p-divider-rule { flex: 1 1 24px; height: 1px; background: #26262B; }
+.p-divider-text { flex: 0 1 auto; min-width: 0; text-align: center; overflow-wrap: anywhere; }

@@ -1,0 +1,43 @@
+/* Header meter (design/components/quota-meter). The popover opens with :hover / :focus-within.
+   The button has a solid backdrop (--p-meter-bg) and only its border takes the accent. */
+.p-meter { position: relative; display: inline-flex; max-width: 100%; min-width: 0; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; }
+.p-meter-btn { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; min-height: 28px; box-sizing: border-box; margin: 0 -9px; padding: 0 8px; border: 1px solid transparent; border-radius: 8px; background: var(--p-meter-bg, #0F0F12); color: inherit; cursor: pointer; }
+.p-meter-btn:hover, .p-meter-btn:focus-visible { border-color: #B9A8FF; }
+.p-meter-btn:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 2px; }
+.p-meter-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #9A9AA3; }
+.p-meter-bar { position: relative; flex: 0 0 36px; width: 36px; height: 4px; overflow: hidden; border-radius: 999px; background: #2A2A2F; }
+.p-meter-bar .p-meter-fill { position: absolute; top: 0; left: 0; bottom: 0; border-radius: 999px; background: #B9A8FF; transition: width 600ms cubic-bezier(0.22, 1, 0.36, 1), background-color 300ms ease; }
+.p-meter-btn .p-meter-pct { flex: 0 0 auto; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; font-variant-numeric: tabular-nums; color: #B4B4BC; transition: color 300ms ease; }
+.p-meter-free { flex: 0 0 auto; padding: 0 7px; border-radius: 999px; background: #202C28; color: #8BE0B0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px; }
+.p-meter-warn .p-meter-bar .p-meter-fill { background: #F0B44C; }
+.p-meter-warn .p-meter-btn .p-meter-pct { color: #F0B44C; }
+.p-meter-crit .p-meter-bar .p-meter-fill { background: #FF9A8B; }
+.p-meter-crit .p-meter-btn .p-meter-pct { color: #FF9A8B; }
+
+.p-meter-pop { position: absolute; left: -9px; top: calc(100% + 8px); z-index: 30; width: 252px; box-sizing: border-box; padding: 12px 14px; border-radius: 14px; background: #141417; border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55); pointer-events: none; transform-origin: top left; opacity: 0; transform: translateY(-6px) scale(0.97); visibility: hidden; transition: opacity 160ms ease, transform 200ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 200ms; }
+.p-meter:hover .p-meter-pop, .p-meter:focus-within .p-meter-pop { opacity: 1; transform: translateY(0) scale(1); visibility: visible; transition-delay: 0ms; }
+.p-meter-col { display: flex; flex-direction: column; gap: 12px; }
+.p-meter-block { display: flex; flex-direction: column; gap: 6px; }
+.p-meter-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.p-meter-name { min-width: 0; font-size: 13px; font-weight: 600; color: #F4F4F5; overflow-wrap: anywhere; }
+.p-meter-tier { flex: 0 0 auto; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; color: #8A8A94; }
+.p-meter-label { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; }
+.p-meter-dim { color: #8A8A94; }
+.p-meter-pop .p-meter-pct { color: #B4B4BC; font-variant-numeric: tabular-nums; }
+.p-meter-warn .p-meter-pop .p-meter-pct { color: #F0B44C; }
+.p-meter-crit .p-meter-pop .p-meter-pct { color: #FF9A8B; }
+.p-meter-ctx { color: #D6D6DC; font-variant-numeric: tabular-nums; }
+.p-meter-track { position: relative; height: 6px; overflow: hidden; border-radius: 999px; background: #26262B; }
+.p-meter-track .p-meter-fill, .p-meter-ctxfill { position: absolute; top: 0; left: 0; bottom: 0; border-radius: 999px; }
+.p-meter-track .p-meter-fill { background: #B9A8FF; }
+.p-meter-warn .p-meter-track .p-meter-fill { background: #F0B44C; }
+.p-meter-crit .p-meter-track .p-meter-fill { background: #FF9A8B; }
+.p-meter-ctxfill { background: #7DD3FC; transition: width 600ms cubic-bezier(0.22, 1, 0.36, 1); }
+.p-meter-mark { position: absolute; top: 0; bottom: 0; width: 1px; background: #8C8C90; }
+.p-meter-note { font-size: 12px; line-height: 1.4; color: #9A9AA3; }
+.p-meter-text { font-size: 12.5px; line-height: 1.45; color: #B4B4BC; }
+.p-meter-hint { display: flex; align-items: center; gap: 8px; padding-top: 10px; border-top: 1px solid #26262B; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #8A8A94; }
+.p-meter-hint kbd { padding: 0 6px; border: 1px solid #34343B; border-radius: 5px; background: #1C1C21; color: #D6D6DC; font-family: inherit; font-size: 11px; line-height: 16px; }
+@media (prefers-reduced-motion: reduce) {
+  .p-meter, .p-meter * { transition: none !important; }
+}

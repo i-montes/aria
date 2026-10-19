@@ -49,10 +49,12 @@ crates/aria-core/      what does not depend on the system: paths, settings, cred
 crates/aria-hyprland/  the hotkey, the focused monitor and reload events, through Hyprland's own IPC
 crates/aria-engine/    Pi's RPC protocol and the supervised Pi child process
 crates/aria/           the `aria` binary: the dock window, the chat and the glue between the crates
-ui/                    the dock's web page: plain HTML, CSS and JS modules, embedded in the binary
+ui/                    the dock's web page: plain HTML, CSS and JS modules, embedded in the binary;
+                       ui/chat/parts/ holds one module per component of the design
+tools/ui-sandbox/      the page without Pi, to see and try every chat state
 install/               the installer and the systemd unit
 design/                the visual reference (Aria.html) and its components
-docs/                  how the pieces fit, the settings, how to add a provider
+docs/                  how the pieces fit, the settings, how to add a provider, what is still pending (docs/pending.md)
 ```
 
 Start with [docs/architecture.md](docs/architecture.md).
@@ -60,6 +62,8 @@ Start with [docs/architecture.md](docs/architecture.md).
 ## Development
 
 ```sh
+bun tools/ui-sandbox/serve.ts      # the dock's page with a stubbed bridge and the design's simulate buttons (permission, quota, ask, tools, tabs…)
+bun tools/ui-sandbox/check.ts      # drives the chat in headless Chrome against it: queue, focus, Esc order, pickers, question card
 cargo test --workspace      # Rust: core, Hyprland, engine, dock
 cargo test -p aria --test live_pi -- --ignored   # the real Pi answering a prompt (needs the setup done)
 bun test ui                 # the UI's logic and its strings
