@@ -12,6 +12,7 @@ pub mod bridge;
 pub mod pi;
 pub mod agent;
 pub mod agent_config;
+pub mod persona;
 pub mod files;
 pub mod quota;
 pub mod sessions;

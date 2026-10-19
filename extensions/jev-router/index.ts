@@ -67,14 +67,11 @@ import { exhausted, fetchGoUsage } from './usage.ts'
 import { confirmFreeSwitch } from '../quota-fallback/ask.ts'
 import { freeModel, isFree } from '../quota-fallback/fallback.ts'
 import { ariaConfig, hasAriaConfig } from '../lib/config.ts'
+import { styleNote } from './style.ts'
 import { EFFORT_FILE, effortFor, RANK, saveEffort } from './effort.ts'
 import { agentDir } from '../lib/agent-dir.ts'
 
 const CLASSIFY_TIMEOUT_MS = 3000
-// Repeated every turn, right after the user's message: a rule buried in a long system prompt gets
-// ignored by smaller models (the user wants short, direct answers).
-const STYLE_NOTE =
-  'Answer style: very short and direct, the answer first, at most ~80 words. No tables, no headings, no closing summary ("en resumen…") or offer. Longer only if the user asked for detail.'
 
 function readFixedEffort(): string | null {
   try {
@@ -244,7 +241,7 @@ export default function (pi: ExtensionAPI) {
         hints.route === 'parallel' ? expertsLine(loadExperts().filter((e) => !hints.readOnly || e.readOnly)) : ''
       // Aria's dock shows the route as a line before the answer.
       if (ctx.mode === 'rpc') ctx.ui?.setStatus?.('aria-jev', JSON.stringify(jevStatus(hints)))
-      const content = [hintLine(hints), experts, STYLE_NOTE].filter(Boolean).join('\n')
+      const content = [hintLine(hints), experts, styleNote(ariaConfig().style)].filter(Boolean).join('\n')
       return { message: { customType: 'jev-router', content, display: false, details: hints } }
     } catch {
       return

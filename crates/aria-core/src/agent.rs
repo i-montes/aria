@@ -104,7 +104,25 @@ pub fn record_written(agent: &Path, rel: &str, bytes: &[u8]) -> io::Result<()> {
 /// Writes every file of `dir` under `agent/<prefix>`, except one the owner edited or deleted (see `MARKER`); returns the
 /// edited files it kept, so the owner can be told. A file is written to a temp file and renamed (never through a symlink,
 /// never truncated under a reader). Files whose name ends with `README.md` or `.test.ts` are not installed.
+/// What Aria writes for one embedded file: its (rendered) contents, or nothing, in which case a copy Aria wrote earlier
+/// is removed (a disabled expert) and the owner's own file is left alone.
+pub enum Render {
+    Write(Vec<u8>),
+    Remove,
+}
+
 pub fn install_embedded(agent: &Path, dir: &include_dir::Dir, prefix: &str, extra_replaceable: &[&str]) -> io::Result<Vec<String>> {
+    install_rendered(agent, dir, prefix, extra_replaceable, &|_, bytes| Render::Write(bytes.to_vec()))
+}
+
+/// `install_embedded`, with each file's contents decided by `render(relative path, embedded bytes)`.
+pub fn install_rendered(
+    agent: &Path,
+    dir: &include_dir::Dir,
+    prefix: &str,
+    extra_replaceable: &[&str],
+    render: &dyn Fn(&str, &[u8]) -> Render,
+) -> io::Result<Vec<String>> {
     let mut marker = read_marker(agent);
     let mut files = Vec::new();
     collect(dir, &mut files);
@@ -117,10 +135,28 @@ pub fn install_embedded(agent: &Path, dir: &include_dir::Dir, prefix: &str, extr
         }
         let rel = if prefix.is_empty() { rel_in_dir } else { format!("{prefix}/{rel_in_dir}") };
         let target = agent.join(&rel);
-        let wanted = file.contents();
+        let rendered = render(&rel, file.contents());
         let recorded = marker.get(&rel).and_then(Value::as_str).map(str::to_string);
         let is_link = std::fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink());
         let current = if is_link { None } else { std::fs::read(&target).ok() };
+        let wanted: &[u8] = match &rendered {
+            Render::Write(bytes) => bytes,
+            Render::Remove => {
+                // Aria's own copy goes, and its record with it (so turning it on again writes it); the owner's stays.
+                match &current {
+                    Some(current) if recorded.as_deref() == Some(sha256_hex(current).as_str()) => {
+                        std::fs::remove_file(&target)?;
+                        marker.remove(&rel);
+                        changed = true;
+                    }
+                    Some(_) => kept.push(rel),
+                    None => {
+                        changed |= marker.remove(&rel).is_some();
+                    }
+                }
+                continue;
+            }
+        };
         let replaceable = match (&current, &recorded) {
             (Some(current), _) if current == wanted => {
                 if recorded.as_deref() != Some(sha256_hex(wanted).as_str()) {
@@ -273,7 +309,21 @@ pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::
     gather_sessions(paths)?;
 
     // The owner's persona and experts; one the owner edited is kept.
-    kept.extend(install_embedded(&agent, &AGENT_FILES, "", &[&sha256_hex(PLACEHOLDER_SYSTEM.as_bytes())])?);
+    // Rendered from the settings (persona.rs): the owner's text, with what a setting varies filled in.
+    let owners = Settings::defaults("es");
+    let chosen = settings.unwrap_or(&owners);
+    kept.extend(install_rendered(&agent, &AGENT_FILES, "", &[&sha256_hex(PLACEHOLDER_SYSTEM.as_bytes())], &|rel, bytes| {
+        let text = String::from_utf8_lossy(bytes);
+        if rel == "SYSTEM.md" {
+            return Render::Write(crate::persona::render_system(&text, chosen).into_bytes());
+        }
+        let name = rel.strip_prefix("agents/").and_then(|n| n.strip_suffix(".md"));
+        match name.and_then(|n| chosen.subagents.experts.iter().find(|e| e.name == n)) {
+            Some(expert) if !expert.enabled => Render::Remove,
+            Some(expert) => Render::Write(crate::persona::render_expert(&text, expert).into_bytes()),
+            None => Render::Write(bytes.to_vec()),
+        }
+    })?);
     // His extensions, adapted to run in Aria (see extensions/README.md); one he edited is kept.
     kept.extend(install_embedded(&agent, &EXTENSIONS, "extensions", &[])?);
     Ok(kept)
@@ -393,7 +443,7 @@ mod tests {
         let (_dir, paths) = paths();
         prepare(&paths, None).unwrap();
         let system = std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap();
-        assert_eq!(system, include_str!("../../../agent-files/SYSTEM.md"));
+        assert_eq!(system, include_str!("../tests/golden/SYSTEM.owner.md"));
         assert!(system.contains("No tables"), "the answer-style rule is there");
         for expert in ["frontend", "backend", "security", "reviewer", "researcher"] {
             assert!(paths.agent().join("agents").join(format!("{expert}.md")).is_file(), "{expert}");
@@ -406,7 +456,7 @@ mod tests {
         std::fs::create_dir_all(paths.agent()).unwrap();
         std::fs::write(paths.agent().join("SYSTEM.md"), PLACEHOLDER_SYSTEM).unwrap();
         prepare(&paths, None).unwrap();
-        assert_eq!(std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap(), include_str!("../../../agent-files/SYSTEM.md"));
+        assert_eq!(std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap(), include_str!("../tests/golden/SYSTEM.owner.md"));
     }
 
     #[test]
@@ -518,6 +568,60 @@ mod tests {
         assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
         prepare(&paths, None).unwrap();
         assert!(!file.exists(), "before the setup the extensions keep their own values");
+    }
+
+    fn owners_settings() -> Settings {
+        let mut settings: Settings = serde_json::from_str(include_str!("../tests/golden/settings-provider-opencode-go.json")).unwrap();
+        settings.assistant.language = "es".into();
+        settings
+    }
+
+    #[test]
+    fn the_persona_is_rendered_from_the_settings() {
+        let (_dir, paths) = paths();
+        let mut settings = owners_settings();
+        prepare(&paths, Some(&settings)).unwrap();
+        let system = std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap();
+        assert_eq!(system, include_str!("../tests/golden/SYSTEM.owner.md"), "the owner's settings give his own SYSTEM.md");
+        settings.assistant.name = "Nova".into();
+        prepare(&paths, Some(&settings)).unwrap();
+        assert!(std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap().starts_with("# Nova"), "a change is written again");
+    }
+
+    #[test]
+    fn turning_an_expert_off_and_on_brings_its_file_back() {
+        let (_dir, paths) = paths();
+        let mut settings = owners_settings();
+        prepare(&paths, Some(&settings)).unwrap();
+        let file = paths.agent().join("agents/backend.md");
+        assert!(file.exists());
+        settings.subagents.experts.iter_mut().filter(|e| e.name == "backend").for_each(|e| e.enabled = false);
+        prepare(&paths, Some(&settings)).unwrap();
+        assert!(!file.exists(), "a disabled expert is not offered");
+        settings.subagents.experts.iter_mut().filter(|e| e.name == "backend").for_each(|e| e.enabled = true);
+        prepare(&paths, Some(&settings)).unwrap();
+        assert!(file.exists(), "enabled again, it comes back");
+    }
+
+    #[test]
+    fn a_read_only_setting_changes_the_experts_tools() {
+        let (_dir, paths) = paths();
+        let mut settings = owners_settings();
+        settings.subagents.experts.iter_mut().filter(|e| e.name == "frontend").for_each(|e| e.read_only = true);
+        prepare(&paths, Some(&settings)).unwrap();
+        assert!(std::fs::read_to_string(paths.agent().join("agents/frontend.md")).unwrap().contains("tools: read, bash, codemode"));
+    }
+
+    #[test]
+    fn an_expert_the_owner_edited_is_still_kept_when_it_is_turned_off() {
+        let (_dir, paths) = paths();
+        let mut settings = owners_settings();
+        prepare(&paths, Some(&settings)).unwrap();
+        let file = paths.agent().join("agents/backend.md");
+        std::fs::write(&file, "my own backend").unwrap();
+        settings.subagents.experts.iter_mut().filter(|e| e.name == "backend").for_each(|e| e.enabled = false);
+        prepare(&paths, Some(&settings)).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "my own backend");
     }
 
     #[test]
