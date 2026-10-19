@@ -138,6 +138,9 @@ function keepingFocus(container, redraw) {
  * with the reply; `onSettings()` opens the settings. Every chat message goes out wrapped in
  * `{ type: 'session', session, message }`: each tab is its own session and its own Pi.
  */
+/** The composer/question swap (chat.css): the rows fold in 380 ms; the design hands the keyboard back at 420 ms. */
+const SWAP_MS = 480
+
 export function createChatView({ root, t, send, request, onSettings, makeId = () => crypto.randomUUID() }) {
   let tabs = createTabs(null, makeId)
   const chats = new Map() // session id -> its conversation (state.js)
@@ -194,12 +197,14 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
         <div class="chat-stage">
           <div class="chat-list" id="chat-list"></div>
           <div class="chat-index" id="chat-index"></div>
-          <div class="chat-question" id="chat-question"></div>
         </div>
         <div id="chat-tasks"></div>
         <div id="chat-dialogs"></div>
         <div class="chat-overlay" id="chat-overlay"></div>
-        <div id="chat-composer"></div>
+        <div class="chat-swap">
+          <div class="chat-swap-row chat-swap-composer"><div class="chat-swap-clip"><div class="chat-swap-inner" id="chat-composer-wrap"><div id="chat-composer"></div></div></div></div>
+          <div class="chat-swap-row chat-swap-card"><div class="chat-swap-clip"><div class="chat-swap-inner" id="chat-question"></div></div></div>
+        </div>
       </section>
       <section class="chat-view" id="view-agents" hidden></section>
       <section class="chat-view" id="view-session" hidden></section>
@@ -285,9 +290,18 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const el = $('chat-question')
     const key = `${tabs.active}:${dialog?.id ?? ''}`
     if (!force && key === questionKey) return
+    const wasAsking = !!questionKey && !questionKey.endsWith(':')
     questionKey = key
+    // The card takes the composer's place (chat.css, `.is-asking`).
+    $('view-chat').classList.toggle('is-asking', !!dialog)
     if (!dialog) {
-      el.innerHTML = ''
+      // Emptied once its row has folded, so the card does not vanish mid-animation; the composer takes the keyboard.
+      if (wasAsking) {
+        setTimeout(() => {
+          if (!current().dialogs.some((d) => d.card?.kind === 'question')) el.innerHTML = ''
+        }, SWAP_MS)
+        setTimeout(() => input?.focus(), SWAP_MS - 60)
+      } else el.innerHTML = ''
       return
     }
     if (!wizards.has(dialog.id)) wizards.set(dialog.id, questionInit(dialog.card.questions))

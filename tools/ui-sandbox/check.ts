@@ -91,7 +91,13 @@ const script = `(async () => {
 
   // 4. the question card: the free-text field keeps focus, enables Continue, Enter submits, the answers card has its header
   sim_ask()
-  await wait(80)
+  await wait(450)
+  // design: the card takes the composer's place; the thread stays in view above it
+  const qBox = $('#chat-question').getBoundingClientRect()
+  const qList = $('#chat-list').getBoundingClientRect()
+  check('the question card sits where the composer was, below the thread', qBox.height > 80 && qBox.top >= qList.bottom - 1 && qList.height > 40, JSON.stringify({ q: [qBox.top, qBox.height], list: [qList.top, qList.bottom] }))
+  const wrapStyle = () => ($('#chat-composer-wrap') ? getComputedStyle($('#chat-composer-wrap')).visibility : 'missing')
+  check('the composer is folded away while the card is up', wrapStyle() === 'hidden', wrapStyle())
   let other = $('[data-op="other"]')
   other.click(); await wait(40)
   other = $('[data-op="other"]'); other.focus()
@@ -107,6 +113,8 @@ const script = `(async () => {
   check('the answers go out as JSON', answered && answered.value && JSON.parse(answered.value).length === 2, answered?.value)
   const text = $('#chat-list').textContent
   check('the answers card shows the question headers and what was said', text.includes('Fallback') && text.includes('my own fallback'), text.slice(0, 160))
+  await wait(450)
+  check('after answering the composer comes back and takes the keyboard', wrapStyle() === 'visible' && document.activeElement === $('#chat-input'), wrapStyle() + ' ' + document.activeElement?.id)
   await reset()
 
   // 5. Esc order

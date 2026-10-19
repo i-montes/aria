@@ -35,9 +35,35 @@ body.open.mode-chat .chat { animation: enter 300ms var(--content) both; }
 .chat-index .p-index { position: absolute; top: 0; right: 12px; width: 0; height: 100%; }
 .chat-index .p-index-panel, .chat-index .p-index-panel.is-open { pointer-events: none; }
 .chat-index .p-index-btn { pointer-events: auto; }
-.chat-question { position: absolute; inset: 0; z-index: 6; display: none; }
-.chat-question:not(:empty) { display: block; }
-.question-fill { height: 100%; overflow-y: auto; }
+/* The question card takes the composer's place (design: Aria.html, `composerRows`/`cardRows`): the composer folds away
+   and the card unfolds where it was, the thread staying in view above. Both rows animate their height; the inner part
+   fades, moves and blurs, and becomes hidden only once its row has folded. */
+.chat-swap > .chat-swap-row { display: grid; transition: grid-template-rows 380ms cubic-bezier(0.22, 1, 0.36, 1); }
+.chat-swap-clip { min-height: 0; overflow: hidden; }
+.chat-swap-composer { grid-template-rows: 1fr; }
+.chat-swap-composer .chat-swap-inner {
+  opacity: 1; transform: none; filter: none; visibility: visible;
+  transition: opacity 260ms ease, transform 380ms cubic-bezier(0.22, 1, 0.36, 1), filter 260ms ease, visibility 0s linear 0ms;
+}
+.chat-swap-card { grid-template-rows: 0fr; }
+.chat-swap-card .chat-swap-inner {
+  transform-origin: bottom center; opacity: 0; transform: translateY(-10px) scale(0.98); filter: blur(4px); visibility: hidden;
+  max-height: min(480px, 62vh); overflow-y: auto;
+  transition: opacity 320ms ease, transform 380ms cubic-bezier(0.22, 1, 0.36, 1), filter 320ms ease, visibility 0s linear 380ms;
+}
+.is-asking .chat-swap-composer { grid-template-rows: 0fr; }
+.is-asking .chat-swap-composer .chat-swap-inner {
+  opacity: 0; transform: translateY(10px) scale(0.98); filter: blur(4px); visibility: hidden;
+  transition: opacity 260ms ease, transform 380ms cubic-bezier(0.22, 1, 0.36, 1), filter 260ms ease, visibility 0s linear 380ms;
+}
+.is-asking .chat-swap-card { grid-template-rows: 1fr; }
+.is-asking .chat-swap-card .chat-swap-inner {
+  opacity: 1; transform: none; filter: none; visibility: visible;
+  transition: opacity 320ms ease, transform 380ms cubic-bezier(0.22, 1, 0.36, 1), filter 320ms ease, visibility 0s linear 0ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-swap > .chat-swap-row, .chat-swap-inner { transition: none !important; }
+}
 .chat-overlay { flex: none; position: relative; height: 0; }
 .chat-overlay > * { position: absolute; left: 0; right: 0; bottom: 6px; z-index: 5; }
 #chat-tasks:empty, #chat-undo:empty, #chat-dialogs:empty, #chat-toast:empty { display: none; }
