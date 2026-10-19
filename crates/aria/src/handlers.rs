@@ -52,15 +52,7 @@ pub fn is_blocking(message: &PageMessage) -> bool {
 pub fn is_chat(message: &PageMessage) -> bool {
     matches!(
         message,
-        PageMessage::ChatSend { .. }
-            | PageMessage::ChatAbort
-            | PageMessage::ChatNew
-            | PageMessage::ChatLoad
-            | PageMessage::UiAnswer { .. }
-            | PageMessage::ListCommands { .. }
-            | PageMessage::ListModels { .. }
-            | PageMessage::SetModel { .. }
-            | PageMessage::ListFiles { .. }
+        PageMessage::Session { .. } | PageMessage::SessionsLoad { .. } | PageMessage::SessionsSave { .. } | PageMessage::SessionClose { .. }
     )
 }
 
@@ -93,16 +85,19 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
                 (ctx.opener)(&url);
             }
         }
-        // The chat messages are handled by `chat::Chat`, not here.
+        // The chat messages are handled by `chat::Sessions`, not here (they arrive wrapped in a session).
         PageMessage::ChatSend { .. }
         | PageMessage::ChatAbort
-        | PageMessage::ChatNew
         | PageMessage::ChatLoad
         | PageMessage::UiAnswer { .. }
         | PageMessage::ListCommands { .. }
         | PageMessage::ListModels { .. }
         | PageMessage::SetModel { .. }
-        | PageMessage::ListFiles { .. } => {}
+        | PageMessage::ListFiles { .. }
+        | PageMessage::Session { .. }
+        | PageMessage::SessionsLoad { .. }
+        | PageMessage::SessionsSave { .. }
+        | PageMessage::SessionClose { .. } => {}
     }
 }
 

@@ -11,7 +11,7 @@ mod visibility;
 use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::paths::AriaPaths;
 use aria_hyprland::Registration;
-use chat::{Chat, ChatCtx, OmarchyNotifier};
+use chat::{ChatCtx, OmarchyNotifier, Sessions};
 use dock::Dock;
 use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc};
@@ -66,7 +66,7 @@ fn run_dock() {
     let visible_now = dock_visible.clone();
     let chat = {
         let sender = reply_sender.clone();
-        Chat::new(
+        Sessions::new(
             ChatCtx {
                 paths,
                 notifier: Arc::new(OmarchyNotifier),

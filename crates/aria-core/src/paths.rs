@@ -37,6 +37,11 @@ impl AriaPaths {
         self.root.join("mcp-auth.json")
     }
 
+    /// The open sessions (the dock's tabs): ids, titles and which one is active.
+    pub fn sessions(&self) -> PathBuf {
+        self.root.join("sessions.json")
+    }
+
     /// Pi's agent directory (`PI_CODING_AGENT_DIR`): its own settings, links to our credentials, the
     /// persona, extensions and sessions. Aria owns and regenerates it.
     pub fn agent(&self) -> PathBuf {

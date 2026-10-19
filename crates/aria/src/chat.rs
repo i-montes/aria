@@ -7,6 +7,7 @@ use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::files;
 use aria_core::paths::AriaPaths;
 use aria_core::pi::{self, PiError};
+use aria_core::sessions::{self, SessionList};
 use aria_core::settings::{self, Settings};
 use aria_engine::engine::{Engine, EngineEvent, SpawnSpec};
 use aria_engine::protocol::UiAnswer;
@@ -25,9 +26,40 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FILE_LIMIT: usize = 50;
 
 /// Raises and removes the desktop notification for a prompt nobody can see.
+///
+/// `key` is the session the prompt belongs to, so several sessions can share one notification.
 pub trait Notifier: Send + Sync {
-    fn send(&self, title: &str, body: &str);
-    fn dismiss(&self);
+    fn send(&self, key: &str, title: &str, body: &str);
+    fn dismiss(&self, key: &str);
+}
+
+/// Wraps a notifier for several sessions: the real notification is removed only when no session has one left.
+pub struct CountingNotifier {
+    inner: Arc<dyn Notifier>,
+    live: Mutex<HashSet<String>>,
+}
+
+impl CountingNotifier {
+    pub fn new(inner: Arc<dyn Notifier>) -> CountingNotifier {
+        CountingNotifier { inner, live: Mutex::new(HashSet::new()) }
+    }
+}
+
+impl Notifier for CountingNotifier {
+    fn send(&self, key: &str, title: &str, body: &str) {
+        self.live.lock().unwrap().insert(key.to_string());
+        self.inner.send(key, title, body);
+    }
+
+    fn dismiss(&self, key: &str) {
+        let last = {
+            let mut live = self.live.lock().unwrap();
+            live.remove(key) && live.is_empty()
+        };
+        if last {
+            self.inner.dismiss(key);
+        }
+    }
 }
 
 /// Omarchy's notifications: critical urgency and no expiry, so it stays until it is dismissed or
@@ -53,13 +85,13 @@ fn detached(program: &str, args: &[String]) {
 }
 
 impl Notifier for OmarchyNotifier {
-    fn send(&self, title: &str, body: &str) {
+    fn send(&self, _key: &str, title: &str, body: &str) {
         if let Ok(exe) = std::env::current_exe() {
             detached("omarchy-notification-send", &notify_args(&exe, title, body));
         }
     }
 
-    fn dismiss(&self) {
+    fn dismiss(&self, _key: &str) {
         detached("omarchy-notification-dismiss", &[NOTIFICATION_TITLE.to_string()]);
     }
 }
@@ -98,6 +130,8 @@ fn apply_state(inner: &mut Inner, data: &Value) {
 
 #[derive(Clone)]
 pub struct Chat {
+    /// The session (tab) this chat is: Pi's `--session-id` and the notifications' key.
+    session: String,
     ctx: Arc<ChatCtx>,
     emit: Emit,
     inner: Arc<Mutex<Inner>>,
@@ -114,8 +148,8 @@ fn is_dialog(method: &str) -> bool {
 }
 
 impl Chat {
-    pub fn new(ctx: ChatCtx, emit: Emit) -> Chat {
-        Chat { ctx: Arc::new(ctx), emit, inner: Arc::new(Mutex::new(Inner::default())), spawn_lock: Arc::new(Mutex::new(())) }
+    pub fn new(ctx: Arc<ChatCtx>, emit: Emit, session: String) -> Chat {
+        Chat { session, ctx, emit, inner: Arc::new(Mutex::new(Inner::default())), spawn_lock: Arc::new(Mutex::new(())) }
     }
 
     fn emit(&self, message: DockMessage) {
@@ -157,12 +191,6 @@ impl Chat {
                 if let Some(engine) = self.current_engine() {
                     let _ = engine.send("clear_queue", json!({}));
                     let _ = engine.send("abort", json!({}));
-                }
-            }
-            PageMessage::ChatNew => {
-                if let Some(engine) = self.current_engine() {
-                    let _ = engine.send("new_session", json!({}));
-                    self.emit(DockMessage::ChatEvent { event: json!({"type": "session_reset"}) });
                 }
             }
             PageMessage::UiAnswer { id, value, confirmed, cancelled } => self.answer(&id, value, confirmed, cancelled),
@@ -228,7 +256,7 @@ impl Chat {
         self.emit(DockMessage::ChatEngine { state: "starting".into() });
         let spec = SpawnSpec {
             program: install.binary,
-            args: vec!["--mode".into(), "rpc".into(), "--continue".into()],
+            args: vec!["--mode".into(), "rpc".into(), "--session-id".into(), self.session.clone()],
             env: vec![
                 ("PI_CODING_AGENT_DIR".into(), self.ctx.paths.agent().display().to_string()),
                 ("PATH".into(), pi::path_with_bin(&self.ctx.paths, &self.ctx.path_var)),
@@ -340,7 +368,7 @@ impl Chat {
             inner.notified.remove(id) && inner.notified.is_empty()
         };
         if dismiss {
-            self.ctx.notifier.dismiss();
+            self.ctx.notifier.dismiss(&self.session);
         }
         self.emit(DockMessage::ChatDialogClosed { id: id.to_string() });
     }
@@ -379,7 +407,7 @@ impl Chat {
 
     fn close_stale(&self, (open, dismiss): (Vec<String>, bool)) {
         if dismiss {
-            self.ctx.notifier.dismiss();
+            self.ctx.notifier.dismiss(&self.session);
         }
         for id in open {
             self.emit(DockMessage::ChatDialogClosed { id });
@@ -400,7 +428,7 @@ impl Chat {
             bodies.iter().map(dialog_body).collect()
         };
         for body in waiting {
-            self.ctx.notifier.send(NOTIFICATION_TITLE, &body);
+            self.ctx.notifier.send(&self.session, NOTIFICATION_TITLE, &body);
         }
     }
 
@@ -414,7 +442,7 @@ impl Chat {
             }
         }
         if hidden {
-            self.ctx.notifier.send(NOTIFICATION_TITLE, &dialog_body(&raw));
+            self.ctx.notifier.send(&self.session, NOTIFICATION_TITLE, &dialog_body(&raw));
         }
         if let Some(timeout) = raw["timeout"].as_u64() {
             // Pi resolves the dialog by itself when its timeout runs out; the page and the notification follow.
@@ -441,7 +469,7 @@ impl Chat {
             (open, dismiss)
         };
         if dismiss {
-            self.ctx.notifier.dismiss();
+            self.ctx.notifier.dismiss(&self.session);
         }
         for id in open {
             self.emit(DockMessage::ChatDialogClosed { id });
@@ -450,10 +478,98 @@ impl Chat {
         self.emit(DockMessage::ChatEvent { event: json!({"type": "engine_exited", "code": code}) });
     }
 
+    /// The session was closed: its Pi stops (its stdin closes), its dialogs and notification go away.
+    pub fn shutdown(&self) {
+        let stale = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.generation += 1; // whatever the old Pi still says is ignored
+            inner.engine = None;
+            inner.running = false;
+            let open: Vec<String> = inner.dialogs.drain().map(|(id, _)| id).collect();
+            let dismiss = !inner.notified.is_empty();
+            inner.notified.clear();
+            (open, dismiss)
+        };
+        self.close_stale(stale);
+    }
+
     #[cfg(test)]
     fn test_send_raw(&self, kind: &str) {
         if let Some(engine) = self.current_engine() {
             let _ = engine.send(kind, json!({}));
+        }
+    }
+}
+
+/// The dock's tabs: one `Chat` (and so one Pi) per session id, created the first time a message names it.
+#[derive(Clone)]
+pub struct Sessions {
+    ctx: Arc<ChatCtx>,
+    emit: Emit,
+    chats: Arc<Mutex<HashMap<String, Chat>>>,
+}
+
+impl Sessions {
+    /// `ctx.notifier` is wrapped so that one session's answer does not remove another's notification.
+    pub fn new(ctx: ChatCtx, emit: Emit) -> Sessions {
+        let notifier: Arc<dyn Notifier> = Arc::new(CountingNotifier::new(ctx.notifier.clone()));
+        let ctx = Arc::new(ChatCtx { notifier, ..ctx });
+        Sessions { ctx, emit, chats: Arc::new(Mutex::new(HashMap::new())) }
+    }
+
+    fn chat(&self, session: &str) -> Option<Chat> {
+        if !sessions::valid_id(session) {
+            return None;
+        }
+        let mut chats = self.chats.lock().unwrap();
+        let chat = chats.entry(session.to_string()).or_insert_with(|| {
+            let emit = self.emit.clone();
+            let tag = session.to_string();
+            let tagged: Emit = Arc::new(move |message| emit(DockMessage::Session { session: tag.clone(), message: Box::new(message) }));
+            Chat::new(self.ctx.clone(), tagged, session.to_string())
+        });
+        Some(chat.clone())
+    }
+
+    pub fn handle(&self, message: PageMessage) {
+        match message {
+            PageMessage::Session { session, message } => {
+                if matches!(*message, PageMessage::Session { .. }) {
+                    return;
+                }
+                if let Some(chat) = self.chat(&session) {
+                    chat.handle(*message);
+                }
+            }
+            PageMessage::SessionsLoad { id } => {
+                let list = sessions::load(&self.ctx.paths);
+                (self.emit)(DockMessage::Sessions { id, sessions: list.sessions, active: list.active });
+            }
+            PageMessage::SessionsSave { sessions: entries, active } => {
+                let _ = self.ctx.paths.ensure_root();
+                let _ = sessions::save(&self.ctx.paths, &SessionList { sessions: entries, active });
+            }
+            PageMessage::SessionClose { session } => {
+                let chat = self.chats.lock().unwrap().remove(&session);
+                if let Some(chat) = chat {
+                    chat.shutdown();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn dock_visibility_changed(&self) {
+        let chats: Vec<Chat> = self.chats.lock().unwrap().values().cloned().collect();
+        for chat in chats {
+            chat.dock_visibility_changed();
+        }
+    }
+
+    #[cfg(test)]
+    fn test_send_raw(&self, session: &str, kind: &str) {
+        if let Some(chat) = self.chat(session) {
+            chat.test_send_raw(kind);
         }
     }
 }
@@ -485,10 +601,10 @@ mod tests {
     }
 
     impl Notifier for TestNotifier {
-        fn send(&self, title: &str, body: &str) {
+        fn send(&self, _key: &str, title: &str, body: &str) {
             self.log.lock().unwrap().push(format!("send:{title}:{body}"));
         }
-        fn dismiss(&self) {
+        fn dismiss(&self, _key: &str) {
             self.log.lock().unwrap().push("dismiss".into());
         }
     }
@@ -546,7 +662,7 @@ mod tests {
         let notifier = Arc::new(TestNotifier::default());
         let visible = Arc::new(AtomicBool::new(true));
         let ctx = ChatCtx { paths: paths.clone(), notifier: notifier.clone(), dock_visible: visible.clone(), path_var: "/usr/bin:/bin".into() };
-        Harness { _turn: turn, backlog: Mutex::new(Vec::new()), _dir: dir, paths, chat: Chat::new(ctx, emit), messages, notifier, visible, workdir }
+        Harness { _turn: turn, backlog: Mutex::new(Vec::new()), _dir: dir, paths, chat: Chat::new(Arc::new(ctx), emit, "s1".into()), messages, notifier, visible, workdir }
     }
 
     fn harness() -> Harness {
@@ -751,7 +867,6 @@ mod tests {
     fn abort_with_no_engine_is_ignored() {
         let h = harness();
         h.chat.handle(PageMessage::ChatAbort);
-        h.chat.handle(PageMessage::ChatNew);
         assert!(drain(&h).is_empty(), "no engine means nothing to abort and nothing to say");
     }
 
@@ -775,7 +890,7 @@ mod tests {
         let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), path_var: "/nonexistent".into() };
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);
-        let chat = Chat::new(ctx, Arc::new(move |m| { let _ = sender.lock().unwrap().send(m); }));
+        let chat = Chat::new(Arc::new(ctx), Arc::new(move |m| { let _ = sender.lock().unwrap().send(m); }), "s1".into());
         chat.handle(PageMessage::ChatSend { text: "hi".into(), behavior: None });
         let message = messages.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(matches!(message, DockMessage::ChatState { problem: Some(ref p), .. } if p == "node-missing"), "{message:?}");
@@ -893,6 +1008,139 @@ mod tests {
             DockMessage::ChatState { workdir, .. } => assert_eq!(workdir, h.workdir.display().to_string()),
             _ => unreachable!(),
         }
+    }
+
+
+    // ---- sessions: one Pi per tab -------------------------------------------------------------
+
+    struct SessionsHarness {
+        h: Harness,
+        sessions: Sessions,
+        messages: Receiver<DockMessage>,
+    }
+
+    fn sessions_harness() -> SessionsHarness {
+        let h = harness();
+        let (sender, messages) = mpsc::channel();
+        let sender = Mutex::new(sender);
+        let emit: Emit = Arc::new(move |m| {
+            let _ = sender.lock().unwrap().send(m);
+        });
+        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), path_var: "/usr/bin:/bin".into() };
+        let sessions = Sessions::new(ctx, emit);
+        SessionsHarness { h, sessions, messages }
+    }
+
+    fn in_session(session: &str, message: PageMessage) -> PageMessage {
+        PageMessage::Session { session: session.into(), message: Box::new(message) }
+    }
+
+    fn wait_session(s: &SessionsHarness, what: &str, session: &str, found: impl Fn(&DockMessage) -> bool) -> DockMessage {
+        loop {
+            match s.messages.recv_timeout(Duration::from_secs(5)) {
+                Ok(DockMessage::Session { session: got, message }) if got == session && found(&message) => return *message,
+                Ok(_) => {}
+                Err(_) => panic!("timed out waiting for {what} in session {session}"),
+            }
+        }
+    }
+
+    fn settled(m: &DockMessage) -> bool {
+        event_of(m, "agent_settled")
+    }
+
+    #[test]
+    fn two_sessions_run_their_own_pi_at_once() {
+        let s = sessions_harness();
+        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "one".into(), behavior: None }));
+        s.sessions.handle(in_session("bb", PageMessage::ChatSend { text: "two".into(), behavior: None }));
+        wait_session(&s, "the first reply", "aa", settled);
+        wait_session(&s, "the second reply", "bb", settled);
+    }
+
+    #[test]
+    fn every_message_comes_back_tagged_with_its_session() {
+        let s = sessions_harness();
+        s.sessions.handle(in_session("aa", PageMessage::ListCommands { id: 4 }));
+        let reply = wait_session(&s, "commands", "aa", |m| matches!(m, DockMessage::Commands { id: 4, .. }));
+        assert!(matches!(reply, DockMessage::Commands { .. }));
+    }
+
+    #[test]
+    fn a_session_message_for_an_unknown_id_creates_it_and_a_bad_id_is_ignored() {
+        let s = sessions_harness();
+        s.sessions.handle(in_session("../evil", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        s.sessions.handle(in_session("fresh-1", PageMessage::ChatLoad));
+        wait_session(&s, "its state", "fresh-1", |m| matches!(m, DockMessage::ChatState { .. }));
+        assert!(!s.h.paths.agent().join("sessions").join("../evil").exists());
+    }
+
+    #[test]
+    fn a_dialog_in_one_session_does_not_dismiss_anothers_notification() {
+        let s = sessions_harness();
+        s.h.visible.store(false, Ordering::SeqCst);
+        for id in ["aa", "bb"] {
+            s.sessions.handle(in_session(id, PageMessage::ChatSend { text: "x".into(), behavior: None }));
+            wait_session(&s, "ready", id, |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        }
+        s.sessions.test_send_raw("aa", "ask");
+        wait_session(&s, "aa's dialog", "aa", |m| matches!(m, DockMessage::ChatDialog { .. }));
+        s.sessions.test_send_raw("bb", "ask");
+        wait_session(&s, "bb's dialog", "bb", |m| matches!(m, DockMessage::ChatDialog { .. }));
+        assert_eq!(s.h.notifier.log().len(), 2);
+        s.sessions.handle(in_session("aa", PageMessage::UiAnswer { id: "u1".into(), value: Some("Allow".into()), confirmed: None, cancelled: None }));
+        wait_session(&s, "aa's dialog closing", "aa", |m| matches!(m, DockMessage::ChatDialogClosed { .. }));
+        assert!(!s.h.notifier.log().contains(&"dismiss".to_string()), "bb still waits for an answer: {:?}", s.h.notifier.log());
+        s.sessions.handle(in_session("bb", PageMessage::UiAnswer { id: "u1".into(), value: Some("Allow".into()), confirmed: None, cancelled: None }));
+        wait_session(&s, "bb's dialog closing", "bb", |m| matches!(m, DockMessage::ChatDialogClosed { .. }));
+        assert_eq!(s.h.notifier.log().last().map(String::as_str), Some("dismiss"));
+    }
+
+    #[test]
+    fn closing_a_session_stops_its_pi_and_closes_its_dialogs() {
+        let s = sessions_harness();
+        s.h.visible.store(false, Ordering::SeqCst);
+        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        s.sessions.test_send_raw("aa", "ask");
+        wait_session(&s, "the dialog", "aa", |m| matches!(m, DockMessage::ChatDialog { .. }));
+        s.sessions.handle(PageMessage::SessionClose { session: "aa".into() });
+        wait_session(&s, "the dialog closing", "aa", |m| matches!(m, DockMessage::ChatDialogClosed { id } if id == "u1"));
+        assert_eq!(s.h.notifier.log().last().map(String::as_str), Some("dismiss"));
+        // the same id opened again starts a fresh Pi
+        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "back".into(), behavior: None }));
+        wait_session(&s, "a new start", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "starting"));
+        wait_session(&s, "its reply", "aa", settled);
+    }
+
+    #[test]
+    fn the_session_list_persists_across_restarts() {
+        let s = sessions_harness();
+        let entries = vec![aria_core::sessions::SessionEntry { id: "aa".into(), title: "Fix the build".into() }];
+        s.sessions.handle(PageMessage::SessionsSave { sessions: entries.clone(), active: Some("aa".into()) });
+        s.sessions.handle(PageMessage::SessionsLoad { id: 9 });
+        match s.messages.recv_timeout(Duration::from_secs(5)).unwrap() {
+            DockMessage::Sessions { id: 9, sessions, active } => {
+                assert_eq!(sessions, entries);
+                assert_eq!(active.as_deref(), Some("aa"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_hidden_dock_notifies_for_dialogs_in_every_session() {
+        let s = sessions_harness();
+        for id in ["aa", "bb"] {
+            s.sessions.handle(in_session(id, PageMessage::ChatSend { text: "x".into(), behavior: None }));
+            wait_session(&s, "ready", id, |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+            s.sessions.test_send_raw(id, "ask");
+            wait_session(&s, "its dialog", id, |m| matches!(m, DockMessage::ChatDialog { .. }));
+        }
+        assert!(s.h.notifier.log().is_empty());
+        s.h.visible.store(false, Ordering::SeqCst);
+        s.sessions.dock_visibility_changed();
+        assert_eq!(s.h.notifier.log().len(), 2);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! expect an answer carry an `id` that the answer repeats.
 
 use serde::{Deserialize, Serialize};
+use crate::sessions::SessionEntry;
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -37,8 +38,6 @@ pub enum PageMessage {
     ChatSend { text: String, behavior: Option<String> },
     #[serde(rename = "chatAbort")]
     ChatAbort,
-    #[serde(rename = "chatNew")]
-    ChatNew,
     /// The dock opened: tell the page where Aria works and how it is doing.
     #[serde(rename = "chatLoad")]
     ChatLoad,
@@ -53,6 +52,17 @@ pub enum PageMessage {
     SetModel { id: u64, model: String },
     #[serde(rename = "listFiles")]
     ListFiles { id: u64, query: String },
+    /// A chat message for one session (each session is its own tab and its own Pi).
+    #[serde(rename = "session")]
+    Session { session: String, message: Box<PageMessage> },
+    #[serde(rename = "sessionsLoad")]
+    SessionsLoad { id: u64 },
+    /// The page owns the tabs; this is the list to keep.
+    #[serde(rename = "sessionsSave")]
+    SessionsSave { sessions: Vec<SessionEntry>, active: Option<String> },
+    /// Close a session's Pi (its conversation stays in Pi's session file).
+    #[serde(rename = "sessionClose")]
+    SessionClose { session: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -104,6 +114,11 @@ pub enum DockMessage {
     Models { id: u64, models: Value },
     #[serde(rename = "files")]
     Files { id: u64, files: Vec<String> },
+    /// What a session says (its chat messages and the replies to its requests).
+    #[serde(rename = "session")]
+    Session { session: String, message: Box<DockMessage> },
+    #[serde(rename = "sessions")]
+    Sessions { id: u64, sessions: Vec<SessionEntry>, active: Option<String> },
 }
 
 #[cfg(test)]
@@ -145,7 +160,6 @@ mod tests {
         );
         assert_eq!(page(r#"{"type":"chatSend","text":"hi"}"#), PageMessage::ChatSend { text: "hi".into(), behavior: None });
         assert_eq!(page(r#"{"type":"chatAbort"}"#), PageMessage::ChatAbort);
-        assert_eq!(page(r#"{"type":"chatNew"}"#), PageMessage::ChatNew);
         assert_eq!(page(r#"{"type":"chatLoad"}"#), PageMessage::ChatLoad);
         assert_eq!(
             page(r#"{"type":"uiAnswer","id":"u1","value":"Allow"}"#),
@@ -168,6 +182,29 @@ mod tests {
         assert_eq!(
             page(r#"{"type":"listFiles","id":10,"query":"src"}"#),
             PageMessage::ListFiles { id: 10, query: "src".into() }
+        );
+    }
+
+    #[test]
+    fn session_messages_parse_and_serialize() {
+        assert_eq!(
+            page(r#"{"type":"session","session":"a1","message":{"type":"chatSend","text":"hi"}}"#),
+            PageMessage::Session { session: "a1".into(), message: Box::new(PageMessage::ChatSend { text: "hi".into(), behavior: None }) }
+        );
+        assert_eq!(page(r#"{"type":"sessionsLoad","id":3}"#), PageMessage::SessionsLoad { id: 3 });
+        assert_eq!(
+            page(r#"{"type":"sessionsSave","sessions":[{"id":"a1","title":"Fix"}],"active":"a1"}"#),
+            PageMessage::SessionsSave { sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into() }], active: Some("a1".into()) }
+        );
+        assert_eq!(page(r#"{"type":"sessionClose","session":"a1"}"#), PageMessage::SessionClose { session: "a1".into() });
+        let value = |m: DockMessage| serde_json::to_value(m).unwrap();
+        assert_eq!(
+            value(DockMessage::Session { session: "a1".into(), message: Box::new(DockMessage::ChatEngine { state: "ready".into() }) }),
+            json!({"type": "session", "session": "a1", "message": {"type": "chatEngine", "state": "ready"}})
+        );
+        assert_eq!(
+            value(DockMessage::Sessions { id: 3, sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into() }], active: None }),
+            json!({"type": "sessions", "id": 3, "sessions": [{"id": "a1", "title": "Fix"}], "active": null})
         );
     }
 
