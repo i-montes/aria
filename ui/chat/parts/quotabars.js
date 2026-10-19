@@ -1,9 +1,10 @@
-// The provider's quota next to the assistant's name (single session): one small bar per window the provider has for the
-// model in use (5h, Week, Month, and a per-model one such as Fable). Not a component of the design (its meter shows one bar);
-// drawn in its spirit. The tooltip says how much is used and when the window resets.
+// The provider's quota next to the assistant's name (single session): a compact 5-hour bar, and, on hover or focus, a card
+// with every window the provider has for the model in use (5h, Week, Month, and a per-model one such as Fable) and when each
+// resets. Drawn in the spirit of the design's meter (a bar with a card of details).
 //
 // Props: { windows: [{ id, label, percent, resetsAt? }], now? }   (empty or missing: nothing is drawn)
-//   id      `5h`, `week`, `month` (translated labels) or a model's name (its own `label` is shown)
+//   id      `5h`, `week`, `month` (translated labels) or a model's name (its own `label` is shown); the compact bar shows `5h`
+//           (the first window when there is none)
 //   percent 0..100 of the window spent
 // ui: unused. t: translate(key, vars).
 // Emits: nothing.
@@ -41,18 +42,34 @@ export function formatReset(iso, now = Date.now()) {
 const levelOf = (percent) => (percent >= 95 ? 'crit' : percent >= 80 ? 'warn' : 'ok')
 
 export function renderQuotaBars({ windows, now } = {}, ui, t) {
-  const items = (windows ?? [])
+  const stamp = now ?? Date.now()
+  const list = (windows ?? [])
     .filter((w) => w && typeof w.percent === 'number' && Number.isFinite(w.percent) && w.id)
     .map((w) => {
       const percent = Math.min(100, Math.max(0, w.percent))
-      const shown = Math.round(percent)
       const label = w.id === 'week' ? t('chat.quotabars.week') : w.id === 'month' ? t('chat.quotabars.month') : (w.label ?? w.id)
-      const reset = formatReset(w.resetsAt, now ?? Date.now())
-      const title = `${t('chat.quotabars.used', { label, percent: shown })}${reset ? ` · ${t('chat.quotabars.resets', { when: reset })}` : ''}`
-      return `<div class="p-qb-item is-${levelOf(percent)}" title="${esc(title)}">
-        <span class="p-qb-head"><span class="p-qb-label">${esc(label)}</span><span class="p-qb-num">${shown}%</span></span>
-        <span class="p-qb-track" aria-hidden="true"><span class="p-qb-fill" style="width: ${percent}%"></span></span>
-      </div>`
+      return { label, percent, shown: Math.round(percent), level: levelOf(percent), reset: formatReset(w.resetsAt, stamp), five: w.id === '5h' }
     })
-  return items.length ? `<div class="p-qb" role="group" aria-label="${esc(t('chat.quotabars.title'))}">${items.join('')}</div>` : ''
+  if (!list.length) return ''
+  const main = list.find((w) => w.five) ?? list[0]
+  const ordered = [...list.filter((w) => w.five), ...list.filter((w) => !w.five)]
+  const rows = ordered
+    .map(
+      (w) => `<div class="p-qb-row is-${w.level}">
+        <span class="p-qb-row-head"><span class="p-qb-row-label">${esc(w.label)}</span><span class="p-qb-row-num">${w.shown}%</span></span>
+        <span class="p-qb-row-track" aria-hidden="true"><span class="p-qb-fill" style="width: ${w.percent}%"></span></span>
+        ${w.reset ? `<span class="p-qb-row-reset">${esc(t('chat.quotabars.resets', { when: w.reset }))}</span>` : ''}
+      </div>`,
+    )
+    .join('')
+  return `<div class="p-qb" tabindex="0" role="group" aria-label="${esc(t('chat.quotabars.title'))}">
+    <div class="p-qb-inline is-${main.level}">
+      <span class="p-qb-head"><span class="p-qb-label">${esc(main.label)}</span><span class="p-qb-num">${main.shown}%</span></span>
+      <span class="p-qb-track" aria-hidden="true"><span class="p-qb-fill" style="width: ${main.percent}%"></span></span>
+    </div>
+    <div class="p-qb-pop" role="tooltip">
+      <div class="p-qb-pop-title">${esc(t('chat.quotabars.title'))}</div>
+      ${rows}
+    </div>
+  </div>`
 }

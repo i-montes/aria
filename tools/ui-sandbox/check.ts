@@ -46,8 +46,17 @@ const script = `(async () => {
   check('the single-session header has the assistant name and no model button', $('#chat-header .chat-name') && !$('#chat-header .p-meter') && !$('#chat-header [data-chat="open-models"]'), $('#chat-header').innerHTML.slice(0, 200))
 
   await wait(200)
-  check('the single-session header shows a bar per quota window (5h, Week, Month, Fable)', document.querySelectorAll('#chat-header .p-qb-item').length === 4, document.querySelectorAll('#chat-header .p-qb-item').length)
-  check('a nearly full window turns amber or red', $('#chat-header .p-qb-item.is-warn') && $('#chat-header .p-qb-item.is-crit'))
+  check('beside the name only the 5h bar shows', document.querySelectorAll('#chat-header .p-qb-inline').length === 1 && $('#chat-header .p-qb-inline').textContent.includes('5h') && $('#chat-header .p-qb-inline').textContent.includes('42%'), $('#chat-header .p-qb-inline')?.textContent)
+  const popBox = () => $('#chat-header .p-qb-pop').getBoundingClientRect()
+  check('the card with every window is hidden until hover', getComputedStyle($('#chat-header .p-qb-pop')).visibility === 'hidden')
+  $('#chat-header .p-qb').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  $('#chat-header .p-qb').focus() // hover cannot be simulated from here; focus opens the same card
+  await wait(250)
+  const pop = $('#chat-header .p-qb-pop')
+  check('the card lists all four windows (5h, Week, Month, Fable) when it opens', getComputedStyle(pop).visibility === 'visible' && pop.querySelectorAll('.p-qb-row').length === 4, pop.querySelectorAll('.p-qb-row').length)
+  check('a nearly full window turns amber or red in the card', pop.querySelector('.p-qb-row.is-warn') && pop.querySelector('.p-qb-row.is-crit'))
+  check('the card is fully inside the dock', popBox().right <= window.innerWidth && popBox().left >= 0, JSON.stringify(popBox()))
+  document.activeElement.blur()
 
   // 1. the textarea survives a run starting, text appearing and the model changing
   typeIn('half-typed')
@@ -215,7 +224,7 @@ const script = `(async () => {
   document.querySelector('[data-chat="add"]').click(); await wait(60)
   check('no model button beside the working folder, with one session or several', !$('.chat-path-row .p-meter') && !$('.chat-path-row .p-composer-model'))
   check('no model button in the header, with one session or several', !$('#chat-header .p-meter') && !$('#chat-header .p-composer-model') && !$('#chat-header [data-chat="open-models"]'), $('#chat-header').innerHTML.slice(0, 160))
-  check('with several sessions the header has tabs and no quota bars', !$('#chat-header .p-qb'), $('#chat-header').innerHTML.slice(0, 120))
+  check('with several sessions the header has tabs and no quota bar', !$('#chat-header .p-qb'), $('#chat-header').innerHTML.slice(0, 120))
   // 8. the textarea is not replaced just because text appeared
   const before = $('#chat-input'); typeIn('abc'); typeIn('abc\\ndef'); await wait(40)
   check('typing and adding a line does not replace the textarea', $('#chat-input') === before && before.rows === 2, before.rows)
