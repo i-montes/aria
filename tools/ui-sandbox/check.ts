@@ -53,8 +53,9 @@ const script = `(async () => {
   $('#chat-header .p-qb').focus() // hover cannot be simulated from here; focus opens the same card
   await wait(250)
   const pop = $('#chat-header .p-qb-pop')
-  check('the card lists all four windows (5h, Week, Month, Fable) when it opens', getComputedStyle(pop).visibility === 'visible' && pop.querySelectorAll('.p-qb-row').length === 4, pop.querySelectorAll('.p-qb-row').length)
+  check('the card lists all four windows (5h, Week, Month, Fable) when it opens', getComputedStyle(pop).visibility === 'visible' && pop.querySelectorAll('.p-qb-hero, .p-qb-row').length === 4, pop.querySelectorAll('.p-qb-hero, .p-qb-row').length)
   check('a nearly full window turns amber or red in the card', pop.querySelector('.p-qb-row.is-warn') && pop.querySelector('.p-qb-row.is-crit'))
+  check('the card names the provider and leads with the 5-hour window', pop.textContent.includes('OpenCode Go') && pop.querySelector('.p-qb-hero')?.textContent.includes('42'), pop.querySelector('.p-qb-hero')?.textContent.replace(/\\s+/g, ' '))
   check('the card is fully inside the dock', popBox().right <= window.innerWidth && popBox().left >= 0, JSON.stringify(popBox()))
   document.activeElement.blur()
 
