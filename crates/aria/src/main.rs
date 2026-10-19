@@ -63,6 +63,7 @@ fn run_dock() {
     // The chat owns Pi. Its messages go through one worker thread, in order, so a send is never
     // overtaken by the abort that follows it.
     let dock_visible = Arc::new(AtomicBool::new(false));
+    let visible_now = dock_visible.clone();
     let chat = {
         let sender = reply_sender.clone();
         Chat::new(
@@ -78,6 +79,7 @@ fn run_dock() {
         )
     };
     let (chat_sender, chat_receiver) = mpsc::channel::<PageMessage>();
+    let chat_for_visibility = chat.clone();
     std::thread::spawn(move || {
         for message in chat_receiver {
             chat.handle(message);
@@ -125,7 +127,14 @@ fn run_dock() {
             }
         }
     });
+    let mut was_visible = false;
     glib::timeout_add_local(Duration::from_millis(16), move || {
+        // A dock that just hid with a question still open needs its notification.
+        let visible = visible_now.load(std::sync::atomic::Ordering::SeqCst);
+        if was_visible && !visible {
+            chat_for_visibility.dock_visibility_changed();
+        }
+        was_visible = visible;
         while let Ok(command) = receiver.try_recv() {
             match command.as_str() {
                 "toggle" => dock.feed(Event::Toggle),

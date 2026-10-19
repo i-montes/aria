@@ -173,9 +173,15 @@ describe('history', () => {
     expect(state.messages[4].text).toBe('thanks')
   })
 
-  test('history replaces what was there (the dock reopened)', () => {
-    const state = run(addUser(createChat(), 'stale'), ev({ type: 'history', messages: history.slice(0, 1) }))
-    expect(state.messages).toEqual([{ kind: 'user', text: 'list files' }])
+  test('history never replaces a conversation already on the page (it can arrive after the first message)', () => {
+    const state = run(addUser(createChat(), 'just typed'), ev({ type: 'history', messages: history }))
+    expect(state.messages).toEqual([{ kind: 'user', text: 'just typed' }])
+  })
+
+  test('history does not cut a reply that is already streaming', () => {
+    const state = run(createChat(), ev({ type: 'message_start', message: { role: 'assistant' } }), ev({ type: 'history', messages: history }), ev({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'hi' } }))
+    expect(state.messages.at(-1)).toMatchObject({ kind: 'assistant', text: 'hi' })
+    expect(state.messages).toHaveLength(1)
   })
 
   test('a failed tool result marks the call as an error', () => {

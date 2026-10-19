@@ -184,7 +184,8 @@ export function createChatView({ root, t, send, request, onSettings }) {
     if (key !== dialogsKey) {
       dialogsKey = key
       $('chat-dialogs').innerHTML = state.dialogs.map((d) => renderDialog(d, t)).join('')
-      $('chat-dialogs').querySelector('button, input, textarea')?.focus()
+      // Never take the keyboard from someone who is typing: the next Space or Enter would answer the dialog.
+      if (!input.value) $('chat-dialogs').querySelector('button, input, textarea')?.focus()
     }
     $('chat-stop').hidden = !state.running
     $('chat-model').textContent = state.model ? modelLabel(state.model) : t('chat.model.none')

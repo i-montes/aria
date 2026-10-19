@@ -166,7 +166,8 @@ function reduceEvent(state, event) {
         ? push(state, notice(TONES[event.request.notifyType] ?? 'info', { text: event.request.message }))
         : state
     case 'history':
-      return withMessages(state, fromHistory(event.messages))
+      // Only into an empty page: it can arrive after the first message or while a reply streams.
+      return state.messages.length ? state : withMessages(state, fromHistory(event.messages))
     case 'session_reset':
       return withMessages(state, [])
     default:

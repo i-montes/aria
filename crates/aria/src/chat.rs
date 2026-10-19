@@ -84,6 +84,16 @@ struct Inner {
     notified: HashSet<String>,
     model: Option<String>,
     thinking: Option<String>,
+    /// The folder the running Pi was started in (what the header must show, whatever the settings say now).
+    workdir: Option<PathBuf>,
+}
+
+/// What `get_state` tells about the model and thinking level. `running` is deliberately not taken from
+/// it: the events (`agent_start`, `agent_settled`) own that, and a late reply must not undo them.
+fn apply_state(inner: &mut Inner, data: &Value) {
+    let model = data["model"]["provider"].as_str().zip(data["model"]["id"].as_str()).map(|(p, id)| format!("{p}/{id}"));
+    inner.model = model.or(inner.model.take());
+    inner.thinking = data["thinkingLevel"].as_str().map(str::to_string);
 }
 
 #[derive(Clone)]
@@ -91,6 +101,12 @@ pub struct Chat {
     ctx: Arc<ChatCtx>,
     emit: Emit,
     inner: Arc<Mutex<Inner>>,
+    /// Starting Pi is check-then-act across threads (a send and a `/` picker can race); one at a time.
+    spawn_lock: Arc<Mutex<()>>,
+}
+
+fn dialog_body(raw: &Value) -> String {
+    raw["title"].as_str().or_else(|| raw["message"].as_str()).unwrap_or_default().to_string()
 }
 
 fn is_dialog(method: &str) -> bool {
@@ -99,7 +115,7 @@ fn is_dialog(method: &str) -> bool {
 
 impl Chat {
     pub fn new(ctx: ChatCtx, emit: Emit) -> Chat {
-        Chat { ctx: Arc::new(ctx), emit, inner: Arc::new(Mutex::new(Inner::default())) }
+        Chat { ctx: Arc::new(ctx), emit, inner: Arc::new(Mutex::new(Inner::default())), spawn_lock: Arc::new(Mutex::new(())) }
     }
 
     fn emit(&self, message: DockMessage) {
@@ -114,7 +130,7 @@ impl Chat {
         let settings = self.settings();
         let inner = self.inner.lock().unwrap();
         DockMessage::ChatState {
-            workdir: agent::workdir(settings.as_ref()).display().to_string(),
+            workdir: inner.workdir.clone().unwrap_or_else(|| agent::workdir(settings.as_ref())).display().to_string(),
             running: inner.running,
             model: inner.model.clone().or_else(|| settings.as_ref().and_then(|s| s.models.daily.clone())),
             thinking: inner.thinking.clone(),
@@ -196,6 +212,10 @@ impl Chat {
         if let Some(engine) = self.current_engine() {
             return Ok(engine);
         }
+        let _one_at_a_time = self.spawn_lock.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(engine) = self.current_engine() {
+            return Ok(engine); // another thread started it while this one waited
+        }
         let install = pi::locate(&self.ctx.paths, pi::pinned_version()).map_err(|e| e.problem_code())?;
         if !pi::node_ok(&self.ctx.paths, &self.ctx.path_var) {
             return Err(PiError::NodeMissing.problem_code());
@@ -214,17 +234,23 @@ impl Chat {
                 ("PATH".into(), pi::path_with_bin(&self.ctx.paths, &self.ctx.path_var)),
                 ("PI_SKIP_VERSION_CHECK".into(), "1".into()),
             ],
-            cwd: workdir,
+            cwd: workdir.clone(),
         };
         let (engine, events) = Engine::spawn(spec).map_err(|_| "pi-failed")?;
         let engine = Arc::new(engine);
-        let generation = {
+        let (generation, stale) = {
             let mut inner = self.inner.lock().unwrap();
             inner.generation += 1;
             inner.engine = Some(engine.clone());
             inner.running = false;
-            inner.generation
+            inner.workdir = Some(workdir);
+            // Whatever the previous Pi left open can never be answered now.
+            let stale: Vec<String> = inner.dialogs.drain().map(|(id, _)| id).collect();
+            let dismiss = !inner.notified.is_empty();
+            inner.notified.clear();
+            (inner.generation, (stale, dismiss))
         };
+        self.close_stale(stale);
         let chat = self.clone();
         std::thread::spawn(move || chat.pump(events, generation));
         self.emit(DockMessage::ChatEngine { state: "ready".into() });
@@ -238,12 +264,7 @@ impl Chat {
     fn announce(&self, engine: &Engine) {
         if let Ok(response) = engine.request("get_state", json!({}), REQUEST_TIMEOUT) {
             if response.success {
-                let model = response.data["model"]["provider"].as_str().zip(response.data["model"]["id"].as_str()).map(|(p, id)| format!("{p}/{id}"));
-                let mut inner = self.inner.lock().unwrap();
-                inner.model = model.or(inner.model.take());
-                inner.thinking = response.data["thinkingLevel"].as_str().map(str::to_string);
-                inner.running = response.data["isStreaming"].as_bool().unwrap_or(false);
-                drop(inner);
+                apply_state(&mut self.inner.lock().unwrap(), &response.data);
                 self.emit(self.state_message(None));
             }
         }
@@ -327,6 +348,10 @@ impl Chat {
     /// Consumes one Pi's events until it exits.
     fn pump(&self, events: Receiver<EngineEvent>, generation: u64) {
         for event in events {
+            let current = self.inner.lock().unwrap().generation == generation;
+            if !current && !matches!(event, EngineEvent::Exited { .. }) {
+                continue; // a Pi that was replaced no longer speaks for the chat
+            }
             match event {
                 EngineEvent::Event(raw) => {
                     match raw["type"].as_str() {
@@ -352,6 +377,33 @@ impl Chat {
         }
     }
 
+    fn close_stale(&self, (open, dismiss): (Vec<String>, bool)) {
+        if dismiss {
+            self.ctx.notifier.dismiss();
+        }
+        for id in open {
+            self.emit(DockMessage::ChatDialogClosed { id });
+        }
+    }
+
+    /// The dock's visibility changed: when it is now hidden, every open dialog that has no notification
+    /// yet gets one (the owner may have pressed Escape with a question still open).
+    pub fn dock_visibility_changed(&self) {
+        if self.ctx.dock_visible.load(Ordering::SeqCst) {
+            return;
+        }
+        let waiting: Vec<String> = {
+            let mut inner = self.inner.lock().unwrap();
+            let fresh: Vec<String> = inner.dialogs.keys().filter(|id| !inner.notified.contains(*id)).cloned().collect();
+            let bodies = fresh.iter().map(|id| inner.dialogs[id].clone()).collect::<Vec<_>>();
+            inner.notified.extend(fresh);
+            bodies.iter().map(dialog_body).collect()
+        };
+        for body in waiting {
+            self.ctx.notifier.send(NOTIFICATION_TITLE, &body);
+        }
+    }
+
     fn open_dialog(&self, id: String, method: String, raw: Value) {
         let hidden = !self.ctx.dock_visible.load(Ordering::SeqCst);
         {
@@ -362,8 +414,7 @@ impl Chat {
             }
         }
         if hidden {
-            let body = raw["title"].as_str().or_else(|| raw["message"].as_str()).unwrap_or_default();
-            self.ctx.notifier.send(NOTIFICATION_TITLE, body);
+            self.ctx.notifier.send(NOTIFICATION_TITLE, &dialog_body(&raw));
         }
         if let Some(timeout) = raw["timeout"].as_u64() {
             // Pi resolves the dialog by itself when its timeout runs out; the page and the notification follow.
@@ -767,6 +818,79 @@ mod tests {
         h.chat.handle(PageMessage::ListFiles { id: 5, query: "main".into() });
         match wait_for(&h, "files", |m| matches!(m, DockMessage::Files { id: 5, .. })) {
             DockMessage::Files { files, .. } => assert_eq!(files, vec!["proj/main.rs"]),
+            _ => unreachable!(),
+        }
+    }
+
+
+    #[test]
+    fn two_threads_asking_at_once_start_one_pi() {
+        let h = harness();
+        let (a, b) = (h.chat.clone(), h.chat.clone());
+        let t1 = std::thread::spawn(move || a.handle(PageMessage::ListCommands { id: 1 }));
+        let t2 = std::thread::spawn(move || b.handle(PageMessage::ChatSend { text: "hi".into(), behavior: None }));
+        t1.join().unwrap();
+        t2.join().unwrap();
+        wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
+        wait_for(&h, "commands", |m| matches!(m, DockMessage::Commands { id: 1, .. }));
+        let starts = drain(&h).iter().filter(|m| matches!(m, DockMessage::ChatEngine { state } if state == "starting")).count();
+        assert_eq!(starts, 1, "two threads must share one Pi");
+    }
+
+    #[test]
+    fn get_state_never_overrides_what_the_events_say_about_running() {
+        let mut inner = Inner { running: true, ..Inner::default() };
+        apply_state(&mut inner, &json!({"isStreaming": false, "thinkingLevel": "high", "model": {"provider": "p", "id": "m"}}));
+        assert!(inner.running, "a late get_state reply must not stop a run the events started");
+        assert_eq!(inner.thinking.as_deref(), Some("high"));
+        assert_eq!(inner.model.as_deref(), Some("p/m"));
+    }
+
+    #[test]
+    fn a_dialog_open_when_the_dock_hides_gets_its_notification_once() {
+        let h = harness();
+        send(&h, "x");
+        wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        h.chat.test_send_raw("ask");
+        wait_for(&h, "the dialog", |m| matches!(m, DockMessage::ChatDialog { hidden: false, .. }));
+        assert!(h.notifier.log().is_empty());
+        h.visible.store(false, Ordering::SeqCst);
+        h.chat.dock_visibility_changed();
+        h.chat.dock_visibility_changed();
+        assert_eq!(h.notifier.log(), vec!["send:Aria needs an answer:Allow?"]);
+        h.chat.handle(PageMessage::UiAnswer { id: "u1".into(), value: Some("Allow".into()), confirmed: None, cancelled: None });
+        assert_eq!(h.notifier.log().last().map(String::as_str), Some("dismiss"));
+    }
+
+    #[test]
+    fn the_dialogs_of_a_dead_pi_are_closed_when_the_next_one_starts() {
+        let h = harness();
+        send(&h, "x");
+        wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        h.visible.store(false, Ordering::SeqCst);
+        h.chat.test_send_raw("ask");
+        wait_for(&h, "the dialog", |m| matches!(m, DockMessage::ChatDialog { .. }));
+        h.chat.test_send_raw("crash");
+        send(&h, "again"); // may come before the old Pi's exit has been processed
+        wait_for(&h, "the old dialog closing", |m| matches!(m, DockMessage::ChatDialogClosed { id } if id == "u1"));
+        wait_for(&h, "settled after the respawn", |m| event_of(m, "agent_settled"));
+        assert_eq!(h.notifier.log().last().map(String::as_str), Some("dismiss"));
+        h.chat.handle(PageMessage::ChatLoad);
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!drain(&h).iter().any(|m| matches!(m, DockMessage::ChatDialog { .. })), "a dead Pi's dialog was replayed");
+    }
+
+    #[test]
+    fn the_header_shows_the_folder_pi_really_works_in() {
+        let h = harness();
+        send(&h, "x");
+        wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        let mut settings = settings::load(&h.paths).unwrap().unwrap();
+        settings.sandbox.projects_dir = h._dir.path().join("elsewhere").display().to_string();
+        settings::save(&h.paths, &settings).unwrap();
+        h.chat.handle(PageMessage::ChatLoad);
+        match wait_for(&h, "chatState after the change", |m| matches!(m, DockMessage::ChatState { .. })) {
+            DockMessage::ChatState { workdir, .. } => assert_eq!(workdir, h.workdir.display().to_string()),
             _ => unreachable!(),
         }
     }

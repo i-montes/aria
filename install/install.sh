@@ -20,7 +20,9 @@ UNIT_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
 UNIT=aria.service
 PACKAGES="gtk3 webkit2gtk-4.1 gtk-layer-shell"
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo .)
+# Only a real file has siblings: under `curl | sh` $0 is just "sh" and the current directory is not ours.
+SCRIPT_DIR=""
+if [ -f "$0" ]; then SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || SCRIPT_DIR=""; fi
 PI_VERSION_URL=${ARIA_PI_VERSION_URL:-${DOWNLOAD_URL%/*}/pi-version}
 PI_PACKAGE=@earendil-works/pi-coding-agent
 
@@ -42,7 +44,7 @@ run() {
 }
 
 usage() {
-  sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # The unit file. `curl | sh` has no sibling files, so the script carries it (install/aria.service
@@ -87,6 +89,7 @@ install_packages() {
 # Node 22.19 or newer runs Pi. Prints the reason and fails when it is missing or too old.
 check_node() {
   command -v node >/dev/null 2>&1 || die "Node 22.19 or newer is required (install it with your package manager or mise)"
+  command -v npm >/dev/null 2>&1 || die "npm is required to install Pi (it usually comes with Node; on Arch install the npm package)"
   version=$(node --version 2>/dev/null | sed 's/^v//')
   major=${version%%.*}
   rest=${version#*.}
@@ -111,20 +114,21 @@ link_node() {
 read_pi_version() {
   if [ -n "${ARIA_PI_VERSION:-}" ]; then
     PI_VERSION=$ARIA_PI_VERSION
-  elif [ -f "$SCRIPT_DIR/../pi-version" ]; then
+  elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../pi-version" ]; then
     PI_VERSION=$(tr -d '[:space:]' < "$SCRIPT_DIR/../pi-version")
   elif [ "$DRY_RUN" = 1 ]; then
     say "would: download $PI_VERSION_URL"
     PI_VERSION=PINNED
     return
   else
-    PI_VERSION=$(curl -fsSL "$PI_VERSION_URL" | tr -d '[:space:]')
+    PI_VERSION=$(curl -fsSL "$PI_VERSION_URL") || die "could not download the pinned Pi version from $PI_VERSION_URL"
+    PI_VERSION=$(printf '%s' "$PI_VERSION" | tr -d '[:space:]')
   fi
   case "$PI_VERSION" in *[!0-9.]* | "") die "the pinned Pi version is not a version number: '$PI_VERSION'" ;; esac
 }
 
 install_pi() {
-  read_pi_version
+  [ -n "${PI_VERSION:-}" ] || read_pi_version
   prefix="$DATA_DIR/pi/$PI_VERSION"
   if [ -x "$prefix/node_modules/.bin/pi" ]; then
     say "Pi $PI_VERSION is already installed"
@@ -169,6 +173,7 @@ do_install() {
   if [ -n "$LOCAL" ] && [ "$DRY_RUN" != 1 ] && [ ! -x "$LOCAL" ]; then die "$LOCAL is not an executable file"; fi
   check_session
   check_node
+  read_pi_version # before anything is installed: a version we cannot read must not leave a half install
   install_packages
   was_active=0
   if [ "$DRY_RUN" != 1 ] && systemctl --user is-active --quiet "$UNIT" 2>/dev/null; then was_active=1; fi
@@ -243,6 +248,7 @@ while [ $# -gt 0 ]; do
     --uninstall) MODE=uninstall ;;
     --print-unit) MODE=print-unit ;;
     --check-node) MODE=check-node ;; # test hooks
+    --print-pi-version) MODE=print-pi-version ;;
     --link-node) MODE=link-node ;;
     --can-delete) # test hook: exit 0 when the directory is one uninstall would delete
       [ $# -ge 2 ] || die "--can-delete needs a directory"
@@ -260,5 +266,6 @@ case "$MODE" in
   uninstall) do_uninstall ;;
   print-unit) print_unit ;;
   check-node) check_node ;;
+  print-pi-version) read_pi_version; printf '%s\n' "$PI_VERSION" ;;
   link-node) link_node ;;
 esac
