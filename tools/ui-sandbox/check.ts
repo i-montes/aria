@@ -244,6 +244,10 @@ const script = `(async () => {
   quotaButtons[0].click(); await wait(60)
   check("choosing free sends the extension's own string", sent().some((m) => m.type === 'uiAnswer' && m.value === 'Switch to cat-jam-free now'))
   check('the note says it switched to the free model', $('#chat-list').textContent.includes('switched to the free model'))
+  // 17. the router's route line
+  await reset()
+  ;[...document.querySelectorAll('nav button')].find((b) => b.textContent === 'Run /plan').click(); await wait(60)
+  check('the route line from the router shows in the thread', $('#chat-list .p-jev')?.textContent.includes('strong model'), $('#chat-list').textContent.slice(0, 120))
   // 9. no model button next to the working folder
   document.querySelector('[data-chat="add"]').click(); await wait(60)
   check('no model button beside the working folder, with one session or several', !$('.chat-path-row .p-meter') && !$('.chat-path-row .p-composer-model'))

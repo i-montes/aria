@@ -79,3 +79,51 @@ export function noUserText(mode: string): string {
   }
   return 'This session is not interactive: nobody can answer. Go on with the recommended option and say in your answer what you decided and why.'
 }
+
+// ---- Aria's dock -------------------------------------------------------------------------------
+
+const unmark = (label: string) => (label.endsWith(RECOMMENDED_SUFFIX) ? label.slice(0, -RECOMMENDED_SUFFIX.length) : label)
+
+/** The question card for the dock (`ctx.ui.input`'s title): `{"aria":1,"kind":"question",questions}`, see the chat's cards.js. */
+export function questionCard(questions: Question[]): string {
+  return JSON.stringify({
+    aria: 1,
+    kind: 'question',
+    questions: questions.map((q) => ({
+      question: q.question,
+      header: q.header,
+      options: q.options.map((o) => ({
+        label: unmark(o.label),
+        ...(o.description ? { description: o.description } : {}),
+        ...(o.label.endsWith(RECOMMENDED_SUFFIX) ? { recommended: true } : {}),
+      })),
+    })),
+  })
+}
+
+export const TALK_LABEL = 'The user wants to talk about this before choosing'
+
+/** The dock answers with `[{ question, answers, talk? }]`; anything else (cancelled, broken) is null. */
+export function parseCardAnswers(reply: string | undefined, questions: Question[]): Answer[] | null {
+  let given: unknown
+  try {
+    given = JSON.parse(String(reply ?? ''))
+  } catch {
+    return null
+  }
+  if (!Array.isArray(given)) return null
+  const answers: Answer[] = []
+  for (const q of questions) {
+    const entry = given.find((g: any) => g && g.question === q.question) as { answers?: unknown; talk?: unknown } | undefined
+    if (!entry) continue
+    if (entry.talk === true) {
+      answers.push({ id: q.id, label: TALK_LABEL, wasCustom: true })
+      continue
+    }
+    const label = Array.isArray(entry.answers) ? entry.answers.filter((a) => typeof a === 'string' && a.trim()).join(', ') : ''
+    if (!label) continue
+    const at = q.options.findIndex((o) => unmark(o.label) === label)
+    answers.push(at >= 0 ? { id: q.id, label, wasCustom: false, index: at + 1 } : { id: q.id, label, wasCustom: true })
+  }
+  return answers
+}

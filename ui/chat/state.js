@@ -230,10 +230,21 @@ function reduceEvent(state, event) {
       }
       return push(next, notice('error', { text: event.error ?? event.command }))
     }
-    case 'ui_notice':
-      return event.request?.method === 'notify'
-        ? push(state, notice(TONES[event.request.notifyType] ?? 'info', { text: event.request.message }))
-        : state
+    case 'ui_notice': {
+      const request = event.request ?? {}
+      if (request.method === 'notify') return push(state, notice(TONES[request.notifyType] ?? 'info', { text: request.message }))
+      // The router's route line (jev-router sends it as the status `aria-jev`).
+      if (request.method === 'setStatus' && request.statusKey === 'aria-jev') {
+        let route = null
+        try {
+          route = JSON.parse(request.statusText)
+        } catch {
+          return state
+        }
+        return typeof route?.mode === 'string' && route.mode ? push(state, { kind: 'jev', mode: route.mode, action: typeof route.action === 'string' ? route.action : '' }) : state
+      }
+      return state
+    }
     case 'history': {
       // The conversation so far. It can arrive after the owner already typed (a cold start): what Pi had before that
       // goes in front. While only a reply streams (no message of the owner on the page), it is left alone.

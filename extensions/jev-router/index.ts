@@ -43,8 +43,7 @@ import {
   parseHints,
   parsePlanning,
   planContinuationRequest,
-  READ_ONLY_NOTE,
-} from './route.ts'
+  READ_ONLY_NOTE, jevStatus } from './route.ts'
 import {
   executePrompt,
   FREE_PLAN_MODEL,
@@ -255,6 +254,8 @@ export default function (pi: ExtensionAPI) {
       applyThinking(ctx.model, hints.route)
       const experts =
         hints.route === 'parallel' ? expertsLine(loadExperts().filter((e) => !hints.readOnly || e.readOnly)) : ''
+      // Aria's dock shows the route as a line before the answer.
+      if (ctx.mode === 'rpc') ctx.ui?.setStatus?.('aria-jev', JSON.stringify(jevStatus(hints)))
       const content = [hintLine(hints), experts, STYLE_NOTE].filter(Boolean).join('\n')
       return { message: { customType: 'jev-router', content, display: false, details: hints } }
     } catch {

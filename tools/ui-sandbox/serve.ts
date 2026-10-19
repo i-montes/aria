@@ -85,7 +85,7 @@ const sandbox = `<script>
     reply(session, text) {
       sim.stopRun(session)
       sim.ev({ type: 'agent_start' }, session)
-      sim.ev({ type: 'aria_jev', mode: 'focused task', action: 'searches memory' }, session)
+      sim.ev({ type: 'ui_notice', request: { method: 'setStatus', statusKey: 'aria-jev', statusText: JSON.stringify({ mode: 'focused task', action: 'searches memory' }) } }, session)
       sim.tools(session)
       sim.timer = setTimeout(() => {
         sim.say('Commit \`a41c9e2\` removed \`RELEASE\` from \`.env\`, but \`env.ts\` still requires it.\\n\\nWe solved this before: we made it optional, with the commit hash as a fallback.\\n\\n\`\`\`diff\\n- const required = ["API_URL", "RELEASE"]\\n+ const required = ["API_URL"]\\n+ RELEASE: process.env.RELEASE ?? gitSha(),\\n\`\`\`', session)
@@ -101,7 +101,7 @@ const sandbox = `<script>
     'Write outside': () => sim.sess(sim.active, { type: 'chatDialog', id: 'w' + ++sim.n, method: 'select', request: { title: card({ kind: 'write', path: '~/Documents/notes.md', summary: 'Wants to change a file' }), options: ['allow', 'always', 'deny'] }, hidden: false }),
     'Quota almost out': () => { const o = ['Switch to cat-jam-free now', 'Stay on deepseek-v4.1-flash']; sim.sess(sim.active, { type: 'chatDialog', id: 'q' + ++sim.n, method: 'select', request: { title: card({ kind: 'quota', percent: 98, window: '5-hour', freeModel: 'opencode-go/cat-jam-free', countdown: 300, options: [{ value: o[0], label: o[0], role: 'free', primary: true }, { value: o[1], label: o[1], role: 'keep' }] }), options: o, timeout: 300000 }, hidden: false }) },
     'Compact context': () => { sim.ev({ type: 'compaction_start', reason: 'threshold' }); setTimeout(() => { sim.ev({ type: 'compaction_end', reason: 'threshold', result: { tokensBefore: 150000 }, aborted: false }); sim.sess(sim.active, { type: 'chatEvent', event: { type: 'ui_notice', request: { method: 'notify', message: 'engram: saved the decisions from this session', notifyType: 'info' } } }) }, 1500) },
-    'Run /plan': () => { sim.sess(sim.active, { type: 'chatEvent', event: { type: 'aria_jev', mode: 'needs thinking', action: 'strong model · Superpowers' } }) },
+    'Run /plan': () => { sim.ev({ type: 'ui_notice', request: { method: 'setStatus', statusKey: 'aria-jev', statusText: JSON.stringify({ mode: 'needs thinking', action: 'strong model · Superpowers' }) } }) },
     'Toggle working': () => sim.ev({ type: sim.working ? 'agent_settled' : 'agent_start', aborted: false }) || (sim.working = !sim.working),
     'Tool calls': () => { sim.ev({ type: 'agent_start' }); sim.tools(); setTimeout(() => sim.ev({ type: 'agent_settled' }), 3600) },
     'Run all tasks': () => { window.aria.chat.setTasks([{ id: '1', label: 'Reproduce the build error', status: 'done' }, { id: '2', label: 'Make RELEASE optional', status: 'active' }, { id: '3', label: 'Run the tests', status: 'todo' }]) },

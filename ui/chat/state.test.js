@@ -423,3 +423,20 @@ describe('review fixes before 2b', () => {
     expect(state.engine).toBe('stopped')
   })
 })
+
+describe('the route line from the router (a status)', () => {
+  const status = (statusText) => ev({ type: 'ui_notice', request: { method: 'setStatus', statusKey: 'aria-jev', statusText } })
+
+  test('a jev status becomes a route line', () => {
+    const state = run(addUser(createChat(), 'hi'), status(JSON.stringify({ mode: 'focused task', action: 'searches memory' })))
+    expect(state.messages.at(-1)).toEqual({ kind: 'jev', mode: 'focused task', action: 'searches memory' })
+  })
+
+  test('a broken or empty jev status, or another status, is ignored', () => {
+    const before = addUser(createChat(), 'hi')
+    expect(run(before, status('not json')).messages).toEqual(before.messages)
+    expect(run(before, status(undefined)).messages).toEqual(before.messages)
+    expect(run(before, status(JSON.stringify({ action: 'x' }))).messages).toEqual(before.messages)
+    expect(run(before, ev({ type: 'ui_notice', request: { method: 'setStatus', statusKey: 'sandbox', statusText: '🔒 sandbox' } })).messages).toEqual(before.messages)
+  })
+})

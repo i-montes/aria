@@ -9,7 +9,7 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Editor, type EditorTheme, Key, matchesKey, Text, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
-import { type Answer, CANCELLED_TEXT, formatAnswers, MAX_OPTIONS, MAX_QUESTIONS, MIN_OPTIONS, normalize, noUserText, OTHER_LABEL, type Question } from './questions.ts'
+import { type Answer, CANCELLED_TEXT, formatAnswers, MAX_OPTIONS, MAX_QUESTIONS, MIN_OPTIONS, normalize, noUserText, OTHER_LABEL, type Question, parseCardAnswers, questionCard } from './questions.ts'
 
 const AskParams = Type.Object({
   questions: Type.Array(
@@ -55,6 +55,13 @@ export default function askUser(pi: ExtensionAPI) {
 
     async execute(_id, params, signal, _onUpdate, ctx) {
       const questions = normalize(params)
+      // Aria's dock: the chat's question card, through a dialog; its answers come back as JSON.
+      if (ctx.mode === 'rpc' && ctx.hasUI) {
+        const reply = await ctx.ui.input(questionCard(questions))
+        const answers = parseCardAnswers(reply, questions)
+        if (!answers || answers.length === 0) return result(CANCELLED_TEXT, { questions, answers: [], cancelled: true })
+        return result(formatAnswers(questions, answers), { questions, answers, cancelled: false })
+      }
       if (ctx.mode !== 'tui') return result(noUserText(ctx.mode), { questions, answers: [], cancelled: true })
 
       const isMulti = questions.length > 1

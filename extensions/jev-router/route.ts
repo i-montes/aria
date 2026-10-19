@@ -230,3 +230,10 @@ export function parsePlanning(result: any): number | null {
   const a = result.answers?.planning
   return a?.type === 'bool' && typeof a.probability === 'number' ? a.probability : null
 }
+
+/** The route line Aria's dock shows before an answer (`{ mode, action }`, words the chat's Jev part knows). */
+export function jevStatus(h: Hints): { mode: string; action: string } {
+  const MODE: Record<Route, string> = { quick: 'quick', focused: 'focused task', parallel: 'work to split', think: 'needs thinking' }
+  const action = [h.memory && 'searches memory', h.web && 'searches the web', h.notion && 'checks Notion', h.readOnly && 'read-only'].filter(Boolean).join(' · ')
+  return { mode: MODE[h.route], action }
+}
