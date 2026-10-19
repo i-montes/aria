@@ -109,7 +109,7 @@ export function renderSessionTabs(tabs, ui = {}, t = (key) => key) {
     }
     const label = status === 'idle' && tone === 'idle' ? titleOf(s) : `${titleOf(s)}, ${t(`chat.status.${tone}`)}`
     return `<div class="${cls}">
-      <button type="button" class="p-tabs-main" role="tab" aria-selected="${on}" aria-label="${esc(label)}" title="${esc(titleOf(s))}" data-chat="select" data-session="${esc(s.id)}">
+      <button type="button" class="p-tabs-main" role="tab" aria-selected="${on}" aria-label="${esc(label)}" data-chat="select" data-session="${esc(s.id)}">
         <span class="p-tabs-dot" aria-hidden="true"></span><span class="p-tabs-title">${esc(titleOf(s))}</span>
       </button>${
         multi
