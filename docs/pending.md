@@ -10,10 +10,8 @@ The permission and write cards (sandbox, with its four choices), the quota card 
 (`ask_user`), the router's route line (jev-router) and the subagents panel (Aria's own watch socket) are fed. Left:
 
 - The quota card's countdown is shown as a number, not counting down; Pi's own timeout decides.
-- `/effort` and `/autocompact` still write their own files in `~/.aria/agent/`; part 2c moves them into Aria's settings.
 - An agent's session view has no composer (the design has one): there is no way to steer a subagent.
 - `/agents` (the terminal overlay) does nothing in the dock; Alt+A is the dock's way.
-- Memory (Engram) is not in Aria's `mcp.json` yet (part 2c), so Aria says it has no memory.
 
 ## Needs the goals engine (phase 3)
 
@@ -28,6 +26,18 @@ The permission and write cards (sandbox, with its four choices), the quota card 
 | What the design shows | What is missing |
 |---|---|
 | Memory panel (`/memory`): list, search, filters, pin, forget with undo | a read of Engram's memories into `chat.setMemory([...])` and the actions (pin, forget) written back; the contract is in `ui/chat/parts/memory.js` |
+
+## Settings drive Pi (phase 2, part 2c — done)
+
+The settings reach Pi and the extensions (`~/.aria/agent/aria.json`, the rendered persona and experts, Aria's Engram
+entry) and a change applies when each session's run settles. Left:
+
+- A release must publish `pi-version`, `pi-packages` and `engram-version` next to the binary: the `curl | sh` install
+  reads them from there. There is no release workflow in the repo yet.
+- The TypeSafe router backend is not built: with it chosen, the router stays off.
+- `integrations.packages.thirdPartyTrusted` and the "gallery" source do nothing yet (only a local folder is listed).
+- The settings screen refreshes after an outside change (`/effort`, `/autocompact`) only on its summary; a step being
+  edited keeps what is on screen, and saving it writes those values.
 
 ## The Claude provider
 
@@ -63,7 +73,6 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
 - Clicking the "needs your answer" desktop notification opens the dock on the active tab, not on the tab that is waiting.
 - Question card: the sliding animation between questions and the "Answers sent" / "Open questions" states were not ported (the card is removed when answered).
 - Message index: chips grow with the pointer but do not fade by distance (the owner's solid-fill rule).
-- Settings changes do not restart a running Pi (applied at the next start); see the phase 2 spec, part 2c.
 
 ## Known limits of the page (from the review, deferred)
 

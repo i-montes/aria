@@ -27,18 +27,20 @@ Aria is a small Rust program that hosts a web page. The page is the interface; R
   - `auth` — `auth.json`, in Pi's exact format so the bundled Pi can read it later.
   - `providers` — one module per provider; the rest of Aria only reads what a module declares ([how to add one](adding-a-provider.md)).
   - `validate` — one cheap request per provider (and for Tavily) to tell a valid key from a rejected one.
-  - `mcp` — the MCP services the setup configures (Notion, Tavily), in Pi's `mcp.json` and `mcp-auth.json` formats.
+  - `mcp` — the MCP services the setup configures (Notion, Tavily) and Aria's own Engram server (memory), in Pi's `mcp.json` and `mcp-auth.json` formats.
   - `oauth` — sign-ins by authorization code + PKCE with a loopback callback: `anthropic` (Claude Pro/Max), `mcp` (Notion: discovery from the 401, dynamic client registration), and the `pkce` and `loopback` pieces they share.
   - `testing` (feature `testing`) — a fake Notion-like server so the OAuth flow can be tested without the network.
   - `bridge` — the messages between the dock and the page (below).
   - `pi` — the pinned Pi (`pi-version`): where it is installed, whether Node can run it, the `pi` shim for Pi's own children.
-  - `agent` — Pi's directory, `~/.aria/agent/`: its `settings.json`, links to the credential files, the persona, one sessions folder (`sessions/aria`), the Claude provider package.
+  - `agent` — Pi's directory, `~/.aria/agent/`, prepared before every Pi start: its `settings.json` (default model, packages, the superpowers skills of the settings), links to the credential files, the owner's extensions, one sessions folder (`sessions/aria`), the Claude provider package.
+  - `agent_config` — `aria.json`, the one file the extensions read Aria's settings from (`extensions/lib/config.ts`; without it they keep the values in their code).
+  - `persona` — `SYSTEM.md` and the experts, rendered from the owner's text where a setting varies them.
   - `sessions` — the dock's tabs (`sessions.json`): ids, titles, the active one.
   - `files` — the `@` file picker's `.gitignore`-aware walk.
   - `quota` — the quota windows of the model's provider (OpenCode Go, a Claude plan).
 - **`aria-hyprland`** is the Hyprland adapter: it registers the hotkey at run time, asks which monitor has the focus, and reports config reloads. On macOS, **`aria-mac`** sits next to it with the same two jobs: `Option + Space` through Carbon (no Accessibility permission, no config to reload) and the screen under the pointer (macOS has no focused monitor that survives app switches).
 - **`aria-engine`** speaks Pi's RPC protocol: strict JSONL framing, commands and their responses, events, extension dialogs, and one supervised child (`Engine::close` stops it: stdin closed, killed after three seconds).
-- **`aria`** is the binary. `main.rs` wires things, `ui.rs` is the platform event loop (GTK/glib or `NSApplication`/`NSTimer`), `control.rs` keeps one instance, `visibility.rs` decides when the dock is shown or closing (a pure state machine), `dock/{gtk,mac}.rs` is the window (the same `Dock` API on both platforms), `handlers.rs` answers the page's setup messages, `chat.rs` owns the sessions: one Pi per tab, started when the tab is shown, restarted when a credential changes (a busy one when its run settles), with desktop notifications for a prompt nobody can see.
+- **`aria`** is the binary. `main.rs` wires things, `ui.rs` is the platform event loop (GTK/glib or `NSApplication`/`NSTimer`), `control.rs` keeps one instance, `visibility.rs` decides when the dock is shown or closing (a pure state machine), `dock/{gtk,mac}.rs` is the window (the same `Dock` API on both platforms), `handlers.rs` answers the page's setup messages, `chat.rs` owns the sessions: one Pi per tab, started when the tab is shown, restarted when a credential or a setting changes (a busy one when its run settles; `main.rs` watches `settings.json` once a second), with desktop notifications for a prompt nobody can see.
 
 ## The hotkey, without touching Hyprland's config
 
@@ -106,4 +108,4 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 
 ## What is not there yet
 
-Settings driving Pi (2c), goals (phase 3), the state socket and external extensions (phase 4), Windows. macOS (phase 5) is here for the dock, setup, chat and installer; click-through, notification clicks, a `.app` bundle and the macOS port of the sandbox extension are still pending (see [pending](pending.md)). What the chat draws but nothing feeds yet is in [pending](pending.md). See the [roadmap](superpowers/specs/2026-10-18-aria-base-design.md#roadmap).
+The parity check (2d), goals (phase 3), the state socket and external extensions (phase 4), Windows. macOS (phase 5) is here for the dock, setup, chat and installer; click-through, notification clicks, a `.app` bundle and the macOS port of the sandbox extension are still pending (see [pending](pending.md)). What the chat draws but nothing feeds yet is in [pending](pending.md). See the [roadmap](superpowers/specs/2026-10-18-aria-base-design.md#roadmap).

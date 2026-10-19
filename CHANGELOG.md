@@ -66,3 +66,15 @@ Notes: the desktop notification for a prompt that nobody can see is sent with `o
 |---|---|---|---|
 | `~/Library/LaunchAgents/com.aria.dock.plist` | now also has `KeepAlive` (`SuccessfulExit` false): launchd starts the dock again if it crashes | the earlier plist, rewritten by the installer | `sh install/install.sh --uninstall`, or remove the `KeepAlive` key and `launchctl bootout`/`bootstrap` |
 | `~/.aria/run/w-<hash>.sock` | a subagent socket whose usual name (`watch-<session>.sock`) would pass macOS's 104-byte limit | none | removed when the tab closes |
+
+## 2026-10-19 — phase 2c: settings drive Pi
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| `~/.aria/agent/aria.json` | the extensions' settings, written from `~/.aria/settings.json` at every Pi start (no secrets) | none, new | delete it: the extensions go back to the values in their code |
+| `~/.aria/agent/SYSTEM.md`, `agents/*.md` | now rendered from the settings (name, language, style, git, memory, experts); a disabled expert's file is removed | Aria's earlier copy (the owner's text) | turn the setting back, or delete the file and its line in `.aria-files` |
+| `~/.aria/mcp.json` | an `engram` server written by Aria (binary `~/.aria/bin/engram`, `ENGRAM_DATA_DIR=~/.aria/engram`), removed when memory is off; an `engram` entry Aria did not write is never touched | none (the entry is new) | turn memory off in the settings |
+| `~/.aria/engram/` | Aria's own Engram database (mode 700), apart from the terminal Pi's `~/.engram` | none, new | delete the folder (Aria forgets what it learned) |
+| `~/.aria/bin/engram` | Engram 3.3.2, installed by `install.sh` from its GitHub release and checked against `engram-version` | none, new | delete it |
+| `~/.aria/bin/pi` | the shim keeps subagent sessions in `~/.aria/agent/sessions/subagents/` when "save the subagents' sessions" is on | the plain shim | turn the setting off (the next start rewrites it) |
+| `~/.aria/settings.json` | `/effort` and `/autocompact` in a session write `effort` and `compaction` here (not `jev-router-effort.json` / `autocompact.json`) | none | change them back in the settings |

@@ -1,6 +1,6 @@
 # Aria phase 2 — parity with the owner's Pi — design
 
-Date: 2026-10-18. Status: approved by the owner; parts 2a (the engine) and 2b (the extensions) implemented, 2c-2d pending. Builds on `2026-10-18-aria-base-design.md` (roadmap, phase 1, now merged into `main`).
+Date: 2026-10-18. Status: approved by the owner; parts 2a (the engine), 2b (the extensions) and 2c (settings drive Pi) implemented, 2d pending. Builds on `2026-10-18-aria-base-design.md` (roadmap, phase 1, now merged into `main`).
 
 ## Intent
 
