@@ -80,7 +80,7 @@ export function renderComposer({ busy = false, hasText = false, rows = 1, showHi
   const hints = !showHints
     ? ''
     : `<div class="p-composer-hints">${chip}
-      <span>${esc(t('chat.composer.hint.type'))} <kbd class="p-composer-kbd">/</kbd> ${esc(t('chat.composer.hint.commands'))}</span>
+      <span><kbd class="p-composer-kbd">/</kbd> ${esc(t('chat.composer.hint.commands'))}</span>
       <span>${key('alt+a')} ${esc(t('chat.composer.hint.agents'))}</span>${
         busy ? `<span>${key('esc')} ${esc(t('chat.composer.hint.stop'))}</span><span>${key('enter')} ${esc(t('chat.composer.hint.queue'))}</span>` : ''
       }

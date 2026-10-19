@@ -160,7 +160,11 @@ document.addEventListener('keydown', (event) => {
     event.preventDefault()
     return chat.toggleAgents()
   }
-  if (event.key === 'Escape') return post({ type: 'closeRequest' })
+  if (event.key === 'Escape') {
+    if (event.isComposing) return // cancels an input-method composition, not the dock
+    if (state.mode === 'chat' && chat.escape()) return
+    return post({ type: 'closeRequest' })
+  }
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
   if (event.target instanceof HTMLInputElement && event.target.type === 'range') return
   const items = navigable()

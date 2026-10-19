@@ -51,6 +51,8 @@ const sandbox = `<script>
         else if (inner.type === 'listModels') w({ type: 'models', models: MODELS })
         else if (inner.type === 'setModel') { w({ type: 'saved' }); sim.sess(m.session, { type: 'chatState', workdir: '/home/ana/Projects/aria', running: false, model: inner.model, thinking: 'medium', context: 22, problem: null }) }
         else if (inner.type === 'chatLoad') sim.sess(m.session, { type: 'chatState', workdir: '/home/ana/Projects/aria', running: false, model: sim.model, thinking: 'medium', context: sim.context, problem: null })
+        else if (inner.type === 'chatSend' && inner.behavior === 'followUp') { sim.queue.push(inner.text); sim.ev({ type: 'queue_update', steering: [], followUp: [...sim.queue] }, m.session) }
+        else if (inner.type === 'chatClearQueue') { sim.queue = [...(inner.keep ?? [])]; sim.ev({ type: 'queue_update', steering: [], followUp: [...sim.queue] }, m.session) }
         else if (inner.type === 'chatSend') sim.reply(m.session, inner.text)
         else if (inner.type === 'chatAbort') { sim.stopRun(m.session) }
       }
@@ -59,7 +61,7 @@ const sandbox = `<script>
 
   const card = (c) => JSON.stringify({ aria: 1, ...c })
   const sim = {
-    model: 'opencode-go/deepseek-v4.1-flash', context: 18, n: 0, timer: null, active: 's1',
+    model: 'opencode-go/deepseek-v4.1-flash', context: 18, n: 0, timer: null, active: 's1', queue: [],
     sess: (session, message) => window.aria.receive({ type: 'session', session, message }),
     ev: (event, session) => sim.sess(session ?? sim.active, { type: 'chatEvent', event }),
     state: (extra = {}, session) => sim.sess(session ?? sim.active, { type: 'chatState', workdir: '/home/ana/Projects/aria', running: false, model: sim.model, thinking: 'medium', context: sim.context, problem: null, ...extra }),

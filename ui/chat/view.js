@@ -4,7 +4,7 @@
 // `parts/` and `thread.js`. Everything dynamic is escaped with `esc`.
 import { esc } from '../onboarding/components.js'
 import { renderAgentSession } from './parts/session.js'
-import { renderCommandPicker, filterCommands, stepActive, clampActive, keepVisible } from './parts/commands.js'
+import { renderCommandPicker, filterCommands, stepActive, clampActive } from './parts/commands.js'
 import { renderComposer } from './parts/composer.js'
 import { renderFilePicker, filterFiles } from './parts/files.js'
 import { activeIndexFor, indexItems, indexTargets, renderIndex } from './parts/index.js'
@@ -19,7 +19,7 @@ import { formatElapsed } from './parts/working.js'
 import {
   MAX_SESSIONS, addSession, applyStatus, closeSession, createTabs, renameSession, selectSession, setTitleIfEmpty, toSaved, undoClose,
 } from './sessions.js'
-import { addQueued, addUser, answerDialog, clearQueue, createChat, reduce } from './state.js'
+import { addQueued, addUser, answerDialog, answersForCard, clearQueue, createChat, reduce } from './state.js'
 import { renderThread } from './thread.js'
 
 /** `/home/ana/Projects` -> `~/Projects` (Linux and Mac homes); anything else stays as it is. */
@@ -106,6 +106,31 @@ const ICON = {
   gear: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
 }
 
+/** A selector that finds this control again after its container was redrawn. */
+const selectorFor = (el) => {
+  const d = el.dataset ?? {}
+  if (d.chatField) return `[data-chat-field="${d.chatField}"]`
+  if (d.op) return `[data-chat="question"][data-op="${d.op}"]${d.q !== undefined ? `[data-q="${d.q}"]` : ''}`
+  return null
+}
+
+/** Runs `redraw` (which replaces `container`'s HTML) and gives focus and caret back to the control that had them. */
+function keepingFocus(container, redraw) {
+  const active = document.activeElement
+  const selector = active && container.contains(active) ? selectorFor(active) : null
+  const caret = selector ? [active.selectionStart, active.selectionEnd] : null
+  redraw()
+  if (!selector) return
+  const again = container.querySelector(selector)
+  if (!again) return
+  again.focus()
+  try {
+    again.setSelectionRange(caret[0], caret[1])
+  } catch {
+    // not a text field
+  }
+}
+
 /**
  * `root` is the chat's container. `send(message)` posts to the dock; `request(message)` posts and resolves
  * with the reply; `onSettings()` opens the settings. Every chat message goes out wrapped in
@@ -131,6 +156,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   let fileToken = 0
   let fileTimer = null
   let composerKey = ''
+  let headerKey = ''
+  let indexKey = ''
+  let questionKey = ''
   let input = null
   let banner = ''
 
@@ -178,6 +206,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     <div id="chat-toast"></div>`
     input = null
     composerKey = ''
+    headerKey = ''
+    indexKey = ''
+    questionKey = ''
     clearInterval(tick)
     tick = setInterval(tickElapsed, 200)
     render()
@@ -202,6 +233,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   }
 
   function drawHeader() {
+    const key = JSON.stringify([
+      tabs.sessions.map((s) => [s.id, s.title, s.status, s.unread, chatOf(s.id).model, chatOf(s.id).context]),
+      tabs.active, ui.menuOpen, ui.renaming, assistantName(), settings?.compaction?.percent,
+    ])
+    if (key === headerKey && $('chat-header').firstChild) return
+    headerKey = key
     const multi = tabs.sessions.length > 1
     const full = tabs.sessions.length >= MAX_SESSIONS
     const sessions = tabs.sessions.map((s) => ({ ...s, model: modelLabel(chatOf(s.id).model), context: chatOf(s.id).context ?? 0, quota: 0, free: false }))
@@ -228,19 +265,28 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const items = indexItems(current().messages)
     const el = $('chat-index')
     ui.index.height = $('chat-list').clientHeight || ui.index.height
+    const key = JSON.stringify([tabs.active, items.map((i) => i.id), ui.activeId, ui.index])
+    if (key === indexKey) return
+    indexKey = key
     el.innerHTML = items.length > 1 ? renderIndex({ items, activeId: ui.activeId }, ui.index, t) : ''
   }
 
-  function drawQuestion() {
+  /** `force`: the wizard changed. Otherwise the card is only drawn when another one shows up. */
+  function drawQuestion(force = false) {
     const state = current()
     const dialog = state.dialogs.find((d) => d.card?.kind === 'question')
     const el = $('chat-question')
+    const key = `${tabs.active}:${dialog?.id ?? ''}`
+    if (!force && key === questionKey) return
+    questionKey = key
     if (!dialog) {
       el.innerHTML = ''
       return
     }
     if (!wizards.has(dialog.id)) wizards.set(dialog.id, questionInit(dialog.card.questions))
-    el.innerHTML = `<div class="question-fill">${renderQuestion({ id: dialog.id, questions: dialog.card.questions }, wizards.get(dialog.id), t)}</div>`
+    keepingFocus(el, () => {
+      el.innerHTML = `<div class="question-fill">${renderQuestion({ id: dialog.id, questions: dialog.card.questions }, wizards.get(dialog.id), t)}</div>`
+    })
   }
 
   function drawDialogs() {
@@ -274,28 +320,47 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     el.innerHTML = data.tasks?.length ? renderTasks({ tasks: data.tasks, kind: data.tasksKind, show: true }, { open: ui.tasksOpen }, t) : ''
   }
 
+  /** The composer is drawn once; later changes (busy, text, model) swap its buttons, rows and hints in place so the
+   * textarea keeps its value, caret, undo history and any composition in progress. */
   function drawComposer() {
     const el = $('chat-composer')
     const value = input ? input.value : (drafts.get(tabs.active) ?? '')
-    const busy = current().running
-    const hasText = value.trim().length > 0
-    const rows = Math.min(6, Math.max(1, value.split('\n').length))
-    const key = `${busy}|${hasText}|${rows}`
+    const model = current().model
+    const props = {
+      busy: current().running,
+      hasText: value.trim().length > 0,
+      rows: Math.min(6, Math.max(1, value.split('\n').length)),
+      showHints: true,
+      model: modelLabel(model) || undefined,
+      modelTitle: model ?? undefined,
+    }
+    const key = JSON.stringify(props)
     if (input && key === composerKey) return
-    const had = input && document.activeElement === input
-    const selection = input ? [input.selectionStart, input.selectionEnd] : null
     composerKey = key
-    el.innerHTML = renderComposer({ busy, hasText, rows, showHints: true }, {}, t)
-    input = $('chat-input')
-    input.value = value
-    if (selection) input.setSelectionRange(selection[0], selection[1])
-    if (had) input.focus()
+    if (!input) {
+      el.innerHTML = renderComposer(props, {}, t)
+      input = $('chat-input')
+      input.value = value
+      return
+    }
+    const next = document.createElement('div')
+    next.innerHTML = renderComposer(props, {}, t)
+    for (const selector of ['.p-composer-actions', '.p-composer-hints']) {
+      const old = el.querySelector(selector)
+      const fresh = next.querySelector(selector)
+      if (old && fresh) old.replaceWith(fresh)
+      else if (old) old.remove()
+      else if (fresh) el.querySelector('.p-composer')?.appendChild(fresh)
+    }
+    input.rows = props.rows
+    input.placeholder = next.querySelector('textarea')?.placeholder ?? ''
   }
 
   function drawViews() {
     const view = ui.view
     $('chat-body').dataset.view = view
     for (const name of ['chat', 'agents', 'session', 'memory']) $(`view-${name}`).hidden = name !== view
+    if (view === 'chat') return
     if (view === 'agents') {
       $('view-agents').innerHTML = `
         <div class="chat-panel-scroll">
@@ -306,7 +371,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       const agent = data.agents.find((a) => (a.id ?? a.role) === ui.agent) ?? data.agents[0]
       $('view-session').innerHTML = `<div class="chat-panel-scroll">${agent ? renderAgentSession({ agent }, { now: Date.now() }, t) : ''}</div>`
     } else if (view === 'memory') {
-      $('view-memory').innerHTML = renderMemory({ memories: data.memory, now: Date.now() }, ui.memory, t)
+      keepingFocus($('view-memory'), () => {
+        $('view-memory').innerHTML = renderMemory({ memories: data.memory, now: Date.now() }, ui.memory, t)
+      })
     }
   }
 
@@ -342,6 +409,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     if (view === 'memory') ui.memory = initialMemoryUi()
     render()
     if (view === 'chat') input?.focus()
+    else $(`view-${view}`).querySelector('button, input')?.focus()
   }
 
   // ---- tabs ------------------------------------------------------------------------------------
@@ -488,22 +556,31 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     }
     if (dismissed && dismissed.kind === asked.kind && input.value.startsWith(dismissed.text)) return closePicker()
     const session = tabs.active
+    // A reply that arrives after the owner changed tab or edited the text no longer applies.
+    const stale = () => {
+      if (session !== tabs.active) return true
+      const now = pickerQuery(input.value, input.selectionStart ?? input.value.length)
+      return !now || now.kind !== asked.kind || (now.kind !== 'file' && now.query !== asked.query)
+    }
+    const local = () => [
+      { name: 'memory', description: t('chat.cmd.memory'), source: 'aria' },
+      { name: 'model', description: t('chat.cmd.model'), source: 'aria' },
+    ]
     if (asked.kind === 'command') {
-      if (!commandsBy.has(session)) {
+      let items = commandsBy.get(session)
+      if (!items) {
         const reply = await ask({ type: 'listCommands' }, session)
-        const local = [
-          { name: 'memory', description: t('chat.cmd.memory'), source: 'aria' },
-          { name: 'model', description: t('chat.cmd.model'), source: 'aria' },
-        ]
-        commandsBy.set(session, [...local, ...(reply.commands ?? [])])
+        items = [...local(), ...(reply.commands ?? [])]
+        // An empty list means Pi could not answer (not started yet, or busy): do not remember that.
+        if ((reply.commands ?? []).length) commandsBy.set(session, items)
       }
-      if (session !== tabs.active) return // the owner moved to another tab while Pi was starting
-      picker = { kind: 'command', items: commandsBy.get(session), query: asked.query, active: 0, start: asked.start }
+      if (stale()) return
+      picker = { kind: 'command', items, query: asked.query, active: 0, start: asked.start }
       return drawOverlay()
     }
     if (asked.kind === 'model') {
       const reply = await ask({ type: 'listModels' }, session)
-      if (session !== tabs.active) return
+      if (stale()) return
       picker = { kind: 'model', items: reply.models ?? [], query: asked.query, active: 0, start: 0 }
       return drawOverlay()
     }
@@ -551,15 +628,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   }
 
   function onComposerKey(event) {
-    if (event.isComposing) return
+    if (event.isComposing) return // Escape belongs to `escape()` (called by the page), which also ignores a composition
     if (picker) {
       const size = pickerSize()
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        event.stopPropagation()
-        dismissed = { kind: picker.kind, text: input.value }
-        return closePicker()
-      }
       if (size && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
         event.preventDefault()
         event.stopPropagation()
@@ -570,11 +641,6 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
         event.preventDefault()
         return choose(clampActive(picker.active, size))
       }
-    }
-    if (event.key === 'Escape' && current().running) {
-      event.preventDefault()
-      event.stopPropagation()
-      return stop()
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -596,28 +662,35 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   }
 
   let autoAdvance = null
-  function onQuestion(el) {
-    const { id, op, q, value } = el.dataset
+
+  /** One step of a question card's wizard (`op` is the part's `data-op`). */
+  function questionStep(id, op, q, value) {
     const state = wizards.get(id)
     const dialog = current().dialogs.find((d) => d.id === id)
     if (!state || !dialog) return
     const list = normalizeQuestions(dialog.card.questions)
-    const next = questionReduce(state, op, { q: q === undefined ? undefined : Number(q), value })
-    wizards.set(id, next)
-    if (next.outcome === 'submit') return answer(id, { value: JSON.stringify(questionAnswers(list, next)) }, questionAnswers(list, next))
-    if (next.outcome === 'dismiss') return answer(id, { cancelled: true }, undefined)
-    drawQuestion()
-    // A single-choice pick moves on by itself after a beat, as the design does.
     clearTimeout(autoAdvance)
-    if (op === 'pick' && !list[Number(q)]?.multi && Number(q) < list.length - 1) {
+    const next = questionReduce(state, op, { q, value })
+    wizards.set(id, next)
+    if (next.outcome === 'submit') {
+      const given = questionAnswers(list, next)
+      return answer(id, { value: JSON.stringify(given) }, answersForCard(list, given))
+    }
+    if (next.outcome === 'dismiss') return answer(id, { cancelled: true }, undefined)
+    drawQuestion(true)
+    // A single-choice pick moves on by itself after a beat (and sends, on the last question), as the design does.
+    if (op === 'pick' && !list[q]?.multi) {
       autoAdvance = setTimeout(() => {
         const cur = wizards.get(id)
-        if (cur && cur.step === Number(q)) {
-          wizards.set(id, questionReduce(cur, 'next', {}))
-          drawQuestion()
-        }
+        if (cur && cur.step === q) questionStep(id, q < list.length - 1 ? 'next' : 'submit')
       }, 480)
     }
+  }
+
+  function onQuestion(el) {
+    const { id, op, q, value } = el.dataset
+    if (op === 'other') return // typing in the free-text field is handled by the input event, not by clicks
+    questionStep(id, op, q === undefined ? undefined : Number(q), value)
   }
 
   // ---- the thread's scroll and index -------------------------------------------------------------
@@ -675,7 +748,10 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     } else if (el?.dataset?.op === 'other') {
       const id = el.dataset.id
       const state = wizards.get(id)
-      if (state) wizards.set(id, questionReduce(state, 'other', { q: Number(el.dataset.q), value: el.value }))
+      if (state) {
+        wizards.set(id, questionReduce(state, 'other', { q: Number(el.dataset.q), value: el.value }))
+        drawQuestion(true) // the Continue button depends on whether something is picked or typed
+      }
     } else if (el?.dataset?.chatField === 'memory-search') {
       ui.memory = reduceMemoryUi(ui.memory, 'search', el.value)
       drawViews()
@@ -694,9 +770,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       return
     }
     if (event.target === input) return onComposerKey(event)
-    if (event.key === 'Escape' && ui.view !== 'chat') {
-      event.stopPropagation()
-      openView('chat')
+    if (event.target?.dataset?.op === 'other' && event.key === 'Enter' && !event.isComposing) {
+      event.preventDefault()
+      const { id, q } = event.target.dataset
+      const dialog = current().dialogs.find((d) => d.id === id)
+      const last = Number(q) >= normalizeQuestions(dialog?.card?.questions).length - 1
+      return questionStep(id, last ? 'submit' : 'next', Number(q))
     }
   })
 
@@ -748,10 +827,14 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       case 'menu':
         ui.menuOpen = !ui.menuOpen
         return drawHeader()
-      case 'cancel-queued':
-        post({ type: 'chatClearQueue' })
-        chats.set(tabs.active, clearQueue(current()))
+      case 'cancel-queued': {
+        // Pi can only empty its queue: the other queued messages go back in, in order.
+        const at = Number(id)
+        const keep = current().queue.filter((_, i) => i !== at).map((q) => q.text)
+        post({ type: 'chatClearQueue', keep })
+        chats.set(tabs.active, clearQueue(current(), at))
         return render()
+      }
       case 'toggle-tools': {
         const set = expanded().open
         if (!set.delete(Number(index))) set.add(Number(index))
@@ -851,6 +934,11 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
           drawToast()
         }, TOAST_MS)
       }
+      if (session !== tabs.active) {
+        drawHeader()
+        drawToast()
+        return
+      }
       render()
     },
     mount,
@@ -858,6 +946,31 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       post({ type: 'chatLoad' })
       render()
       input?.focus()
+    },
+    /**
+     * Esc, in this order: close a picker, stop a run, leave a panel, close an open tab menu. Returns whether it
+     * did something; when it did not, the dock closes.
+     */
+    escape() {
+      if (picker) {
+        dismissed = { kind: picker.kind, text: input?.value ?? '' }
+        closePicker()
+        return true
+      }
+      if (current().running && ui.view === 'chat') {
+        stop()
+        return true
+      }
+      if (ui.view !== 'chat') {
+        openView('chat')
+        return true
+      }
+      if (ui.menuOpen) {
+        ui.menuOpen = false
+        drawHeader()
+        return true
+      }
+      return false
     },
     /** Alt+A: the subagents view and back. */
     toggleAgents() {

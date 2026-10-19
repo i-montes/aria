@@ -1,0 +1,137 @@
+// Drives the chat's controller in headless Chrome against the sandbox's stubbed bridge and checks the
+// behaviours the unit tests cannot see (focus, redraws, key order, races). Needs Chrome and the sandbox:
+//
+//   bun tools/ui-sandbox/serve.ts 8770 &      then      bun tools/ui-sandbox/check.ts
+//
+// Exit code 1 when any check fails.
+const url = process.env.URL ?? 'http://127.0.0.1:8770/'
+const port = 9338
+const chrome = Bun.spawn(['google-chrome-stable', '--headless=new', '--disable-gpu', '--no-sandbox', `--user-data-dir=/tmp/aria-check-${process.pid}`, `--remote-debugging-port=${port}`, '--window-size=940,940', 'about:blank'], { stderr: 'ignore', stdout: 'ignore' })
+let target: any
+for (let i = 0; i < 50 && !target; i++) {
+  await Bun.sleep(200)
+  try { target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t: any) => t.type === 'page') } catch {}
+}
+const ws = new WebSocket(target.webSocketDebuggerUrl)
+await new Promise((r) => (ws.onopen = r))
+let id = 0
+const pending = new Map<number, (v: any) => void>()
+ws.onmessage = (e) => {
+  const m = JSON.parse(String(e.data))
+  if (m.id && pending.has(m.id)) { pending.get(m.id)!(m.result); pending.delete(m.id) }
+  else if (m.method === 'Runtime.exceptionThrown') console.log('PAGE ERROR', m.params.exceptionDetails.exception?.description?.split('\n')[0] ?? m.params.exceptionDetails.text)
+}
+const send = (method: string, params: any = {}) => new Promise<any>((r) => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })) })
+await send('Runtime.enable'); await send('Page.enable')
+await send('Page.navigate', { url })
+await Bun.sleep(2200)
+
+// Everything runs inside the page: each check returns [name, ok, detail].
+const script = `(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+  const $ = (s) => document.querySelector(s)
+  const typeIn = (value) => { const i = $('#chat-input'); i.focus(); i.value = value; i.setSelectionRange(value.length, value.length); i.dispatchEvent(new Event('input', { bubbles: true })) }
+  const key = (el, k, extra = {}) => el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...extra }))
+  const sess = (message, session = 's1') => window.aria.receive({ type: 'session', session, message })
+  const ev = (event) => sess({ type: 'chatEvent', event })
+  const sent = () => window.__sent.filter((m) => m.type === 'session').map((m) => m.message)
+  const results = []
+  const check = (name, ok, detail = '') => results.push([name, !!ok, String(detail)])
+  const settle = () => wait(30) // the page applies session messages one microtask later
+  const reset = async () => { window.sim.queue = []; ev({ type: 'agent_settled', aborted: false }); ev({ type: 'session_reset' }); const i = $('#chat-input'); if (i) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })) }; await wait(50) }
+
+  await wait(300)
+
+  // 1. the textarea survives a run starting, text appearing and the model changing
+  typeIn('half-typed')
+  const mark = $('#chat-input'); mark.__mark = 1
+  ev({ type: 'agent_start' }); sess({ type: 'chatState', workdir: '/w', running: true, model: 'a/b', thinking: null, context: 5, problem: null })
+  ev({ type: 'message_start', message: { role: 'assistant' } }); ev({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'hi' } })
+  await wait(60)
+  check('the textarea element survives a run and keeps its text', $('#chat-input') === mark && mark.value === 'half-typed', mark.value)
+  check('the model chip sits under the input', $('.p-composer-hints .p-composer-model')?.textContent === 'b', $('.p-composer-hints')?.textContent)
+  check('no "shift+enter" reminder is shown', !document.body.textContent.includes('shift+enter'))
+  await reset()
+
+  // 2. queue: Enter during a run queues, and delivery (Pi's order) moves it into the thread
+  ev({ type: 'agent_start' }); await settle()
+  typeIn('do this later'); key($('#chat-input'), 'Enter'); await wait(60)
+  check('Enter during a run queues with followUp', sent().some((m) => m.type === 'chatSend' && m.behavior === 'followUp'))
+  check('the queued bubble shows', $('.p-user.queued, .p-user-queued, [data-chat="cancel-queued"]'))
+  ev({ type: 'queue_update', steering: [], followUp: [] }); ev({ type: 'message_start', message: { role: 'user', content: 'do this later' } }); await wait(80)
+  check('a delivered message lands in the thread and leaves the queue', !$('[data-chat="cancel-queued"]') && $('#chat-list').textContent.includes('do this later'))
+  await reset()
+
+  // 3. cancelling one of two queued messages re-queues the other
+  ev({ type: 'agent_start' }); await settle(); typeIn('first'); key($('#chat-input'), 'Enter'); await wait(60); typeIn('second'); key($('#chat-input'), 'Enter'); await wait(80)
+  window.__sent.length = 0
+  const cancelButton = $('[data-chat="cancel-queued"][data-id="0"]')
+  check('each queued bubble has its own cancel', cancelButton, $('#chat-list').innerHTML.slice(-600))
+  cancelButton?.click(); await wait(60)
+  const cancel = sent().find((m) => m.type === 'chatClearQueue')
+  check('cancelling the first keeps the second', cancel && JSON.stringify(cancel.keep) === '["second"]', JSON.stringify(cancel))
+  await reset()
+
+  // 4. the question card: the free-text field keeps focus, enables Continue, Enter submits, the answers card has its header
+  sim_ask()
+  await wait(80)
+  let other = $('[data-op="other"]')
+  other.click(); await wait(40)
+  other = $('[data-op="other"]'); other.focus()
+  other.value = 'my own fallback'; other.dispatchEvent(new Event('input', { bubbles: true })); await wait(60)
+  check('typing in "Other" keeps focus in that field', document.activeElement?.dataset?.op === 'other' && document.activeElement.value === 'my own fallback', document.activeElement?.outerHTML?.slice(0, 80))
+  const primary = $('.p-q-primary, .p-q-continue, [data-op="next"], [data-op="submit"]')
+  check('Continue is enabled once something is typed', primary && !primary.disabled)
+  document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); await wait(80)
+  check('Enter in Other moves to the next question', $('#chat-question').textContent.includes('Which checks'), $('#chat-question').textContent.slice(0, 120))
+  other = $('[data-op="other"]')
+  if (other) { other.focus(); other.value = 'unit tests'; other.dispatchEvent(new Event('input', { bubbles: true })); await wait(40); document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); await wait(100) }
+  const answered = sent().find((m) => m.type === 'uiAnswer')
+  check('the answers go out as JSON', answered && answered.value && JSON.parse(answered.value).length === 2, answered?.value)
+  const text = $('#chat-list').textContent
+  check('the answers card shows the question headers and what was said', text.includes('Fallback') && text.includes('my own fallback'), text.slice(0, 160))
+  await reset()
+
+  // 5. Esc order
+  typeIn('/'); await wait(120)
+  check('the command picker opens', $('.p-cmd.is-open'))
+  check('Esc closes the picker first', window.aria.chat.escape() === true && !$('.p-cmd.is-open'))
+  ev({ type: 'agent_start' }); await settle(); window.__sent.length = 0
+  check('Esc stops a run', window.aria.chat.escape() === true && sent().some((m) => m.type === 'chatAbort'))
+  await reset()
+  window.aria.chat.toggleAgents(); await wait(40)
+  check('Esc in a panel goes back to the chat', window.aria.chat.escape() === true && $('#view-chat') && !$('#view-chat').hidden)
+  check('Esc on an idle chat is left to the dock', window.aria.chat.escape() === false)
+
+  // 6. a picker reply that arrives after the text changed does not open it
+  typeIn('/'); typeIn(''); await wait(150)
+  check('a stale command reply opens nothing', !$('.p-cmd.is-open'))
+
+  // 7. memory search keeps focus while typing
+  window.aria.chat.setMemory([{ id: 'm1', type: 'decision', title: 'Use Rust', key: null, content: 'We use Rust.', rev: 1, dup: 0, created: Date.now(), updated: Date.now(), seen: 0, personal: false, pinned: false, session: null, tool: 'mem_save', review: null, expires: null }])
+  typeIn('/memory'); await wait(120); key($('#chat-input'), 'Enter'); await wait(40); key($('#chat-input'), 'Enter'); await wait(80) // the first Enter picks the command, the second runs it
+  const search = $('[data-chat-field="memory-search"]')
+  if (search) { search.focus(); search.value = 'ru'; search.dispatchEvent(new Event('input', { bubbles: true })); await wait(60) }
+  check('typing in the memory search keeps its focus', document.activeElement?.dataset?.chatField === 'memory-search' && document.activeElement.value === 'ru')
+  window.aria.chat.escape(); await wait(40)
+
+  // 8. the textarea is not replaced just because text appeared
+  const before = $('#chat-input'); typeIn('abc'); typeIn('abc\\ndef'); await wait(40)
+  check('typing and adding a line does not replace the textarea', $('#chat-input') === before && before.rows === 2, before.rows)
+
+  return results
+  function sim_ask() { window.sim.sess('s1', { type: 'chatDialog', id: 'ask1', method: 'input', request: { title: JSON.stringify({ aria: 1, kind: 'question', questions: [{ question: 'Which fallback?', header: 'Fallback', options: [{ label: 'Git hash' }, { label: 'Version' }] }, { question: 'Which checks?', header: 'Checks', options: [{ label: 'Unit' }, { label: 'Lint' }] }] }) }, hidden: false }) }
+})()`
+const reply = await send('Runtime.evaluate', { expression: script, awaitPromise: true, returnByValue: true })
+chrome.kill()
+if (!reply?.result?.value) {
+  console.error('the checks did not run:', JSON.stringify(reply).slice(0, 600))
+  process.exit(1)
+}
+let failed = 0
+for (const [name, ok, detail] of reply.result.value as [string, boolean, string][]) {
+  console.log(`${ok ? 'ok:  ' : 'FAIL:'} ${name}${ok || !detail ? '' : `  (${detail})`}`)
+  if (!ok) failed++
+}
+console.log(failed ? `${failed} check(s) failed` : 'all checks passed')
+process.exit(failed ? 1 : 0)

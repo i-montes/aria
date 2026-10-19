@@ -35,3 +35,8 @@
 .p-composer-hints { align-items: center; }
 .p-composer-model { max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 9px; border-radius: 8px; border: 1px solid #26262B; background: #16161a; color: #D6D6DC; font: inherit; cursor: pointer; }
 .p-composer-model:hover, .p-composer-model:focus-visible { border-color: #B9A8FF; outline: none; }
+
+/* One row under the input: the model, then the shortcuts. */
+.p-composer-hints { flex-wrap: nowrap; gap: 10px; overflow: hidden; }
+.p-composer-hints > span { white-space: nowrap; }
+.p-composer-model { flex: 0 1 auto; max-width: 180px; }

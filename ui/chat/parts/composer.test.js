@@ -67,6 +67,12 @@ describe('renderComposer', () => {
     expect(renderComposer({ showHints: false }, {}, t)).not.toContain('p-composer-hints')
   })
 
+  test('the shortcuts read "/ for commands" and "alt+a subagents", with no leading "type"', () => {
+    const html = renderComposer({}, {}, t)
+    expect(html).not.toContain('chat.composer.hint.type')
+    expect(html).toContain('<kbd class="p-composer-kbd">/</kbd> chat.composer.hint.commands')
+  })
+
   test('the "enter send · shift+enter new line" text is gone', () => {
     const html = renderComposer({}, {}, t)
     expect(html).not.toContain('shift+enter')
