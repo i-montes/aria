@@ -1,18 +1,18 @@
 /* The chat's layout. The look of every element lives in chat/parts/*.css (one file per design component);
    this file only places them. House rule (the owner's taste): buttons, cards and fields have SOLID
    backgrounds that never change on hover, focus or selection; only the border takes the accent. */
-.chat { position: absolute; top: 24px; right: 28px; bottom: 20px; left: 0; display: none; flex-direction: column; gap: 10px; min-height: 0; }
+.chat { position: absolute; top: 26px; right: 28px; bottom: 24px; left: 0; display: none; flex-direction: column; gap: 18px; min-height: 0; }
 body.mode-chat .content { display: none; }
 body.mode-chat .chat { display: flex; }
 body.open.mode-chat .chat { animation: enter 300ms var(--content) both; }
 
-.chat-header { flex: none; display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.chat-header { flex: none; display: flex; align-items: center; gap: 6px; min-height: 44px; }
 .chat-header > .p-tabs { flex: 1; min-width: 0; width: auto; }
 .chat-identity { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
-.chat-dot { flex: none; display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: glow 2400ms ease-in-out infinite; }
-.chat-name { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.chat-dot { flex: none; display: block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+.chat-name { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 15px; font-weight: 500; letter-spacing: 0.02em; color: #F4F4F5; }
 .chat-new:disabled { cursor: not-allowed; color: #5d5d66; border-color: #26262b; }
-.chat-path-row { flex: none; display: flex; align-items: center; gap: 8px; }
+.chat-path-row { flex: none; display: flex; align-items: center; gap: 8px; margin-top: -8px; }
 
 .icon-btn { display: grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; cursor: pointer; border-radius: 9px; border: 1px solid var(--line-strong); background: var(--surface); color: #B4B4BC; }
 .icon-btn:hover, .icon-btn:focus-visible { border-color: var(--accent-border); outline: none; }
@@ -82,3 +82,8 @@ body.open.mode-chat .chat { animation: enter 300ms var(--content) both; }
 .primary:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 2px; }
 .secondary { cursor: pointer; padding: 8px 14px; border-radius: 9px; border: 1px solid var(--line-strong); background: var(--surface); color: #B4B4BC; font-size: 13px; }
 
+
+/* The header's buttons as in the design: 44 px, no fill, a muted icon; the border (not the fill) answers hover and focus. */
+.chat-header .icon-btn { flex: 0 0 44px; width: 44px; height: 44px; background: transparent; border: 1px solid transparent; border-radius: 10px; color: #A1A1AA; }
+.chat-header .icon-btn:hover, .chat-header .icon-btn:focus-visible { border-color: var(--accent-border); color: #F4F4F5; }
+.chat-header .icon-btn:disabled { color: #4A4A52; border-color: transparent; }
