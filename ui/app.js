@@ -146,6 +146,9 @@ const chat = createChatView({
   },
 })
 
+// The sandbox page (tools/ui-sandbox) drives the chat through this.
+window.aria.chat = chat
+
 // ---- keyboard --------------------------------------------------------------------------------
 
 // Disabled controls cannot take focus, so the arrows have to skip them.

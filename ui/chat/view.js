@@ -12,7 +12,7 @@ import { renderMemory, initialMemoryUi, reduceMemoryUi } from './parts/memory.js
 import { renderMeter } from './parts/meter.js'
 import { renderModelPicker, filterModels } from './parts/models.js'
 import { questionAnswers, questionInit, questionReduce, normalizeQuestions, renderQuestion } from './parts/question.js'
-import { renderSubagents, agentsSummary } from './parts/subagents.js'
+import { renderSubagents } from './parts/subagents.js'
 import { renderSessionTabs } from './parts/tabs.js'
 import { renderTasks } from './parts/tasks.js'
 import { formatElapsed } from './parts/working.js'
@@ -299,7 +299,6 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     if (view === 'agents') {
       $('view-agents').innerHTML = `
         <div class="chat-panel-scroll">
-          <div class="chat-panel-head"><h2>${esc(t('chat.agents.title'))}</h2><span>${esc(agentsSummary(data.agents, t))}</span></div>
           ${data.agents.length ? renderSubagents({ agents: data.agents, footnote: t('chat.agents.footnote') }, {}, t) : `<p class="chat-panel-empty">${esc(t('chat.agents.empty'))}</p>`}
         </div>
         <button type="button" class="chat-back" data-chat="panel-back"><kbd>Alt</kbd><kbd>A</kbd><span>${esc(t('chat.agents.back'))}</span></button>`
