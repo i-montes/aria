@@ -35,3 +35,14 @@ Notes: the desktop notification for a prompt that nobody can see is sent with `o
 | `~/.aria/agent/npm/`, `~/.aria/agent/settings.json` (`packages`) | `pi install npm:pi-claude-agent-sdk@0.9.2` (about 300 MB), run **only** when you choose "Sign in with Claude" in `/connect`; Pi lists the package in its own settings (new) | none, new | `pi remove` with `PI_CODING_AGENT_DIR=~/.aria/agent`, or `rm -r ~/.aria/agent/npm` and delete the `packages` entry |
 | `~/.aria/auth.json` | the `anthropic` credential (API key or Claude OAuth) written by `/connect`, as the setup already does | the file is rewritten atomically keeping other providers | delete the `anthropic` entry |
 | `~/.local/bin/aria` | the binary with `/connect` (replaced) | rebuild from the earlier commit | `git checkout main~1 && cargo build --release` |
+
+## 2026-10-19 — phase 2b: the owner's persona and extensions
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| `~/.aria/agent/SYSTEM.md`, `agents/*.md` | the owner's persona and experts, replacing the one-line placeholder (written at every Pi start; an edited file is kept, see `.aria-files`) | the placeholder was one line, written by Aria | delete them; Aria writes them again |
+| `~/.aria/agent/extensions/` | the owner's seven extensions, adapted (see `extensions/README.md`) | none, new | `rm -r ~/.aria/agent/extensions` (Aria writes them again at the next start) |
+| `~/.aria/agent/.aria-files` | hashes of what Aria wrote, so an edit by the owner is kept | none, new | delete it (every file is then treated as the owner's) |
+| `~/.aria/agent/npm/node_modules/pi-parallel-agents`, `~/.aria/agent/git/github.com/obra/superpowers` (at `bb92a77`) | the packages the extensions use, installed by `install.sh` with `pi install`; listed in `~/.aria/agent/settings.json` (`packages`, superpowers filtered to two skills) | none, new | `pi remove` with `PI_CODING_AGENT_DIR=~/.aria/agent` |
+| `~/.aria/agent/sessions/aria/` | every session's file in one folder; the files of the earlier per-folder layout were moved here (3 files) | none (moved, not copied) | move them back under `sessions/--home-ana-Projects--/` |
+| `$XDG_RUNTIME_DIR/aria/watch-<session>.sock` | one socket per open tab for its subagents, mode 600, removed when the tab closes | none | stopping the dock removes them |

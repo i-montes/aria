@@ -4,9 +4,16 @@ The chat has every element of the design (`design/Aria.html`, `design/components
 tested as UI, with their data contract written at the top of each module in `ui/chat/parts/`, but nothing feeds
 them yet. Each row says what is missing and which part of the roadmap brings it.
 
-## Needs the owner's extensions (phase 2, part 2b — see its plan)
+## Fed by the owner's extensions (phase 2, part 2b — done)
 
-The cards, the Jev route line and the subagents panel are drawn and tested; part 2b makes the extensions send them. The contracts the extensions will follow are written in `docs/superpowers/plans/2026-10-19-aria-phase2b-extensions.md` (a card is a dialog whose `title` is `{"aria":1,"kind":…, "options":[…]}`; the Jev line is a `setStatus('aria-jev', …)`; the subagents come from Aria's own watch socket).
+The permission and write cards (sandbox, with its four choices), the quota card (quota-fallback), the question card
+(`ask_user`), the router's route line (jev-router) and the subagents panel (Aria's own watch socket) are fed. Left:
+
+- The quota card's countdown is shown as a number, not counting down; Pi's own timeout decides.
+- `/effort` and `/autocompact` still write their own files in `~/.aria/agent/`; part 2c moves them into Aria's settings.
+- An agent's session view has no composer (the design has one): there is no way to steer a subagent.
+- `/agents` (the terminal overlay) does nothing in the dock; Alt+A is the dock's way.
+- Memory (Engram) is not in Aria's `mcp.json` yet (part 2c), so Aria says it has no memory.
 
 ## Needs the goals engine (phase 3)
 
