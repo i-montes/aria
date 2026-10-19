@@ -2,72 +2,13 @@
 // The chat's HTML is built by pure functions, so it is tested without a browser.
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { addUser, createChat, reduce } from './state.js'
-import { insertFile, pickerQuery, renderDialog, renderEmpty, renderMessages, renderPath, renderProblem, keepRenameField, renderTabs, renderUndo, shortPath } from './view.js'
+import { createChat } from './state.js'
+import { chatTexts } from './texts.js'
+import { insertFile, keepRenameField, pickerQuery, renderDialog, renderPath, renderProblem, renderUndo, shortPath } from './view.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const ev = (event) => ({ type: 'chatEvent', event })
 const run = (state, ...messages) => messages.reduce(reduce, state)
-
-describe('messages', () => {
-  test('user and assistant text is escaped', () => {
-    let state = addUser(createChat(), '<script>alert(1)</script>')
-    state = run(
-      state,
-      ev({ type: 'message_start', message: { role: 'assistant' } }),
-      ev({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'a < b & "c"' }] } }),
-    )
-    const html = renderMessages(state, t)
-    expect(html).not.toContain('<script>')
-    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
-    expect(html).toContain('a &lt; b &amp; &quot;c&quot;')
-    expect(html).toContain('class="msg user"')
-    expect(html).toContain('class="msg assistant"')
-  })
-
-  test('a tool group shows a count and keeps its rows hidden until expanded', () => {
-    const state = run(
-      createChat(),
-      ev({ type: 'tool_execution_start', toolCallId: 'a', toolName: 'bash', args: { command: 'ls' } }),
-      ev({ type: 'tool_execution_start', toolCallId: 'b', toolName: 'read', args: { path: 'x<y.rs' } }),
-      ev({ type: 'tool_execution_end', toolCallId: 'a', toolName: 'bash', isError: false, result: { content: [{ type: 'text', text: 'out' }] } }),
-    )
-    const closed = renderMessages(state, t)
-    expect(closed).toContain('chat.tools n=2')
-    expect(closed).not.toContain('class="tool-row ')
-    const open = renderMessages(state, t, new Set([0]))
-    expect(open.match(/class="tool-row /g)).toHaveLength(2)
-    expect(open).toContain('x&lt;y.rs')
-    expect(open).toContain('status-done')
-    expect(open).toContain('status-running')
-  })
-
-  test('the working indicator shows only while running', () => {
-    const idle = renderMessages(createChat(), t)
-    expect(idle).not.toContain('class="working"')
-    const busy = renderMessages(reduce(createChat(), ev({ type: 'agent_start' })), t)
-    expect(busy).toContain('class="working"')
-    expect(busy).toContain('chat.working')
-  })
-
-  test('notices use their key and variables, or their text', () => {
-    const state = run(
-      createChat(),
-      ev({ type: 'auto_retry_start', attempt: 2, maxAttempts: 3 }),
-      ev({ type: 'command_failed', command: 'prompt', error: 'nope <b>' }),
-    )
-    const html = renderMessages(state, t)
-    expect(html).toContain('chat.retry attempt=2,max=3')
-    expect(html).toContain('nope &lt;b&gt;')
-    expect(html).toContain('notice tone-warn')
-    expect(html).toContain('notice tone-error')
-  })
-
-  test('an empty chat shows a start hint', () => {
-    expect(renderEmpty(createChat(), t)).toContain('chat.hint.empty')
-    expect(renderEmpty(addUser(createChat(), 'hi'), t)).toBe('')
-  })
-})
 
 describe('the working folder', () => {
   test('the path is always shown, shortened under the home folder, with the full path as its title', () => {
@@ -143,7 +84,10 @@ describe('problems', () => {
 })
 
 describe('pickers', () => {
-  test('pickerQuery finds a slash command at the start and an @ file at the caret', () => {
+  test('pickerQuery finds the model picker after "/model ", a command at the start and an @ file at the caret', () => {
+    expect(pickerQuery('/model ', 7)).toEqual({ kind: 'model', query: '', start: 0 })
+    expect(pickerQuery('/model gl', 9)).toEqual({ kind: 'model', query: 'gl', start: 0 })
+    expect(pickerQuery('/model', 6)).toEqual({ kind: 'command', query: 'model', start: 0 })
     expect(pickerQuery('/ef', 3)).toEqual({ kind: 'command', query: 'ef', start: 0 })
     expect(pickerQuery('/effort high', 12)).toBeNull() // after a space it is an argument
     expect(pickerQuery('look at @src/ma', 15)).toEqual({ kind: 'file', query: 'src/ma', start: 8 })
@@ -157,79 +101,14 @@ describe('pickers', () => {
   })
 })
 
-describe('the tab bar', () => {
+describe('the tab bar helpers', () => {
   const tab = (id, extra = {}) => ({ id, title: id, status: 'idle', unread: false, ...extra })
   const bar = (sessions, active = sessions[0].id, closed = null) => ({ sessions, active, closed })
-
-  test('titles are escaped and the active tab is marked', () => {
-    const html = renderTabs(bar([tab('a', { title: '<img onerror=x>' }), tab('b')], 'b'), t)
-    expect(html).not.toContain('<img')
-    expect(html).toContain('&lt;img onerror=x&gt;')
-    expect(html).toMatch(/aria-selected="true"[^>]*data-session="b"|data-session="b"[^>]*aria-selected="true"/)
-    expect(html.match(/aria-selected="true"/g)).toHaveLength(1)
-  })
-
-  test('an untitled session shows the placeholder title', () => {
-    expect(renderTabs(bar([tab('a', { title: '' })]), t)).toContain('chat.untitled')
-  })
-
-  test('each tab carries its status, and unread shows', () => {
-    const html = renderTabs(bar([tab('a', { status: 'working' }), tab('b', { status: 'needs' }), tab('c', { status: 'done', unread: true })]), t)
-    expect(html).toContain('status-working')
-    expect(html).toContain('status-needs')
-    expect(html).toContain('status-done')
-    expect(html).toContain('unread')
-  })
-
-  test('close buttons exist only when there is more than one session', () => {
-    expect(renderTabs(bar([tab('a')]), t)).not.toContain('data-chat="close-tab"')
-    expect(renderTabs(bar([tab('a'), tab('b')]), t).match(/data-chat="close-tab"/g)).toHaveLength(2)
-  })
-
-  test('the plus button opens a new session', () => {
-    expect(renderTabs(bar([tab('a')]), t)).toContain('data-chat="add"')
-  })
-
-  test('more than four sessions show an overflow count and, open, a menu with the rest', () => {
-    const sessions = Array.from({ length: 6 }, (_, i) => tab(`s${i}`))
-    const closed = renderTabs(bar(sessions), t)
-    expect(closed).toContain('chat.tab.more n=2')
-    expect(closed).not.toContain('role="menu"')
-    const open = renderTabs(bar(sessions), t, { menuOpen: true })
-    expect(open).toContain('role="menu"')
-    expect(open.match(/data-chat="select"[^>]*data-session="s[45]"/g)).toHaveLength(2)
-  })
-
-  test('a hidden session that needs you shows on the overflow button', () => {
-    const sessions = Array.from({ length: 6 }, (_, i) => tab(`s${i}`, i === 5 ? { status: 'needs' } : {}))
-    const html = renderTabs(bar(sessions), t)
-    expect(html).toMatch(/class="tab-more needs"/)
-    expect(html).toContain('chat.tab.moreNeeds')
-    const calm = renderTabs(bar(sessions.map((s) => ({ ...s, status: 'idle' }))), t)
-    expect(calm).not.toMatch(/tab-more needs/)
-  })
-
-  test('a hidden session that finished unread also shows on the overflow button', () => {
-    const sessions = Array.from({ length: 6 }, (_, i) => tab(`s${i}`, i === 4 ? { status: 'done', unread: true } : {}))
-    expect(renderTabs(bar(sessions), t)).toMatch(/class="tab-more unread"/)
-  })
-
-  test('the plus is disabled at eight sessions', () => {
-    const eight = Array.from({ length: 8 }, (_, i) => tab(`s${i}`))
-    expect(renderTabs(bar(eight), t)).toMatch(/data-chat="add"[^>]*disabled|disabled[^>]*data-chat="add"/)
-    expect(renderTabs(bar(eight.slice(0, 3)), t)).not.toMatch(/data-chat="add"[^>]*disabled/)
-  })
 
   test('the tab bar is left alone while a rename field is open', () => {
     expect(keepRenameField({ renaming: 'a' }, true)).toBe(true)
     expect(keepRenameField({ renaming: 'a' }, false)).toBe(false) // the field has to be drawn first
     expect(keepRenameField({ renaming: null }, true)).toBe(false)
-  })
-
-  test('a tab being renamed shows a field with its title', () => {
-    const html = renderTabs(bar([tab('a', { title: 'My <plan>' })]), t, { renaming: 'a' })
-    expect(html).toContain('data-chat-rename')
-    expect(html).toContain('value="My &lt;plan&gt;"')
   })
 
   test('the undo bar names the closed session', () => {
@@ -241,16 +120,22 @@ describe('the tab bar', () => {
 })
 
 describe('texts', () => {
-  test('every text key the chat view and state use exists in both languages', () => {
+  test('every text key the chat view, thread and state use exists in both languages (parts included)', () => {
     const read = (file) => readFileSync(new URL(file, import.meta.url), 'utf8')
-    const source = read('./view.js') + read('./state.js')
+    const source = read('./view.js') + read('./state.js') + read('./thread.js')
     const keys = new Set([...source.matchAll(/\bt\('(chat\.[a-zA-Z.-]+)'/g)].map((m) => m[1]))
-    for (const status of ['working', 'needs', 'done', 'idle']) keys.add(`chat.status.${status}`)
     for (const key of [...source.matchAll(/key: '(chat\.[a-zA-Z.-]+)'/g)].map((m) => m[1])) keys.add(key)
-    expect(keys.size).toBeGreaterThan(20)
+    for (const code of ['allow', 'always', 'deny', 'free', 'keep']) keys.add(`chat.result.${code}`)
+    expect(keys.size).toBeGreaterThan(15)
+    const texts = chatTexts()
     for (const lang of ['en', 'es']) {
-      const catalog = JSON.parse(read(`../i18n/${lang}.json`))
+      const catalog = { ...JSON.parse(read(`../i18n/${lang}.json`)), ...texts[lang] }
       for (const key of keys) expect(catalog[key], `${lang}: ${key}`).toBeDefined()
     }
+  })
+
+  test('the parts bring the same keys in both languages', () => {
+    const texts = chatTexts()
+    expect(Object.keys(texts.es).sort()).toEqual(Object.keys(texts.en).sort())
   })
 })

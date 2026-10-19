@@ -2,6 +2,7 @@
 // onboarding. Everything the dock sends arrives through `window.aria.receive(message)` (see
 // crates/aria-core/src/bridge.rs).
 import { createI18n, normalizeLanguage } from './i18n.js'
+import { chatTexts } from './chat/texts.js'
 import { createChatView } from './chat/view.js'
 import { createOnboarding } from './onboarding/view.js'
 
@@ -151,6 +152,11 @@ const chat = createChatView({
 const navigable = () => [...document.querySelectorAll('#flow [data-nav]:not(:disabled)')]
 
 document.addEventListener('keydown', (event) => {
+  // Alt+A: the subagents view and back (the design's shortcut).
+  if (event.altKey && event.key.toLowerCase() === 'a' && state.mode === 'chat') {
+    event.preventDefault()
+    return chat.toggleAgents()
+  }
   if (event.key === 'Escape') return post({ type: 'closeRequest' })
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
   if (event.target instanceof HTMLInputElement && event.target.type === 'range') return
@@ -171,7 +177,9 @@ document.querySelector('aside').addEventListener('transitionend', (event) => {
 
 async function boot() {
   const [en, es] = await Promise.all(['en', 'es'].map((code) => fetch(`aria://app/i18n/${code}.json`).then((r) => r.json())))
-  i18n = createI18n({ en, es })
+  // The chat's parts bring their own texts; they join the catalogs here.
+  const parts = chatTexts()
+  i18n = createI18n({ en: { ...en, ...parts.en }, es: { ...es, ...parts.es } })
   i18n.setLanguage(navigator.language)
   chat.mount()
   const reply = await request({ type: 'loadSettings' })
@@ -180,6 +188,7 @@ async function boot() {
     i18n.setLanguage(reply.settings.assistant.language)
     chat.mount()
   }
+  chat.setSettings(reply.settings)
   chat.setSessions(await request({ type: 'sessionsLoad' }))
   onboarding.start(reply.settings, reply.connected)
   setMode(reply.settings?.setup?.completed ? 'chat' : 'setup')

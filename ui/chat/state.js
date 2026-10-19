@@ -47,14 +47,14 @@ const notice = (tone, extra) => ({ kind: 'notice', tone, ...extra })
 
 /** What the run is doing, from the tool that just started (a code the working indicator has a text for). */
 export function phaseFor(name = '') {
-  if (/engram|mem_/.test(name)) return 'searching-memory'
-  if (/tavily/.test(name)) return 'searching-web'
-  if (/notion/.test(name)) return 'checking-notion'
+  if (/engram|mem_/.test(name)) return 'searching memory'
+  if (/tavily/.test(name)) return 'searching the web'
+  if (/notion/.test(name)) return 'checking Notion'
   if (/^(parallel|subagent)/.test(name)) return 'delegating'
-  if (name === 'bash') return 'running-command'
-  if (name === 'read') return 'reading-files'
-  if (name === 'write' || name === 'edit') return 'writing-files'
-  if (['grep', 'find', 'ls'].includes(name)) return 'searching-files'
+  if (name === 'bash') return 'running command'
+  if (name === 'read') return 'reading files'
+  if (name === 'write' || name === 'edit') return 'writing files'
+  if (['grep', 'find', 'ls'].includes(name)) return 'reading files'
   return 'working'
 }
 
@@ -199,7 +199,7 @@ function reduceEvent(state, event) {
     case 'auto_retry_start':
       return push(state, notice('warn', { key: 'chat.retry', vars: { attempt: event.attempt, max: event.maxAttempts } }))
     case 'compaction_start':
-      return { ...state, phase: 'compacting' }
+      return { ...state, phase: 'compacting context' }
     case 'compaction_end':
       return event.aborted || !event.result
         ? { ...state, phase: 'working' }
@@ -271,5 +271,5 @@ export function answerDialog(state, id, choice) {
   if (kind === 'question') {
     return Array.isArray(choice) ? push(next, { kind: 'answers', answers: choice }) : push(next, { kind: 'note', label: 'ask', key: 'chat.askSkipped' })
   }
-  return choice ? push(next, { kind: 'note', label: CARD_LABEL[kind] ?? kind, text: String(choice) }) : next
+  return choice ? push(next, { kind: 'note', label: CARD_LABEL[kind] ?? kind, key: `chat.result.${choice}`, text: String(choice) }) : next
 }

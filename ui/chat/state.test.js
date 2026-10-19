@@ -221,14 +221,14 @@ describe('queued messages', () => {
 describe('phase, elapsed time and the notes around a run', () => {
   test('the working phase follows the tool that runs', () => {
     const phase = (name, args = {}) => run(createChat(), ev({ type: 'agent_start' }), toolStart('a', name, args)).phase
-    expect(phase('bash')).toBe('running-command')
-    expect(phase('read')).toBe('reading-files')
-    expect(phase('write')).toBe('writing-files')
-    expect(phase('edit')).toBe('writing-files')
-    expect(phase('grep')).toBe('searching-files')
-    expect(phase('mcp__engram__mem_search')).toBe('searching-memory')
-    expect(phase('mcp__tavily__tavily_search')).toBe('searching-web')
-    expect(phase('mcp__notion__notion-search')).toBe('checking-notion')
+    expect(phase('bash')).toBe('running command')
+    expect(phase('read')).toBe('reading files')
+    expect(phase('write')).toBe('writing files')
+    expect(phase('edit')).toBe('writing files')
+    expect(phase('grep')).toBe('reading files')
+    expect(phase('mcp__engram__mem_search')).toBe('searching memory')
+    expect(phase('mcp__tavily__tavily_search')).toBe('searching the web')
+    expect(phase('mcp__notion__notion-search')).toBe('checking Notion')
     expect(phase('parallel')).toBe('delegating')
     expect(phase('something-new')).toBe('working')
   })
@@ -249,7 +249,7 @@ describe('phase, elapsed time and the notes around a run', () => {
 
   test('compaction shows its phase and leaves a divider when it ends', () => {
     let state = run(createChat(), ev({ type: 'compaction_start', reason: 'threshold' }))
-    expect(state.phase).toBe('compacting')
+    expect(state.phase).toBe('compacting context')
     state = reduce(state, ev({ type: 'compaction_end', reason: 'threshold', result: { tokensBefore: 150000 }, aborted: false }))
     expect(state.messages.at(-1)).toMatchObject({ kind: 'divider', key: 'chat.compacted' })
   })
@@ -296,7 +296,7 @@ describe('a card sent by an extension (a dialog whose title is JSON)', () => {
   test('answering a card leaves a resolved note with the chosen option', () => {
     const title = JSON.stringify({ aria: 1, kind: 'sandbox', summary: 'rm -rf build' })
     let state = reduce(createChat(), { type: 'chatDialog', id: 'u1', method: 'select', request: { title, options: ['Allow once', 'Block'] }, hidden: false })
-    state = answerDialog(state, 'u1', 'Block')
-    expect(state.messages.at(-1)).toMatchObject({ kind: 'note', label: 'sandbox', text: 'Block' })
+    state = answerDialog(state, 'u1', 'deny')
+    expect(state.messages.at(-1)).toMatchObject({ kind: 'note', label: 'sandbox', key: 'chat.result.deny' })
   })
 })
