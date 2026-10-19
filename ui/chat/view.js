@@ -7,10 +7,10 @@ import { renderAgentSession } from './parts/session.js'
 import { renderCommandPicker, filterCommands, stepActive, clampActive } from './parts/commands.js'
 import { renderComposer } from './parts/composer.js'
 import { renderFilePicker, filterFiles } from './parts/files.js'
-import { activeIndexFor, indexItems, indexTargets, renderIndex } from './parts/index.js'
+import { indexItems, indexLayout, renderIndex } from './parts/index.js'
 import { renderMemory, initialMemoryUi, reduceMemoryUi } from './parts/memory.js'
 import { renderMeter } from './parts/meter.js'
-import { renderModelPicker, filterModels } from './parts/models.js'
+import { renderModelPicker, orderedModels } from './parts/models.js'
 import { questionAnswers, questionInit, questionReduce, normalizeQuestions, renderQuestion } from './parts/question.js'
 import { renderSubagents } from './parts/subagents.js'
 import { renderSessionTabs } from './parts/tabs.js'
@@ -305,10 +305,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       return
     }
     const props = { items: picker.items, query: picker.query, active: picker.active, open: true }
-    el.innerHTML =
-      picker.kind === 'command' ? renderCommandPicker(props, {}, t)
-      : picker.kind === 'file' ? renderFilePicker(props, {}, t)
-      : renderModelPicker({ models: picker.items, current: current().model ?? '', query: picker.query, active: picker.active, open: true }, {}, t)
+    keepingFocus(el, () => {
+      el.innerHTML =
+        picker.kind === 'command' ? renderCommandPicker(props, {}, t)
+        : picker.kind === 'file' ? renderFilePicker(props, {}, t)
+        : renderModelPicker({ models: picker.items, current: current().model ?? '', query: picker.query, active: picker.active, open: true }, {}, t)
+    })
     el.querySelector('.p-cmd-row.on, .p-files-row.on, .p-models-row.on')?.scrollIntoView?.({ block: 'nearest' })
   }
 
@@ -534,15 +536,29 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   }
 
   function closePicker(draw = true) {
+    const hadModelPicker = picker?.kind === 'model'
     picker = null
     fileToken++
     if (draw) drawOverlay()
+    if (hadModelPicker) input?.focus() // the search field is gone: the keyboard goes back to the composer
+  }
+
+  /** The model picker opens at once (so Esc works even while Pi is still answering) and fills in when the list arrives. */
+  async function openModelPicker(query = '') {
+    const session = tabs.active
+    picker = { kind: 'model', items: [], query, active: 0, start: 0 }
+    drawOverlay()
+    $('chat-overlay').querySelector('[data-chat-field="model-search"]')?.focus()
+    const reply = await ask({ type: 'listModels' }, session)
+    if (picker?.kind !== 'model' || session !== tabs.active) return // closed or moved on meanwhile
+    picker = { ...picker, items: reply.models ?? [] }
+    drawOverlay()
   }
 
   const pickerSize = () => {
     if (!picker) return 0
     const { kind, items, query } = picker
-    return kind === 'command' ? filterCommands(items, query).length : kind === 'file' ? filterFiles(items, query).length : filterModels(items, query).length
+    return kind === 'command' ? filterCommands(items, query).length : kind === 'file' ? filterFiles(items, query).length : orderedModels(items, query).length
   }
 
   async function updatePicker() {
@@ -576,10 +592,10 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       return drawOverlay()
     }
     if (asked.kind === 'model') {
-      const reply = await ask({ type: 'listModels' }, session)
-      if (stale()) return
-      picker = { kind: 'model', items: reply.models ?? [], query: asked.query, active: 0, start: 0 }
-      return drawOverlay()
+      // "/model " opens the model picker, which has its own search field: the text leaves the composer.
+      clearDraft()
+      drawComposer()
+      return openModelPicker(asked.query)
     }
     clearTimeout(fileTimer)
     const token = ++fileToken
@@ -595,13 +611,10 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     if (!picker) return
     const { kind, items, query } = picker
     if (kind === 'model') {
-      const hit = filterModels(items, query)[index]?.model
+      const hit = orderedModels(items, query)[index]?.model
       if (!hit) return
-      closePicker(false)
-      clearDraft()
+      closePicker()
       ask({ type: 'setModel', model: `${hit.provider}/${hit.id}` })
-      drawOverlay()
-      drawComposer()
       return
     }
     const caret = input.selectionStart ?? input.value.length
@@ -692,17 +705,26 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
 
   // ---- the thread's scroll and index -------------------------------------------------------------
 
+  // As the design's message index: it opens when the pointer reaches the right edge of the thread (the last 56 px),
+  // follows the pointer while it stays over the chips' area (300 px), and closes shortly after it leaves. The thread's
+  // own scrollbar stays usable: nothing of the index takes the pointer except the chips themselves.
+  const INDEX_OPEN_ZONE = 56
+  const INDEX_KEEP_ZONE = 300
+  const INDEX_HIDE_MS = 160
+  let indexHide = null
+  let indexSettle = null
+  let indexSuppressed = false
+
   function updateActive() {
     const items = indexItems(current().messages)
     if (!items.length) return
-    const list = $('chat-list')
-    const base = list.getBoundingClientRect().top
-    const tops = indexTargets(items).map((id) => {
-      const el = document.getElementById(id)
-      return el ? el.getBoundingClientRect().top - base + list.scrollTop : Infinity
-    })
-    const at = activeIndexFor(list.scrollTop, tops)
-    const id = items[Math.max(0, Math.min(items.length - 1, at))]?.id
+    const top = $('chat-list').getBoundingClientRect().top
+    let at = -1
+    for (let i = 0; i < items.length && at === -1; i++) {
+      const el = document.getElementById(items[i].id)
+      if (el && el.getBoundingClientRect().bottom > top + 8) at = i // the first message still reaching below the top edge
+    }
+    const id = items[at === -1 ? items.length - 1 : at]?.id
     if (id !== ui.activeId) {
       ui.activeId = id
       drawIndex()
@@ -713,27 +735,115 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     if (event.target?.id === 'chat-list') updateActive()
   }, true)
 
-  const indexEl = () => $('chat-index')
-  root.addEventListener('mouseover', (event) => {
-    if (event.target.closest?.('#chat-index') && !ui.index.expanded) {
-      ui.index = { ...ui.index, expanded: true, settled: false }
-      drawIndex()
-      setTimeout(() => { ui.index.settled = true }, 400)
+  const indexGeometry = () => indexLayout(indexItems(current().messages).length, { ...ui.index, expanded: true })
+
+  function showIndex(my) {
+    clearTimeout(indexHide)
+    const height = $('chat-list').clientHeight || ui.index.height
+    const items = indexItems(current().messages)
+    if (!ui.index.expanded) {
+      // Opening: when the chips do not all fit, start with the active one in the middle.
+      const g = indexLayout(items.length, { height, expanded: true })
+      const at = Math.max(0, items.findIndex((i) => i.id === ui.activeId))
+      const off = g.overflow ? Math.min(g.maxOff, Math.max(0, 8 + at * 34 + 15 - height / 2)) : 0
+      ui.index = { ...ui.index, expanded: true, settled: false, my, off, height }
+      clearTimeout(indexSettle)
+      indexSettle = setTimeout(() => {
+        ui.index.settled = true
+      }, 450)
+    } else {
+      ui.index = { ...ui.index, my, height }
     }
-  })
-  root.addEventListener('mousemove', (event) => {
-    if (!ui.index.expanded) return
-    const rect = indexEl()?.getBoundingClientRect()
-    if (!rect) return
-    ui.index = { ...ui.index, my: event.clientY - rect.top }
     drawIndex()
-  })
-  root.addEventListener('mouseout', (event) => {
-    if (event.target.closest?.('#chat-index') && !event.relatedTarget?.closest?.('#chat-index')) {
-      ui.index = { ...ui.index, expanded: false, my: null }
+  }
+
+  function scheduleHideIndex() {
+    if (!ui.index.expanded) return
+    clearTimeout(indexHide)
+    indexHide = setTimeout(() => {
+      ui.index = { ...ui.index, expanded: false, my: null, settled: false }
       drawIndex()
+    }, INDEX_HIDE_MS)
+  }
+
+  function hideIndexNow() {
+    clearTimeout(indexHide)
+    clearTimeout(indexSettle)
+    ui.index = { ...ui.index, expanded: false, my: null, settled: false }
+    drawIndex()
+  }
+
+  root.addEventListener('mousemove', (event) => {
+    const list = $('chat-list')
+    if (!list || ui.view !== 'chat' || indexItems(current().messages).length < 2) return
+    const rect = list.getBoundingClientRect()
+    const inside = event.clientY >= rect.top && event.clientY <= rect.bottom && event.clientX >= rect.left && event.clientX <= rect.right
+    const fromRight = rect.right - event.clientX
+    if (inside && ((ui.index.expanded && fromRight <= INDEX_KEEP_ZONE) || (!indexSuppressed && fromRight <= INDEX_OPEN_ZONE))) {
+      showIndex(event.clientY - rect.top)
+    } else {
+      if (!inside || fromRight > INDEX_OPEN_ZONE) indexSuppressed = false
+      scheduleHideIndex()
     }
   })
+
+  // With the index open and more chips than fit, the wheel scrolls the chips; otherwise it scrolls the thread.
+  root.addEventListener(
+    'wheel',
+    (event) => {
+      if (!ui.index.expanded) return
+      const rect = $('chat-list').getBoundingClientRect()
+      if (rect.right - event.clientX > INDEX_KEEP_ZONE) return
+      const g = indexGeometry()
+      if (!g.overflow) return
+      event.preventDefault()
+      const dy = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY
+      ui.index = { ...ui.index, off: Math.min(g.maxOff, Math.max(0, (ui.index.off ?? 0) + dy)) }
+      drawIndex()
+    },
+    { passive: false },
+  )
+
+  /** Jump to a message you sent: the thread scrolls to it, and it gives a soft halo once it is there. */
+  function jumpTo(id) {
+    const el = document.getElementById(id)
+    if (!el) return
+    indexSuppressed = true // stay closed until the pointer leaves the edge and comes back
+    hideIndexNow()
+    const list = $('chat-list')
+    list.scrollBy({ top: el.getBoundingClientRect().top - list.getBoundingClientRect().top - 12, behavior: 'smooth' })
+    let quiet = null
+    const finish = () => {
+      list.removeEventListener('scroll', onScroll)
+      clearTimeout(quiet)
+      clearTimeout(cap)
+      flash(el)
+    }
+    const onScroll = () => {
+      clearTimeout(quiet)
+      quiet = setTimeout(finish, 110)
+    }
+    list.addEventListener('scroll', onScroll, { passive: true })
+    quiet = setTimeout(finish, 160)
+    const cap = setTimeout(finish, 1400)
+  }
+
+  function flash(el) {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    const bubble = el.querySelector('.p-user-bubble, p') ?? el
+    try {
+      bubble.animate(
+        [
+          { transform: 'scale(1)', transformOrigin: 'right center', boxShadow: '0 0 0 0 rgba(185, 168, 255, 0.5)', offset: 0 },
+          { transform: 'scale(1.035)', transformOrigin: 'right center', boxShadow: '0 0 0 4px rgba(185, 168, 255, 0.28)', offset: 0.3 },
+          { transform: 'scale(1)', transformOrigin: 'right center', boxShadow: '0 0 0 12px rgba(185, 168, 255, 0)', offset: 1 },
+        ],
+        { duration: 850, easing: 'ease-in-out' },
+      )
+    } catch {
+      // animations unavailable: the jump alone is enough
+    }
+  }
 
   // ---- events ----------------------------------------------------------------------------------
 
@@ -742,6 +852,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     if (el === input) {
       drawComposer()
       updatePicker()
+    } else if (el?.dataset?.chatField === 'model-search' && picker?.kind === 'model') {
+      picker = { ...picker, query: el.value, active: 0 }
+      drawOverlay()
     } else if (el?.dataset?.op === 'other') {
       const id = el.dataset.id
       const state = wizards.get(id)
@@ -767,6 +880,19 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       return
     }
     if (event.target === input) return onComposerKey(event)
+    if (event.target?.dataset?.chatField === 'model-search' && picker?.kind === 'model') {
+      const size = pickerSize()
+      if (size && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+        event.preventDefault()
+        picker = { ...picker, active: stepActive(picker.active, size, event.key === 'ArrowDown' ? 1 : -1) }
+        return drawOverlay()
+      }
+      if (size && (event.key === 'Enter' || event.key === 'Tab') && !event.isComposing) {
+        event.preventDefault()
+        return choose(clampActive(picker.active, size))
+      }
+      return // Escape is not handled here: the page calls escape(), which closes just this picker
+    }
     if (event.target?.dataset?.op === 'other' && event.key === 'Enter' && !event.isComposing) {
       event.preventDefault()
       const { id, q } = event.target.dataset
@@ -804,15 +930,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       case 'stop': return stop()
       case 'settings': return onSettings?.()
       case 'close-dock': return send({ type: 'closeRequest' })
-      case 'open-models': {
-        if (!input) return
-        input.value = '/model '
-        composerKey = ''
-        drawComposer()
-        input.focus()
-        input.setSelectionRange(7, 7)
-        return updatePicker()
-      }
+      case 'open-models':
+        if (ui.view !== 'chat') openView('chat')
+        return picker?.kind === 'model' ? closePicker() : openModelPicker()
       case 'pick': return choose(Number(index))
       case 'picker-hover':
         if (picker) picker = { ...picker, active: Number(index) }
@@ -847,10 +967,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
         if (!set.delete(Number(index))) set.add(Number(index))
         return drawThread()
       }
-      case 'index-jump': {
-        document.getElementById(id)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
-        return
-      }
+      case 'index-jump': return jumpTo(id)
       case 'permission': return answer(id, { value: choice }, choice)
       case 'quota': return answer(id, { value: choice }, choice)
       case 'question': return onQuestion(el)

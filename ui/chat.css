@@ -29,8 +29,12 @@ body.open.mode-chat .chat { animation: enter 300ms var(--content) both; }
 .thread-empty { margin: auto 0; display: flex; flex-direction: column; gap: 8px; align-items: center; text-align: center; padding: 0 12px; }
 .thread-empty-title { font: 11px ui-monospace, "Geist Mono", monospace; letter-spacing: 0.08em; color: var(--muted); }
 .thread-empty-text { font-size: 13.5px; line-height: 1.6; color: #B4B4BC; }
-.chat-index { position: absolute; top: 0; right: 0; bottom: 0; width: 22px; z-index: 4; }
-.chat-index .p-index { position: absolute; top: 0; right: 0; width: 0; height: 100%; }
+/* The index never takes the pointer (the thread's scrollbar stays usable); only its chips do. The view opens it from the
+   pointer's position over the thread. */
+.chat-index { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.chat-index .p-index { position: absolute; top: 0; right: 12px; width: 0; height: 100%; }
+.chat-index .p-index-panel, .chat-index .p-index-panel.is-open { pointer-events: none; }
+.chat-index .p-index-btn { pointer-events: auto; }
 .chat-question { position: absolute; inset: 0; z-index: 6; display: none; }
 .chat-question:not(:empty) { display: block; }
 .question-fill { height: 100%; overflow-y: auto; }

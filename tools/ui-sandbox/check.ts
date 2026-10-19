@@ -115,6 +115,39 @@ const script = `(async () => {
   check('typing in the memory search keeps its focus', document.activeElement?.dataset?.chatField === 'memory-search' && document.activeElement.value === 'ru')
   window.aria.chat.escape(); await wait(40)
 
+  // 10. the model picker: its own search, grouped by provider, Esc closes only it
+  window.aria.chat.setSettings(null)
+  $('.p-composer-model').click(); await wait(20)
+  check('Esc right after opening the model picker (before the list arrives) closes only the picker', window.aria.chat.escape() === true && !$('.p-models.is-open'))
+  $('.p-composer-model').click(); await wait(150)
+  check('the model picker has a search field with focus', document.activeElement?.dataset?.chatField === 'model-search', document.activeElement?.tagName)
+  check('the models are grouped by provider', document.querySelectorAll('.p-models-group').length >= 1, document.querySelector('.p-models')?.textContent.slice(0, 120))
+  const modelSearch = document.activeElement
+  modelSearch.value = 'glm'; modelSearch.dispatchEvent(new Event('input', { bubbles: true })); await wait(60)
+  check('typing in the search narrows the list and keeps focus', document.activeElement?.dataset?.chatField === 'model-search' && document.querySelectorAll('.p-models-row').length === 1, document.querySelectorAll('.p-models-row').length)
+  window.__sent.length = 0
+  document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); await wait(80)
+  check('Enter picks the model', sent().some((m) => m.type === 'setModel' && m.model === 'opencode-go/glm-5.3'), JSON.stringify(sent()))
+  check('the picker closes after picking', !$('.p-models.is-open'))
+  $('.p-composer-model').click(); await wait(150)
+  check('Esc inside the search closes only the picker and returns the keyboard to the composer', window.aria.chat.escape() === true && !$('.p-models.is-open') && document.activeElement === $('#chat-input'))
+  // 11. the message index: opens at the thread's right edge, follows the pointer, leaves the scrollbar free
+  await reset()
+  for (const text of ['first question', 'second one', 'third one', 'fourth one']) { typeIn(text); key($('#chat-input'), 'Enter'); await wait(60); ev({ type: 'agent_settled', aborted: false }); await wait(30) }
+  const listBox = $('#chat-list').getBoundingClientRect()
+  const move = (x, y) => $('#chat-list').dispatchEvent(new MouseEvent('mousemove', { clientX: x, clientY: y, bubbles: true }))
+  move(listBox.right - 200, listBox.top + 100); await wait(60)
+  check('the index stays closed away from the edge', !$('.p-index-panel.is-open'))
+  move(listBox.right - 20, listBox.top + 100); await wait(80)
+  check('the index opens when the pointer reaches the right edge', $('.p-index-panel.is-open'))
+  const chipTops = () => [...document.querySelectorAll('.p-index-item')].map((li) => li.style.top).join()
+  const tops0 = chipTops()
+  move(listBox.right - 120, listBox.bottom - 60); await wait(120)
+  check('the chips follow the pointer', chipTops() !== tops0, tops0 + ' -> ' + chipTops())
+  const hit = document.elementFromPoint(listBox.right - 3, listBox.top + 200)
+  check('the thread scrollbar is not covered by the index', hit && !hit.closest('.chat-index') && (hit.id === 'chat-list' || hit.closest('#chat-list')), hit?.className)
+  move(listBox.left + 40, listBox.top + 100); await wait(300)
+  check('the index closes after the pointer leaves', !$('.p-index-panel.is-open'))
   // 9. no model button next to the working folder
   document.querySelector('[data-chat="add"]').click(); await wait(60)
   check('no model button beside the working folder, with one session or several', !$('.chat-path-row .p-meter') && !$('.chat-path-row .p-composer-model'))

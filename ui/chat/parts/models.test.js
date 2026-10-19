@@ -1,7 +1,7 @@
 // Run: bun test ui/chat/parts/models.test.js
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { TEXTS, filterModels, renderModelPicker } from './models.js'
+import { TEXTS, filterModels, orderedModels, providerLabel, renderModelPicker } from './models.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const hostile = '<script>alert("x")</script> & \'q\''
@@ -32,6 +32,69 @@ describe('filterModels', () => {
   test('matching ignores case; nothing matches gives an empty list', () => {
     expect(ids('GLM')).toEqual(['glm-5'])
     expect(ids('zzz')).toEqual([])
+  })
+})
+
+describe('grouping by provider', () => {
+  const mixed = [
+    { provider: 'opencode-go', id: 'glm-5', name: 'GLM 5' },
+    { provider: 'anthropic', id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' },
+    { provider: 'opencode-go', id: 'kimi-k2', name: 'Kimi K2' },
+    { provider: 'anthropic', id: 'claude-opus-5-5', name: 'Claude Opus 5.5' },
+    { provider: 'weird<provider>', id: 'x', name: 'X' },
+  ]
+
+  test('models of one provider sit together, providers in order of first appearance, models in their own order', () => {
+    expect(orderedModels(mixed, '').map((x) => x.model.id)).toEqual(['glm-5', 'kimi-k2', 'claude-sonnet-5-5', 'claude-opus-5-5', 'x'])
+  })
+
+  test('with a query the provider whose best match ranks first comes first', () => {
+    const found = orderedModels(mixed, 'claude').map((x) => x.model.id)
+    expect(found).toEqual(['claude-sonnet-5-5', 'claude-opus-5-5'])
+    const byName = orderedModels(mixed, 'kimi').map((x) => x.model.id)
+    expect(byName).toEqual(['kimi-k2'])
+  })
+
+  test('each entry knows its flat index and where its provider group starts', () => {
+    const list = orderedModels(mixed, '')
+    expect(list.map((x) => x.index)).toEqual([0, 1, 2, 3, 4])
+    expect(list.filter((x) => x.firstOfProvider).map((x) => x.model.provider)).toEqual(['opencode-go', 'anthropic', 'weird<provider>'])
+  })
+
+  test('provider names are readable', () => {
+    expect(providerLabel('opencode-go')).toBe('OpenCode Go')
+    expect(providerLabel('opencode')).toBe('OpenCode Zen')
+    expect(providerLabel('anthropic')).toBe('Anthropic')
+    expect(providerLabel('claude-bridge')).toBe('Claude (sign-in)')
+    expect(providerLabel('some-new-one')).toBe('some-new-one')
+    expect(providerLabel('')).toBe('')
+  })
+
+  test('the picker shows one header per provider with its models counted, and row indexes run across groups', () => {
+    const html = renderModelPicker({ models: mixed, current: '', query: '', active: 0, open: true }, {}, t)
+    expect(html.match(/class="p-models-group"/g)).toHaveLength(3)
+    expect(html).toContain('OpenCode Go')
+    expect(html).toContain('Anthropic')
+    expect(html).toContain('weird&lt;provider&gt;')
+    expect(html).not.toContain('weird<provider>')
+    expect(html.match(/data-chat="pick" data-index="4"/g)).toHaveLength(1)
+    expect(html.indexOf('OpenCode Go')).toBeLessThan(html.indexOf('GLM 5'))
+    expect(html.indexOf('GLM 5')).toBeLessThan(html.indexOf('Kimi K2'))
+    expect(html.indexOf('Kimi K2')).toBeLessThan(html.indexOf('Anthropic'))
+  })
+
+  test('the picker has its own search field, filled with the query and escaped', () => {
+    const html = renderModelPicker({ models: mixed, current: '', query: 'cla"<b>', active: 0, open: true }, {}, t)
+    expect(html).toContain('data-chat-field="model-search"')
+    expect(html).toContain('value="cla&quot;&lt;b&gt;"')
+    expect(html).toContain('placeholder="chat.models.search"')
+    expect(html).not.toContain('<b>')
+  })
+
+  test('the search field shows even when nothing matches, so the query can be fixed', () => {
+    const html = renderModelPicker({ models: mixed, current: '', query: 'zzz', active: 0, open: true }, {}, t)
+    expect(html).toContain('data-chat-field="model-search"')
+    expect(html).toContain('chat.models.empty')
   })
 })
 
