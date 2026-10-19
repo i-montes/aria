@@ -251,6 +251,15 @@ pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::
     }
     write_json_atomic(&settings_path, &merge_preserving(original, ours), 0o600)?;
 
+    // The extensions' settings (extensions/lib/config.ts); before the setup they keep the values in their code.
+    let config_path = agent.join("aria.json");
+    match settings {
+        Some(settings) => write_json_atomic(&config_path, &crate::agent_config::extension_config(settings), 0o600)?,
+        None => {
+            let _ = std::fs::remove_file(&config_path);
+        }
+    }
+
     gather_sessions(paths)?;
 
     // The owner's persona and experts; one the owner edited is kept.
@@ -476,6 +485,19 @@ mod tests {
         assert!(!packages_installed(&paths), "superpowers is not cloned yet");
         std::fs::create_dir_all(paths.agent().join("git/github.com/obra/superpowers/skills")).unwrap();
         assert!(packages_installed(&paths));
+    }
+
+    #[test]
+    fn prepare_writes_aria_json_and_removes_it_without_settings() {
+        let (_dir, paths) = paths();
+        let settings: Settings = serde_json::from_str(include_str!("../tests/golden/settings-provider-opencode-go.json")).unwrap();
+        prepare(&paths, Some(&settings)).unwrap();
+        let file = paths.agent().join("aria.json");
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(written["quota"]["switchAt"], 98);
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        prepare(&paths, None).unwrap();
+        assert!(!file.exists(), "before the setup the extensions keep their own values");
     }
 
     #[test]
