@@ -12,6 +12,7 @@ import { indexItems, indexLayout, renderIndex } from './parts/index.js'
 import { renderMemory, initialMemoryUi, reduceMemoryUi } from './parts/memory.js'
 import { renderModelPicker, orderedModels } from './parts/models.js'
 import { questionAnswers, questionInit, questionReduce, normalizeQuestions, renderQuestion } from './parts/question.js'
+import { renderQuotaBars } from './parts/quotabars.js'
 import { renderSubagents } from './parts/subagents.js'
 import { renderSessionTabs } from './parts/tabs.js'
 import { renderTasks } from './parts/tasks.js'
@@ -226,7 +227,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   function drawHeader() {
     const key = JSON.stringify([
       tabs.sessions.map((s) => [s.id, s.title, s.status, s.unread, chatOf(s.id).model, chatOf(s.id).context]),
-      tabs.active, ui.menuOpen, ui.renaming, assistantName(), settings?.compaction?.percent,
+      tabs.active, ui.menuOpen, ui.renaming, assistantName(), settings?.compaction?.percent, current().quota,
     ])
     if (key === headerKey && $('chat-header').firstChild) return
     headerKey = key
@@ -235,7 +236,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const sessions = tabs.sessions.map((s) => ({ ...s, model: modelLabel(chatOf(s.id).model), context: chatOf(s.id).context ?? 0, quota: 0, free: false }))
     const left = multi
       ? renderSessionTabs({ ...tabs, sessions }, { maxVisible: 3, hideNew: true, hideUndo: true, menuOpen: ui.menuOpen, renaming: ui.renaming, hasQuota: false }, t)
-      : `<div class="chat-identity"><span class="chat-dot" aria-hidden="true"></span><span class="chat-name">${esc(assistantName())}</span></div>`
+      : `<div class="chat-identity"><span class="chat-dot" aria-hidden="true"></span><span class="chat-name">${esc(assistantName())}</span>${renderQuotaBars({ windows: current().quota }, {}, t)}</div>`
     $('chat-header').innerHTML = `${left}
       <button type="button" class="icon-btn chat-new" data-chat="add" ${full ? 'disabled' : ''} aria-label="${esc(t('chat.new'))}" title="${esc(t('chat.new'))}">${ICON.plus}</button>
       <button type="button" class="icon-btn" data-chat="close-dock" aria-label="${esc(t('chat.close'))}" title="${esc(t('chat.close'))}">${ICON.close}</button>`

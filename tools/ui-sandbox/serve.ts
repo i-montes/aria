@@ -53,7 +53,8 @@ const sandbox = `<script>
         else if (inner.type === 'listFiles') w({ type: 'files', files: FILES.filter((f) => f.includes(inner.query)) })
         else if (inner.type === 'listModels') w({ type: 'models', models: MODELS })
         else if (inner.type === 'setModel') { w({ type: 'saved' }); sim.sess(m.session, { type: 'chatState', workdir: '/home/ana/Projects/aria', running: false, model: inner.model, thinking: 'medium', context: 22, problem: null }) }
-        else if (inner.type === 'chatLoad') sim.sess(m.session, { type: 'chatState', workdir: '/home/ana/Projects/aria', running: false, model: sim.model, thinking: 'medium', context: sim.context, problem: null })
+        else if (inner.type === 'chatLoad') { sim.sess(m.session, { type: 'chatQuota', windows: [{ id: '5h', label: '5h', percent: 42, resetsAt: new Date(Date.now() + 3 * 3600e3 + 20 * 60e3).toISOString() }, { id: 'week', label: 'Week', percent: 17, resetsAt: new Date(Date.now() + 5 * 86400e3).toISOString() }, { id: 'month', label: 'Month', percent: 83, resetsAt: null }, { id: 'fable', label: 'Fable', percent: 96, resetsAt: new Date(Date.now() + 2 * 86400e3).toISOString() }] }) }
+        if (inner.type === 'chatLoad') sim.sess(m.session, { type: 'chatState', workdir: '/home/ana/Projects/aria', running: false, model: sim.model, thinking: 'medium', context: sim.context, problem: null })
         else if (inner.type === 'chatSend' && inner.behavior === 'followUp') { sim.queue.push(inner.text); sim.ev({ type: 'queue_update', steering: [], followUp: [...sim.queue] }, m.session) }
         else if (inner.type === 'chatClearQueue') { sim.queue = [...(inner.keep ?? [])]; sim.ev({ type: 'queue_update', steering: [], followUp: [...sim.queue] }, m.session) }
         else if (inner.type === 'chatSend') sim.reply(m.session, inner.text)

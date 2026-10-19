@@ -307,6 +307,28 @@ describe('phase, elapsed time and the notes around a run', () => {
   })
 })
 
+describe('the provider quota', () => {
+  const windows = [{ id: '5h', label: '5h', percent: 42, resetsAt: null }, { id: 'week', label: 'Week', percent: 17, resetsAt: null }]
+
+  test('chatQuota stores the windows for the session', () => {
+    expect(reduce(createChat(), { type: 'chatQuota', windows }).quota).toEqual(windows)
+  })
+
+  test('an empty answer clears them (a model whose provider has nothing to read)', () => {
+    const state = run(createChat(), { type: 'chatQuota', windows }, { type: 'chatQuota', windows: [] })
+    expect(state.quota).toEqual([])
+  })
+
+  test('a new conversation keeps the quota (it is the account\'s, not the conversation\'s)', () => {
+    const state = run(createChat(), { type: 'chatQuota', windows }, ev({ type: 'session_reset' }))
+    expect(state.quota).toEqual(windows)
+  })
+
+  test('a malformed message is ignored', () => {
+    expect(reduce(createChat(), { type: 'chatQuota', windows: 'nope' }).quota).toEqual([])
+  })
+})
+
 describe('the route line from the router', () => {
   test('a jev event becomes a route line before the next answer', () => {
     const state = run(createChat(), ev({ type: 'aria_jev', mode: 'focused task', action: 'searches memory' }))

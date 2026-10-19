@@ -17,7 +17,7 @@ import { parseCardTitle } from './parts/cards.js'
 export function createChat() {
   return {
     workdir: '', running: false, engine: 'idle', model: null, thinking: null, context: null, problem: null,
-    messages: [], dialogs: [], queue: [], delivered: [], phase: 'working', startedAt: null,
+    messages: [], dialogs: [], queue: [], delivered: [], phase: 'working', startedAt: null, quota: [],
   }
 }
 
@@ -255,6 +255,8 @@ export function reduce(state, message) {
         ? push(next, { kind: 'note', label: 'model', text: modelShort(next.model) })
         : next
     }
+    case 'chatQuota':
+      return { ...state, quota: Array.isArray(message.windows) ? message.windows : state.quota }
     case 'chatEngine':
       return { ...state, engine: message.state }
     case 'chatDialog': {

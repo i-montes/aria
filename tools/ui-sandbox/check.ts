@@ -45,6 +45,10 @@ const script = `(async () => {
   // 0. the header with a single session: the name, and no model button
   check('the single-session header has the assistant name and no model button', $('#chat-header .chat-name') && !$('#chat-header .p-meter') && !$('#chat-header [data-chat="open-models"]'), $('#chat-header').innerHTML.slice(0, 200))
 
+  await wait(200)
+  check('the single-session header shows a bar per quota window (5h, Week, Month, Fable)', document.querySelectorAll('#chat-header .p-qb-item').length === 4, document.querySelectorAll('#chat-header .p-qb-item').length)
+  check('a nearly full window turns amber or red', $('#chat-header .p-qb-item.is-warn') && $('#chat-header .p-qb-item.is-crit'))
+
   // 1. the textarea survives a run starting, text appearing and the model changing
   typeIn('half-typed')
   const mark = $('#chat-input'); mark.__mark = 1
@@ -211,6 +215,7 @@ const script = `(async () => {
   document.querySelector('[data-chat="add"]').click(); await wait(60)
   check('no model button beside the working folder, with one session or several', !$('.chat-path-row .p-meter') && !$('.chat-path-row .p-composer-model'))
   check('no model button in the header, with one session or several', !$('#chat-header .p-meter') && !$('#chat-header .p-composer-model') && !$('#chat-header [data-chat="open-models"]'), $('#chat-header').innerHTML.slice(0, 160))
+  check('with several sessions the header has tabs and no quota bars', !$('#chat-header .p-qb'), $('#chat-header').innerHTML.slice(0, 120))
   // 8. the textarea is not replaced just because text appeared
   const before = $('#chat-input'); typeIn('abc'); typeIn('abc\\ndef'); await wait(40)
   check('typing and adding a line does not replace the textarea', $('#chat-input') === before && before.rows === 2, before.rows)
