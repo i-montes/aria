@@ -54,52 +54,6 @@ export function createOnboarding(env) {
     servicesConnected: SERVICES.filter((id) => state.connected.has(`mcp:${id}`)),
   })
 
-  // A control changes its own state; only the ones that add or remove fields redraw the step.
-  const structuralToggle = new Set(['service', 'askFirst', 'memory', 'limitTurns', 'planExecute'])
-  const structuralPick = new Set(['router', 'language', 'effort', 'packageSource'])
-
-  function paintSwitch(el, on) {
-    el.setAttribute('aria-checked', String(on))
-    const track = el.classList.contains('track') ? el : el.querySelector('.track')
-    track?.classList.toggle('on', on)
-  }
-
-  function paintCheck(el, on) {
-    el.setAttribute('aria-checked', String(on))
-    const box = el.querySelector('.box')
-    if (box) {
-      box.classList.toggle('on', on)
-      box.textContent = on ? '✓' : ''
-    }
-  }
-
-  function paintPick(el) {
-    const group = el.parentElement
-    if (!group) return
-    for (const option of group.querySelectorAll('[data-action="pick"]')) {
-      const selected = option === el
-      option.classList.toggle('selected', selected)
-      option.setAttribute('aria-pressed', String(selected))
-    }
-  }
-
-  /** The footer depends on the whole step, so a simple control still updates its disabled state. */
-  function paintContinue() {
-    const button = root.querySelector('[data-action="next"]')
-    if (button) button.disabled = !canContinue(state.step, state.settings, uiFlags()) || state.saving
-  }
-
-  function paintStepper(el) {
-    const row = el.closest?.('.stepper')
-    if (!row) return
-    const value = state.settings.subagents.turnLimit
-    row.querySelector('.readout').textContent = `${value} ${t('ob.agents.turns', { n: '' }).trim()}`
-    for (const button of row.querySelectorAll('[data-action="step"]')) {
-      const delta = Number(button.dataset.value)
-      button.disabled = delta < 0 ? value <= 5 : value >= 100
-    }
-  }
-
   const update = (mutate) => {
     const next = structuredClone(state.settings)
     mutate(next)
@@ -580,7 +534,7 @@ export function createOnboarding(env) {
   function pick(field, value) {
     const [name] = field.split(':')
     if (name === 'provider') {
-      if (value === state.settings.provider.id) return false
+      if (value === state.settings.provider.id) return
       state.settings = applyProvider(state.settings, value)
       const keep = state.ui.drafts
       state.ui = {
@@ -612,7 +566,7 @@ export function createOnboarding(env) {
         else if (name === 'packageSource') s.integrations.packages.source = value
       })
     }
-    return structuralPick.has(name)
+    render()
   }
 
   function toggleField(field) {
@@ -637,7 +591,7 @@ export function createOnboarding(env) {
       else if (name === 'limitTurns') s.subagents.turnLimit = s.subagents.turnLimit === null ? DEFAULT_TURN_LIMIT : null
       else if (name === 'planExecute') s.subagents.planExecute = !s.subagents.planExecute
     })
-    return structuralToggle.has(name)
+    render()
   }
 
   /** Typing never re-renders (it would drop the cursor); it updates the state and the Continue button. */
@@ -880,25 +834,11 @@ export function createOnboarding(env) {
     if (action === 'defaults') return go('review')
     if (action === 'edit') return go(value)
     if (action === 'close') return env.onDone ? env.onDone() : post({ type: 'closeRequest' })
-    if (action === 'pick') {
-      if (pick(field, value)) return render()
-      paintPick(el)
-      paintContinue()
-      return
-    }
-    if (action === 'toggle') {
-      const on = el.getAttribute('aria-checked') !== 'true'
-      if (toggleField(field)) return render()
-      paintSwitch(el, on)
-      paintContinue()
-      return
-    }
+    if (action === 'pick') return pick(field, value)
+    if (action === 'toggle') return toggleField(field)
     if (action === 'reveal') {
       state.ui.reveal[field] = !state.ui.reveal[field]
-      const input = root.querySelector(`[data-field="${CSS.escape(field)}"][data-action="input"]`)
-      if (input) input.type = state.ui.reveal[field] ? 'text' : 'password'
-      el.textContent = state.ui.reveal[field] ? t('ob.signin.hide') : t('ob.signin.show')
-      return
+      return render()
     }
     if (action === 'save-key') return saveKey('key')
     if (action === 'save-typesafeKey') return saveKey('typesafeKey')
@@ -913,8 +853,7 @@ export function createOnboarding(env) {
       update((s) => {
         s.subagents.turnLimit = Math.max(5, Math.min(100, s.subagents.turnLimit + Number(value)))
       })
-      paintStepper(el)
-      return
+      return render()
     }
     if (action === 'add-chip') {
       const text = state.ui.drafts.extraWritable.trim()
@@ -928,27 +867,19 @@ export function createOnboarding(env) {
       return render()
     }
     if (action === 'check') {
-      const on = el.getAttribute('aria-checked') !== 'true'
       update((s) => {
         const list = s.subagents.autoSkills
         list.includes(value) ? list.splice(list.indexOf(value), 1) : list.push(value)
       })
-      paintCheck(el, on)
-      return
+      return render()
     }
     if (action === 'expert-on' || action === 'expert-ro') {
-      const on = el.getAttribute('aria-checked') !== 'true'
       update((s) => {
         const expert = s.subagents.experts.find((e) => e.name === value)
         if (action === 'expert-on') expert.enabled = !expert.enabled
         else expert.readOnly = !expert.readOnly
       })
-      paintSwitch(el, on)
-      if (action === 'expert-on') {
-        const readOnly = el.parentElement?.querySelector('[data-action="expert-ro"]')
-        if (readOnly) readOnly.disabled = !on
-      }
-      return
+      return render()
     }
   })
 

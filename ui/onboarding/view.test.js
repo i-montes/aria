@@ -32,21 +32,9 @@ function harness() {
     request: (message, onProgress) => new Promise((resolve) => pending.push({ message, onProgress, resolve })),
   }
   const ob = createOnboarding(env)
-  // A click target with the few DOM methods the controller uses. The assertions are about the settings,
-  // so the visual in-place updates are no-ops here (a real browser exercises them).
   const click = (action, field, value) => {
-    const el = {
-      dataset: { action, field, value },
-      disabled: false,
-      textContent: '',
-      parentElement: null,
-      getAttribute: () => 'false',
-      setAttribute: () => {},
-      classList: { contains: () => false, toggle: () => {} },
-      querySelector: () => null,
-      querySelectorAll: () => [],
-    }
-    el.closest = (selector) => (selector === '[data-key]' ? el : null)
+    const el = { dataset: { action, field, value }, disabled: false }
+    el.closest = () => null
     listeners.click({ target: { closest: () => el } })
   }
   const type = (field, value) => {
@@ -438,5 +426,37 @@ describe('a service that is connected shows no way to connect it again', () => {
     await flush()
     for (const control of notionControls) expect(h.root.innerHTML).not.toContain(control)
     expect(h.root.innerHTML).toContain('ob.integrations.connected')
+  })
+})
+
+describe('every control redraws the step from the settings (the components draw it)', () => {
+  const agentsStep = () => {
+    const h = harness()
+    h.ob.start(completed, ['opencode-go:api_key'])
+    h.click('edit', undefined, 'agents')
+    return h
+  }
+
+  for (const [name, act] of [
+    ['a skill checkbox', (h) => h.click('check', 'skills', 'systematic-debugging')],
+    ['an expert switch', (h) => h.click('expert-on', undefined, completed.subagents.experts[0].name)],
+    ['the turn stepper', (h) => h.click('step', 'turnLimit', '5')],
+  ]) {
+    test(`${name}`, () => {
+      const h = agentsStep()
+      const before = h.root.innerHTML
+      act(h)
+      expect(h.root.innerHTML).not.toBe(before)
+    })
+  }
+
+  test('a redraw keeps the reader where they were in the step', () => {
+    const panel = { scrollTop: 0 }
+    globalThis.document.getElementById = (id) => (id === 'content' ? panel : null)
+    const h = agentsStep()
+    panel.scrollTop = 420
+    h.click('expert-on', undefined, completed.subagents.experts[0].name)
+    expect(panel.scrollTop).toBe(420)
+    delete globalThis.document.getElementById
   })
 })
