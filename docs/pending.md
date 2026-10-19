@@ -58,5 +58,5 @@ them yet. Each row says what is missing and which part of the roadmap brings it.
 ## Deliberate differences from the design
 
 - The working folder row and the settings button (owner's decisions).
-- With several tabs the header's meter is not shown (the design only has it for a single session); the model is under the input, and in each tab's tooltip.
+- The header has no model button or meter (owner's decision; the design has one beside the name): the model is the chip under the input and shows in each tab's tooltip. The meter's part (`parts/meter.js`) is kept for when its quota and context readings have a place.
 - Buttons and cards use solid fills; only the border takes the accent (owner's taste).
