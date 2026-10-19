@@ -359,5 +359,7 @@
   "chat.undo": "Deshacer",
   "chat.tab.moreNeeds": "+{n} · una sesión oculta te necesita",
   "chat.problem.workdir-unavailable": "Aria no pudo crear su carpeta de trabajo. Revisa la carpeta de proyectos en los ajustes.",
-  "chat.problem.pi-settings-invalid": "El archivo de ajustes del motor (~/.aria/agent/settings.json) no se puede leer. Corrígelo o bórralo, y Aria lo vuelve a escribir."
+  "chat.problem.pi-settings-invalid": "El archivo de ajustes del motor (~/.aria/agent/settings.json) no se puede leer. Corrígelo o bórralo, y Aria lo vuelve a escribir.",
+  "chat.problem.settings-invalid": "Aria no pudo usar ~/.aria/settings.json, así que el chat no arrancó (no va a sobrescribirlo). Corrígelo, o abre los ajustes y guárdalos de nuevo.",
+  "chat.problem.settings-unreadable": "Aria no pudo leer ~/.aria/settings.json, así que el chat no arrancó. Revisa los permisos de ese archivo."
 }

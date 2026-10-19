@@ -392,7 +392,13 @@ impl Chat {
         if !pi::node_ok(&self.ctx.paths, &self.ctx.path_var) {
             return Err(PiError::NodeMissing.problem_code());
         }
-        let settings = self.settings();
+        // Settings that exist but cannot be read stop the start: falling back to defaults would run a Pi that is not
+        // the one the owner set up (other persona, no memory, other models), without a word.
+        let settings = match settings::load(&self.ctx.paths) {
+            Ok(settings) => settings,
+            Err(settings::SettingsError::File(aria_core::json_file::JsonFileError::Io { .. })) => return Err("settings-unreadable"),
+            Err(_) => return Err("settings-invalid"),
+        };
         let kept = agent::prepare_reporting(&self.ctx.paths, settings.as_ref()).map_err(|error| match error.kind() {
             std::io::ErrorKind::InvalidData => "pi-settings-invalid",
             _ => "agent-dir-unwritable",
@@ -1776,6 +1782,18 @@ mod tests {
             DockMessage::ChatEvent { event } => assert_eq!(event["projects"], json!(h.workdir.display().to_string())),
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn settings_aria_cannot_read_stop_the_start_instead_of_falling_back_to_defaults() {
+        let h = harness();
+        std::fs::write(h.paths.settings(), r#"{"version": 1, "compaction": {"percent": "lots"}}"#).unwrap();
+        send(&h, "x");
+        match wait_for(&h, "the problem", |m| matches!(m, DockMessage::ChatState { problem: Some(_), .. })) {
+            DockMessage::ChatState { problem, .. } => assert_eq!(problem.as_deref(), Some("settings-invalid")),
+            _ => unreachable!(),
+        }
+        assert!(!h.paths.agent().join("aria.json").exists(), "nothing was prepared from defaults");
     }
 
     #[test]
