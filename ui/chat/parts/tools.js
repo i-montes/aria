@@ -3,7 +3,8 @@
 // row is open, the result; once the group has settled, the files it changed as small diff chips.
 //
 // Props:  { index?: number,                     the group's position in the thread's messages
-//           calls: [{ id, name, args, status: 'running'|'done'|'error', summary, result }],
+//           calls: [{ id, name, args, status: 'running'|'done'|'error', summary, result }
+//                   | { id, think: true, text }],  a reasoning step: the "Thinking" row
 //           live?: boolean }                    true while the run is going (any running call counts too)
 // Ui:     { open?: Set<number>|boolean,         is the group expanded (a Set holds message indexes)
 //           openRows?: Set<string>,             call ids whose result is shown
@@ -19,6 +20,8 @@ import { esc } from '../../onboarding/components.js'
 export const TEXTS = {
   en: {
     'chat.tools.one': '1 tool call',
+    'chat.tools.thinking': 'Thinking',
+    'chat.tools.thought': 'Thought it through',
     'chat.tools.many': '{n} tool calls',
     'chat.tools.run': 'Run command',
     'chat.tools.read': 'Read file',
@@ -42,6 +45,8 @@ export const TEXTS = {
   },
   es: {
     'chat.tools.one': '1 llamada a herramienta',
+    'chat.tools.thinking': 'Pensando',
+    'chat.tools.thought': 'Lo pensó',
     'chat.tools.many': '{n} llamadas a herramientas',
     'chat.tools.run': 'Ejecutar comando',
     'chat.tools.read': 'Leer archivo',
@@ -89,6 +94,12 @@ const humanize = (raw) => {
   return text ? text[0].toUpperCase() + text.slice(1) : ''
 }
 
+/** A step's first line, short enough for the chip. */
+const firstLine = (text) => {
+  const line = String(text ?? '').trim().split('\n')[0]
+  return line.length > 90 ? `${line.slice(0, 89).trimEnd()}…` : line
+}
+
 /** The text split into lines; one trailing newline does not make an extra line. */
 const toLines = (text) => (typeof text === 'string' && text ? text.replace(/\n$/, '').split('\n') : [])
 
@@ -99,6 +110,7 @@ const argPath = (args) => {
 
 /** The row's title: what the tool does ("Read file", "Write 3 lines"). */
 export function toolLabel(call, t) {
+  if (call.think) return t('chat.tools.thinking')
   const name = call.name
   switch (toolKind(name)) {
     case 'run':
@@ -122,6 +134,7 @@ export function toolLabel(call, t) {
 
 /** The chip beside the title: the command, path or pattern (the call's summary when it has one). */
 export function toolChip(call) {
+  if (call.think) return firstLine(call.text)
   const { name, args = {}, summary } = call
   if (summary && summary !== name) return String(summary)
   const first = (value) => (typeof value === 'string' ? value.split('\n')[0] : '')
@@ -210,8 +223,10 @@ function changedFiles(calls) {
 const SVG = (body, size = 13, extra = 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"') =>
   `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" ${extra}>${body}</svg>`
 
+const SPARK = SVG('<path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z"></path>', 13, 'fill="currentColor" stroke="none"')
 const ICONS = {
-  tool: SVG('<path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z"></path>', 13, 'fill="currentColor" stroke="none"'),
+  tool: SPARK,
+  think: SPARK,
   write: SVG('<path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"></path>'),
   run: SVG('<path d="M4 17l6-5-6-5M12 19h8"></path>'),
   read: SVG('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path>'),
@@ -225,6 +240,7 @@ const CHEVRON = (cls) =>
 const isOn = (value, index) => (value instanceof Set ? value.has(index) : value === true)
 
 function detailLines(call, t) {
+  if (call.think) return toLines(call.text).map((text) => ({ tone: '', text }))
   const out = [] // { tone, text }
   const diff = callDiff(call)
   if (diff) {
@@ -241,7 +257,7 @@ function detailLines(call, t) {
 }
 
 function row(call, openRows, animate, t) {
-  const kind = toolKind(call.name)
+  const kind = call.think ? 'think' : toolKind(call.name)
   const open = openRows.has(call.id)
   const chip = toolChip(call)
   const status = call.status === 'running' || call.status === 'error' ? call.status : 'done'
@@ -254,7 +270,7 @@ function row(call, openRows, animate, t) {
       <button type="button" class="p-tools-row status-${status}${open ? ' is-open' : ''}" data-chat="toggle-tool-row" data-id="${esc(call.id)}" aria-expanded="${open}">
         <span class="p-tools-ico"><span class="p-tools-icon" data-icon="${kind}">${ICONS[kind]}</span>${CHEVRON('p-tools-chevron')}</span>
         <span class="p-tools-label">${esc(toolLabel(call, t))}${sr}</span>${chip ? `
-        <span class="p-tools-cmd${kind === 'tool' ? ' is-sans' : ''}">${esc(chip)}</span>` : ''}
+        <span class="p-tools-cmd${kind === 'tool' || kind === 'think' ? ' is-sans' : ''}">${esc(chip)}</span>` : ''}
       </button>
       <div class="p-tools-detail${open ? ' is-open' : ''}"><div class="p-tools-clip"><div class="p-tools-lines">${lines}</div></div></div>
     </div>`
@@ -303,7 +319,8 @@ export function renderTools(props, ui, t) {
   const animate = ui?.animate !== false
   const live = props.live === true || calls.some((c) => c.status === 'running')
   const files = live ? [] : changedFiles(calls)
-  const header = calls.length === 1 ? t('chat.tools.one') : t('chat.tools.many', { n: calls.length })
+  const tools = calls.filter((c) => !c.think).length
+  const header = tools === 0 ? t('chat.tools.thought') : tools === 1 ? t('chat.tools.one') : t('chat.tools.many', { n: tools })
   const classes = ['p-tools', open ? 'is-open' : '', live ? 'is-live' : '', open && files.length ? 'has-diffs' : ''].filter(Boolean).join(' ')
   return `
     <div class="${classes}"${live ? ' aria-busy="true"' : ''}>

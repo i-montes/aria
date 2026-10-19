@@ -28,8 +28,16 @@ function renderCard(dialog, t) {
   return renderPermission({ id: dialog.id, kind: card.kind, summary: card.summary, detail: card.detail || card.path, jev: card.jev, options: card.options }, {}, t)
 }
 
+/** The group of the run going on now (design: it is open while Aria works, with its live pulse). */
+export const isLive = (state, index) => state.running && index >= (state.turnFrom ?? 0)
+
+/** Open while live unless closed by hand; folded afterwards unless opened by hand. */
+export const groupOpen = (state, index, opened, closed) => (isLive(state, index) ? !closed.has(index) : opened.has(index))
+
 export function renderThread(state, ui = {}, t) {
-  const toolUi = { open: ui.expanded ?? new Set(), openRows: ui.openRows ?? new Set(), moreOpen: ui.moreOpen ?? new Set() }
+  const opened = ui.expanded ?? new Set()
+  const closed = ui.collapsed ?? new Set()
+  const toolUi = (index) => ({ open: groupOpen(state, index, opened, closed), openRows: ui.openRows ?? new Set(), moreOpen: ui.moreOpen ?? new Set() })
   const entries = state.messages
     .map((entry, index) => {
       switch (entry.kind) {
@@ -38,7 +46,7 @@ export function renderThread(state, ui = {}, t) {
         case 'assistant':
           return entry.text ? `<div class="thread-item">${renderAssistant({ text: entry.text }, {}, t)}</div>` : ''
         case 'tools':
-          return `<div class="thread-item">${renderTools({ index, calls: entry.calls, live: entry.calls.some((c) => c.status === 'running') && state.running }, toolUi, t)}</div>`
+          return `<div class="thread-item">${renderTools({ index, calls: entry.calls, live: isLive(state, index) }, toolUi(index), t)}</div>`
         case 'jev':
           return `<div class="thread-item">${renderJev({ mode: entry.mode, action: entry.action }, {}, t)}</div>`
         case 'note':

@@ -166,11 +166,13 @@ describe('history', () => {
 
   test('past messages become entries in order', () => {
     const state = reduce(createChat(), ev({ type: 'history', messages: history }))
-    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'assistant', 'tools', 'assistant', 'user'])
+    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'tools', 'assistant', 'user'])
     expect(state.messages[0].text).toBe('list files')
-    expect(state.messages[1]).toMatchObject({ text: 'Sure.', thinking: 'ok', done: true })
-    expect(state.messages[2].calls[0]).toMatchObject({ id: 't1', status: 'done', summary: 'ls', result: 'a b' })
-    expect(state.messages[4].text).toBe('thanks')
+    // the reasoning and the text written before the tool are steps of the turn's group (design: tool-chips)
+    expect(state.messages[1].calls.map((c) => (c.think ? c.text : c.id))).toEqual(['ok', 'Sure.', 't1'])
+    expect(state.messages[1].calls[2]).toMatchObject({ id: 't1', status: 'done', summary: 'ls', result: 'a b' })
+    expect(state.messages[2]).toMatchObject({ kind: 'assistant', text: 'There they are.', done: true })
+    expect(state.messages[3].text).toBe('thanks')
   })
 
   test('history never replaces a conversation already on the page: it goes in front of it', () => {
@@ -187,7 +189,7 @@ describe('history', () => {
 
   test('a failed tool result marks the call as an error', () => {
     const failed = [history[1], { ...history[2], isError: true }]
-    expect(reduce(createChat(), ev({ type: 'history', messages: failed })).messages[1].calls[0].status).toBe('error')
+    expect(reduce(createChat(), ev({ type: 'history', messages: failed })).messages[0].calls.find((c) => !c.think).status).toBe('error')
   })
 })
 
@@ -488,5 +490,79 @@ describe('a tool call being written', () => {
     const last = state.messages.at(-1)
     expect(last.text).toBe('Let me look.')
     expect(last.thinking ?? '').toBe('')
+  })
+})
+
+describe('one accordion per answer (design: tool-chips)', () => {
+  const update = (e) => ev({ type: 'message_update', assistantMessageEvent: e })
+  const toolStart = (id, name, args = {}) => ev({ type: 'tool_execution_start', toolCallId: id, toolName: name, args })
+  const toolEnd = (id) => ev({ type: 'tool_execution_end', toolCallId: id, result: { content: [{ type: 'text', text: 'ok' }] }, isError: false })
+  const step = (thinking, calls) => [
+    ev({ type: 'message_start', message: { role: 'assistant' } }),
+    update({ type: 'thinking_delta', contentIndex: 0, delta: thinking }),
+    ev({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'thinking', thinking }, ...calls.map(([id, name]) => ({ type: 'toolCall', id, name, arguments: {} }))] } }),
+    ...calls.flatMap(([id, name]) => [toolStart(id, name), toolEnd(id)]),
+  ]
+  const turn = () =>
+    run(
+      createChat(),
+      ev({ type: 'message_start', message: { role: 'user', content: 'fix it' } }),
+      ev({ type: 'agent_start' }),
+      ...step('Look at the file first.', [['t1', 'read']]),
+      ...step('Now change it.', [['t2', 'edit']]),
+      ...step('Check the build.', [['t3', 'bash']]),
+      ev({ type: 'message_start', message: { role: 'assistant' } }),
+      update({ type: 'thinking_delta', contentIndex: 0, delta: 'All good.' }),
+      update({ type: 'text_delta', contentIndex: 1, delta: 'Fixed.' }),
+      ev({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'All good.' }, { type: 'text', text: 'Fixed.' }] } }),
+    )
+
+  test('the thinking and every tool of a turn go into a single group before the answer', () => {
+    const kinds = turn().messages.map((m) => m.kind)
+    expect(kinds.filter((k) => k === 'tools')).toHaveLength(1)
+    expect(kinds.slice(-2)).toEqual(['tools', 'assistant'])
+  })
+
+  test('the group lists thinking rows and calls in the order they happened', () => {
+    const group = turn().messages.find((m) => m.kind === 'tools')
+    expect(group.calls.map((c) => (c.think ? `think:${c.text}` : c.name))).toEqual([
+      'think:Look at the file first.', 'read', 'think:Now change it.', 'edit', 'think:Check the build.', 'bash', 'think:All good.',
+    ])
+  })
+
+  test('the answer keeps only its text', () => {
+    expect(turn().messages.at(-1)).toMatchObject({ kind: 'assistant', text: 'Fixed.' })
+  })
+
+  test('text written between tools is a step of the group, not a message', () => {
+    const state = run(
+      createChat(),
+      ev({ type: 'agent_start' }),
+      ev({ type: 'message_start', message: { role: 'assistant' } }),
+      update({ type: 'text_delta', contentIndex: 0, delta: 'Let me look.' }),
+      ev({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Let me look.' }, { type: 'toolCall', id: 't1', name: 'read', arguments: {} }] } }),
+      toolStart('t1', 'read'),
+    )
+    expect(state.messages.map((m) => m.kind)).toEqual(['tools'])
+    expect(state.messages[0].calls[0]).toMatchObject({ think: true, text: 'Let me look.' })
+  })
+
+  test('the next question starts a new group', () => {
+    const state = run(turn(), ev({ type: 'agent_settled', aborted: false }), ev({ type: 'message_start', message: { role: 'user', content: 'again' } }), ev({ type: 'agent_start' }), ...step('Again.', [['t9', 'read']]))
+    expect(state.messages.filter((m) => m.kind === 'tools')).toHaveLength(2)
+  })
+
+  test('history is grouped the same way', () => {
+    const history = [
+      { role: 'user', content: 'fix it' },
+      { role: 'assistant', content: [{ type: 'thinking', thinking: 'Look.' }, { type: 'toolCall', id: 'h1', name: 'read', arguments: {} }] },
+      { role: 'toolResult', toolCallId: 'h1', content: [{ type: 'text', text: 'ok' }] },
+      { role: 'assistant', content: [{ type: 'thinking', thinking: 'Edit.' }, { type: 'toolCall', id: 'h2', name: 'edit', arguments: {} }] },
+      { role: 'toolResult', toolCallId: 'h2', content: [{ type: 'text', text: 'ok' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'Fixed.' }] },
+    ]
+    const state = reduce(createChat(), ev({ type: 'history', messages: history }))
+    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'tools', 'assistant'])
+    expect(state.messages[1].calls.map((c) => c.think ? 'think' : c.name)).toEqual(['think', 'read', 'think', 'edit'])
   })
 })

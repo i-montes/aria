@@ -22,7 +22,7 @@ import {
   MAX_SESSIONS, addSession, applyStatus, closeSession, createTabs, renameSession, selectSession, setTitleIfEmpty, toSaved, undoClose,
 } from './sessions.js'
 import { addNote, addQueued, addUser, answerDialog, tookBack, answersForCard, clearQueue, createChat, reduce } from './state.js'
-import { renderThread } from './thread.js'
+import { renderThread, groupOpen } from './thread.js'
 
 /** `/home/ana/Projects` -> `~/Projects` (Linux and Mac homes); anything else stays as it is. */
 export const shortPath = (path) => String(path ?? '').replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, '~')
@@ -168,7 +168,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   const chatOf = (id) => chats.get(id) ?? createChat()
   const current = () => chatOf(tabs.active)
   const expanded = () => {
-    if (!expandedOf.has(tabs.active)) expandedOf.set(tabs.active, { open: new Set(), rows: new Set(), more: new Set() })
+    if (!expandedOf.has(tabs.active)) expandedOf.set(tabs.active, { open: new Set(), closed: new Set(), rows: new Set(), more: new Set() })
     return expandedOf.get(tabs.active)
   }
   const post = (message, session = tabs.active) => send({ type: 'session', session, message })
@@ -262,7 +262,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const ex = expanded()
     const connectHtml = ui.connect ? `<div class="thread-item" id="chat-connect">${renderConnect(ui.connect, {}, t)}</div>` : ''
     keepingFocus(list, () => {
-      patchHtml(list, renderThread(state, { expanded: ex.open, openRows: ex.rows, moreOpen: ex.more, now: Date.now() }, t) + connectHtml)
+      patchHtml(list, renderThread(state, { expanded: ex.open, collapsed: ex.closed, openRows: ex.rows, moreOpen: ex.more, now: Date.now() }, t) + connectHtml)
     })
     if (nearBottom || (ui.connect && ui.connect.justOpened)) list.scrollTop = list.scrollHeight
     if (ui.connect) ui.connect.justOpened = false
@@ -1085,8 +1085,16 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
         return render()
       }
       case 'toggle-tools': {
-        const set = expanded().open
-        if (!set.delete(Number(index))) set.add(Number(index))
+        // What the reader sees flips: the live group is open by default, a finished one folded (thread.js).
+        const ex = expanded()
+        const at = Number(index)
+        if (groupOpen(current(), at, ex.open, ex.closed)) {
+          ex.open.delete(at)
+          ex.closed.add(at)
+        } else {
+          ex.closed.delete(at)
+          ex.open.add(at)
+        }
         return drawThread()
       }
       case 'toggle-tool-row': {

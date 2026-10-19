@@ -234,3 +234,29 @@ describe('texts', () => {
     }
   })
 })
+
+describe('thinking steps (design: the "Thinking" rows)', () => {
+  const tt = (key, vars) => (vars?.n !== undefined ? `${key}:${vars.n}` : key)
+  const think = { id: 'k1', name: 'thinking', think: true, text: 'RELEASE is required.\nI will make it optional.', status: 'done' }
+  const read = { id: 'c1', name: 'read', args: { path: 'env.ts' }, status: 'done', summary: 'env.ts', result: 'x' }
+
+  test('a thinking step is a row with the think icon, the Thinking label and its first line as the chip', () => {
+    const html = renderTools({ index: 0, calls: [think, read] }, { open: true }, tt)
+    expect(html).toContain('data-icon="think"')
+    expect(html).toContain('chat.tools.thinking')
+    expect(html).toContain('RELEASE is required.')
+  })
+
+  test('its detail is the whole text', () => {
+    const html = renderTools({ index: 0, calls: [think] }, { open: true, openRows: new Set(['k1']) }, tt)
+    expect(html).toContain('I will make it optional.')
+  })
+
+  test('the header counts the tool calls only', () => {
+    expect(renderTools({ index: 0, calls: [think, read] }, {}, tt)).toContain('chat.tools.one')
+  })
+
+  test('only thinking: the header says so', () => {
+    expect(renderTools({ index: 0, calls: [think] }, {}, tt)).toContain('chat.tools.thought')
+  })
+})

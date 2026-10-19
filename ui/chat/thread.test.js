@@ -97,3 +97,19 @@ describe('the thread', () => {
     expect(html).toContain('tone-error')
   })
 })
+
+describe("the turn's group opens while Aria works and folds when it answers", () => {
+  const group = { kind: 'tools', calls: [{ id: 'c1', name: 'read', args: {}, status: 'done', summary: 'a.ts', result: '' }] }
+  const working = { ...createChat(), running: true, turnFrom: 0, messages: [group] }
+  const answered = { ...working, running: false, messages: [group, { kind: 'assistant', text: 'Done.', done: true }] }
+  const isOpen = (html) => /class="p-tools[^"]*is-open/.test(html)
+
+  test('open while the run goes', () => expect(isOpen(renderThread(working, {}, t))).toBe(true))
+  test('folded once the answer is there', () => expect(isOpen(renderThread(answered, {}, t))).toBe(false))
+  test('closed by hand while working, it stays closed', () => expect(isOpen(renderThread(working, { collapsed: new Set([0]) }, t))).toBe(false))
+  test('opened by hand afterwards, it stays open', () => expect(isOpen(renderThread(answered, { expanded: new Set([0]) }, t))).toBe(true))
+  test('an earlier turn is not live', () => {
+    const state = { ...working, turnFrom: 1, messages: [group, { kind: 'user', text: 'again' }] }
+    expect(isOpen(renderThread(state, {}, t))).toBe(false)
+  })
+})

@@ -17,7 +17,7 @@ import { parseCardTitle } from './parts/cards.js'
 export function createChat() {
   return {
     workdir: '', running: false, engine: 'idle', model: null, thinking: null, context: null, problem: null,
-    messages: [], dialogs: [], queue: [], delivered: [], phase: 'working', startedAt: null, quota: [], giveBack: null, agents: [],
+    messages: [], dialogs: [], queue: [], delivered: [], phase: 'working', startedAt: null, quota: [], giveBack: null, agents: [], turnFrom: 0,
   }
 }
 
@@ -88,15 +88,53 @@ function streamUpdate(state, update) {
   return replaceLast(state, next)
 }
 
+// ---- the turn's group (design: tool-chips): one accordion per answer ---------------------------
+//
+// Everything Aria does before it answers (its reasoning, the text it writes between tools, every tool call) goes
+// into ONE `tools` entry per turn, in order; the answer comes after it. A thinking or text step is a call with
+// `think: true` and its `text`.
+
+let stepSeq = 0
+
+/** This turn's group: the last `tools` entry after the last user message (and after `from`, where the run started), or
+ * -1. */
+function turnGroup(messages, from = 0) {
+  for (let i = messages.length - 1; i >= from; i--) {
+    if (messages[i].kind === 'user') return -1
+    if (messages[i].kind === 'tools') return i
+  }
+  return -1
+}
+
+/** Adds steps to this turn's group, creating it (at the end) when the turn has none yet. */
+function addSteps(messages, steps, from = 0) {
+  if (!steps.length) return messages
+  const at = turnGroup(messages, from)
+  if (at < 0) return [...messages, { kind: 'tools', calls: steps }]
+  const next = messages.slice()
+  next[at] = { ...next[at], calls: [...next[at].calls, ...steps] }
+  return next
+}
+
+/** A message's reasoning and text as steps of the group (empty ones are left out). */
+const thinkSteps = (...texts) =>
+  texts.filter((text) => text && text.trim()).map((text) => ({ id: `think-${++stepSeq}`, name: 'thinking', think: true, text: text.trim(), status: 'done' }))
+
+const thinkingOf = (content) => (Array.isArray(content) ? content : []).filter((block) => block.type === 'thinking').map((block) => block.thinking).join('')
+const hasToolCalls = (content) => Array.isArray(content) && content.some((block) => block.type === 'toolCall')
+
 function endAssistant(state, message) {
   const text = textOf(message.content)
-  const thinking = (message.content ?? []).filter((block) => block.type === 'thinking').map((block) => block.thinking).join('')
+  const thinking = thinkingOf(message.content)
   const current = lastStreamingAssistant(state)
-  const base = current ?? { kind: 'assistant', texts: {}, thoughts: {} }
-  const done = { ...base, text, thinking: thinking || base.thinking || '', done: true }
   const rest = current ? state.messages.slice(0, -1) : state.messages
-  if (!done.text && !done.thinking) return withMessages(state, rest) // only tool calls: the tools show up as chips
-  return withMessages(state, [...rest, done])
+  // A step on the way (it calls tools): its reasoning and its text are steps of the group, not a message.
+  if (hasToolCalls(message.content)) return withMessages(state, addSteps(rest, thinkSteps(thinking, text), state.turnFrom))
+  // The answer: its reasoning closes the group, its text is the message.
+  const grouped = addSteps(rest, thinkSteps(thinking), state.turnFrom)
+  if (!text) return withMessages(state, grouped)
+  const base = current ?? { kind: 'assistant', texts: {}, thoughts: {} }
+  return withMessages(state, [...grouped, { ...base, text, thinking: '', done: true }])
 }
 
 function startTool(state, event) {
@@ -108,9 +146,7 @@ function startTool(state, event) {
     summary: toolSummary(event.toolName, event.args),
     result: '',
   }
-  const last = state.messages.at(-1)
-  if (last?.kind === 'tools') return replaceLast(state, { ...last, calls: [...last.calls, call] })
-  return push(state, { kind: 'tools', calls: [call] })
+  return withMessages(state, addSteps(state.messages, [call], state.turnFrom))
 }
 
 function finishTool(state, event) {
@@ -131,26 +167,25 @@ function finishTool(state, event) {
 const TONES = { warning: 'warn', error: 'error' }
 
 function fromHistory(messages) {
-  const entries = []
+  let entries = []
   const calls = new Map()
   for (const message of messages ?? []) {
     if (message.role === 'user') {
       entries.push({ kind: 'user', text: textOf(message.content) })
     } else if (message.role === 'assistant') {
       const text = textOf(message.content)
-      const thinking = (message.content ?? []).filter((block) => block.type === 'thinking').map((block) => block.thinking).join('')
-      if (text || thinking) entries.push({ kind: 'assistant', text, thinking, done: true, texts: { 0: text }, thoughts: { 0: thinking } })
+      const thinking = thinkingOf(message.content)
       const toolCalls = (message.content ?? []).filter((block) => block.type === 'toolCall')
       if (toolCalls.length) {
-        const group = {
-          kind: 'tools',
-          calls: toolCalls.map((block) => {
-            const call = { id: block.id, name: block.name, args: block.arguments ?? {}, status: 'done', summary: toolSummary(block.name, block.arguments), result: '' }
-            calls.set(block.id, call)
-            return call
-          }),
-        }
-        entries.push(group)
+        const made = toolCalls.map((block) => {
+          const call = { id: block.id, name: block.name, args: block.arguments ?? {}, status: 'done', summary: toolSummary(block.name, block.arguments), result: '' }
+          calls.set(block.id, call)
+          return call
+        })
+        entries = addSteps(entries, [...thinkSteps(thinking, text), ...made])
+      } else {
+        entries = addSteps(entries, thinkSteps(thinking))
+        if (text) entries.push({ kind: 'assistant', text, thinking: '', done: true, texts: { 0: text }, thoughts: {} })
       }
     } else if (message.role === 'toolResult') {
       const call = calls.get(message.toolCallId)
@@ -166,7 +201,8 @@ function fromHistory(messages) {
 function reduceEvent(state, event) {
   switch (event.type) {
     case 'agent_start':
-      return { ...state, running: true, startedAt: Date.now(), phase: 'working' }
+      // A new run starts a new group, even when its question's echo never became an entry.
+      return { ...state, running: true, startedAt: Date.now(), phase: 'working', turnFrom: state.messages.length }
     case 'agent_settled': {
       const settled = { ...state, running: false, startedAt: null, phase: 'working', delivered: [] }
       return event.aborted ? push(settled, { kind: 'note', label: 'aria', key: 'chat.stoppedByYou' }) : settled
