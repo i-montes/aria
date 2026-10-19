@@ -5,6 +5,7 @@
 // credentials, every socket or file that makes the host run code — docker, herdr, X11, the system
 // bus, $XDG_RUNTIME_DIR, the repo's .git/config and hooks, project-local Pi extensions and Pi's own
 // transpile cache in /tmp/jiti — is hidden or read-only, and only pure download caches are writable.
+import { ariaConfig } from '../lib/config.ts'
 import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
@@ -150,7 +151,15 @@ export function writableRoots(cwd: string, home = HOME, exists: (p: string) => b
   const project = projectRoot(cwd, home)
   const { common } = gitDirs(project)
   const extra = common && !(project && inside(common, project)) ? [common] : []
-  return [...(project ? [project] : []), ...extra, '/tmp', ...CACHES.map((c) => join(home, c)).filter(exists)]
+  return [...(project ? [project] : []), ...extra, '/tmp', ...CACHES.map((c) => join(home, c)).filter(exists), ...extraWritable(home)]
+}
+
+/** The folders Aria's settings add (`sandbox.extraWritable`, absolute): never one that holds secrets or Aria's own files. */
+function extraWritable(home: string): string[] {
+  const agent = process.env.PI_CODING_AGENT_DIR ?? null
+  return ariaConfig().sandbox.extraWritable.filter(
+    (dir) => dir.startsWith('/') && !isSecret(dir, '/', home) && ![...SECRET_DIRS.map((d) => join(home, d))].some((s) => inside(s, dir)) && !isAgentCode(dir, agent),
+  )
 }
 
 /** Paths inside the writable roots that stay read-only: they make the host run code. */

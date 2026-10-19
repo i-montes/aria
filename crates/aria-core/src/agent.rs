@@ -17,19 +17,25 @@ pub fn required_packages() -> Vec<&'static str> {
     include_str!("../../../pi-packages").lines().map(str::trim).filter(|line| !line.is_empty()).collect()
 }
 
-/// From superpowers the owner loads two skills and no extensions (as in his own Pi's settings).
-const SUPERPOWERS_SKILLS: [&str; 2] = ["skills/systematic-debugging", "skills/verification-before-completion"];
+/// From superpowers the owner loads two skills and no extensions (as in his own Pi's settings); the settings'
+/// `subagents.autoSkills` replace them.
+const SUPERPOWERS_SKILLS: [&str; 2] = ["systematic-debugging", "verification-before-completion"];
 
-/// `pi install` lists a package as a plain string; the superpowers one becomes the owner's filtered entry.
-fn with_package_filters(packages: Value) -> Value {
+/// `pi install` lists a package as a plain string; the superpowers one becomes a filtered entry with no extensions
+/// and only `skills` (names under the package's `skills/`). An entry filtered earlier gets the current skills.
+fn with_package_filters(packages: Value, skills: &[String]) -> Value {
     let Value::Array(list) = packages else { return packages };
+    let skills: Vec<String> = skills.iter().map(|name| format!("skills/{name}")).collect();
     Value::Array(
         list.into_iter()
-            .map(|entry| match entry.as_str() {
-                Some(source) if source.starts_with("git:github.com/obra/superpowers") => {
-                    json!({"source": source, "extensions": [], "skills": SUPERPOWERS_SKILLS})
+            .map(|entry| {
+                let source = entry.as_str().or_else(|| entry["source"].as_str()).map(str::to_string);
+                match source {
+                    Some(source) if source.starts_with("git:github.com/obra/superpowers") => {
+                        json!({"source": source, "extensions": [], "skills": skills})
+                    }
+                    _ => entry,
                 }
-                _ => entry,
             })
             .collect(),
     )
@@ -247,7 +253,11 @@ pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::
         Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidData, error.to_string())),
     };
     if let Some(packages) = original.get_mut("packages") {
-        *packages = with_package_filters(packages.take());
+        let skills: Vec<String> = match settings {
+            Some(settings) => settings.subagents.auto_skills.clone(),
+            None => SUPERPOWERS_SKILLS.iter().map(|s| s.to_string()).collect(),
+        };
+        *packages = with_package_filters(packages.take(), &skills);
     }
     write_json_atomic(&settings_path, &merge_preserving(original, ours), 0o600)?;
 
@@ -485,6 +495,16 @@ mod tests {
         assert!(!packages_installed(&paths), "superpowers is not cloned yet");
         std::fs::create_dir_all(paths.agent().join("git/github.com/obra/superpowers/skills")).unwrap();
         assert!(packages_installed(&paths));
+    }
+
+    #[test]
+    fn the_superpowers_filter_lists_the_automatic_skills_from_the_settings() {
+        let packages = json!(["git:github.com/obra/superpowers@abc"]);
+        let skills = vec!["brainstorming".to_string(), "systematic-debugging".to_string()];
+        assert_eq!(
+            with_package_filters(packages, &skills),
+            json!([{"source": "git:github.com/obra/superpowers@abc", "extensions": [], "skills": ["skills/brainstorming", "skills/systematic-debugging"]}])
+        );
     }
 
     #[test]

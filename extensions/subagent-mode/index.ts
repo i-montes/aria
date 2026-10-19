@@ -5,6 +5,8 @@
 // as the main agent (../jev-router/process-guard.ts).
 //
 // PI_SUBAGENT_LEAN=0 turns it off, to compare runs with and without it.
+import { ariaConfig } from '../lib/config.ts'
+import { turnLimitReached } from './limit.ts'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -46,8 +48,18 @@ export default function (pi: ExtensionAPI) {
     }
   })
 
+  // A subagent that reached the turn limit gets no more tools: it has to deliver what it has.
+  let turns = 0
+  pi.on('turn_end', (_event: any, ctx: any) => {
+    if (isChild(ctx)) turns += 1
+  })
+
   pi.on('tool_call', (event: any, ctx: any) => {
     if (!isChild(ctx)) return
+    const config = ariaConfig()
+    if (turnLimitReached(turns, config)) {
+      return { block: true, reason: `Stopped at the turn limit (${config.subagents.turnLimit}): no more tools. Write your report now with what you have.` }
+    }
     // Same process guard as the main agent: a subagent may only stop its own or the project's processes.
     if (event.toolName === 'bash') {
       const verdict = checkKill(String(event.input?.command ?? ''), process.pid, ctx.cwd)

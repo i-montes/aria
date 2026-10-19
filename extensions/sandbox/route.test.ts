@@ -22,3 +22,10 @@ describe('where a bash command runs', () => {
     expect(bashRoute({ ...base, hasBwrap: false, outside: true })).toBe('ask')
   })
 })
+
+describe('leaving the sandbox switched off in the settings', () => {
+  const base = { covered: false, outside: false, hasBwrap: true, canAsk: true, platform: 'linux', mayLeave: false }
+  test('asking to leave is refused without asking, as not allowed', () => expect(bashRoute({ ...base, outside: true })).toBe('refuse-not-allowed'))
+  test('a normal command still runs in the box', () => expect(bashRoute(base)).toBe('boxed'))
+  test('a command the session already allowed still runs', () => expect(bashRoute({ ...base, outside: true, covered: true })).toBe('plain'))
+})

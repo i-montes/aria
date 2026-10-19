@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { isPlanPath, notAPlan, planMayWrite, routedMode, planPrompt, PLAN_MODEL, planModel, planQuotaThreshold, planThinking } from './modes.ts'
+import { isPlanPath, notAPlan, planMayWrite, routedMode, planPrompt, PLAN_MODEL, planModel, planQuotaThreshold, planThinking, shouldClassify } from './modes.ts'
 import { exhausted, parseGoUsage } from './usage.ts'
 
 const widget = join(homedir(), 'Projects', 'acme', 'checkout-widget')
@@ -88,4 +88,13 @@ describe("plan mode follows Aria's settings", () => {
       expect(planThinking()).toBe('high')
       expect(planQuotaThreshold()).toBe(90)
     }))
+})
+
+describe('the router switch', () => {
+  const { DEFAULTS } = require('../lib/config.ts')
+  test('router off means no classification (and so no hidden hint)', () => {
+    expect(shouldClassify('rpc', { ...DEFAULTS, router: { enabled: false } })).toBe(false)
+    expect(shouldClassify('rpc', DEFAULTS)).toBe(true)
+    expect(shouldClassify('json', DEFAULTS)).toBe(false)
+  })
 })

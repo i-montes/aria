@@ -52,6 +52,13 @@ Tests: `bun test extensions`.
   - `quota-fallback`: the free model, the threshold, the countdown, asking first and what no answer does (`freeModel`,
     `switchThreshold`, `askTimeoutMs`; `choiceFrom` gained `onNoAnswer`).
   - `autocompact`: the share comes from the settings (`compactPercent`); outside Aria, `autocompact.json`.
+  - `jev-router`: with the router off (`router.enabled`) Jev does not classify (`shouldClassify` in `modes.ts`);
+    `/plan` and `/execute` are registered only with `subagents.planExecute`.
+  - `sandbox`: `sandbox.extraWritable` folders join the writable roots (never a secret folder or Aria's own files);
+    `jevReview` off skips Jev's review; `askToLeave` off refuses leaving the sandbox and says it is not allowed
+    (`route.ts`, `refuse-not-allowed`).
+  - `subagent-mode`: `subagents.turnLimit` stops a subagent's tools at that many turns (`limit.ts`). Saved subagent
+    sessions are the `pi` shim's job (`crates/aria-core/src/pi.rs`).
   - `/effort` and `/autocompact` write Aria's settings (`ARIA_SETTINGS`, `writeAriaSetting` in `lib/config.ts`) instead
     of `jev-router-effort.json` and `autocompact.json`; the dock applies the change when the run settles.
 - **Left out:** `jev-router/eval.ts`, `sandbox/review-eval.ts` and `sandbox/accept.sh`, which run real models against the

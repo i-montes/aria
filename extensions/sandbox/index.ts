@@ -18,6 +18,7 @@ import { commandPreview, covers, coversPath, emptyGrants, grantDir, grantUnits }
 import { CLASSIFIER, parseReview, REVIEW_TIMEOUT_MS, reviewLine, reviewRequest } from './review.ts'
 import { canAsk, sandboxCard } from './card.ts'
 import { bashRoute } from './route.ts'
+import { ariaConfig } from '../lib/config.ts'
 import { BLOCK_NOTE, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, resolvePath, secretDirs, secretFiles, subagentProblem, wrapCommand, writableRoots, isAgentCode } from './policy.ts'
 
 const hasBwrap = (() => {
@@ -66,6 +67,7 @@ export default function sandbox(pi: ExtensionAPI) {
 
   // Jev's independent check of the command against the model's description (see review.ts).
   const review = async (ctx: any, command: string, description: string) => {
+    if (!ariaConfig().sandbox.jevReview) return null // Jev's review is off in Aria's settings
     try {
       const jev = ctx.modelRegistry.findOfType('classifier', CLASSIFIER.provider, CLASSIFIER.id)
       if (!jev) return null
@@ -120,7 +122,7 @@ export default function sandbox(pi: ExtensionAPI) {
     async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
       const { command, timeout, outsideSandbox, reason } = params
       // Allowed for the session: straight outside, without failing inside first. Without bwrap every command asks.
-      const route = bashRoute({ covered: covers(grants, command), outside: !!outsideSandbox, hasBwrap, canAsk: canAsk(ctx), platform: process.platform })
+      const route = bashRoute({ covered: covers(grants, command), outside: !!outsideSandbox, hasBwrap, canAsk: canAsk(ctx), platform: process.platform, mayLeave: ariaConfig().sandbox.askToLeave })
       if (route === 'plain') return plain.execute(id, { command, timeout }, signal, onUpdate, ctx)
       if (route === 'refuse-nobody') {
         return refuse(
@@ -129,6 +131,7 @@ export default function sandbox(pi: ExtensionAPI) {
             : 'There is no sandbox on this system, so every command needs the user\'s permission, and there is nobody here to ask.',
         )
       }
+      if (route === 'refuse-not-allowed') return refuse('Leaving the sandbox is not allowed (the user turned it off in Aria\'s settings): the command did not run. Do it inside the project, or tell the user what is needed.')
       if (route === 'refuse-no-bwrap') return refuse('The sandbox cannot run: bwrap is missing (sudo pacman -S bubblewrap). No commands run without it.')
       if (route === 'ask') {
         if (!(await askOutside(ctx, command, reason))) return refuse('The user said no: the command did not run.')

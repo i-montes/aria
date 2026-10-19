@@ -81,11 +81,21 @@ pub fn node_ok(paths: &AriaPaths, path_var: &str) -> bool {
     parse_node_version(&String::from_utf8_lossy(&output.stdout)).is_some_and(meets_minimum)
 }
 
-/// `~/.aria/bin/pi`: runs the pinned binary, so a child that starts `pi` by name gets the same version.
-pub fn write_shim(paths: &AriaPaths, install: &PiInstall) -> io::Result<PathBuf> {
+/// `~/.aria/bin/pi`: runs the pinned binary, so a child that starts `pi` by name gets the same version. With
+/// `save_sessions` (settings: `subagents.saveSessions`) a subagent's `--no-session` becomes a session folder of its own.
+pub fn write_shim(paths: &AriaPaths, install: &PiInstall, save_sessions: bool) -> io::Result<PathBuf> {
     std::fs::create_dir_all(paths.bin())?;
     let shim = paths.bin().join("pi");
-    let script = format!("#!/bin/sh\nexec '{}' \"$@\"\n", install.binary.display());
+    let script = if save_sessions {
+        let dir = paths.agent().join("sessions").join("subagents");
+        format!(
+            "#!/bin/sh\n# Subagents keep their sessions (settings: subagents.saveSessions).\nfor a do\n  shift\n  if [ \"$a\" = --no-session ]; then set -- \"$@\" --session-dir '{}'; else set -- \"$@\" \"$a\"; fi\ndone\nexec '{}' \"$@\"\n",
+            dir.display(),
+            install.binary.display()
+        )
+    } else {
+        format!("#!/bin/sh\nexec '{}' \"$@\"\n", install.binary.display())
+    };
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = paths.bin().join(format!(".pi.{}.{n}.tmp", std::process::id()));
@@ -211,12 +221,37 @@ mod tests {
         let (_dir, paths) = paths();
         let binary = fake_install(&paths, "1.3.0", 0o755);
         let install = locate(&paths, "1.3.0").unwrap();
-        let shim = write_shim(&paths, &install).unwrap();
+        let shim = write_shim(&paths, &install, false).unwrap();
         assert_eq!(shim, paths.bin().join("pi"));
         assert_eq!(std::fs::metadata(&shim).unwrap().permissions().mode() & 0o777, 0o755);
         let text = std::fs::read_to_string(&shim).unwrap();
         assert!(text.starts_with("#!/bin/sh\n"));
         assert!(text.contains(&format!("exec '{}' \"$@\"", binary.display())));
+    }
+
+    fn run_shim(paths: &AriaPaths, save_sessions: bool, args: &[&str]) -> String {
+        let bin = paths.root.join("echo-args");
+        std::fs::write(&bin, "#!/bin/sh\nprintf '%s|' \"$@\"\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let install = PiInstall { dir: paths.root.clone(), binary: bin };
+        let shim = write_shim(paths, &install, save_sessions).unwrap();
+        String::from_utf8(std::process::Command::new(&shim).args(args).output().unwrap().stdout).unwrap()
+    }
+
+    #[test]
+    fn the_shim_keeps_no_session_by_default() {
+        let (_dir, paths) = paths();
+        assert_eq!(run_shim(&paths, false, &["--mode", "json", "-p", "--no-session", "Task: x y"]), "--mode|json|-p|--no-session|Task: x y|");
+    }
+
+    #[test]
+    fn with_saved_sessions_the_shim_gives_a_child_a_session_dir() {
+        let (_dir, paths) = paths();
+        let dir = paths.agent().join("sessions").join("subagents");
+        assert_eq!(
+            run_shim(&paths, true, &["--mode", "json", "-p", "--no-session", "Task: x y"]),
+            format!("--mode|json|-p|--session-dir|{}|Task: x y|", dir.display())
+        );
     }
 
     #[test]

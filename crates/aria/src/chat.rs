@@ -397,7 +397,8 @@ impl Chat {
             std::io::ErrorKind::InvalidData => "pi-settings-invalid",
             _ => "agent-dir-unwritable",
         })?;
-        pi::write_shim(&self.ctx.paths, &install).map_err(|_| "agent-dir-unwritable")?;
+        let save_sessions = settings.as_ref().is_some_and(|s| s.subagents.save_sessions);
+        pi::write_shim(&self.ctx.paths, &install, save_sessions).map_err(|_| "agent-dir-unwritable")?;
         let workdir = working_folder(settings.as_ref()).ok_or("workdir-unavailable")?;
         self.tell_once(&kept);
 

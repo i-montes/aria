@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { agentDir, projectsDir } from '../lib/agent-dir.ts'
-import { ariaConfig, DEFAULTS, type Model } from '../lib/config.ts'
+import { type AriaConfig, ariaConfig, DEFAULTS, type Model } from '../lib/config.ts'
 
 export type Mode = 'normal' | 'plan' | 'execute'
 
@@ -29,6 +29,10 @@ export const planThinking = (): string => ariaConfig().models.planThinking
 // At or above this percentage of the 5-hour or the weekly Go window, /plan uses the free model.
 /** Modes with a person behind them: the terminal, `pi -p`, and Aria's dock (RPC). Subagents (`json`) are not routed. */
 export const routedMode = (mode: string | undefined): boolean => mode === 'tui' || mode === 'print' || mode === 'rpc'
+
+/** Jev classifies a message (and adds the hidden hint) in a routed mode, unless Aria's settings turn the router off.
+ * Plan mode, the process guard and expert assignment do not depend on it. */
+export const shouldClassify = (mode: string | undefined, config: AriaConfig): boolean => routedMode(mode) && config.router.enabled
 
 export const QUOTA_THRESHOLD = DEFAULTS.quota.planSwitchAt
 export const planQuotaThreshold = (): number => ariaConfig().quota.planSwitchAt

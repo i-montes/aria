@@ -60,6 +60,7 @@ import {
   planPrompt,
   planQuotaThreshold,
   routedMode,
+  shouldClassify,
 } from './modes.ts'
 import { checkKill } from './process-guard.ts'
 import { exhausted, fetchGoUsage } from './usage.ts'
@@ -222,6 +223,7 @@ export default function (pi: ExtensionAPI) {
       return { message: { customType: 'jev-router', content: modeHint(mode), display: false, details: { mode } } }
     }
     if (!text.trim() || text.startsWith('/')) return
+    if (!shouldClassify(ctx?.mode, ariaConfig())) return // the router is off in Aria's settings
     try {
       const jev = classifier(ctx)
       if (!jev) return
@@ -437,7 +439,9 @@ export default function (pi: ExtensionAPI) {
     return { model: ctx.modelRegistry.find(pick.provider, pick.id), note }
   }
 
-  pi.registerCommand('plan', {
+  // `/plan` and `/execute` exist unless Aria's settings turn them off (subagents.planExecute).
+  const planExecute = ariaConfig().subagents.planExecute
+  if (planExecute) pi.registerCommand('plan', {
     description:
       'Design and plan with Superpowers (brainstorming → writing-plans) on a stronger model. Turns itself off once the plan is written; /plan off to leave earlier.',
     handler: async (args: string, ctx: any) => {
@@ -487,7 +491,7 @@ export default function (pi: ExtensionAPI) {
     return files[0] ?? null
   }
 
-  pi.registerCommand('execute', {
+  if (planExecute) pi.registerCommand('execute', {
     description:
       'Execute a Superpowers plan with subagents (subagent-driven-development). Takes a plan, not a spec. /execute off to leave.',
     handler: async (args: string, ctx: any) => {

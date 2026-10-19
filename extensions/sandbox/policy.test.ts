@@ -171,3 +171,22 @@ describe("Aria's own files", () => {
     expect(isAgentCode('/home/u/.pi/agent/extensions/x.ts', null)).toBe(false)
   })
 })
+
+describe('extra writable folders (settings)', () => {
+  const { mkdtempSync: mk, writeFileSync: wr } = require('node:fs')
+  const { tmpdir } = require('node:os')
+  const withExtra = (extra: string[], run: () => void) => {
+    const dir = mk(join(tmpdir(), 'aria-extra-'))
+    wr(join(dir, 'aria.json'), JSON.stringify({ sandbox: { extraWritable: extra } }))
+    const saved = process.env.PI_CODING_AGENT_DIR
+    process.env.PI_CODING_AGENT_DIR = dir
+    try { run() } finally { if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved }
+  }
+  const all = () => true
+  test('an extra folder is writable', () =>
+    withExtra(['/srv/shared'], () => expect(isWritable('/srv/shared/notes.md', '/home/u/Projects/app', '/home/u', all)).toBe(true)))
+  test('an extra folder inside a secret dir is not', () =>
+    withExtra(['/home/u/.ssh'], () => expect(isWritable('/home/u/.ssh/config', '/home/u/Projects/app', '/home/u', all)).toBe(false)))
+  test('without it nothing changes', () =>
+    withExtra([], () => expect(isWritable('/srv/shared/notes.md', '/home/u/Projects/app', '/home/u', all)).toBe(false)))
+})
