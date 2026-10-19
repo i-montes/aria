@@ -833,12 +833,31 @@ impl SettingsWatch {
 }
 
 impl Sessions {
-    /// The settings (or the credentials) changed: every session's Pi starts again, a busy one when its run settles,
-    /// never during it (spec: "Settings changes never restart a run"); the next start prepares the agent directory.
-    pub fn settings_changed(&self) {
+    /// The credentials or packages changed: every session's Pi starts again, a busy one when its run settles, never
+    /// during it; the next start prepares the agent directory.
+    pub fn restart_all(&self) {
         let chats: Vec<Chat> = self.chats.lock().unwrap().values().cloned().collect();
         for chat in chats {
             chat.restart_when_idle();
+        }
+    }
+
+    /// `settings.json` changed. The agent directory is prepared again at once (`aria.json`, which the extensions read on
+    /// every use, so `/effort`, compaction, the quota and the sandbox apply without a restart). Only when something Pi
+    /// reads at start changed (the persona, the experts, its settings, `mcp.json`, the shim) do the Pis restart, each
+    /// when its run settles: a restart loses plan mode, the sandbox's session grants and the quota switch.
+    pub fn settings_changed(&self) {
+        let paths = &self.ctx.paths;
+        let Ok(settings) = settings::load(paths) else { return }; // a broken file: the next start says so
+        let before = agent::start_fingerprint(paths);
+        if agent::prepare(paths, settings.as_ref()).is_err() {
+            return;
+        }
+        if let Ok(install) = pi::locate(paths, pi::pinned_version()) {
+            let _ = pi::write_shim(paths, &install, settings.as_ref().is_some_and(|s| s.subagents.save_sessions));
+        }
+        if agent::start_fingerprint(paths) != before {
+            self.restart_all();
         }
     }
 
@@ -883,7 +902,7 @@ impl Sessions {
                 let _ = sessions::save(&self.ctx.paths, &SessionList { sessions: entries, active });
             }
             // Credentials or packages changed.
-            PageMessage::EnginesRestart => self.settings_changed(),
+            PageMessage::EnginesRestart => self.restart_all(),
             PageMessage::ChatShown { shown } => {
                 self.ctx.chat_shown.store(shown, Ordering::SeqCst);
                 if !shown {
@@ -1511,6 +1530,9 @@ mod tests {
         while s.messages.try_recv().is_ok() {}
         s.sessions.test_send_raw("aa", "start"); // a run that has not settled
         wait_session(&s, "the run", "aa", |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "agent_start"));
+        let mut settings = Settings::defaults("es");
+        settings.assistant.name = "Nova".into(); // the persona changes: Pi reads it only at start
+        settings::save(&s.h.paths, &settings).unwrap();
         s.sessions.settings_changed();
         std::thread::sleep(Duration::from_millis(200));
         let mut cut = false;
@@ -1520,6 +1542,45 @@ mod tests {
         assert!(!cut, "the run is not cut");
         s.sessions.test_send_raw("aa", "settle");
         wait_session(&s, "stopped once the run settled", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "stopped"));
+    }
+
+    fn stopped_within(s: &SessionsHarness, ms: u64) -> bool {
+        std::thread::sleep(Duration::from_millis(ms));
+        let mut stopped = false;
+        while let Ok(m) = s.messages.try_recv() {
+            stopped |= matches!(m, DockMessage::Session { ref message, .. } if matches!(**message, DockMessage::ChatEngine { ref state } if state == "stopped"));
+        }
+        stopped
+    }
+
+    #[test]
+    fn a_change_the_extensions_read_live_keeps_every_pi_and_its_session_state() {
+        let s = sessions_harness();
+        settings::save(&s.h.paths, &Settings::defaults("es")).unwrap();
+        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        let mut settings = Settings::defaults("es");
+        settings.effort.mode = "fixed".into();
+        settings.effort.fixed_level = Some("high".into());
+        settings.compaction.percent = 70;
+        settings::save(&s.h.paths, &settings).unwrap();
+        s.sessions.settings_changed();
+        assert!(!stopped_within(&s, 300), "plan mode, session grants and the quota switch survive an /effort");
+        let config: Value = serde_json::from_str(&std::fs::read_to_string(s.h.paths.agent().join("aria.json")).unwrap()).unwrap();
+        assert_eq!(config["effort"]["fixedLevel"], "high", "the extensions read the change at once");
+    }
+
+    #[test]
+    fn a_change_pi_reads_only_at_start_restarts_it() {
+        let s = sessions_harness();
+        settings::save(&s.h.paths, &Settings::defaults("es")).unwrap();
+        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        let mut settings = Settings::defaults("es");
+        settings.subagents.experts.iter_mut().for_each(|e| e.enabled = e.name != "security");
+        settings::save(&s.h.paths, &settings).unwrap();
+        s.sessions.settings_changed();
+        wait_session(&s, "a restart", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "stopped"));
     }
 
     #[test]

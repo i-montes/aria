@@ -354,6 +354,26 @@ fn local_packages(packages: &crate::settings::Packages) -> Option<String> {
     Some(path.strip_prefix("~/").map(|rest| format!("{home}/{rest}")).unwrap_or_else(|| path.to_string()))
 }
 
+/// A fingerprint of what Pi reads only when it starts: the persona, the experts, Pi's `settings.json`, `mcp.json` and
+/// the `pi` shim. When a settings change leaves it as it was, the running Pis need no restart (the extensions read
+/// `aria.json` on every use).
+pub fn start_fingerprint(paths: &AriaPaths) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let agent = paths.agent();
+    let mut files = vec![agent.join("SYSTEM.md"), agent.join("settings.json"), paths.mcp(), paths.bin().join("pi")];
+    if let Ok(entries) = std::fs::read_dir(agent.join("agents")) {
+        let mut experts: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+        experts.sort();
+        files.extend(experts);
+    }
+    for file in files {
+        file.hash(&mut hasher);
+        std::fs::read(&file).ok().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// Is the Claude provider listed in Pi's settings and downloaded?
 pub fn claude_bridge_installed(paths: &AriaPaths) -> bool {
     let listed = read_json(&paths.agent().join("settings.json"))

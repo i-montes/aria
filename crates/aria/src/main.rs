@@ -164,7 +164,9 @@ fn run_dock() {
         // every session's Pi when its run settles, and the page reads the settings again.
         ticks = ticks.wrapping_add(1);
         if ticks % 60 == 0 && settings_watch.changed() {
-            chat_for_settings.settings_changed();
+            // Off the UI thread: preparing the agent directory reads and writes files.
+            let sessions = chat_for_settings.clone();
+            std::thread::spawn(move || sessions.settings_changed());
             dock.send(&DockMessage::SettingsChanged);
         }
         // A dock that just hid with a question still open needs its notification.
