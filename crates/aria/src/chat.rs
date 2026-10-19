@@ -420,15 +420,8 @@ impl Chat {
                 "--session-id".into(),
                 self.session.clone(),
             ],
-            env: vec![
-                ("PI_CODING_AGENT_DIR".into(), self.ctx.paths.agent().display().to_string()),
-                ("PATH".into(), pi::path_with_bin(&self.ctx.paths, &self.ctx.path_var)),
-                ("PI_SKIP_VERSION_CHECK".into(), "1".into()),
-                // The extensions' projects folder (jev-router's plan mode) is the working folder.
-                ("ARIA_PROJECTS_DIR".into(), workdir.display().to_string()),
-                // `/effort` and `/autocompact` write Aria's settings instead of their own files (extensions/lib/config.ts).
-                ("ARIA_SETTINGS".into(), self.ctx.paths.settings().display().to_string()),
-            ],
+            env: pi::session_env(&self.ctx.paths, &self.ctx.path_var, &workdir),
+            unset: pi::unset_for_pi(std::env::vars()),
             cwd: workdir.clone(),
         };
         let mut spec = spec;

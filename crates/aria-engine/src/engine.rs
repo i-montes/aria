@@ -21,6 +21,8 @@ pub struct SpawnSpec {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    /// Names removed from the inherited environment before `env` is applied.
+    pub unset: Vec<String>,
     pub cwd: PathBuf,
 }
 
@@ -67,6 +69,9 @@ impl Engine {
         let mut command = Command::new(&spec.program);
         command.args(&spec.args).current_dir(&spec.cwd).stdin(Stdio::piped()).stdout(Stdio::piped())// Pi's diagnostics go nowhere unless ARIA_DEBUG_PI is set (then to the dock's own stderr).
         .stderr(if std::env::var_os("ARIA_DEBUG_PI").is_some() { Stdio::inherit() } else { Stdio::null() });
+        for name in &spec.unset {
+            command.env_remove(name);
+        }
         for (key, value) in &spec.env {
             command.env(key, value);
         }

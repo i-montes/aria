@@ -391,6 +391,8 @@ pub struct InstallCommand {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    /// Names removed from the inherited environment (`pi::unset_for_pi`).
+    pub unset: Vec<String>,
     pub cwd: PathBuf,
 }
 
@@ -403,6 +405,7 @@ pub fn claude_bridge_install_command(paths: &AriaPaths, install: &crate::pi::PiI
             ("PATH".into(), crate::pi::path_with_bin(paths, path_var)),
             ("PI_SKIP_VERSION_CHECK".into(), "1".into()),
         ],
+        unset: crate::pi::unset_for_pi(std::env::vars()),
         cwd: paths.agent(),
     }
 }
@@ -764,6 +767,15 @@ mod tests {
         assert_eq!(env("PI_CODING_AGENT_DIR"), Some(paths.agent().display().to_string()));
         assert_eq!(env("PATH"), Some(format!("{}:/usr/bin", paths.bin().display())));
         assert_eq!(env("PI_SKIP_VERSION_CHECK"), Some("1".to_string()));
+    }
+
+    #[test]
+    fn the_install_command_drops_anthropic_variables() {
+        std::env::set_var("ANTHROPIC_ARIA_INSTALL_TEST", "x");
+        let (_dir, paths) = paths();
+        let install = crate::pi::PiInstall { dir: paths.pi_install("1.3.0"), binary: paths.pi_install("1.3.0").join("node_modules/.bin/pi") };
+        let command = claude_bridge_install_command(&paths, &install, "/usr/bin");
+        assert!(command.unset.contains(&"ANTHROPIC_ARIA_INSTALL_TEST".to_string()), "{:?}", command.unset);
     }
 
     #[test]

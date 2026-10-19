@@ -33,6 +33,7 @@ fn the_pinned_pi_answers_a_prompt_through_the_engine() {
             ("PATH".into(), pi::path_with_bin(&real, &path_var)),
             ("PI_SKIP_VERSION_CHECK".into(), "1".into()),
         ],
+        unset: pi::unset_for_pi(std::env::vars()),
         cwd: dir.path().to_path_buf(),
     };
     let (engine, events) = Engine::spawn(spec).expect("start Pi");
@@ -82,7 +83,11 @@ fn the_claude_provider_installs_with_arias_command_and_its_models_show_up() {
     assert!(!claude_bridge_installed(&paths));
 
     let command = claude_bridge_install_command(&paths, &install, &path_var);
-    let status = std::process::Command::new(&command.program)
+    let mut run = std::process::Command::new(&command.program);
+    for name in &command.unset {
+        run.env_remove(name);
+    }
+    let status = run
         .args(&command.args)
         .envs(command.env.iter().map(|(k, v)| (k, v)))
         .current_dir(&command.cwd)
@@ -99,6 +104,7 @@ fn the_claude_provider_installs_with_arias_command_and_its_models_show_up() {
             ("PATH".into(), pi::path_with_bin(&paths, &path_var)),
             ("PI_SKIP_VERSION_CHECK".into(), "1".into()),
         ],
+        unset: pi::unset_for_pi(std::env::vars()),
         cwd: dir.path().to_path_buf(),
     };
     let (engine, _events) = Engine::spawn(spec).expect("start Pi");

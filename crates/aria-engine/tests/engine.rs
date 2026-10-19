@@ -6,7 +6,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 fn spec(program: &str, args: Vec<String>) -> SpawnSpec {
-    SpawnSpec { program: PathBuf::from(program), args, env: vec![], cwd: std::env::temp_dir() }
+    SpawnSpec { program: PathBuf::from(program), args, env: vec![], unset: vec![], cwd: std::env::temp_dir() }
 }
 
 fn fake() -> (Engine, Receiver<EngineEvent>) {
@@ -131,4 +131,17 @@ fn close_lets_a_child_that_stops_on_eof_end_by_itself() {
     let (engine, events) = fake();
     engine.close(Duration::from_secs(3));
     assert_eq!(next(&events), EngineEvent::Exited { code: Some(0) });
+}
+
+#[test]
+fn an_unset_variable_does_not_reach_the_child() {
+    std::env::set_var("ARIA_ENGINE_TEST_SECRET", "x");
+    let probe = r#"printf '{"type":"probe","value":"%s"}\n' "${ARIA_ENGINE_TEST_SECRET:-absent}"; sleep 1"#;
+    let mut spec = spec("/bin/sh", vec!["-c".into(), probe.into()]);
+    spec.unset = vec!["ARIA_ENGINE_TEST_SECRET".into()];
+    let (_engine, events) = Engine::spawn(spec).expect("spawn the probe");
+    match next(&events) {
+        EngineEvent::Event(raw) => assert_eq!(raw["value"], "absent"),
+        other => panic!("{other:?}"),
+    }
 }

@@ -105,6 +105,24 @@ pub fn write_shim(paths: &AriaPaths, install: &PiInstall, save_sessions: bool) -
     Ok(shim)
 }
 
+/// The environment a session's Pi runs with: its agent directory, Aria's `bin` first on `PATH`, no version check, the
+/// extensions' projects folder (the working folder) and Aria's settings, which `/effort` and `/autocompact` write
+/// (extensions/lib/config.ts).
+pub fn session_env(paths: &AriaPaths, path_var: &str, workdir: &Path) -> Vec<(String, String)> {
+    vec![
+        ("PI_CODING_AGENT_DIR".into(), paths.agent().display().to_string()),
+        ("PATH".into(), path_with_bin(paths, path_var)),
+        ("PI_SKIP_VERSION_CHECK".into(), "1".into()),
+        ("ARIA_PROJECTS_DIR".into(), workdir.display().to_string()),
+        ("ARIA_SETTINGS".into(), paths.settings().display().to_string()),
+    ]
+}
+
+/// The inherited variables Pi must not see: any `ANTHROPIC_*` breaks the Claude provider, which signs in with OAuth.
+pub fn unset_for_pi(vars: impl Iterator<Item = (String, String)>) -> Vec<String> {
+    vars.map(|(name, _)| name).filter(|name| name.starts_with("ANTHROPIC_")).collect()
+}
+
 /// The directory to put first on a Pi process's `PATH`.
 pub fn path_with_bin(paths: &AriaPaths, path_var: &str) -> String {
     let bin: &Path = &paths.bin();
@@ -123,6 +141,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = AriaPaths { root: dir.path().to_path_buf() };
         (dir, paths)
+    }
+
+    #[test]
+    fn anthropic_variables_are_unset_for_pi() {
+        let vars = [("ANTHROPIC_API_KEY", "k"), ("ANTHROPIC_BASE_URL", "u"), ("PATH", "/bin"), ("MY_ANTHROPIC", "z")];
+        let unset = unset_for_pi(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        assert_eq!(unset, vec!["ANTHROPIC_API_KEY".to_string(), "ANTHROPIC_BASE_URL".to_string()]);
+    }
+
+    #[test]
+    fn session_env_lists_what_pi_needs() {
+        let (_dir, paths) = paths();
+        let env = session_env(&paths, "/usr/bin", Path::new("/work"));
+        let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["PI_CODING_AGENT_DIR", "PATH", "PI_SKIP_VERSION_CHECK", "ARIA_PROJECTS_DIR", "ARIA_SETTINGS"]);
+        assert_eq!(env[3].1, "/work");
+        assert_eq!(env[4].1, paths.settings().display().to_string());
     }
 
     fn fake_install(paths: &AriaPaths, version: &str, mode: u32) -> PathBuf {

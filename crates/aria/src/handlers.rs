@@ -57,8 +57,11 @@ impl Ctx {
             oauth_timeout: Duration::from_secs(300),
             notion_url: mcp::NOTION_URL.to_string(),
             installer: Arc::new(|command| {
-                Command::new(&command.program)
-                    .args(&command.args)
+                let mut run = Command::new(&command.program);
+                for name in &command.unset {
+                    run.env_remove(name);
+                }
+                run.args(&command.args)
                     .envs(command.env.iter().map(|(k, v)| (k, v)))
                     .current_dir(&command.cwd)
                     .stdin(Stdio::null())
