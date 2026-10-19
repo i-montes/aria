@@ -11,13 +11,15 @@ const go = [
 ]
 
 describe('the compact bar', () => {
-  test('beside the name only the 5-hour window shows, as a label, a bar and a percent', () => {
+  test('beside the name only the 5-hour window shows, as a chip with a ring, its label and its percent', () => {
     const html = renderQuotaBars({ windows: go, now: NOW }, {}, t)
     expect(html.match(/class="p-qb-inline/g)).toHaveLength(1)
     const inline = html.slice(html.indexOf('p-qb-inline'), html.indexOf('p-qb-pop'))
+    expect(inline).toContain('p-qb-ring')
+    expect(inline).toContain('--p: 42')
     expect(inline).toContain('>5h<')
-    expect(inline).toContain('42%')
-    expect(inline).toContain('width: 42%')
+    expect(inline).toContain('>42%<')
+    expect(inline).not.toContain('p-qb-track')
     expect(inline).not.toContain('17%')
     expect(inline).not.toContain('chat.quotabars.week')
   })
@@ -26,7 +28,12 @@ describe('the compact bar', () => {
     const html = renderQuotaBars({ windows: [go[1], go[2]], now: NOW }, {}, t)
     const inline = html.slice(html.indexOf('p-qb-inline'), html.indexOf('p-qb-pop'))
     expect(inline).toContain('chat.quotabars.week')
-    expect(inline).toContain('17%')
+    expect(inline).toContain('>17%<')
+  })
+
+  test('the ring is clamped like the card', () => {
+    expect(renderQuotaBars({ windows: [{ id: '5h', label: '5h', percent: 180 }] }, {}, t)).toContain('--p: 100')
+    expect(renderQuotaBars({ windows: [{ id: '5h', label: '5h', percent: -3 }] }, {}, t)).toContain('--p: 0')
   })
 
   test('no windows draws nothing, and junk entries are skipped', () => {
