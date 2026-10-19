@@ -42,6 +42,19 @@ entry) and a change applies when each session's run settles. Left:
 - The settings screen refreshes after an outside change (`/effort`, `/autocompact`) only on its summary; a step being
   edited keeps what is on screen, and saving it writes those values.
 
+## Parity (phase 2, part 2d — done)
+
+`docs/parity.md` walks every item of `ARIA-SETUP.md` with its check and its last result (2026-10-19): every offline
+suite passes, the sandbox acceptance is 7/7, Jev's review eval 10/10 and the smoke test passes. Left:
+
+- The router eval is 93/94: one expert case ("performance opportunities in the bundle") sits on the line between
+  `reviewer` and `frontend` (0.48 against 0.52) and flips between runs; the experts are the owner's, word for word.
+- The manual rows wait for the owner: Claude Max in the dock, Notion and Tavily, a subagent's `## Learnings`, the
+  `ask_user` answer lifting read-only mode, and the `PI_*` switches through the dock's environment.
+- Aria's memory starts empty: its Engram database is its own (the owner's decision), so the memories in `~/.engram`
+  are not in it. Importing them would be a new feature.
+- Parity is accepted by the owner using Aria for real work, not by the matrix.
+
 ## The Claude provider
 
 - `/connect` installs the Claude provider (`claude-bridge`) for the sign-in route and needs Claude Code on the machine. Closing the card does not cancel a sign-in still waiting in the browser (it times out after five minutes).

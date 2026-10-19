@@ -78,3 +78,10 @@ Notes: the desktop notification for a prompt that nobody can see is sent with `o
 | `~/.aria/bin/engram` | Engram 3.3.2, installed by `install.sh` from its GitHub release and checked against `engram-version` | none, new | delete it |
 | `~/.aria/bin/pi` | the shim keeps subagent sessions in `~/.aria/agent/sessions/subagents/` when "save the subagents' sessions" is on | the plain shim | turn the setting off (the next start rewrites it) |
 | `~/.aria/settings.json` | `/effort` and `/autocompact` in a session write `effort` and `compaction` here (not `jev-router-effort.json` / `autocompact.json`) | none | change them back in the settings |
+
+## 2026-10-19 — phase 2d: the parity check
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| system packages (pacman) | `install.sh` also installs `bubblewrap` and `iproute2` on Omarchy, at the next install (both were already on the owner's machine) | none | `sudo pacman -R bubblewrap iproute2`, if nothing else needs them |
+| `/tmp/tmp.*` | `tools/parity/scratch-home.sh` makes a scratch copy of `~/.aria` (settings, credentials at mode 600, MCP list) for each live check and deletes it when the check ends; `~/.aria` is only read | none | none needed: removed on exit |

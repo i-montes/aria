@@ -56,7 +56,9 @@ Tests: `bun test extensions`.
     `/plan` and `/execute` are registered only with `subagents.planExecute`.
   - `sandbox`: `sandbox.extraWritable` folders that exist join the writable roots (never one holding secrets, and
     never one that holds or sits inside Aria's home);
-    `jevReview` off skips Jev's review; `askToLeave` off refuses leaving the sandbox and says it is not allowed
+    a credential that is a symlink (Aria's agent dir links its credentials to `~/.aria`) is hidden at its target, since
+  bwrap cannot mount on a symlink;
+  `jevReview` off skips Jev's review; `askToLeave` off refuses leaving the sandbox and says it is not allowed
     (`route.ts`, `refuse-not-allowed`).
   - `subagent-mode`: `subagents.turnLimit` stops a subagent's tools at that many turns (`limit.ts`). Saved subagent
     sessions are the `pi` shim's job (`crates/aria-core/src/pi.rs`).

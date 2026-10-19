@@ -60,6 +60,7 @@ extensions/            the owner's Pi extensions, adapted to run in Aria (see it
 ui/                    the dock's web page: plain HTML, CSS and JS modules, embedded in the binary;
                        ui/chat/parts/ holds one module per component of the design
 tools/ui-sandbox/      the page without Pi, to see and try every chat state
+tools/parity/          the parity checks against the owner's Pi (the matrix is docs/parity.md)
 install/               the installer and the systemd unit
 design/                the visual reference (Aria.html) and its components
 docs/                  how the pieces fit, the settings, how to add a provider, what is still pending (docs/pending.md)
