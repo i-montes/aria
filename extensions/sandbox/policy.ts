@@ -151,14 +151,22 @@ export function writableRoots(cwd: string, home = HOME, exists: (p: string) => b
   const project = projectRoot(cwd, home)
   const { common } = gitDirs(project)
   const extra = common && !(project && inside(common, project)) ? [common] : []
-  return [...(project ? [project] : []), ...extra, '/tmp', ...CACHES.map((c) => join(home, c)).filter(exists), ...extraWritable(home)]
+  return [...(project ? [project] : []), ...extra, '/tmp', ...CACHES.map((c) => join(home, c)).filter(exists), ...extraWritable(home, exists)]
 }
 
-/** The folders Aria's settings add (`sandbox.extraWritable`, absolute): never one that holds secrets or Aria's own files. */
-function extraWritable(home: string): string[] {
+/** The folders Aria's settings add (`sandbox.extraWritable`, absolute and existing, or bwrap cannot bind them): never one
+ * that holds secrets, and never one that holds or sits inside Aria's own home (its extensions, `bin/pi`, settings). */
+function extraWritable(home: string, exists: (p: string) => boolean): string[] {
   const agent = process.env.PI_CODING_AGENT_DIR ?? null
+  const ariaHome = agent && process.env.ARIA_SETTINGS ? dirname(agent) : agent
   return ariaConfig().sandbox.extraWritable.filter(
-    (dir) => dir.startsWith('/') && !isSecret(dir, '/', home) && ![...SECRET_DIRS.map((d) => join(home, d))].some((s) => inside(s, dir)) && !isAgentCode(dir, agent),
+    (dir) =>
+      dir.startsWith('/') &&
+      exists(dir) &&
+      !isSecret(dir, '/', home) &&
+      !SECRET_DIRS.map((d) => join(home, d)).some((secret) => inside(secret, dir)) &&
+      !(ariaHome && (inside(ariaHome, dir) || inside(dir, ariaHome))) &&
+      !isAgentCode(dir, agent),
   )
 }
 

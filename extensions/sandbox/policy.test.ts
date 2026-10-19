@@ -187,6 +187,26 @@ describe('extra writable folders (settings)', () => {
     withExtra(['/srv/shared'], () => expect(isWritable('/srv/shared/notes.md', '/home/u/Projects/app', '/home/u', all)).toBe(true)))
   test('an extra folder inside a secret dir is not', () =>
     withExtra(['/home/u/.ssh'], () => expect(isWritable('/home/u/.ssh/config', '/home/u/Projects/app', '/home/u', all)).toBe(false)))
+  test('an extra folder that does not exist is left out (bwrap cannot bind it)', () =>
+    withExtra(['/srv/missing'], () => expect(writableRoots('/home/u/Projects/app', '/home/u', (p) => p !== '/srv/missing')).not.toContain('/srv/missing')))
+  test("an extra folder that holds Aria's own files is refused", () => {
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wr } = require('node:fs')
+    const home = join(mk(join(require('node:os').tmpdir(), 'aria-home-')), '.aria')
+    const agent = join(home, 'agent')
+    md(agent, { recursive: true })
+    wr(join(agent, 'aria.json'), JSON.stringify({ sandbox: { extraWritable: [home, join(home, 'bin')] } }))
+    const saved = [process.env.PI_CODING_AGENT_DIR, process.env.ARIA_SETTINGS]
+    process.env.PI_CODING_AGENT_DIR = agent
+    process.env.ARIA_SETTINGS = join(home, 'settings.json')
+    try {
+      const roots = writableRoots('/home/u/Projects/app', '/home/u', all)
+      expect(roots).not.toContain(home)
+      expect(roots).not.toContain(join(home, 'bin'))
+    } finally {
+      if (saved[0] === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved[0]
+      if (saved[1] === undefined) delete process.env.ARIA_SETTINGS; else process.env.ARIA_SETTINGS = saved[1]
+    }
+  })
   test('without it nothing changes', () =>
     withExtra([], () => expect(isWritable('/srv/shared/notes.md', '/home/u/Projects/app', '/home/u', all)).toBe(false)))
 })

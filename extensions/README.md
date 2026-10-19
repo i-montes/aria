@@ -54,7 +54,8 @@ Tests: `bun test extensions`.
   - `autocompact`: the share comes from the settings (`compactPercent`); outside Aria, `autocompact.json`.
   - `jev-router`: with the router off (`router.enabled`) Jev does not classify (`shouldClassify` in `modes.ts`);
     `/plan` and `/execute` are registered only with `subagents.planExecute`.
-  - `sandbox`: `sandbox.extraWritable` folders join the writable roots (never a secret folder or Aria's own files);
+  - `sandbox`: `sandbox.extraWritable` folders that exist join the writable roots (never one holding secrets, and
+    never one that holds or sits inside Aria's home);
     `jevReview` off skips Jev's review; `askToLeave` off refuses leaving the sandbox and says it is not allowed
     (`route.ts`, `refuse-not-allowed`).
   - `subagent-mode`: `subagents.turnLimit` stops a subagent's tools at that many turns (`limit.ts`). Saved subagent
