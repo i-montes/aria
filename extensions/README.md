@@ -62,5 +62,7 @@ Tests: `bun test extensions`.
     sessions are the `pi` shim's job (`crates/aria-core/src/pi.rs`).
   - `/effort` and `/autocompact` write Aria's settings (`ARIA_SETTINGS`, `writeAriaSetting` in `lib/config.ts`) instead
     of `jev-router-effort.json` and `autocompact.json`; the dock applies the change when the run settles.
-- **Left out:** `jev-router/eval.ts`, `sandbox/review-eval.ts` and `sandbox/accept.sh`, which run real models against the
-  owner's own Pi.
+- **Checks with real models:** `jev-router/eval.ts`, `sandbox/review-eval.ts` and `sandbox/accept.sh`, the owner's
+  evals, run against Aria's pinned Pi through a scratch Aria home (`tools/parity/scratch-home.sh`; how to run them is in
+  `tools/parity/README.md`). The cases name neutral projects instead of the owner's, and the experts are the ones Aria
+  writes for its settings.

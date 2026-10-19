@@ -17,7 +17,7 @@ through the scratch home:
 
     sh tools/parity/scratch-home.sh bun $PWD/extensions/jev-router/eval.ts
     sh tools/parity/scratch-home.sh bun $PWD/extensions/sandbox/review-eval.ts
-    sh tools/parity/scratch-home.sh sh $PWD/extensions/sandbox/accept.sh
+    sh tools/parity/scratch-home.sh bash $PWD/extensions/sandbox/accept.sh
     sh tools/parity/scratch-home.sh sh $PWD/tools/parity/smoke.sh
 
 Jev (the classifier) is free. `accept.sh` and the smoke test use the daily model and spend a few cents of the Go quota.
