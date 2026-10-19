@@ -263,6 +263,20 @@ const script = `(async () => {
   const before = $('#chat-input'); typeIn('abc'); typeIn('abc\\ndef'); await wait(40)
   check('typing and adding a line does not replace the textarea', $('#chat-input') === before && before.rows === 2, before.rows)
 
+  // 9. the setup (settings): a control redraws the step through its components, keeping the scroll and the focus
+  $('[data-chat="settings"]').click(); await wait(200)
+  $('#flow [data-action="edit"][data-value="agents"]')?.click(); await wait(120)
+  const content = $('#content')
+  content.scrollTop = content.scrollHeight
+  const kept = content.scrollTop
+  const sw = $('#flow [data-action="expert-on"]')
+  const was = sw?.getAttribute('aria-checked')
+  sw?.click(); await wait(80)
+  const after = $('#flow [data-action="expert-on"]')
+  check('a setup switch flips through a redraw of its component', after && after !== sw && after.getAttribute('aria-checked') !== was, was + ' -> ' + after?.getAttribute('aria-checked'))
+  check('the redraw keeps the scroll position', kept > 0 && Math.abs(content.scrollTop - kept) < 2, kept + ' vs ' + content.scrollTop)
+  check('the redraw gives the focus back to the switch that was clicked', document.activeElement === after, document.activeElement?.outerHTML?.slice(0, 80))
+
   return results
   function sim_ask() { window.sim.sess('s1', { type: 'chatDialog', id: 'ask1', method: 'input', request: { title: JSON.stringify({ aria: 1, kind: 'question', questions: [{ question: 'Which fallback?', header: 'Fallback', options: [{ label: 'Git hash' }, { label: 'Version' }] }, { question: 'Which checks?', header: 'Checks', options: [{ label: 'Unit' }, { label: 'Lint' }] }] }) }, hidden: false }) }
 })()`

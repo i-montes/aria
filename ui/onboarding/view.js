@@ -109,7 +109,6 @@ export function createOnboarding(env) {
     lastView = view
     ;(target ?? root.querySelector('[data-nav]'))?.focus({ preventScroll: true })
     if (panel) panel.scrollTop = scrollTop
-    maybeCheckStoredCredential()
   }
 
   function welcomeHtml() {
@@ -486,6 +485,8 @@ export function createOnboarding(env) {
     state.view = 'step'
     state.error = null
     render()
+    // Drawing has no side effects; entering the sign-in step is what checks a credential already on disk.
+    maybeCheckStoredCredential()
   }
 
   function startFlow(mode) {
