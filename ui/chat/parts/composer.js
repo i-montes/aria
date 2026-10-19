@@ -28,7 +28,6 @@ export const TEXTS = {
     'chat.composer.hint.type': 'type',
     'chat.composer.hint.commands': 'for commands',
     'chat.composer.hint.agents': 'subagents',
-    'chat.composer.hint.stop': 'stop',
     'chat.composer.hint.queue': 'queues your message',
     'chat.composer.hint.send': 'send',
     'chat.composer.hint.newline': 'new line',
@@ -44,7 +43,6 @@ export const TEXTS = {
     'chat.composer.hint.type': 'escribe',
     'chat.composer.hint.commands': 'para comandos',
     'chat.composer.hint.agents': 'subagentes',
-    'chat.composer.hint.stop': 'detener',
     'chat.composer.hint.queue': 'encola tu mensaje',
     'chat.composer.hint.send': 'enviar',
     'chat.composer.hint.newline': 'nueva línea',
@@ -82,7 +80,7 @@ export function renderComposer({ busy = false, hasText = false, rows = 1, showHi
     : `<div class="p-composer-hints">${chip}
       <span><kbd class="p-composer-kbd">/</kbd> ${esc(t('chat.composer.hint.commands'))}</span>
       <span>${key('alt+a')} ${esc(t('chat.composer.hint.agents'))}</span>${
-        busy ? `<span>${key('esc')} ${esc(t('chat.composer.hint.stop'))}</span><span>${key('enter')} ${esc(t('chat.composer.hint.queue'))}</span>` : ''
+        busy ? `<span>${key('enter')} ${esc(t('chat.composer.hint.queue'))}</span>` : ''
       }
     </div>`
   return `<div class="p-composer">

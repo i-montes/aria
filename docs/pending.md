@@ -77,6 +77,7 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
 
 ## Deliberate differences from the design
 
+- Esc never stops a run (the owner's choice, 2026-10-19): it closes a picker or a panel, and otherwise closes the dock while the run goes on. The stop button stops it; the composer no longer shows "esc stop".
 - The working folder row and the settings button (owner's decisions).
 - The header has no model button or meter (owner's decision; the design has one beside the name): the model is the chip under the input; the quota chip beside the name and each tab's hover open the same quota card, with the model and the context.
 - Buttons and cards use solid fills; only the border takes the accent (owner's taste).

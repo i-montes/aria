@@ -1250,8 +1250,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       input?.focus()
     },
     /**
-     * Esc, in this order: close a picker, stop a run, leave a panel, close an open tab menu. Returns whether it
-     * did something; when it did not, the dock closes.
+     * Esc, in this order: close a picker, leave a panel, close an open tab menu. Returns whether it did something;
+     * when it did not, the dock closes. A run is never stopped by Esc (the owner's choice): it goes on with the dock
+     * closed, and the stop button stops it.
      */
     escape() {
       if (picker) {
@@ -1261,10 +1262,6 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       }
       if (ui.connect) {
         closeConnect()
-        return true
-      }
-      if (current().running && ui.view === 'chat') {
-        stop()
         return true
       }
       if (ui.view !== 'chat') {

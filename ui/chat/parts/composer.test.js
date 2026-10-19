@@ -103,10 +103,9 @@ describe('renderComposer', () => {
     expect(renderComposer({ busy: true, model: 'GLM 5.3' }, {}, t)).toContain('GLM 5.3')
   })
 
-  test('while busy the hints say esc stops and enter queues', () => {
+  test('while busy the hints say enter queues (Esc closes the dock, it does not stop the run)', () => {
     const html = renderComposer({ busy: true }, {}, t)
-    expect(html).toContain('esc')
-    expect(html).toContain('chat.composer.hint.stop')
+    expect(html).not.toContain('chat.composer.hint.stop') // Esc closes the dock; the stop button stops a run
     expect(html).toContain('chat.composer.hint.queue')
     expect(html).not.toContain('shift+enter')
   })

@@ -137,7 +137,8 @@ const script = `(async () => {
   check('the command picker opens', $('.p-cmd.is-open'))
   check('Esc closes the picker first', window.aria.chat.escape() === true && !$('.p-cmd.is-open'))
   ev({ type: 'agent_start' }); await settle(); window.__sent.length = 0
-  check('Esc stops a run', window.aria.chat.escape() === true && sent().some((m) => m.type === 'chatAbort'))
+  check('Esc during a run does not stop it: it is left to the dock, which closes', window.aria.chat.escape() === false && !sent().some((m) => m.type === 'chatAbort'))
+  check('the composer no longer offers Esc to stop', !$('#chat-composer').textContent.includes('esc'), $('#chat-composer').textContent.slice(-80))
   await reset()
   window.aria.chat.toggleAgents(); await wait(40)
   check('Esc in a panel goes back to the chat', window.aria.chat.escape() === true && $('#view-chat') && !$('#view-chat').hidden)
