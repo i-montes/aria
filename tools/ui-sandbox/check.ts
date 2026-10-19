@@ -79,6 +79,15 @@ const script = `(async () => {
   window.aria.receive({ type: 'settingsChanged' }); await wait(80)
   check('the page reads the settings again when they change outside it', window.__sent.filter((m) => m.type === 'loadSettings').length === loadsBefore + 1)
 
+  // 0c. saving from the settings screen shows "done", and the dock's own change notice does not take it back
+  $('[data-chat="settings"]').click(); await wait(250)
+  $('#flow [data-action="next"]')?.click(); await wait(250)
+  const doneShown = () => !!$('#flow [data-action="close"]')
+  check('saving the settings shows the done screen', doneShown())
+  window.aria.receive({ type: 'settingsChanged' }); await wait(200)
+  check('the change notice that follows the save does not take the done screen away', doneShown(), $('#flow').textContent.slice(0, 80))
+  $('#flow [data-action="close"]')?.click(); await wait(150)
+
   // 1. the textarea survives a run starting, text appearing and the model changing
   typeIn('half-typed')
   const mark = $('#chat-input'); mark.__mark = 1

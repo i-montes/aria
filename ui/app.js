@@ -61,7 +61,9 @@ const handlers = {
       if (!reply.settings) return
       chat.setSettings(reply.settings)
       const at = onboarding.snapshot()
-      if (state.mode === 'setup' && at.editing && at.step === 'review') onboarding.start(reply.settings, reply.connected)
+      // Only the summary on screen is refreshed: not a step being edited, and not the "done" screen a save just showed
+      // (the dock's own save is a change too).
+      if (state.mode === 'setup' && at.editing && at.view === 'step' && at.step === 'review') onboarding.start(reply.settings, reply.connected)
     }),
   // These need the catalogs, so they wait for the boot to finish.
   notice: () => booted.then(showNotice),
