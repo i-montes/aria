@@ -14,7 +14,7 @@ line_of() { printf '%s\n' "$1" | grep -nF -- "$2" | head -1 | cut -d: -f1; }
 out=$(sh "$installer" --dry-run --local /tmp/fake-aria 2>&1)
 last=0
 ordered=1
-for step in 'sudo pacman -S --needed gtk3 webkit2gtk-4.1 gtk-layer-shell' 'install -Dm755 /tmp/fake-aria' 'install -d -m 700' 'systemctl --user daemon-reload' 'systemctl --user enable --now aria.service'; do
+for step in 'sudo pacman -S --needed gtk3 webkit2gtk-4.1 gtk-layer-shell' 'install -d -m 700' 'install -Dm755 /tmp/fake-aria' 'systemctl --user daemon-reload' 'systemctl --user enable --now aria.service'; do
   at=$(line_of "$out" "would: $step") || at=""
   if [ -z "$at" ]; then fail "install dry run lacks 'would: $step'"; ordered=0
   elif [ "$at" -le "$last" ]; then fail "install dry run has '$step' out of order"; ordered=0
@@ -29,6 +29,9 @@ while IFS= read -r package; do
   [ -z "$package" ] && continue
   printf '%s\n' "$out" | grep -qF "would: env PI_CODING_AGENT_DIR=$tmp/home/agent PI_SKIP_VERSION_CHECK=1 $tmp/home/pi/" && printf '%s\n' "$out" | grep -qF "install $package" && pass "installs $package" || fail "does not install $package"
 done < "$here/../pi-packages"
+at_packages=$(line_of "$out" "install git:")
+at_binary=$(line_of "$out" "would: install -Dm755")
+[ -n "$at_packages" ] && [ -n "$at_binary" ] && [ "$at_packages" -lt "$at_binary" ] && pass "packages are installed before the binary is replaced (a failure leaves the old one running)" || fail "packages come after the binary"
 rm -r "$tmp"
 
 # Pi and Node: the pinned version is read from pi-version, Pi is installed under ~/.aria/pi/<version>

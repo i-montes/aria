@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { bwrapArgs, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, shellQuote, subagentProblem, wrapCommand, writableRoots } from './policy.ts'
+import { bwrapArgs, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, shellQuote, subagentProblem, wrapCommand, writableRoots, isAgentCode } from './policy.ts'
 
 const home = '/home/u'
 const all = () => true
@@ -154,5 +154,20 @@ describe('review fixes', () => {
     expect(subagentProblem({ tasks: [{ task: 'x', cwd: `${real}/.config/hypr` }] }, repo, real, rt)).toMatch(/cwd/)
     expect(subagentProblem({ task: 'x', contextFiles: [`${real}/.ssh/id_ed25519`] }, repo, real, rt)).toMatch(/contextFiles/)
     expect(subagentProblem({ chain: [{ task: 'x', cwd: `${repo}/sub` }] }, repo, real, rt)).toBeNull()
+  })
+})
+
+describe("Aria's own files", () => {
+  test("the extensions, persona, experts and settings of Aria's Pi can never be written by the model", () => {
+    const agent = '/home/u/.aria/agent'
+    for (const p of [`${agent}/extensions/sandbox/policy.ts`, `${agent}/agents/security.md`, `${agent}/SYSTEM.md`, `${agent}/settings.json`, `${agent}/.aria-files`]) {
+      expect(isAgentCode(p, agent)).toBe(true)
+    }
+    expect(isAgentCode(`${agent}/sessions/aria/x.jsonl`, agent)).toBe(false)
+    expect(isAgentCode('/home/u/Projects/app/SYSTEM.md', agent)).toBe(false)
+  })
+
+  test("in the owner's own Pi (no Aria) nothing is locked this way", () => {
+    expect(isAgentCode('/home/u/.pi/agent/extensions/x.ts', null)).toBe(false)
   })
 })

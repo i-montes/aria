@@ -5,7 +5,7 @@
 
 use serde_json::{json, Value};
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -16,6 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const MAX_AGENTS: usize = 20;
 const MAX_STEPS: usize = 400;
 const MAX_TEXT: usize = 4000;
+const MAX_LINE: u64 = 64 * 1024;
 const THROTTLE: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,7 +119,7 @@ impl Watch {
         &self.path
     }
 
-    /// The arguments of a `parallel` call: its tasks name the children that will connect (same rule as the extension).
+    /// The arguments of a `parallel` call: its tasks name the children that will connect (the extension's rule, in English).
     pub fn expect_tasks(&self, args: &Value) {
         let mut list: Vec<Value> = Vec::new();
         for key in ["tasks", "chain"] {
@@ -144,7 +145,8 @@ impl Watch {
             }
         }
         let mut state = self.state.lock().unwrap();
-        state.pending = list
+        // Appended, not replaced: two `parallel` calls in one turn both name their children.
+        let more: Vec<(String, String)> = list
             .iter()
             .enumerate()
             .map(|(i, t)| {
@@ -156,6 +158,10 @@ impl Watch {
                 (shown, t["task"].as_str().unwrap_or_default().to_string())
             })
             .collect();
+        state.pending.extend(more);
+        while state.pending.len() > MAX_AGENTS {
+            state.pending.pop_front();
+        }
     }
 
     /// The agents as the page's subagents view reads them (see ui/chat/parts/subagents.js and session.js).
@@ -203,10 +209,24 @@ fn serve(stream: UnixStream, state: Arc<Mutex<State>>) {
         s.dirty = true;
         id
     };
-    let _ = stream.set_read_timeout(None);
-    for line in BufReader::new(stream).lines() {
-        let Ok(line) = line else { break };
-        let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
+    let mut reader = BufReader::new(stream);
+    loop {
+        // One line at a time, at most MAX_LINE bytes: a child that never sends a newline cannot grow the dock's memory.
+        let mut bytes = Vec::new();
+        match (&mut reader).take(MAX_LINE).read_until(b'\n', &mut bytes) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        if bytes.last() != Some(&b'\n') && bytes.len() as u64 >= MAX_LINE {
+            // too long: skip the rest of it
+            let mut rest = Vec::new();
+            if reader.read_until(b'\n', &mut rest).unwrap_or(0) == 0 {
+                break;
+            }
+            continue;
+        }
+        let line = String::from_utf8_lossy(&bytes);
+        let Ok(message) = serde_json::from_str::<Value>(line.trim_end()) else { continue };
         let mut s = state.lock().unwrap();
         let named = if message["t"] == "prompt" { Some(name_for(&mut s.pending, message["text"].as_str().unwrap_or_default())) } else { None };
         let Some(agent) = s.agents.iter_mut().find(|a| a.id == id) else { break };
@@ -383,6 +403,25 @@ mod tests {
         let agents = eventually(&w, "two closed", |a| a.as_array().is_some_and(|l| l.len() == 2 && l.iter().all(|x| x["kind"] == "done")));
         assert_eq!(agents[0]["status"], "done");
         assert_eq!(agents[1]["status"], "failed");
+    }
+
+    #[test]
+    fn two_parallel_calls_in_a_row_both_name_their_children() {
+        let (_d, w, _) = watch();
+        w.expect_tasks(&json!({"tasks": [{"agent": "security", "task": "first job"}]}));
+        w.expect_tasks(&json!({"tasks": [{"agent": "frontend", "task": "second job"}]}));
+        let _a = child(&w, &[json!({"t": "prompt", "text": "Task: first job"})]);
+        eventually(&w, "the first call's child keeps its name", |a| a[0]["role"] == "security");
+    }
+
+    #[test]
+    fn a_child_that_never_sends_a_newline_is_cut_and_the_next_line_still_counts() {
+        let (_d, w, _) = watch();
+        let mut c = child(&w, &[]);
+        c.write_all(&vec![b'x'; 200 * 1024]).unwrap();
+        writeln!(c).unwrap();
+        writeln!(c, "{}", json!({"t": "tool", "name": "ls", "args": "."})).unwrap();
+        eventually(&w, "the line after the long one", |a| a[0]["status"] == "working · 1 tool");
     }
 
     #[test]

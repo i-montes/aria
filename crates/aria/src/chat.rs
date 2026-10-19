@@ -129,6 +129,8 @@ struct Inner {
     /// The provider's quota windows as last read, and when (so a run that follows another does not ask again).
     quota: Option<Vec<aria_core::quota::Window>>,
     quota_at: Option<std::time::Instant>,
+    /// The notices of `tell_once` were given.
+    told: bool,
     /// The socket this session's subagents stream to (kept across Pi restarts, removed when the tab closes).
     watch: Option<Arc<crate::watch::Watch>>,
     /// A restart was asked while a run was going: it happens when the run settles.
@@ -167,7 +169,9 @@ fn dialog_body(raw: &Value) -> String {
     let Some(card) = card else { return title.to_string() };
     let text = |key: &str| card[key].as_str().filter(|s| !s.is_empty()).map(str::to_string);
     match card["kind"].as_str() {
-        Some("sandbox") | Some("write") => text("summary").or_else(|| text("path")).or_else(|| text("detail")),
+        // Never the raw command (it may hold a token, and notifications stay in history): its summary, or a path.
+        Some("sandbox") => text("summary").or_else(|| Some("Aria wants to run a command outside the sandbox".into())),
+        Some("write") => text("summary").or_else(|| text("path").map(|p| format!("Aria wants to write {p}"))),
         Some("quota") => card["percent"].as_f64().map(|p| format!("Quota at {}%", p.round())),
         Some("question") => card["questions"][0]["question"].as_str().map(str::to_string),
         _ => None,
@@ -278,6 +282,22 @@ impl Chat {
         Some(watch)
     }
 
+    /// Once per tab: files of Aria the owner edited (kept, so updates to them are not applied), and missing packages.
+    fn tell_once(&self, kept: &[String]) {
+        if std::mem::replace(&mut self.inner.lock().unwrap().told, true) {
+            return;
+        }
+        let notice = |message: String| {
+            self.emit(DockMessage::ChatEvent { event: json!({"type": "ui_notice", "request": {"method": "notify", "message": message, "notifyType": "warning"}}) });
+        };
+        if !kept.is_empty() {
+            notice(format!("Aria kept your edited {} in ~/.aria/agent: its own updates to them are not applied. To get Aria's version back, delete the file and its line in ~/.aria/agent/.aria-files.", kept.join(", ")));
+        }
+        if !agent::packages_installed(&self.ctx.paths) {
+            notice("Some packages the extensions use are missing (subagents, skills). Run the Aria installer again.".into());
+        }
+    }
+
     /// The tab closed: its subagent socket goes away.
     pub fn forget_watch(&self) {
         self.inner.lock().unwrap().watch = None;
@@ -340,12 +360,13 @@ impl Chat {
             return Err(PiError::NodeMissing.problem_code());
         }
         let settings = self.settings();
-        agent::prepare(&self.ctx.paths, settings.as_ref()).map_err(|error| match error.kind() {
+        let kept = agent::prepare_reporting(&self.ctx.paths, settings.as_ref()).map_err(|error| match error.kind() {
             std::io::ErrorKind::InvalidData => "pi-settings-invalid",
             _ => "agent-dir-unwritable",
         })?;
         pi::write_shim(&self.ctx.paths, &install).map_err(|_| "agent-dir-unwritable")?;
         let workdir = working_folder(settings.as_ref()).ok_or("workdir-unavailable")?;
+        self.tell_once(&kept);
 
         self.emit(DockMessage::ChatEngine { state: "starting".into() });
         let spec = SpawnSpec {
@@ -363,7 +384,7 @@ impl Chat {
                 ("PI_CODING_AGENT_DIR".into(), self.ctx.paths.agent().display().to_string()),
                 ("PATH".into(), pi::path_with_bin(&self.ctx.paths, &self.ctx.path_var)),
                 ("PI_SKIP_VERSION_CHECK".into(), "1".into()),
-                // The extensions' projects folder (jev-router's plan mode, the sandbox) is the working folder.
+                // The extensions' projects folder (jev-router's plan mode) is the working folder.
                 ("ARIA_PROJECTS_DIR".into(), workdir.display().to_string()),
             ],
             cwd: workdir.clone(),
@@ -1078,12 +1099,24 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_is_told_once_when_the_packages_are_missing() {
+        let h = harness();
+        send(&h, "x");
+        wait_for(&h, "the notice", |m| matches!(m, DockMessage::ChatEvent { event } if event["request"]["message"].as_str().is_some_and(|t| t.contains("packages"))));
+        h.chat.restart_when_idle();
+        send(&h, "y");
+        wait_for(&h, "ready again", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(drain(&h).iter().all(|m| !matches!(m, DockMessage::ChatEvent { event } if event["request"]["message"].as_str().is_some_and(|t| t.contains("packages")))));
+    }
+
+    #[test]
     fn notices_from_extensions_are_events_not_dialogs() {
         let h = harness();
         send(&h, "x");
         wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         h.chat.test_send_raw("notify");
-        let notice = wait_for(&h, "the notice", |m| event_of(m, "ui_notice"));
+        let notice = wait_for(&h, "the notice", |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "ui_notice" && event["request"]["message"] == "careful"));
         match notice {
             DockMessage::ChatEvent { event } => assert_eq!(event["request"]["message"], json!("careful")),
             _ => unreachable!(),
@@ -1550,7 +1583,8 @@ mod tests {
     #[test]
     fn the_notification_of_a_card_reads_its_summary_not_its_json() {
         assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"sandbox\",\"summary\":\"Run rm -rf build\"}"})), "Run rm -rf build");
-        assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"write\",\"path\":\"~/notes.md\"}"})), "~/notes.md");
+        assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"write\",\"path\":\"~/notes.md\"}"})), "Aria wants to write ~/notes.md");
+        assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"sandbox\",\"detail\":\"curl -H token:abc\"}"})), "Aria wants to run a command outside the sandbox");
         assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"quota\",\"percent\":98}"})), "Quota at 98%");
         assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"question\",\"questions\":[{\"question\":\"Which fallback?\"}]}"})), "Which fallback?");
         assert_eq!(dialog_body(&json!({"title": "Allow?"})), "Allow?");

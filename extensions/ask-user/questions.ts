@@ -57,6 +57,9 @@ export function normalize(params: { questions?: unknown }): Question[] {
   })
 }
 
+/** "Talk about this" in the dock's question card: no choice yet, the user wants to discuss it. */
+export const TALK_LABEL = 'The user wants to talk about this before choosing'
+
 /** What the model reads after the user answered. */
 export function formatAnswers(questions: Question[], answers: Answer[]): string {
   return questions
@@ -64,6 +67,7 @@ export function formatAnswers(questions: Question[], answers: Answer[]): string 
       const a = answers.find((x) => x.id === q.id)
       if (!a) return `${q.question}\n→ (no answer)`
       const label = a.label.endsWith(RECOMMENDED_SUFFIX) ? a.label.slice(0, -RECOMMENDED_SUFFIX.length) : a.label
+      if (a.label === TALK_LABEL) return `${q.question}\n→ ${TALK_LABEL}: ask them in plain words and wait for their message.`
       return a.wasCustom ? `${q.question}\n→ The user wrote: ${label}` : `${q.question}\n→ The user chose: ${label}`
     })
     .join('\n\n')
@@ -101,7 +105,7 @@ export function questionCard(questions: Question[]): string {
   })
 }
 
-export const TALK_LABEL = 'The user wants to talk about this before choosing'
+
 
 /** The dock answers with `[{ question, answers, talk? }]`; anything else (cancelled, broken) is null. */
 export function parseCardAnswers(reply: string | undefined, questions: Question[]): Answer[] | null {

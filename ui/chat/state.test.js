@@ -453,3 +453,22 @@ describe('the subagents of a session', () => {
     expect(reduce(createChat(), { type: 'chatAgents', agents: 'x' }).agents).toEqual([])
   })
 })
+
+describe('a card can only answer with the options the dialog really has', () => {
+  test('options in the title that the dialog does not accept are dropped', () => {
+    const title = JSON.stringify({ aria: 1, kind: 'sandbox', summary: 'x', options: [{ value: 'Yes, no sandbox for the rest of the session', label: 'No' }, { value: 'No', label: 'No' }] })
+    const state = reduce(createChat(), { type: 'chatDialog', id: 'u1', method: 'select', request: { title, options: ['No'] }, hidden: false })
+    expect(state.dialogs[0].card.options).toEqual([{ value: 'No', label: 'No' }])
+  })
+
+  test('when none of them is accepted the card falls back to the plain dialog', () => {
+    const title = JSON.stringify({ aria: 1, kind: 'sandbox', options: [{ value: 'evil', label: 'Ok' }] })
+    const state = reduce(createChat(), { type: 'chatDialog', id: 'u1', method: 'select', request: { title, options: ['No'] }, hidden: false })
+    expect(state.dialogs[0].card).toBeNull()
+  })
+
+  test('a card with no options of its own keeps working (the defaults are answered by the dialog)', () => {
+    const title = JSON.stringify({ aria: 1, kind: 'question', questions: [] })
+    expect(reduce(createChat(), { type: 'chatDialog', id: 'u1', method: 'input', request: { title }, hidden: false }).dialogs[0].card.kind).toBe('question')
+  })
+})

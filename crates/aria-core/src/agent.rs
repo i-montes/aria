@@ -95,12 +95,15 @@ pub fn record_written(agent: &Path, rel: &str, bytes: &[u8]) -> io::Result<()> {
     write_json_atomic(&agent.join(MARKER), &Value::Object(marker), 0o600)
 }
 
-/// Writes every file of `dir` under `agent/<prefix>`, except one the owner edited (see `MARKER`). Files whose name ends
-/// with `README.md` or `.test.ts` are not installed.
-pub fn install_embedded(agent: &Path, dir: &include_dir::Dir, prefix: &str, extra_replaceable: &[&str]) -> io::Result<()> {
+/// Writes every file of `dir` under `agent/<prefix>`, except one the owner edited or deleted (see `MARKER`); returns the
+/// edited files it kept, so the owner can be told. A file is written to a temp file and renamed (never through a symlink,
+/// never truncated under a reader). Files whose name ends with `README.md` or `.test.ts` are not installed.
+pub fn install_embedded(agent: &Path, dir: &include_dir::Dir, prefix: &str, extra_replaceable: &[&str]) -> io::Result<Vec<String>> {
     let mut marker = read_marker(agent);
     let mut files = Vec::new();
     collect(dir, &mut files);
+    let mut kept = Vec::new();
+    let mut changed = false;
     for file in files {
         let rel_in_dir = file.path().to_string_lossy().into_owned();
         if rel_in_dir.ends_with("README.md") || rel_in_dir.ends_with(".test.ts") {
@@ -109,24 +112,42 @@ pub fn install_embedded(agent: &Path, dir: &include_dir::Dir, prefix: &str, extr
         let rel = if prefix.is_empty() { rel_in_dir } else { format!("{prefix}/{rel_in_dir}") };
         let target = agent.join(&rel);
         let wanted = file.contents();
-        let replaceable = match std::fs::read(&target) {
-            Err(_) => true,
-            Ok(current) if current == wanted => true,
-            Ok(current) => {
-                let hash = sha256_hex(&current);
-                marker.get(&rel).and_then(Value::as_str) == Some(hash.as_str()) || extra_replaceable.iter().any(|h| *h == hash)
+        let recorded = marker.get(&rel).and_then(Value::as_str).map(str::to_string);
+        let is_link = std::fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink());
+        let current = if is_link { None } else { std::fs::read(&target).ok() };
+        let replaceable = match (&current, &recorded) {
+            (Some(current), _) if current == wanted => {
+                if recorded.as_deref() != Some(sha256_hex(wanted).as_str()) {
+                    marker.insert(rel.clone(), json!(sha256_hex(wanted)));
+                    changed = true;
+                }
+                continue;
+            }
+            // Aria wrote it once and it is gone now: the owner deleted it on purpose.
+            (None, Some(_)) if !is_link => continue,
+            (None, _) => true,
+            (Some(current), recorded) => {
+                let hash = sha256_hex(current);
+                recorded.as_deref() == Some(hash.as_str()) || extra_replaceable.iter().any(|h| *h == hash)
             }
         };
         if !replaceable {
+            kept.push(rel);
             continue;
         }
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&target, wanted)?;
+        let tmp = target.with_extension(format!("aria-{}.tmp", std::process::id()));
+        std::fs::write(&tmp, wanted)?;
+        std::fs::rename(&tmp, &target)?; // replaces a symlink itself, not what it points at
         marker.insert(rel, json!(sha256_hex(wanted)));
+        changed = true;
     }
-    write_json_atomic(&agent.join(MARKER), &Value::Object(marker), 0o600)
+    if changed {
+        write_json_atomic(&agent.join(MARKER), &Value::Object(marker), 0o600)?;
+    }
+    Ok(kept)
 }
 
 fn collect<'a>(dir: &'a include_dir::Dir<'a>, out: &mut Vec<&'a include_dir::File<'a>>) {
@@ -195,6 +216,12 @@ static PREPARE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Creates or refreshes the agent directory for the given settings (`None` before the setup). A Pi `settings.json` that
 /// does not parse is an `InvalidData` error and is left as it is (it lists the installed packages).
 pub fn prepare(paths: &AriaPaths, settings: Option<&Settings>) -> io::Result<()> {
+    prepare_reporting(paths, settings).map(|_| ())
+}
+
+/// `prepare`, and the files Aria kept because the owner edited them (updates to them are not applied).
+pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::Result<Vec<String>> {
+    let mut kept = Vec::new();
     let _one_at_a_time = PREPARE.lock().unwrap_or_else(|e| e.into_inner());
     let agent = paths.agent();
     std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&agent)?;
@@ -227,10 +254,10 @@ pub fn prepare(paths: &AriaPaths, settings: Option<&Settings>) -> io::Result<()>
     gather_sessions(paths)?;
 
     // The owner's persona and experts; one the owner edited is kept.
-    install_embedded(&agent, &AGENT_FILES, "", &[&sha256_hex(PLACEHOLDER_SYSTEM.as_bytes())])?;
+    kept.extend(install_embedded(&agent, &AGENT_FILES, "", &[&sha256_hex(PLACEHOLDER_SYSTEM.as_bytes())])?);
     // His extensions, adapted to run in Aria (see extensions/README.md); one he edited is kept.
-    install_embedded(&agent, &EXTENSIONS, "extensions", &[])?;
-    Ok(())
+    kept.extend(install_embedded(&agent, &EXTENSIONS, "extensions", &[])?);
+    Ok(kept)
 }
 
 /// Is the Claude provider listed in Pi's settings and downloaded?
@@ -411,19 +438,28 @@ mod tests {
 
     #[test]
     fn the_required_packages_come_from_the_repo_file_and_are_pinned() {
-        assert_eq!(required_packages(), vec!["npm:pi-parallel-agents@0.2.0", "git:github.com/obra/superpowers@bb92a77"]);
+        assert_eq!(required_packages(), vec!["npm:pi-parallel-agents@0.2.0", "git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3"]);
         assert!(required_packages().iter().all(|p| p.contains('@')));
+    }
+
+    #[test]
+    fn a_git_package_is_pinned_to_a_full_commit() {
+        // `git fetch origin <short sha>` fails on an existing clone: every update would break.
+        for package in required_packages().iter().filter(|p| p.starts_with("git:")) {
+            let sha = package.rsplit_once('@').unwrap().1;
+            assert!(sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()), "{package}");
+        }
     }
 
     #[test]
     fn prepare_gives_the_superpowers_package_the_owners_filter() {
         let (_dir, paths) = paths();
         std::fs::create_dir_all(paths.agent()).unwrap();
-        std::fs::write(paths.agent().join("settings.json"), r#"{"packages":["npm:pi-parallel-agents@0.2.0","git:github.com/obra/superpowers@bb92a77","npm:pi-claude-agent-sdk@0.9.2"]}"#).unwrap();
+        std::fs::write(paths.agent().join("settings.json"), r#"{"packages":["npm:pi-parallel-agents@0.2.0","git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3","npm:pi-claude-agent-sdk@0.9.2"]}"#).unwrap();
         prepare(&paths, None).unwrap();
         let packages = read_json(&paths.agent().join("settings.json")).unwrap().unwrap()["packages"].clone();
         assert_eq!(packages[0], json!("npm:pi-parallel-agents@0.2.0"));
-        assert_eq!(packages[1], json!({"source": "git:github.com/obra/superpowers@bb92a77", "extensions": [], "skills": ["skills/systematic-debugging", "skills/verification-before-completion"]}));
+        assert_eq!(packages[1], json!({"source": "git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3", "extensions": [], "skills": ["skills/systematic-debugging", "skills/verification-before-completion"]}));
         assert_eq!(packages[2], json!("npm:pi-claude-agent-sdk@0.9.2"));
         // and again: the object stays as it is
         prepare(&paths, None).unwrap();
@@ -435,11 +471,45 @@ mod tests {
         let (_dir, paths) = paths();
         prepare(&paths, None).unwrap();
         assert!(!packages_installed(&paths));
-        std::fs::write(paths.agent().join("settings.json"), r#"{"packages":["npm:pi-parallel-agents@0.2.0","git:github.com/obra/superpowers@bb92a77"]}"#).unwrap();
+        std::fs::write(paths.agent().join("settings.json"), r#"{"packages":["npm:pi-parallel-agents@0.2.0","git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3"]}"#).unwrap();
         std::fs::create_dir_all(paths.agent().join("npm/node_modules/pi-parallel-agents")).unwrap();
         assert!(!packages_installed(&paths), "superpowers is not cloned yet");
         std::fs::create_dir_all(paths.agent().join("git/github.com/obra/superpowers/skills")).unwrap();
         assert!(packages_installed(&paths));
+    }
+
+    #[test]
+    fn a_file_the_owner_deleted_stays_deleted() {
+        let (_dir, paths) = paths();
+        prepare(&paths, None).unwrap();
+        std::fs::remove_file(paths.agent().join("agents/backend.md")).unwrap();
+        prepare(&paths, None).unwrap();
+        assert!(!paths.agent().join("agents/backend.md").exists());
+    }
+
+    #[test]
+    fn prepare_says_which_edited_files_it_kept() {
+        let (_dir, paths) = paths();
+        prepare(&paths, None).unwrap();
+        std::fs::write(paths.agent().join("extensions/sandbox/policy.ts"), "// weakened").unwrap();
+        let kept = prepare_reporting(&paths, None).unwrap();
+        assert_eq!(kept, vec!["extensions/sandbox/policy.ts".to_string()]);
+        assert!(prepare_reporting(&paths, None).unwrap().len() == 1, "said every time, while it lasts");
+    }
+
+    #[test]
+    fn a_symlink_in_the_way_is_replaced_not_followed() {
+        let (dir, paths) = paths();
+        prepare(&paths, None).unwrap();
+        let outside = dir.path().join("outside.md");
+        let target = paths.agent().join("agents/reviewer.md");
+        std::fs::remove_file(&target).unwrap();
+        // the owner did not delete it: Aria's marker entry is gone too, as on a fresh directory
+        std::fs::remove_file(paths.agent().join(".aria-files")).unwrap();
+        std::os::unix::fs::symlink(&outside, &target).unwrap();
+        prepare(&paths, None).unwrap();
+        assert!(!outside.exists(), "nothing written through the link");
+        assert!(std::fs::symlink_metadata(&target).unwrap().file_type().is_file());
     }
 
     #[test]

@@ -23,8 +23,18 @@ Tests: `bun test extensions`.
   changed: `jev-router/{index,usage,modes}.ts`, `autocompact/autocompact.ts`. The same files still run in the owner's own Pi.
 - **The sandbox also protects Aria's credentials** (`~/.aria/auth.json`, `mcp.json`, `mcp-auth.json` and their links in
   `~/.aria/agent/`), in `sandbox/policy.ts`.
+- **In Aria's dock (Pi's RPC mode)** the extensions talk to the chat instead of a terminal. The terminal paths
+  (`mode === 'tui'`) are unchanged.
+  - `jev-router/modes.ts`: `routedMode` routes in `tui`, `print` and `rpc`. `jev-router/route.ts` adds `jevStatus`;
+    `index.ts` sends it as `setStatus('aria-jev', …)`, the chat's route line.
+  - `sandbox/card.ts` (new): `canAsk` (a UI in `tui` or `rpc`) and `sandboxCard`. `sandbox/index.ts` asks with card
+    titles in RPC (running outside the sandbox, writing outside the project) and passes the run's abort signal to its
+    dialogs.
+  - `sandbox/policy.ts`: `isAgentCode` marks Aria's own Pi files (`extensions/`, `agents/`, `SYSTEM.md`, `settings.json`,
+    `.aria-files` in `~/.aria/agent`) as never writable by the model, whatever was granted. It is only active under Aria
+    (both `PI_CODING_AGENT_DIR` and `ARIA_PROJECTS_DIR` set).
+  - `quota-fallback/ask.ts` (new): `quotaQuestion` builds the quota card in RPC, the old text in the terminal.
+  - `ask-user/questions.ts`: `questionCard`, `parseCardAnswers` and `TALK_LABEL`. `ask-user/dock.ts` (new) asks with
+    the card through `ui.input` with the abort signal; `index.ts` calls it in RPC.
 - **Left out:** `jev-router/eval.ts`, `sandbox/review-eval.ts` and `sandbox/accept.sh`, which run real models against the
   owner's own Pi.
-
-Later parts of phase 2b add: RPC as a routed mode, the chat's cards for the sandbox, the quota and `ask_user`, the router's
-route line, and the subagents panel fed by Aria's own socket.

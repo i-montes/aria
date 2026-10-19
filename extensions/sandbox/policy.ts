@@ -164,6 +164,14 @@ export function protectedPaths(cwd: string, home = HOME): string[] {
 export const secretDirs = (home = HOME, runtimeDir = RUNTIME) => [...SECRET_DIRS.map((d) => join(home, d)), runtimeDir]
 export const secretFiles = (home = HOME) => SECRET_FILES.map((f) => join(home, f))
 
+/** Aria's own Pi files: its extensions (this sandbox among them), persona, experts, settings and its record of them.
+ * `agentDir` is Aria's agent folder, or null in the owner's own Pi. No grant opens them: a model that could edit them
+ * could switch the sandbox off for every later session. */
+export function isAgentCode(path: string, agentDir: string | null): boolean {
+  if (!agentDir) return false
+  return ['extensions', 'agents', 'SYSTEM.md', 'settings.json', '.aria-files'].some((name) => inside(path, join(agentDir, name)))
+}
+
 export function isWritable(path: string, cwd: string, home = HOME, exists: (p: string) => boolean = existsSync): boolean {
   const { lexical, real } = resolvePath(path, cwd, home)
   const roots = writableRoots(cwd, home, exists)

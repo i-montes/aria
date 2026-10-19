@@ -196,11 +196,12 @@ do_install() {
   was_active=0
   if [ "$DRY_RUN" != 1 ] && systemctl --user is-active --quiet "$UNIT" 2>/dev/null; then was_active=1; fi
   fetch_binary
-  run install -Dm755 "$SOURCE" "$BIN_DIR/aria"
+  # Pi and its packages first: if a download fails, nothing has been replaced and the running dock stays as it was.
   run install -d -m 700 "$DATA_DIR"
   link_node
   install_pi
   install_pi_packages
+  run install -Dm755 "$SOURCE" "$BIN_DIR/aria"
   write_unit
   run systemctl --user daemon-reload
   run systemctl --user enable --now "$UNIT"

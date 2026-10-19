@@ -17,7 +17,7 @@ import { Type } from 'typebox'
 import { commandPreview, covers, coversPath, emptyGrants, grantDir, grantUnits } from './grants.ts'
 import { CLASSIFIER, parseReview, REVIEW_TIMEOUT_MS, reviewLine, reviewRequest } from './review.ts'
 import { canAsk, sandboxCard } from './card.ts'
-import { BLOCK_NOTE, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, resolvePath, secretDirs, secretFiles, subagentProblem, wrapCommand, writableRoots } from './policy.ts'
+import { BLOCK_NOTE, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, resolvePath, secretDirs, secretFiles, subagentProblem, wrapCommand, writableRoots, isAgentCode } from './policy.ts'
 
 const hasBwrap = (() => {
   try {
@@ -86,7 +86,7 @@ export default function sandbox(pi: ExtensionAPI) {
       ctx.mode === 'rpc'
         ? sandboxCard('sandbox', { summary: description, detail: commandPreview(command), jev: verdict.replace(/^Jev: /, '') }, options)
         : ['Run outside the sandbox?', description || '(no description given)', verdict, `› ${commandPreview(command)}`].join('\n')
-    const pick = await ctx.ui.select(title, options)
+    const pick = await ctx.ui.select(title, options, { signal: ctx.signal })
     if (pick === forUnits && g) g.units.forEach((u) => grants.programs.add(u))
     else if (pick === forExact) grants.exact.add(command.trim())
     else if (pick === ALL) grants.all = true
@@ -143,6 +143,11 @@ export default function sandbox(pi: ExtensionAPI) {
     const path = String(event.input?.path ?? '')
     if (!path || !['read', 'write', 'edit'].includes(name)) return
     if (isSecret(path, here)) return { block: true, reason: `${path} holds credentials: the sandbox does not allow reading or changing it.` }
+    // Aria's own files (its extensions, persona, settings): never by the model, whatever was granted.
+    const ariaAgent = process.env.PI_CODING_AGENT_DIR && process.env.ARIA_PROJECTS_DIR ? process.env.PI_CODING_AGENT_DIR : null
+    if (name !== 'read' && isAgentCode(resolvePath(path, here).real, ariaAgent)) {
+      return { block: true, reason: `${path} is part of Aria itself: the sandbox does not allow changing it.` }
+    }
     if (name === 'read' || isWritable(path, here)) return
     const { real } = resolvePath(path, here)
     if (coversPath(grants, real)) return
@@ -153,7 +158,7 @@ export default function sandbox(pi: ExtensionAPI) {
         ctx.mode === 'rpc'
           ? sandboxCard('write', { path: tilde(real), detail: `${name} ${tilde(real)}` }, options)
           : `Write outside the project?\n${name} ${tilde(real)}`
-      const pick = await ctx.ui.select(title, options)
+      const pick = await ctx.ui.select(title, options, { signal: ctx.signal })
       if (pick === forDir) grants.dirs.add(grantDir(real))
       else if (pick === ALL) grants.all = true
       if (pick === ONCE || pick === forDir || pick === ALL) {

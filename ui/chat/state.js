@@ -262,6 +262,16 @@ function reduceEvent(state, event) {
   }
 }
 
+/** The dialog's card, if its title is one; a button may only send an option the dialog itself accepts (a title cannot
+ * show "No" and answer "allow everything"). A card whose options were all foreign falls back to the plain dialog. */
+function checkedCard(request) {
+  const card = parseCardTitle(request?.title)
+  if (!card || !Array.isArray(card.options) || !card.options.length) return card
+  const accepted = Array.isArray(request.options) ? request.options : []
+  const options = card.options.filter((o) => accepted.includes(o.value))
+  return options.length ? { ...card, options } : null
+}
+
 /** `message` is a dock message (see crates/aria-core/src/bridge.rs). */
 export function reduce(state, message) {
   switch (message.type) {
@@ -291,7 +301,7 @@ export function reduce(state, message) {
         ? { ...state, engine: message.state, running: false, startedAt: null }
         : { ...state, engine: message.state }
     case 'chatDialog': {
-      const dialog = { id: message.id, method: message.method, request: message.request, card: parseCardTitle(message.request?.title) }
+      const dialog = { id: message.id, method: message.method, request: message.request, card: checkedCard(message.request) }
       return { ...state, dialogs: [...state.dialogs.filter((d) => d.id !== message.id), dialog] }
     }
     case 'chatDialogClosed':
