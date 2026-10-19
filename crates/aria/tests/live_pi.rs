@@ -21,7 +21,7 @@ fn the_pinned_pi_answers_a_prompt_through_the_engine() {
 
     let install = pi::locate(&paths, pi::pinned_version()).expect("the pinned Pi is installed");
     agent::prepare(&paths, loaded.as_ref()).unwrap();
-    pi::write_shim(&paths, &install).unwrap();
+    pi::write_shim(&paths, &install, false).unwrap();
     let path_var = std::env::var("PATH").unwrap_or_default();
     assert!(pi::node_ok(&real, &path_var), "a Node that can run Pi");
 
