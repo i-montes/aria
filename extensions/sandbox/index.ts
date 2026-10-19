@@ -17,6 +17,7 @@ import { Type } from 'typebox'
 import { commandPreview, covers, coversPath, emptyGrants, grantDir, grantUnits } from './grants.ts'
 import { CLASSIFIER, parseReview, REVIEW_TIMEOUT_MS, reviewLine, reviewRequest } from './review.ts'
 import { canAsk, sandboxCard } from './card.ts'
+import { bashRoute } from './route.ts'
 import { BLOCK_NOTE, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, resolvePath, secretDirs, secretFiles, subagentProblem, wrapCommand, writableRoots, isAgentCode } from './policy.ts'
 
 const hasBwrap = (() => {
@@ -49,7 +50,7 @@ export default function sandbox(pi: ExtensionAPI) {
   const showStatus = (ctx: any) => {
     const allowed = [...grants.programs, ...(grants.exact.size ? [`${grants.exact.size} exact command(s)`] : []), ...[...grants.dirs].map(tilde)]
     const status = !hasBwrap
-      ? '⚠ sandbox without bwrap'
+      ? '⚠ no sandbox on this system: every command asks first'
       : grants.all
         ? '🔓 no sandbox (this session)'
         : allowed.length
@@ -107,20 +108,26 @@ export default function sandbox(pi: ExtensionAPI) {
       reason: Type.Optional(
         Type.String({
           description:
-            "With outsideSandbox: what the command does, for the user, in the user's language and at most 12 words (e.g. 'Restarts the project's Postgres container'). The user reads only this, not the command.",
+            `${hasBwrap ? 'With outsideSandbox' : 'Always (this system has no sandbox, so the user approves every command)'}: what the command does, for the user, in the user's language and at most 12 words (e.g. 'Restarts the project's Postgres container'). The user reads only this, not the command.`,
         }),
       ),
     }),
     async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
       const { command, timeout, outsideSandbox, reason } = params
-      // Allowed for the session: straight outside, without failing inside first.
-      if (covers(grants, command)) return plain.execute(id, { command, timeout }, signal, onUpdate, ctx)
-      if (outsideSandbox) {
-        if (!canAsk(ctx)) return refuse('Running outside the sandbox needs the user\'s permission, and there is nobody here to ask. Find another way inside the project or explain what is needed.')
-        if (!(await askOutside(ctx, command, reason))) return refuse('The user said no: the command did not run outside the sandbox.')
+      // Allowed for the session: straight outside, without failing inside first. Without bwrap every command asks.
+      const route = bashRoute({ covered: covers(grants, command), outside: !!outsideSandbox, hasBwrap, canAsk: canAsk(ctx) })
+      if (route === 'plain') return plain.execute(id, { command, timeout }, signal, onUpdate, ctx)
+      if (route === 'refuse-nobody') {
+        return refuse(
+          hasBwrap
+            ? 'Running outside the sandbox needs the user\'s permission, and there is nobody here to ask. Find another way inside the project or explain what is needed.'
+            : 'There is no sandbox on this system (bwrap is missing), so every command needs the user\'s permission, and there is nobody here to ask.',
+        )
+      }
+      if (route === 'ask') {
+        if (!(await askOutside(ctx, command, reason))) return refuse('The user said no: the command did not run.')
         return plain.execute(id, { command, timeout }, signal, onUpdate, ctx)
       }
-      if (!hasBwrap) return refuse('The sandbox cannot run: bwrap is missing (sudo pacman -S bubblewrap). No commands run without it.')
       const r = await boxed.execute(id, { command, timeout }, signal, onUpdate, ctx)
       return looksBlocked(textOf(r)) ? withNote(r) : r
     },

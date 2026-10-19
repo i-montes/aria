@@ -36,5 +36,8 @@ Tests: `bun test extensions`.
   - `quota-fallback/ask.ts` (new): `quotaQuestion` builds the quota card in RPC, the old text in the terminal.
   - `ask-user/questions.ts`: `questionCard`, `parseCardAnswers` and `TALK_LABEL`. `ask-user/dock.ts` (new) asks with
     the card through `ui.input` with the abort signal; `index.ts` calls it in RPC.
+- **Without bwrap** (macOS has none) the sandbox no longer refuses every command: each one asks first, with the same
+  permission card and choices (`sandbox/route.ts`). Nothing runs unconfined without the user. On a Linux with bwrap,
+  nothing changes.
 - **Left out:** `jev-router/eval.ts`, `sandbox/review-eval.ts` and `sandbox/accept.sh`, which run real models against the
   owner's own Pi.

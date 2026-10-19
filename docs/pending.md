@@ -47,7 +47,7 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
 
 - Click-through: the whole 700 px panel takes clicks; a click on the veil closes the dock instead of passing through to the app below.
 - Desktop notifications come from `osascript`; clicking one does not open the dock (an unbundled app has no notification action). The chat still posts one when a prompt is hidden.
-- The owner's `sandbox` extension uses `bwrap` (Linux); its tests fail on macOS and the chat runs without the sandbox. A macOS sandbox is not designed yet.
+- The owner's `sandbox` extension uses `bwrap` (Linux). On macOS there is no box yet: every command asks first with the permission card (`extensions/sandbox/route.ts`). A Seatbelt (`sandbox-exec`) profile with the same limits is the macOS sandbox still to design; some of its tests assume Linux paths.
 - No `.app` bundle, signing or notarization, so the standard "open at login" UI and notification actions wait.
 - The panel opens on the screen under the pointer and joins all spaces; multi-monitor and full-screen behavior needs manual testing on the owner's layout.
 - `~/.local/bin` is not on the default macOS `PATH`, so the CLI is `~/.local/bin/aria toggle` (the hotkey does not need it).
