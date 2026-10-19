@@ -135,12 +135,12 @@ Behaviour: `/effort <level>` under Aria writes `effort.mode = "fixed"`, `effort.
 
 Behaviour:
 - `router.enabled` false: no classification and no hidden hint, effort fixed (Task 2 rule), process guard, plan mode and expert assignment still on.
-- Sandbox: `extraWritable` are added to the writable roots (still never a secret dir, never Aria's own files); `jevReview` false skips the review call (the card shows no Jev line); `askToLeave` false: a request to leave the sandbox is refused without asking (the sandbox stays on — see "Decisions to confirm").
+- Sandbox: `extraWritable` are added to the writable roots (still never a secret dir, never Aria's own files); `jevReview` false skips the review call (the card shows no Jev line); `askToLeave` false: a request to leave the sandbox is refused without asking, and the model is told plainly that it is not allowed to leave the sandbox (owner's decision).
 - Subagents: `planExecute` false: `/plan` and `/execute` are not registered; `saveSessions` true: the `pi` shim replaces a child's `--no-session` with `--session-dir <agent>/sessions/subagents`; `turnLimit` n: in a child (`subagent-mode`) the run is stopped after n turns with a final note "stopped at the turn limit (n)".
 
 - [ ] **Step 1: Failing tests**
   - jev-router (pure `shouldRoute(config, mode)`): `router off means no hint`.
-  - sandbox `policy.test.ts`: `an extra folder is writable`; `an extra folder inside a secret dir is not`; route: `askToLeave off refuses leaving without asking`; review: `jevReview off asks without a review`.
+  - sandbox `policy.test.ts`: `an extra folder is writable`; `an extra folder inside a secret dir is not`; route: `askToLeave off refuses leaving without asking, saying it is not allowed`; review: `jevReview off asks without a review`.
   - subagent-mode (pure `turnLimitReached(turns, config)`): `no limit by default`; `stops at the limit`.
   - shim (Rust, `pi.rs`): `the shim keeps --no-session by default`; `with saved sessions it gives the child a session dir`.
   - `agent.rs`: `the superpowers filter lists the automatic skills from the settings`.
@@ -184,7 +184,7 @@ What varies (everything else word for word):
 **Files:** `crates/aria-core/src/mcp.rs`, `agent.rs` (packages), `install/install.sh`, `install/install.test.sh`, `install/install-mac.test.sh`, new repo file `engram-version` (`3.3.2` and the release asset sha256 per platform).
 
 **Interfaces:**
-- Produces: `pub fn sync_memory(paths: &AriaPaths, memory: &Memory) -> Result<(), McpError>` in `mcp.rs`, called by `prepare`. Aria's entry is `{"command": "<~/.aria/bin/engram>", "args": ["mcp", "--project", <project>, "--tools=agent"], "toolExposure": { the seven tools: "direct" }}` (the owner's entry, ARIA-SETUP item 16), marked as Aria's with `"aria": true`. An `engram` entry without that mark is the owner's and is never changed.
+- Produces: `pub fn sync_memory(paths: &AriaPaths, memory: &Memory) -> Result<(), McpError>` in `mcp.rs`, called by `prepare`. Aria's entry is `{"command": "<~/.aria/bin/engram>", "args": ["mcp", "--project", <project>, "--tools=agent"], "env": {"ENGRAM_DATA_DIR": "<~/.aria/engram>"}, "toolExposure": { the seven tools: "direct" }}` (the owner's entry, ARIA-SETUP item 16, with its own database: owner's decision). It is recognised as Aria's by its content (that command and that data folder), not by an extra key Pi could reject; any other `engram` entry is the owner's and is never changed.
 - Installer: `install_engram` downloads the pinned release for the platform into `~/.aria/bin/engram`, checks its sha256, and skips when that version is already there; a failure stops the install before the binary is replaced (same rule as Pi's packages).
 - Packages: `integrations.packages.source == "path"` with a non-empty `path` adds that local package to Pi's `packages` (once); `gallery` adds nothing.
 
@@ -193,19 +193,21 @@ What varies (everything else word for word):
   - `agent.rs`: `a local package folder from the settings is listed once`.
   - `install.test.sh` / `install-mac.test.sh`: the dry run lists `install engram 3.3.2` before the binary is replaced; a wrong checksum is refused.
 - [ ] **Step 2: Run**, expect FAIL.
-- [ ] **Step 3: Implement.** Engram keeps its default database (`~/.engram/engram.db`), so the owner's 53 memories are Aria's (ARIA-SETUP item 16).
+- [ ] **Step 3: Implement.** Aria's Engram keeps its own database in `~/.aria/engram/` (owner's decision): it starts empty and does not mix with the owner's terminal Pi.
 - [ ] **Step 4: Run** all suites, PASS. Live: a question that needs memory (`¿qué decidimos sobre el sandbox en el Mac?`) shows an Engram tool call and answers from memory.
 - [ ] **Step 5: Commit** `feat: memory turns Engram on in Aria's Pi; the installer brings Engram; a local package folder from the settings`.
 
 ### Task 7: Docs, live check, review
 
-**Files:** `docs/pending.md`, `docs/architecture.md`, `README.md`, `CHANGELOG.md` (`~/.aria/agent/aria.json`, the rendered `SYSTEM.md`/`agents`, Aria's `engram` entry in `~/.aria/mcp.json`, `~/.aria/bin/engram`, `sessions/subagents/`), `extensions/README.md`, the spec's status line.
+**Files:** `docs/pending.md`, `docs/architecture.md`, `README.md`, `CHANGELOG.md` (`~/.aria/agent/aria.json`, the rendered `SYSTEM.md`/`agents`, Aria's `engram` entry in `~/.aria/mcp.json`, `~/.aria/bin/engram`, `~/.aria/engram/`, `sessions/subagents/`), `extensions/README.md`, the spec's status line.
 
 - [ ] Live check on the owner's machine, one line each in the final message: change the style in the settings while a run is going (the run finishes, the next answer follows the new style); `/effort high` in a tab (the settings screen shows it fixed); turn memory off (no Engram calls) and on again; turn `security` off (the router no longer names it).
 - [ ] Run `cargo test --workspace`, `bun test`, `bun test extensions`, `sh install/install.test.sh`, `sh install/install-mac.test.sh`, the browser checks.
 - [ ] Fresh whole-branch review (no `model` parameter), one fix pass, then ask the owner about merging.
 
-## Decisions to confirm with the owner
+## Decisions taken by the owner (2026-10-19)
 
-1. **"Ask before leaving the sandbox" off.** The label suggests "leave without asking", which is the sandbox switched off for that command; the spec says the sandbox is always on. The plan reads off as **refused without asking**. If the owner wants "leave without asking", only Task 4's route test changes.
-2. **Engram's database.** The plan keeps Engram's default `~/.engram/engram.db`, shared with the owner's terminal Pi (his 53 memories become Aria's). The alternative is a separate database under `~/.aria/`.
+1. **"Ask before leaving the sandbox" off:** leaving is refused, and the model is told it is not allowed to leave the sandbox.
+2. **Engram's database:** a separate one under `~/.aria/engram/` (`ENGRAM_DATA_DIR`), not the terminal Pi's.
+3. **Execution:** inline in this session, one fresh whole-branch review at the end.
+4. **Never reinstall or restart the owner's running Aria** while building this: live checks run Pi with a temporary copy of the agent directory.
