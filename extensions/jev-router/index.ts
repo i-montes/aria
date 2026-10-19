@@ -61,6 +61,7 @@ import {
   planMayWrite,
   planPrompt,
   QUOTA_THRESHOLD,
+  routedMode,
 } from './modes.ts'
 import { checkKill } from './process-guard.ts'
 import { exhausted, fetchGoUsage } from './usage.ts'
@@ -124,7 +125,7 @@ export default function (pi: ExtensionAPI) {
   // Set when plan mode writes a plan file; plan mode ends when that run settles.
   let planWritten = false
 
-  const routed = (ctx: any) => ctx?.mode === 'tui' || ctx?.mode === 'print'
+  const routed = (ctx: any) => routedMode(ctx?.mode)
 
   // Reasoning effort has two modes. Auto (the default): a quick turn drops to low and a think turn
   // goes at least to high from `base`, the level the session started with, and a free model is

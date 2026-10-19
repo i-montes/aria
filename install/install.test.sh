@@ -22,6 +22,15 @@ for step in 'sudo pacman -S --needed gtk3 webkit2gtk-4.1 gtk-layer-shell' 'insta
 done
 [ "$ordered" = 1 ] && pass "install dry run lists its steps in order"
 
+# the packages the owner's extensions use are installed in Aria's Pi, pinned (pi-packages)
+tmp=$(mktemp -d)
+out=$(ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria 2>&1)
+while IFS= read -r package; do
+  [ -z "$package" ] && continue
+  printf '%s\n' "$out" | grep -qF "would: env PI_CODING_AGENT_DIR=$tmp/home/agent PI_SKIP_VERSION_CHECK=1 $tmp/home/pi/" && printf '%s\n' "$out" | grep -qF "install $package" && pass "installs $package" || fail "does not install $package"
+done < "$here/../pi-packages"
+rm -r "$tmp"
+
 # Pi and Node: the pinned version is read from pi-version, Pi is installed under ~/.aria/pi/<version>
 pinned=$(tr -d '[:space:]' < "$here/../pi-version")
 tmp=$(mktemp -d)

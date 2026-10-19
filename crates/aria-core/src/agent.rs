@@ -12,6 +12,58 @@ use std::path::{Path, PathBuf};
 
 /// The provider for Claude Pro/Max sign-in (`claude-bridge`), pinned like Pi itself. It runs Claude Code through the Agent
 /// SDK, uses Pi's Anthropic credential (OAuth = the subscription, an API key = per token) and is about 300 MB.
+/// The packages the owner's extensions rely on (`pi-packages` in the repo), pinned; the installer installs them.
+pub fn required_packages() -> Vec<&'static str> {
+    include_str!("../../../pi-packages").lines().map(str::trim).filter(|line| !line.is_empty()).collect()
+}
+
+/// From superpowers the owner loads two skills and no extensions (as in his own Pi's settings).
+const SUPERPOWERS_SKILLS: [&str; 2] = ["skills/systematic-debugging", "skills/verification-before-completion"];
+
+/// `pi install` lists a package as a plain string; the superpowers one becomes the owner's filtered entry.
+fn with_package_filters(packages: Value) -> Value {
+    let Value::Array(list) = packages else { return packages };
+    Value::Array(
+        list.into_iter()
+            .map(|entry| match entry.as_str() {
+                Some(source) if source.starts_with("git:github.com/obra/superpowers") => {
+                    json!({"source": source, "extensions": [], "skills": SUPERPOWERS_SKILLS})
+                }
+                _ => entry,
+            })
+            .collect(),
+    )
+}
+
+fn listed_packages(paths: &AriaPaths) -> Vec<String> {
+    read_json(&paths.agent().join("settings.json"))
+        .ok()
+        .flatten()
+        .and_then(|value| value["packages"].as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|p| p.as_str().or_else(|| p["source"].as_str()).map(str::to_string))
+        .collect()
+}
+
+/// Are the required packages listed in Pi's settings and present on disk?
+pub fn packages_installed(paths: &AriaPaths) -> bool {
+    let listed = listed_packages(paths);
+    let agent = paths.agent();
+    required_packages().iter().all(|wanted| {
+        let present = if let Some(npm) = wanted.strip_prefix("npm:") {
+            let name = npm.rsplit_once('@').map(|(name, _)| name).unwrap_or(npm);
+            agent.join("npm/node_modules").join(name).is_dir()
+        } else if let Some(git) = wanted.strip_prefix("git:") {
+            let repo = git.split_once('@').map(|(repo, _)| repo).unwrap_or(git);
+            agent.join("git").join(repo).is_dir()
+        } else {
+            false
+        };
+        present && listed.iter().any(|l| l == wanted)
+    })
+}
+
 pub const CLAUDE_BRIDGE_PACKAGE: &str = "npm:pi-claude-agent-sdk@0.9.2";
 
 /// The one-line persona earlier versions wrote; it is replaced by the owner's.
@@ -163,10 +215,13 @@ pub fn prepare(paths: &AriaPaths, settings: Option<&Settings>) -> io::Result<()>
         ours["defaultProvider"] = json!(provider);
         ours["defaultModel"] = json!(model);
     }
-    let original = match read_json(&settings_path) {
+    let mut original = match read_json(&settings_path) {
         Ok(found) => found.unwrap_or_else(|| Value::Object(Default::default())),
         Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidData, error.to_string())),
     };
+    if let Some(packages) = original.get_mut("packages") {
+        *packages = with_package_filters(packages.take());
+    }
     write_json_atomic(&settings_path, &merge_preserving(original, ours), 0o600)?;
 
     gather_sessions(paths)?;
@@ -352,6 +407,39 @@ mod tests {
         std::fs::write(&file, "// my change").unwrap();
         prepare(&paths, None).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "// my change");
+    }
+
+    #[test]
+    fn the_required_packages_come_from_the_repo_file_and_are_pinned() {
+        assert_eq!(required_packages(), vec!["npm:pi-parallel-agents@0.2.0", "git:github.com/obra/superpowers@bb92a77"]);
+        assert!(required_packages().iter().all(|p| p.contains('@')));
+    }
+
+    #[test]
+    fn prepare_gives_the_superpowers_package_the_owners_filter() {
+        let (_dir, paths) = paths();
+        std::fs::create_dir_all(paths.agent()).unwrap();
+        std::fs::write(paths.agent().join("settings.json"), r#"{"packages":["npm:pi-parallel-agents@0.2.0","git:github.com/obra/superpowers@bb92a77","npm:pi-claude-agent-sdk@0.9.2"]}"#).unwrap();
+        prepare(&paths, None).unwrap();
+        let packages = read_json(&paths.agent().join("settings.json")).unwrap().unwrap()["packages"].clone();
+        assert_eq!(packages[0], json!("npm:pi-parallel-agents@0.2.0"));
+        assert_eq!(packages[1], json!({"source": "git:github.com/obra/superpowers@bb92a77", "extensions": [], "skills": ["skills/systematic-debugging", "skills/verification-before-completion"]}));
+        assert_eq!(packages[2], json!("npm:pi-claude-agent-sdk@0.9.2"));
+        // and again: the object stays as it is
+        prepare(&paths, None).unwrap();
+        assert_eq!(read_json(&paths.agent().join("settings.json")).unwrap().unwrap()["packages"], packages);
+    }
+
+    #[test]
+    fn the_packages_are_installed_when_settings_list_them_and_their_files_exist() {
+        let (_dir, paths) = paths();
+        prepare(&paths, None).unwrap();
+        assert!(!packages_installed(&paths));
+        std::fs::write(paths.agent().join("settings.json"), r#"{"packages":["npm:pi-parallel-agents@0.2.0","git:github.com/obra/superpowers@bb92a77"]}"#).unwrap();
+        std::fs::create_dir_all(paths.agent().join("npm/node_modules/pi-parallel-agents")).unwrap();
+        assert!(!packages_installed(&paths), "superpowers is not cloned yet");
+        std::fs::create_dir_all(paths.agent().join("git/github.com/obra/superpowers/skills")).unwrap();
+        assert!(packages_installed(&paths));
     }
 
     #[test]

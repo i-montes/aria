@@ -23,6 +23,9 @@ export const PLAN_MODEL = { provider: 'opencode-go', id: 'glm-5.3' } as const
 export { FREE_MODEL as FREE_PLAN_MODEL } from '../quota-fallback/fallback.ts'
 export const PLAN_THINKING = 'high'
 // At or above this percentage of the 5-hour or the weekly Go window, /plan uses the free model.
+/** Modes with a person behind them: the terminal, `pi -p`, and Aria's dock (RPC). Subagents (`json`) are not routed. */
+export const routedMode = (mode: string | undefined): boolean => mode === 'tui' || mode === 'print' || mode === 'rpc'
+
 export const QUOTA_THRESHOLD = 90
 // /plan warns before starting in a session that already carries this much context.
 export const LARGE_CONTEXT_TOKENS = 100_000

@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { isPlanPath, notAPlan, planMayWrite } from './modes.ts'
+import { isPlanPath, notAPlan, planMayWrite, routedMode } from './modes.ts'
 import { exhausted, parseGoUsage } from './usage.ts'
 
 const widget = join(homedir(), 'Projects', 'acme', 'checkout-widget')
@@ -44,4 +44,14 @@ describe('Go usage', () => {
   test('5 h first', () => expect(exhausted(parseGoUsage(body(95, 93))!, 90)?.name).toBe('5-hour'))
   test('below the threshold', () => expect(exhausted(parseGoUsage(body(10, 50))!, 90)).toBeNull())
   test('garbage parses to null', () => expect(parseGoUsage({ nope: 1 })).toBeNull())
+})
+
+describe('which modes the router works in', () => {
+  test('the terminal, print and Aria (rpc) are routed; subagents (json) are not', () => {
+    expect(routedMode('tui')).toBe(true)
+    expect(routedMode('print')).toBe(true)
+    expect(routedMode('rpc')).toBe(true)
+    expect(routedMode('json')).toBe(false)
+    expect(routedMode(undefined)).toBe(false)
+  })
 })

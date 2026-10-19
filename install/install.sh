@@ -139,6 +139,22 @@ install_pi() {
   run npm install --prefix "$prefix" --no-audit --no-fund "$PI_PACKAGE@$PI_VERSION"
 }
 
+# The packages the owner's extensions use (pi-packages, pinned), installed into Aria's own Pi directory.
+install_pi_packages() {
+  if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../pi-packages" ]; then
+    packages=$(cat "$SCRIPT_DIR/../pi-packages")
+  elif [ "$DRY_RUN" = 1 ]; then
+    say "would: download ${DOWNLOAD_URL%/*}/pi-packages"
+    return
+  else
+    packages=$(curl -fsSL "${DOWNLOAD_URL%/*}/pi-packages") || die "could not download the list of Pi packages"
+  fi
+  run install -d -m 700 "$DATA_DIR/agent"
+  for package in $packages; do
+    run env PI_CODING_AGENT_DIR="$DATA_DIR/agent" PI_SKIP_VERSION_CHECK=1 "$DATA_DIR/pi/$PI_VERSION/node_modules/.bin/pi" install "$package"
+  done
+}
+
 # Sets SOURCE to the binary to install: the --local one, or a downloaded and verified one.
 fetch_binary() {
   if [ -n "$LOCAL" ]; then
@@ -184,6 +200,7 @@ do_install() {
   run install -d -m 700 "$DATA_DIR"
   link_node
   install_pi
+  install_pi_packages
   write_unit
   run systemctl --user daemon-reload
   run systemctl --user enable --now "$UNIT"
