@@ -89,6 +89,7 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         PageMessage::ChatSend { .. }
         | PageMessage::ChatAbort
         | PageMessage::ChatLoad
+        | PageMessage::ChatClearQueue
         | PageMessage::UiAnswer { .. }
         | PageMessage::ListCommands { .. }
         | PageMessage::ListModels { .. }

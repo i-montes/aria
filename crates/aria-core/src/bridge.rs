@@ -41,6 +41,9 @@ pub enum PageMessage {
     /// The dock opened: tell the page where Aria works and how it is doing.
     #[serde(rename = "chatLoad")]
     ChatLoad,
+    /// Drop the messages queued behind the current run (the queued bubble's Cancel).
+    #[serde(rename = "chatClearQueue")]
+    ChatClearQueue,
     /// The answer to a dialog (`id` is Pi's request id): a `value`, a `confirmed` flag or `cancelled`.
     #[serde(rename = "uiAnswer")]
     UiAnswer { id: String, value: Option<String>, confirmed: Option<bool>, cancelled: Option<bool> },
@@ -96,7 +99,7 @@ pub enum DockMessage {
     Error { id: u64, code: String },
     /// Where Aria works and how the engine is; `problem` is a UI string key (`pi-missing`, `node-missing`).
     #[serde(rename = "chatState")]
-    ChatState { workdir: String, running: bool, model: Option<String>, thinking: Option<String>, problem: Option<String> },
+    ChatState { workdir: String, running: bool, model: Option<String>, thinking: Option<String>, context: Option<f64>, problem: Option<String> },
     /// A Pi session event, verbatim.
     #[serde(rename = "chatEvent")]
     ChatEvent { event: Value },
@@ -161,6 +164,7 @@ mod tests {
         assert_eq!(page(r#"{"type":"chatSend","text":"hi"}"#), PageMessage::ChatSend { text: "hi".into(), behavior: None });
         assert_eq!(page(r#"{"type":"chatAbort"}"#), PageMessage::ChatAbort);
         assert_eq!(page(r#"{"type":"chatLoad"}"#), PageMessage::ChatLoad);
+        assert_eq!(page(r#"{"type":"chatClearQueue"}"#), PageMessage::ChatClearQueue);
         assert_eq!(
             page(r#"{"type":"uiAnswer","id":"u1","value":"Allow"}"#),
             PageMessage::UiAnswer { id: "u1".into(), value: Some("Allow".into()), confirmed: None, cancelled: None }
@@ -212,8 +216,8 @@ mod tests {
     fn chat_dock_messages_serialize() {
         let value = |m: DockMessage| serde_json::to_value(m).unwrap();
         assert_eq!(
-            value(DockMessage::ChatState { workdir: "/home/u/Projects".into(), running: false, model: Some("opencode-go/glm-5.3".into()), thinking: None, problem: None }),
-            json!({"type": "chatState", "workdir": "/home/u/Projects", "running": false, "model": "opencode-go/glm-5.3", "thinking": null, "problem": null})
+            value(DockMessage::ChatState { workdir: "/home/u/Projects".into(), running: false, model: Some("opencode-go/glm-5.3".into()), thinking: None, context: Some(30.0), problem: None }),
+            json!({"type": "chatState", "workdir": "/home/u/Projects", "running": false, "model": "opencode-go/glm-5.3", "thinking": null, "context": 30.0, "problem": null})
         );
         assert_eq!(
             value(DockMessage::ChatEvent { event: json!({"type": "agent_start"}) }),

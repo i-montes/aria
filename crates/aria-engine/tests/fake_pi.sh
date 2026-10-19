@@ -26,6 +26,11 @@ while IFS= read -r line; do
       printf '{"type":"response","id":"%s","command":"get_available_models","success":true,"data":{"models":[{"provider":"opencode-go","id":"glm-5.3","name":"GLM 5.3"}]}}\n' "$id" ;;
     get_messages)
       printf '{"type":"response","id":"%s","command":"get_messages","success":true,"data":{"messages":[{"role":"user","content":"earlier"}]}}\n' "$id" ;;
+    get_session_stats)
+      printf '{"type":"response","id":"%s","command":"get_session_stats","success":true,"data":{"contextUsage":{"tokens":60000,"contextWindow":200000,"percent":30}}}\n' "$id" ;;
+    clear_queue)
+      printf '{"type":"response","id":"%s","command":"clear_queue","success":true,"data":{"steering":[],"followUp":["x"]}}\n' "$id"
+      printf '{"type":"queue_update","steering":[],"followUp":[]}\n' ;;
     set_model)
       printf '{"type":"response","id":"%s","command":"set_model","success":true,"data":{}}\n' "$id" ;;
     extension_ui_response)
