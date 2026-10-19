@@ -23,6 +23,7 @@ pub type Emit = Arc<dyn Fn(DockMessage) + Send + Sync>;
 
 const NOTIFICATION_TITLE: &str = "Aria needs an answer";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const FILE_LIMIT: usize = 50;
 const QUOTA_MAX_AGE: Duration = Duration::from_secs(20);
 
@@ -101,6 +102,8 @@ pub struct ChatCtx {
     pub paths: AriaPaths,
     pub notifier: Arc<dyn Notifier>,
     pub dock_visible: Arc<AtomicBool>,
+    /// Is the chat what the dock shows? False while the settings are open: a prompt then needs a notification too.
+    pub chat_shown: Arc<AtomicBool>,
     /// The `PATH` Pi inherits (the shim directory goes in front of it).
     pub path_var: String,
     /// Reads a provider's quota (a fake in tests).
@@ -124,6 +127,12 @@ struct Inner {
     /// The provider's quota windows as last read, and when (so a run that follows another does not ask again).
     quota: Option<Vec<aria_core::quota::Window>>,
     quota_at: Option<std::time::Instant>,
+    /// A restart was asked while a run was going: it happens when the run settles.
+    restart_pending: bool,
+    /// Prompts sent and not yet accepted, by command id, so a refusal can name its text.
+    pending_prompts: HashMap<String, String>,
+    /// The arguments the running Pi was started with (tests read them).
+    spawn_args: Vec<String>,
     /// The folder the running Pi was started in (what the header must show, whatever the settings say now).
     workdir: Option<PathBuf>,
 }
@@ -147,8 +156,19 @@ pub struct Chat {
     spawn_lock: Arc<Mutex<()>>,
 }
 
+/// The notification's text: a card's summary (its path, its quota, its first question), or the dialog's own title.
 fn dialog_body(raw: &Value) -> String {
-    raw["title"].as_str().or_else(|| raw["message"].as_str()).unwrap_or_default().to_string()
+    let title = raw["title"].as_str().or_else(|| raw["message"].as_str()).unwrap_or_default();
+    let card = serde_json::from_str::<Value>(title).ok().filter(|card| card["aria"] == json!(1));
+    let Some(card) = card else { return title.to_string() };
+    let text = |key: &str| card[key].as_str().filter(|s| !s.is_empty()).map(str::to_string);
+    match card["kind"].as_str() {
+        Some("sandbox") | Some("write") => text("summary").or_else(|| text("path")).or_else(|| text("detail")),
+        Some("quota") => card["percent"].as_f64().map(|p| format!("Quota at {}%", p.round())),
+        Some("question") => card["questions"][0]["question"].as_str().map(str::to_string),
+        _ => None,
+    }
+    .unwrap_or_else(|| "Aria is waiting for your answer".to_string())
 }
 
 fn is_dialog(method: &str) -> bool {
@@ -228,6 +248,11 @@ impl Chat {
         }
     }
 
+    /// Is `engine` still this chat's Pi? A reply that comes back after a restart or a close must say nothing.
+    fn is_current(&self, engine: &Engine) -> bool {
+        self.inner.lock().unwrap().engine.as_deref().is_some_and(|e| std::ptr::eq(e, engine))
+    }
+
     fn current_engine(&self) -> Option<Arc<Engine>> {
         self.inner.lock().unwrap().engine.clone().filter(|engine| engine.is_alive())
     }
@@ -258,8 +283,13 @@ impl Chat {
         if let Some(behavior) = behavior {
             fields["streamingBehavior"] = json!(behavior);
         }
-        if engine.send("prompt", fields).is_err() {
-            self.emit(DockMessage::ChatEvent { event: json!({"type": "command_failed", "command": "prompt", "error": "Pi is no longer running"}) });
+        match engine.send("prompt", fields) {
+            Ok(id) => {
+                self.inner.lock().unwrap().pending_prompts.insert(id, text.to_string());
+            }
+            Err(_) => self.emit(DockMessage::ChatEvent {
+                event: json!({"type": "command_failed", "command": "prompt", "error": "Pi is no longer running", "text": text}),
+            }),
         }
     }
 
@@ -277,14 +307,25 @@ impl Chat {
             return Err(PiError::NodeMissing.problem_code());
         }
         let settings = self.settings();
-        agent::prepare(&self.ctx.paths, settings.as_ref()).map_err(|_| "agent-dir-unwritable")?;
+        agent::prepare(&self.ctx.paths, settings.as_ref()).map_err(|error| match error.kind() {
+            std::io::ErrorKind::InvalidData => "pi-settings-invalid",
+            _ => "agent-dir-unwritable",
+        })?;
         pi::write_shim(&self.ctx.paths, &install).map_err(|_| "agent-dir-unwritable")?;
-        let workdir = working_folder(settings.as_ref());
+        let workdir = working_folder(settings.as_ref()).ok_or("workdir-unavailable")?;
 
         self.emit(DockMessage::ChatEngine { state: "starting".into() });
         let spec = SpawnSpec {
             program: install.binary,
-            args: vec!["--mode".into(), "rpc".into(), "--session-id".into(), self.session.clone()],
+            // One sessions folder, whatever the working folder: a changed projects folder must not lose a tab's history.
+            args: vec![
+                "--mode".into(),
+                "rpc".into(),
+                "--session-dir".into(),
+                agent::sessions_dir(&self.ctx.paths).display().to_string(),
+                "--session-id".into(),
+                self.session.clone(),
+            ],
             env: vec![
                 ("PI_CODING_AGENT_DIR".into(), self.ctx.paths.agent().display().to_string()),
                 ("PATH".into(), pi::path_with_bin(&self.ctx.paths, &self.ctx.path_var)),
@@ -292,6 +333,7 @@ impl Chat {
             ],
             cwd: workdir.clone(),
         };
+        let spec_args = spec.args.clone();
         let (engine, events) = Engine::spawn(spec).map_err(|_| "pi-failed")?;
         let engine = Arc::new(engine);
         let (generation, stale) = {
@@ -300,6 +342,8 @@ impl Chat {
             inner.engine = Some(engine.clone());
             inner.running = false;
             inner.workdir = Some(workdir);
+            inner.spawn_args = spec_args.clone();
+            inner.pending_prompts.clear();
             // Whatever the previous Pi left open can never be answered now.
             let stale: Vec<String> = inner.dialogs.drain().map(|(id, _)| id).collect();
             let dismiss = !inner.notified.is_empty();
@@ -319,7 +363,7 @@ impl Chat {
     /// Reads how full the context window is and tells the page.
     fn refresh_context(&self, engine: &Engine) {
         let Ok(response) = engine.request("get_session_stats", json!({}), REQUEST_TIMEOUT) else { return };
-        if !response.success {
+        if !response.success || !self.is_current(engine) {
             return;
         }
         self.inner.lock().unwrap().context = response.data["contextUsage"]["percent"].as_f64();
@@ -343,23 +387,28 @@ impl Chat {
         let chat = self.clone();
         std::thread::spawn(move || {
             let windows = source.and_then(|s| aria_core::quota::fetch(&s, &*chat.ctx.quota_fetcher)).unwrap_or_default();
-            chat.inner.lock().unwrap().quota = Some(windows.clone());
-            chat.emit(DockMessage::ChatQuota { windows });
+            chat.store_quota_for(&model, windows);
         });
     }
 
     /// Tells the page what Pi is using and replays the session's history.
     fn announce(&self, engine: &Engine) {
-        if let Ok(response) = engine.request("get_state", json!({}), REQUEST_TIMEOUT) {
-            if response.success {
-                apply_state(&mut self.inner.lock().unwrap(), &response.data);
-                self.emit(self.state_message(None));
+        // A cold start can be slow (packages, MCP servers): wait longer than for an ordinary request, and ask twice.
+        let ask = |command: &str| {
+            (0..2).find_map(|_| engine.request(command, json!({}), STARTUP_TIMEOUT).ok().filter(|r| r.success))
+        };
+        if let Some(response) = ask("get_state") {
+            if !self.is_current(engine) {
+                return;
             }
+            apply_state(&mut self.inner.lock().unwrap(), &response.data);
+            self.emit(self.state_message(None));
         }
-        if let Ok(response) = engine.request("get_messages", json!({}), REQUEST_TIMEOUT) {
-            if response.success {
-                self.emit(DockMessage::ChatEvent { event: json!({"type": "history", "messages": response.data["messages"]}) });
+        if let Some(response) = ask("get_messages") {
+            if !self.is_current(engine) {
+                return;
             }
+            self.emit(DockMessage::ChatEvent { event: json!({"type": "history", "messages": response.data["messages"]}) });
         }
         self.refresh_context(engine);
         // Not forced: a run that already settled may have asked a moment ago.
@@ -449,7 +498,21 @@ impl Chat {
                     match raw["type"].as_str() {
                         Some("agent_start") => self.inner.lock().unwrap().running = true,
                         Some("agent_settled") => {
-                            self.inner.lock().unwrap().running = false;
+                            // Pi drops a run's dialogs silently when the run is aborted: they go here too.
+                            let (open, restart) = {
+                                let mut inner = self.inner.lock().unwrap();
+                                inner.running = false;
+                                let restart = std::mem::take(&mut inner.restart_pending);
+                                (inner.dialogs.keys().cloned().collect::<Vec<_>>(), restart)
+                            };
+                            for id in open {
+                                self.close_dialog(&id);
+                            }
+                            if restart {
+                                self.emit(DockMessage::ChatEvent { event: raw.clone() });
+                                self.shutdown();
+                                continue;
+                            }
                             if let Some(engine) = self.current_engine() {
                                 let chat = self.clone();
                                 std::thread::spawn(move || chat.refresh_context(&engine));
@@ -464,10 +527,13 @@ impl Chat {
                 EngineEvent::UiRequest { raw, .. } => {
                     self.emit(DockMessage::ChatEvent { event: json!({"type": "ui_notice", "request": raw}) });
                 }
-                EngineEvent::Response { success: false, command, error, .. } => {
-                    self.emit(DockMessage::ChatEvent { event: json!({"type": "command_failed", "command": command, "error": error}) });
+                EngineEvent::Response { id, success, command, error } => {
+                    // A refused prompt names its text, so the page can take it back out of the thread or the queue.
+                    let text = id.and_then(|id| self.inner.lock().unwrap().pending_prompts.remove(&id));
+                    if !success {
+                        self.emit(DockMessage::ChatEvent { event: json!({"type": "command_failed", "command": command, "error": error, "text": text}) });
+                    }
                 }
-                EngineEvent::Response { .. } => {}
                 EngineEvent::Exited { code } => {
                     self.exited(generation, code);
                     break;
@@ -487,8 +553,13 @@ impl Chat {
 
     /// The dock's visibility changed: when it is now hidden, every open dialog that has no notification
     /// yet gets one (the owner may have pressed Escape with a question still open).
+    /// Can the owner see this chat? The dock is open and showing the chat, not the settings.
+    fn seen(&self) -> bool {
+        self.ctx.dock_visible.load(Ordering::SeqCst) && self.ctx.chat_shown.load(Ordering::SeqCst)
+    }
+
     pub fn dock_visibility_changed(&self) {
-        if self.ctx.dock_visible.load(Ordering::SeqCst) {
+        if self.seen() {
             return;
         }
         let waiting: Vec<String> = {
@@ -504,7 +575,7 @@ impl Chat {
     }
 
     fn open_dialog(&self, id: String, method: String, raw: Value) {
-        let hidden = !self.ctx.dock_visible.load(Ordering::SeqCst);
+        let hidden = !self.seen();
         {
             let mut inner = self.inner.lock().unwrap();
             inner.dialogs.insert(id.clone(), raw.clone());
@@ -549,22 +620,60 @@ impl Chat {
         self.emit(DockMessage::ChatEvent { event: json!({"type": "engine_exited", "code": code}) });
     }
 
-    /// The session was closed: its Pi stops (its stdin closes), its dialogs and notification go away.
+    /// Restart for a changed credential or package: at once when idle, when the current run settles otherwise.
+    pub fn restart_when_idle(&self) {
+        let running = {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.running {
+                inner.restart_pending = true;
+            }
+            inner.running
+        };
+        if !running {
+            self.shutdown();
+        }
+    }
+
+    /// Pi stops (stdin closed, killed after three seconds), its dialogs and notification go away, and the page is told.
     pub fn shutdown(&self) {
-        let stale = {
+        let (stale, engine) = {
             let mut inner = self.inner.lock().unwrap();
             inner.generation += 1; // whatever the old Pi still says is ignored
-            inner.engine = None;
+            let engine = inner.engine.take();
             inner.running = false;
+            inner.restart_pending = false;
             // A credential may have changed (that is why Pis restart): the quota is read afresh next time.
             inner.quota = None;
             inner.quota_at = None;
             let open: Vec<String> = inner.dialogs.drain().map(|(id, _)| id).collect();
             let dismiss = !inner.notified.is_empty();
             inner.notified.clear();
-            (open, dismiss)
+            ((open, dismiss), engine)
         };
         self.close_stale(stale);
+        if let Some(engine) = engine {
+            std::thread::spawn(move || engine.close(Duration::from_secs(3)));
+            self.emit(DockMessage::ChatEngine { state: "stopped".into() });
+            self.emit(self.state_message(None));
+        }
+    }
+
+    /// Keeps a quota reading only if it is for the model in use now (a reading for the previous model can land late).
+    fn store_quota_for(&self, model: &str, windows: Vec<aria_core::quota::Window>) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let now = inner.model.clone().or_else(|| self.settings().and_then(|s| s.models.daily));
+            if now.as_deref() != Some(model) {
+                return;
+            }
+            inner.quota = Some(windows.clone());
+        }
+        self.emit(DockMessage::ChatQuota { windows });
+    }
+
+    #[cfg(test)]
+    fn test_spawn_args(&self) -> Vec<String> {
+        self.inner.lock().unwrap().spawn_args.clone()
     }
 
     #[cfg(test)]
@@ -581,6 +690,7 @@ pub struct Sessions {
     ctx: Arc<ChatCtx>,
     emit: Emit,
     chats: Arc<Mutex<HashMap<String, Chat>>>,
+    closed: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Sessions {
@@ -588,11 +698,12 @@ impl Sessions {
     pub fn new(ctx: ChatCtx, emit: Emit) -> Sessions {
         let notifier: Arc<dyn Notifier> = Arc::new(CountingNotifier::new(ctx.notifier.clone()));
         let ctx = Arc::new(ChatCtx { notifier, ..ctx });
-        Sessions { ctx, emit, chats: Arc::new(Mutex::new(HashMap::new())) }
+        Sessions { ctx, emit, chats: Arc::new(Mutex::new(HashMap::new())), closed: Arc::new(Mutex::new(HashSet::new())) }
     }
 
     fn chat(&self, session: &str) -> Option<Chat> {
-        if !sessions::valid_id(session) {
+        // A late reply for a closed tab must not bring its Pi back.
+        if !sessions::valid_id(session) || self.closed.lock().unwrap().contains(session) {
             return None;
         }
         let mut chats = self.chats.lock().unwrap();
@@ -624,13 +735,20 @@ impl Sessions {
                 let _ = sessions::save(&self.ctx.paths, &SessionList { sessions: entries, active });
             }
             PageMessage::EnginesRestart => {
-                // Credentials or packages changed: every Pi stops; the page's next `chatLoad` starts it again.
+                // Credentials or packages changed: every Pi restarts, a busy one when its run settles (never cut).
                 let chats: Vec<Chat> = self.chats.lock().unwrap().values().cloned().collect();
                 for chat in chats {
-                    chat.shutdown();
+                    chat.restart_when_idle();
+                }
+            }
+            PageMessage::ChatShown { shown } => {
+                self.ctx.chat_shown.store(shown, Ordering::SeqCst);
+                if !shown {
+                    self.dock_visibility_changed();
                 }
             }
             PageMessage::SessionClose { session } => {
+                self.closed.lock().unwrap().insert(session.clone());
                 let chat = self.chats.lock().unwrap().remove(&session);
                 if let Some(chat) = chat {
                     chat.shutdown();
@@ -655,14 +773,11 @@ impl Sessions {
     }
 }
 
-/// Pi's folder: the configured one, created when missing, `$HOME` when that is not possible.
-fn working_folder(settings: Option<&Settings>) -> PathBuf {
+/// Pi's folder: the configured one, created when missing. `None` when it cannot be made: never another folder in its
+/// place (the sandbox lets Pi write in it).
+fn working_folder(settings: Option<&Settings>) -> Option<PathBuf> {
     let folder = agent::workdir(settings);
-    if std::fs::create_dir_all(&folder).is_ok() {
-        folder
-    } else {
-        PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-    }
+    std::fs::create_dir_all(&folder).ok().map(|_| folder)
 }
 
 #[cfg(test)]
@@ -705,6 +820,7 @@ mod tests {
         chat: Chat,
         messages: Receiver<DockMessage>,
         quota_calls: Arc<std::sync::atomic::AtomicUsize>,
+        chat_shown: Arc<AtomicBool>,
         notifier: Arc<TestNotifier>,
         visible: Arc<AtomicBool>,
         workdir: PathBuf,
@@ -750,8 +866,9 @@ mod tests {
             counter.fetch_add(1, Ordering::SeqCst);
             Some(json!({"usage": {"rolling": {"status": "ok", "percent": 42}, "weekly": {"status": "ok", "percent": 17}, "monthly": {"status": "ok", "percent": 6}}}))
         });
-        let ctx = ChatCtx { paths: paths.clone(), notifier: notifier.clone(), dock_visible: visible.clone(), path_var: "/usr/bin:/bin".into(), quota_fetcher };
-        Harness { _turn: turn, quota_calls, backlog: Mutex::new(Vec::new()), _dir: dir, paths, chat: Chat::new(Arc::new(ctx), emit, "s1".into()), messages, notifier, visible, workdir }
+        let chat_shown = Arc::new(AtomicBool::new(true));
+        let ctx = ChatCtx { paths: paths.clone(), notifier: notifier.clone(), dock_visible: visible.clone(), chat_shown: chat_shown.clone(), path_var: "/usr/bin:/bin".into(), quota_fetcher };
+        Harness { _turn: turn, quota_calls, chat_shown, backlog: Mutex::new(Vec::new()), _dir: dir, paths, chat: Chat::new(Arc::new(ctx), emit, "s1".into()), messages, notifier, visible, workdir }
     }
 
     fn harness() -> Harness {
@@ -856,15 +973,6 @@ mod tests {
         send(&h, "hello");
         let state = wait_for(&h, "state from get_state", |m| matches!(m, DockMessage::ChatState { thinking: Some(_), .. }));
         assert!(matches!(state, DockMessage::ChatState { thinking: Some(t), model: Some(m), .. } if t == "medium" && m == "opencode-go/deepseek-v4.1-flash"));
-    }
-
-    #[test]
-    fn a_failed_command_nobody_waited_for_is_reported() {
-        let h = harness();
-        send(&h, "x");
-        wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
-        h.chat.handle(PageMessage::SetModel { id: 1, model: "nonsense".into() });
-        wait_for(&h, "an error reply", |m| matches!(m, DockMessage::Error { id: 1, .. }));
     }
 
     #[test]
@@ -987,7 +1095,7 @@ mod tests {
         let h = harness();
         std::fs::remove_file(h.paths.bin().join("node")).unwrap();
         // /usr/bin:/bin may hold a real node on this machine; point the chat at an empty PATH instead.
-        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), path_var: "/nonexistent".into(), quota_fetcher: Arc::new(|_| None) };
+        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), chat_shown: Arc::new(AtomicBool::new(true)), path_var: "/nonexistent".into(), quota_fetcher: Arc::new(|_| None) };
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);
         let chat = Chat::new(Arc::new(ctx), Arc::new(move |m| { let _ = sender.lock().unwrap().send(m); }), "s1".into());
@@ -1126,7 +1234,7 @@ mod tests {
         let emit: Emit = Arc::new(move |m| {
             let _ = sender.lock().unwrap().send(m);
         });
-        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), path_var: "/usr/bin:/bin".into(), quota_fetcher: Arc::new(|_| None) };
+        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), chat_shown: Arc::new(AtomicBool::new(true)), path_var: "/usr/bin:/bin".into(), quota_fetcher: Arc::new(|_| None) };
         let sessions = Sessions::new(ctx, emit);
         SessionsHarness { h, sessions, messages }
     }
@@ -1208,9 +1316,12 @@ mod tests {
         wait_session(&s, "the dialog closing", "aa", |m| matches!(m, DockMessage::ChatDialogClosed { id } if id == "u1"));
         assert_eq!(s.h.notifier.log().last().map(String::as_str), Some("dismiss"));
         // the same id opened again starts a fresh Pi
-        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "back".into(), behavior: None }));
-        wait_session(&s, "a new start", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "starting"));
-        wait_session(&s, "its reply", "aa", settled);
+        // a late message for the closed tab (a picker reply, a model change) does not bring its Pi back
+        while s.messages.try_recv().is_ok() {}
+        s.sessions.handle(in_session("aa", PageMessage::ListCommands { id: 9 }));
+        std::thread::sleep(Duration::from_millis(200));
+        let late = s.messages.try_recv();
+        assert!(late.is_err(), "nothing answered for a closed tab: {late:?}");
     }
 
     #[test]
@@ -1295,10 +1406,6 @@ mod tests {
         wait_for(&h, "the kept message sent again", |m| event_of(m, "agent_start"));
     }
 
-    fn go_usage() -> serde_json::Value {
-        json!({"usage": {"rolling": {"status": "ok", "percent": 42}, "weekly": {"status": "ok", "percent": 17}, "monthly": {"status": "ok", "percent": 6}}})
-    }
-
     #[test]
     fn the_provider_quota_is_reported_once_pi_is_ready() {
         let h = harness();
@@ -1345,6 +1452,129 @@ mod tests {
         h.chat.handle(PageMessage::ChatLoad);
         wait_for(&h, "the quota again", |m| matches!(m, DockMessage::ChatQuota { windows } if windows.len() == 3));
         assert_eq!(h.quota_calls.load(Ordering::SeqCst), 1, "replayed, not fetched again");
+    }
+
+    // ---- review fixes before 2b -------------------------------------------------------------------
+
+    fn ready(h: &Harness) {
+        send(h, "x");
+        wait_for(h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        wait_for(h, "settled", |m| event_of(m, "agent_settled"));
+    }
+
+    #[test]
+    fn a_restart_waits_for_a_run_to_settle_and_says_so() {
+        let h = harness();
+        ready(&h);
+        drain(&h); // the first run's events must not satisfy the wait below
+        h.chat.test_send_raw("start");
+        wait_for(&h, "a run", |m| event_of(m, "agent_start"));
+        h.chat.restart_when_idle();
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(h.chat.current_engine().is_some(), "a run in progress is not cut");
+        h.chat.test_send_raw("settle");
+        wait_for(&h, "the stop announced", |m| matches!(m, DockMessage::ChatEngine { state } if state == "stopped"));
+        wait_for(&h, "an idle state", |m| matches!(m, DockMessage::ChatState { running: false, .. }));
+        assert!(h.chat.current_engine().is_none());
+    }
+
+    #[test]
+    fn a_restart_of_an_idle_session_stops_it_at_once_and_says_so() {
+        let h = harness();
+        ready(&h);
+        h.chat.restart_when_idle();
+        wait_for(&h, "the stop announced", |m| matches!(m, DockMessage::ChatEngine { state } if state == "stopped"));
+        assert!(h.chat.current_engine().is_none());
+    }
+
+    #[test]
+    fn dialogs_still_open_when_a_run_settles_are_closed() {
+        let h = harness();
+        ready(&h);
+        h.visible.store(false, Ordering::SeqCst);
+        h.chat.test_send_raw("ask");
+        wait_for(&h, "the dialog", |m| matches!(m, DockMessage::ChatDialog { .. }));
+        h.chat.test_send_raw("settle"); // Pi resolves a dialog silently when the run is aborted
+        wait_for(&h, "the dialog closing", |m| matches!(m, DockMessage::ChatDialogClosed { id } if id == "u1"));
+        assert_eq!(h.notifier.log().last().map(String::as_str), Some("dismiss"));
+    }
+
+    #[test]
+    fn the_notification_of_a_card_reads_its_summary_not_its_json() {
+        assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"sandbox\",\"summary\":\"Run rm -rf build\"}"})), "Run rm -rf build");
+        assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"write\",\"path\":\"~/notes.md\"}"})), "~/notes.md");
+        assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"quota\",\"percent\":98}"})), "Quota at 98%");
+        assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"question\",\"questions\":[{\"question\":\"Which fallback?\"}]}"})), "Which fallback?");
+        assert_eq!(dialog_body(&json!({"title": "Allow?"})), "Allow?");
+        assert_eq!(dialog_body(&json!({"title": "{not json"})), "{not json");
+        let h = harness();
+        ready(&h);
+        h.visible.store(false, Ordering::SeqCst);
+        h.chat.test_send_raw("ask_card");
+        wait_for(&h, "the card", |m| matches!(m, DockMessage::ChatDialog { .. }));
+        assert_eq!(h.notifier.log(), vec!["send:Aria needs an answer:Wants to run rm -rf build"]);
+    }
+
+    #[test]
+    fn a_working_folder_that_cannot_be_made_is_a_problem_not_the_home_folder() {
+        let h = harness();
+        let mut settings = settings::load(&h.paths).unwrap().unwrap();
+        settings.sandbox.projects_dir = "/proc/aria-cannot-be-here".into();
+        settings::save(&h.paths, &settings).unwrap();
+        send(&h, "hi");
+        wait_for(&h, "the problem", |m| matches!(m, DockMessage::ChatState { problem: Some(p), .. } if p == "workdir-unavailable"));
+    }
+
+    #[test]
+    fn a_refused_prompt_names_its_text_so_the_page_can_take_it_back() {
+        let h = harness();
+        ready(&h);
+        send(&h, "FAIL");
+        match wait_for(&h, "the failure", |m| event_of(m, "command_failed")) {
+            DockMessage::ChatEvent { event } => {
+                assert_eq!(event["text"], json!("FAIL"));
+                assert_eq!(event["command"], json!("prompt"));
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn a_failed_command_nobody_waited_for_reaches_the_page() {
+        let h = harness();
+        ready(&h);
+        h.chat.handle(PageMessage::SetModel { id: 1, model: "opencode-go/rejected".into() });
+        wait_for(&h, "an error reply", |m| matches!(m, DockMessage::Error { id: 1, code } if code == "model-rejected"));
+    }
+
+    #[test]
+    fn while_the_chat_is_not_shown_a_dialog_notifies_even_with_the_dock_open() {
+        let h = harness();
+        ready(&h);
+        h.chat_shown.store(false, Ordering::SeqCst); // the owner opened the settings
+        h.chat.test_send_raw("ask");
+        wait_for(&h, "the dialog", |m| matches!(m, DockMessage::ChatDialog { hidden: true, .. }));
+        assert_eq!(h.notifier.log().len(), 1);
+    }
+
+    #[test]
+    fn pi_keeps_its_sessions_in_one_folder_whatever_the_working_folder() {
+        let h = harness();
+        std::env::set_var("ARIA_TEST_ARGS", "unused");
+        ready(&h);
+        let args = h.chat.test_spawn_args();
+        let at = args.iter().position(|a| a == "--session-dir").expect("--session-dir is passed");
+        assert_eq!(args[at + 1], h.paths.agent().join("sessions").join("aria").display().to_string());
+    }
+
+    #[test]
+    fn a_quota_read_for_an_old_model_does_not_overwrite_the_new_one() {
+        let h = harness();
+        ready(&h);
+        wait_for(&h, "the first quota", |m| matches!(m, DockMessage::ChatQuota { .. }));
+        // the fetch for the old model lands after the model changed
+        h.chat.store_quota_for("opencode-go/old", vec![]);
+        assert_eq!(h.chat.inner.lock().unwrap().quota.as_ref().map(Vec::len), Some(3));
     }
 
     #[test]

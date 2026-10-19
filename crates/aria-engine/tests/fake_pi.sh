@@ -8,6 +8,10 @@ while IFS= read -r line; do
     get_state)
       printf '{"type":"response","id":"%s","command":"get_state","success":true,"data":{"isStreaming":false,"thinkingLevel":"medium","model":{"provider":"opencode-go","id":"deepseek-v4.1-flash"}}}\n' "$id" ;;
     prompt)
+      if [ "$(field message "$line")" = "FAIL" ]; then
+        printf '{"type":"response","id":"%s","command":"prompt","success":false,"error":"Cannot submit a prompt while compaction is in progress"}\n' "$id"
+        continue
+      fi
       printf '{"type":"response","id":"%s","command":"prompt","success":true,"data":{"disposition":"started"}}\n' "$id"
       printf '{"type":"agent_start"}\n'
       printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"hi"}}\n'
@@ -32,9 +36,21 @@ while IFS= read -r line; do
       printf '{"type":"response","id":"%s","command":"clear_queue","success":true,"data":{"steering":[],"followUp":["x"]}}\n' "$id"
       printf '{"type":"queue_update","steering":[],"followUp":[]}\n' ;;
     set_model)
+      if [ "$(field modelId "$line")" = "rejected" ]; then
+        printf '{"type":"response","id":"%s","command":"set_model","success":false,"error":"Model not found"}\n' "$id"
+        continue
+      fi
       printf '{"type":"response","id":"%s","command":"set_model","success":true,"data":{}}\n' "$id" ;;
     extension_ui_response)
       printf '{"type":"answered","value":"%s"}\n' "$(field value "$line")" ;;
+    start)
+      printf '{"type":"agent_start"}\n' ;;
+    settle)
+      printf '{"type":"agent_settled","aborted":true}\n' ;;
+    ask_card)
+      printf '{"type":"extension_ui_request","id":"c1","method":"select","title":"{\\"aria\\":1,\\"kind\\":\\"sandbox\\",\\"summary\\":\\"Wants to run rm -rf build\\"}","options":["Allow once","Block"]}\n' ;;
+    args)
+      printf '{"type":"args","args":"%s"}\n' "$ARIA_TEST_ARGS" ;;
     crash) exit 3 ;;
     silent) : ;;
   esac

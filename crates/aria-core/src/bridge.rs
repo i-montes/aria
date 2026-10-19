@@ -66,6 +66,9 @@ pub enum PageMessage {
     /// A credential or package changed: every session's Pi stops and starts again when next used, so it sees the change.
     #[serde(rename = "enginesRestart")]
     EnginesRestart,
+    /// Is the chat on screen (false while the settings are open)? A prompt nobody sees gets a notification.
+    #[serde(rename = "chatShown")]
+    ChatShown { shown: bool },
     /// A chat message for one session (each session is its own tab and its own Pi).
     #[serde(rename = "session")]
     Session { session: String, message: Box<PageMessage> },
@@ -114,10 +117,10 @@ pub enum DockMessage {
     /// A Pi session event, verbatim.
     #[serde(rename = "chatEvent")]
     ChatEvent { event: Value },
-    /// An extension dialog; `hidden` says the dock was not visible when it arrived.
     /// How much of the provider's quota is spent, for the model in use (empty when the provider has none to read).
     #[serde(rename = "chatQuota")]
     ChatQuota { windows: Vec<QuotaWindow> },
+    /// An extension dialog; `hidden` says the owner could not see the chat when it arrived.
     #[serde(rename = "chatDialog")]
     ChatDialog { id: String, method: String, request: Value, hidden: bool },
     #[serde(rename = "chatDialogClosed")]
@@ -180,6 +183,7 @@ mod tests {
         assert_eq!(page(r#"{"type":"chatLoad"}"#), PageMessage::ChatLoad);
         assert_eq!(page(r#"{"type":"installClaudeBridge","id":12}"#), PageMessage::InstallClaudeBridge { id: 12 });
         assert_eq!(page(r#"{"type":"enginesRestart"}"#), PageMessage::EnginesRestart);
+        assert_eq!(page(r#"{"type":"chatShown","shown":false}"#), PageMessage::ChatShown { shown: false });
         assert_eq!(page(r#"{"type":"chatClearQueue"}"#), PageMessage::ChatClearQueue { keep: vec![] });
         assert_eq!(
             page(r#"{"type":"chatClearQueue","keep":["a","b"]}"#),

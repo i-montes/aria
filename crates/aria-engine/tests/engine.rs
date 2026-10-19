@@ -113,3 +113,22 @@ fn shutdown_stops_a_running_child() {
     engine.shutdown();
     assert!(matches!(next(&events), EngineEvent::Exited { .. }));
 }
+
+#[test]
+fn close_works_through_a_shared_engine_and_kills_a_child_that_ignores_eof() {
+    // `sleep` never reads stdin: closing it does not stop it, so `close` must kill it after its grace time.
+    let (engine, events) = Engine::spawn(spec("/bin/sh", vec!["-c".into(), "exec sleep 30".into()])).unwrap();
+    let engine = std::sync::Arc::new(engine);
+    let started = std::time::Instant::now();
+    engine.close(Duration::from_millis(300));
+    assert!(matches!(events.recv_timeout(Duration::from_secs(5)).unwrap(), EngineEvent::Exited { .. }));
+    assert!(started.elapsed() < Duration::from_secs(3), "killed after the grace time, not left running");
+    assert!(!engine.is_alive());
+}
+
+#[test]
+fn close_lets_a_child_that_stops_on_eof_end_by_itself() {
+    let (engine, events) = fake();
+    engine.close(Duration::from_secs(3));
+    assert_eq!(next(&events), EngineEvent::Exited { code: Some(0) });
+}

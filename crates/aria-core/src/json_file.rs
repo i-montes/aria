@@ -29,7 +29,10 @@ pub fn read_json(path: &Path) -> Result<Option<Value>, JsonFileError> {
 pub fn write_json_atomic(path: &Path, value: &Value, mode: u32) -> io::Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    // Unique per write, so two threads writing the same file never share a temp file.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.{}.{n}.tmp", std::process::id()));
     let result = (|| {
         let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(&tmp)?;
         file.set_permissions(std::fs::Permissions::from_mode(mode))?;
