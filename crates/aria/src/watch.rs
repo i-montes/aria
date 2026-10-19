@@ -92,6 +92,9 @@ impl Watch {
                 while !stop.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((stream, _)) => {
+                            // BSD (macOS) inherits the listener's non-blocking flag when accepting; Linux does not.
+                            // The child's reader below blocks on purpose, so make the accepted stream blocking again.
+                            let _ = stream.set_nonblocking(false);
                             let state = state.clone();
                             std::thread::spawn(move || serve(stream, state));
                         }

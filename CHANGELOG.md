@@ -2,6 +2,19 @@
 
 What Aria's installer and runtime change on a machine, in one place (file, what, how to undo it).
 
+## 2026-10-18 — first install on the owner's Mac (`sh install/install.sh --local target/release/aria`)
+
+The installer detected Darwin, skipped the Omarchy packages and Hyprland checks, and installed a LaunchAgent.
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| `~/.local/bin/aria` | the dock binary (new on this machine) | none, new file | `sh install/install.sh --uninstall` |
+| `~/Library/LaunchAgents/com.aria.dock.plist` | LaunchAgent that starts the dock at login (new) | none, new file | `sh install/install.sh --uninstall` |
+| `~/.aria/` | data directory, mode 700: `pi/1.3.0/`, `agent/` (the pinned Pi packages), `bin/node`, `sessions.json`, `logs/aria.log`, `run/control.sock` (new) | none, new | `sh install/install.sh --uninstall` asks before deleting it |
+| Carbon hotkey (runtime only, nothing on disk) | `Option + Space`, registered by the dock on the application event target; no Accessibility permission | not applicable | quit the dock; the registration dies with the process |
+
+Checked: `launchctl print gui/501/com.aria.dock` shows the agent running, `~/.aria/logs/aria.log` shows "registered Option + Space", and the page wrote `~/.aria/sessions.json`. No file under `/Library` or any system configuration was touched.
+
 ## 2026-10-18 — first install on the owner's Omarchy machine (`install/install.sh --local target/release/aria`)
 
 | File | What | Backup | Revert |

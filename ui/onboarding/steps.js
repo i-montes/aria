@@ -166,10 +166,11 @@ const CREDENTIAL = { 'opencode-go': 'opencode-go:api_key', 'anthropic-api': 'ant
 export const credentialFor = (providerId) => CREDENTIAL[providerId]
 export const isSignedIn = (settings, connected) => connected.includes(credentialFor(settings.provider.id))
 
-/** `ui` is what the page knows beyond the settings: `signedIn`, `typesafeSaved`, `servicesConnected`. */
+/** `ui` is what the page knows beyond the settings: `signedIn`, `keyChecking`, `typesafeSaved`, `servicesConnected`. */
 export function canContinue(step, settings, ui) {
   if (step === 'provider') return settings.provider.id !== null
-  if (step === 'auth') return ui.signedIn === true
+  // A key that is being checked cannot be considered signed in yet.
+  if (step === 'auth') return ui.signedIn === true && ui.keyChecking !== true
   // A service you turned on has to be connected; to skip one, turn it off.
   if (step === 'integrations') return settings.integrations.services.every((service) => ui.servicesConnected?.includes(service.id))
   if (step === 'router') {

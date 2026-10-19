@@ -1,4 +1,4 @@
-//! `aria` runs the dock (resident, hidden until you press SUPER + A); `aria toggle` shows or hides
+//! `aria` runs the dock (resident, hidden until you press the hotkey); `aria toggle` shows or hides
 //! it, and `aria show` only shows it (a notification's click uses that), starting it first when it
 //! is not running.
 
@@ -6,16 +6,19 @@ mod chat;
 mod control;
 mod dock;
 mod handlers;
+mod ui;
 mod visibility;
 mod watch;
 
 use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::paths::AriaPaths;
+#[cfg(target_os = "linux")]
 use aria_hyprland::Registration;
-use chat::{ChatCtx, OmarchyNotifier, Sessions};
-use dock::Dock;
+use chat::{ChatCtx, PlatformNotifier, Sessions};
+use dock::{Dock, HOTKEY_LABEL};
 use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc};
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 use visibility::Event;
 
@@ -49,13 +52,10 @@ fn run_dock() {
         }
     };
 
-    // WebKitGTK's DMA-BUF renderer draws nothing in a layer-shell surface on this setup.
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    }
-    gtk::init().expect("gtk");
+    // WebKitGTK needs its renderer flag before GTK starts; on Mac this creates the app object.
+    ui::init();
 
-    // Replies from any thread come back to the GTK thread through this channel.
+    // Replies from any thread come back to the UI thread through this channel.
     let (reply_sender, reply_receiver) = mpsc::channel::<DockMessage>();
     let paths = AriaPaths::from_env();
     let first_run = !paths.settings().exists();
@@ -70,7 +70,7 @@ fn run_dock() {
         Sessions::new(
             ChatCtx {
                 paths,
-                notifier: Arc::new(OmarchyNotifier),
+                notifier: Arc::new(PlatformNotifier),
                 dock_visible: dock_visible.clone(),
                 chat_shown: Arc::new(AtomicBool::new(true)),
                 run_dir: control::control_socket_path().parent().map(std::path::Path::to_path_buf).unwrap_or_else(std::env::temp_dir),
@@ -108,31 +108,55 @@ fn run_dock() {
             }
         }))
     };
+    // The page needs the shortcut for its notice and its "you are set up" screen: Super + A on Omarchy,
+    // Option + Space on macOS.
+    dock.send(&DockMessage::Platform { hotkey: HOTKEY_LABEL.to_string() });
     if first_run {
         dock.show_notice();
     }
 
-    // The hotkey: registered as soon as Hyprland can take it (it may not be up when a service starts),
-    // and again after every config reload. The thread reports how it is going; the problem banner
-    // follows it.
-    let (registration_sender, registration_receiver) = mpsc::channel::<Registration>();
-    let exe = std::env::current_exe().expect("own path");
-    aria_hyprland::keep_hotkey_registered(exe, Duration::from_secs(2), move |state| {
-        let _ = registration_sender.send(state);
-    });
-
-    // Commands arrive on a socket thread and are handled on the GTK thread.
+    // Commands arrive on a socket thread and are handled on the UI thread. The hotkey sends the same
+    // "toggle" line, so there is one path from both.
     let (sender, receiver) = mpsc::channel::<String>();
+    let listener_sender = sender.clone();
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
         for stream in listener.incoming().map_while(Result::ok) {
             if let Some(Ok(line)) = BufReader::new(stream).lines().next() {
-                let _ = sender.send(line);
+                let _ = listener_sender.send(line);
             }
         }
     });
+
+    // The hotkey. On Linux it is registered as soon as Hyprland can take it (it may not be up when a
+    // service starts), and again after every config reload; the thread reports how it is going and the
+    // problem banner follows it. On Mac Carbon registers it once, without permissions, for the life of
+    // the app; a shortcut another app already owns is reported the same way.
+    #[cfg(target_os = "linux")]
+    let (registration_sender, registration_receiver) = mpsc::channel::<Registration>();
+    #[cfg(target_os = "linux")]
+    {
+        let exe = std::env::current_exe().expect("own path");
+        aria_hyprland::keep_hotkey_registered(exe, Duration::from_secs(2), move |state| {
+            let _ = registration_sender.send(state);
+        });
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let hotkey_sender = sender.clone();
+        if let Err(error) = aria_mac::install_hotkey(move || {
+            let _ = hotkey_sender.send("toggle".to_string());
+        }) {
+            eprintln!("aria: could not register Option + Space: {error}");
+            dock.set_problem("hotkey-unavailable");
+        } else {
+            eprintln!("aria: registered Option + Space");
+            dock.clear_problem();
+        }
+    }
+
     let mut was_visible = false;
-    glib::timeout_add_local(Duration::from_millis(16), move || {
+    ui::every(16, move || {
         // A dock that just hid with a question still open needs its notification.
         let visible = visible_now.load(std::sync::atomic::Ordering::SeqCst);
         if was_visible && !visible {
@@ -149,6 +173,7 @@ fn run_dock() {
         while let Ok(reply) = reply_receiver.try_recv() {
             dock.send(&reply);
         }
+        #[cfg(target_os = "linux")]
         while let Ok(state) = registration_receiver.try_recv() {
             match state {
                 Registration::Registered => dock.clear_problem(),
@@ -156,12 +181,16 @@ fn run_dock() {
                 Registration::ClassicConfig => dock.set_problem("hyprland-classic-config"),
             }
         }
-        glib::ControlFlow::Continue
     });
 
-    eprintln!("aria: ready, press SUPER + A");
-    gtk::main();
+    eprintln!("aria: ready, press {HOTKEY_HINT}");
+    ui::run();
 }
+
+#[cfg(target_os = "linux")]
+const HOTKEY_HINT: &str = "SUPER + A";
+#[cfg(target_os = "macos")]
+const HOTKEY_HINT: &str = "Option + Space";
 
 /// Tests that start child processes or hold a listening socket take turns: a fork in one test
 /// leaves copies of every open descriptor in the child until it execs, which keeps a dropped socket

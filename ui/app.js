@@ -8,7 +8,7 @@ import { createOnboarding } from './onboarding/view.js'
 
 let i18n = createI18n({})
 const t = (key, vars) => i18n.t(key, vars)
-const state = { problem: null, mode: 'setup' } // mode: `setup` (the onboarding) or `chat`
+const state = { problem: null, mode: 'setup', hotkey: 'Super + A' } // mode: `setup` (the onboarding) or `chat`
 
 // ---- bridge ----------------------------------------------------------------------------------
 
@@ -49,6 +49,10 @@ const handlers = {
   close: () => document.body.classList.remove('open'),
   // The chat's messages need the catalogs too (and the chat view), so they wait for the boot.
   session: (message) => booted.then(() => chat.receive(message.session, message.message)),
+  // The host's shortcut: `Super + A` on Omarchy, `Option + Space` on macOS.
+  platform: (message) => {
+    if (message.hotkey) state.hotkey = message.hotkey
+  },
   // These need the catalogs, so they wait for the boot to finish.
   notice: () => booted.then(showNotice),
   problem: (message) =>
@@ -83,6 +87,10 @@ window.aria = {
 
 // ---- problem banner and notice ---------------------------------------------------------------
 
+// A click on the veil closes the dock. On Omarchy the veil is outside the surface's input region, so
+// this only fires on macOS, where the panel takes the whole 700 px surface.
+document.querySelector('.veil')?.addEventListener('click', () => post({ type: 'closeRequest' }))
+
 const problem = document.getElementById('problem')
 
 function renderProblem() {
@@ -102,10 +110,13 @@ function setMode(mode) {
 
 const NOTICE_MS = 8000
 
+/** The hotkey as the design shows it: one key per `<kbd>`. */
+const hotkeyHtml = () => state.hotkey.split(' + ').map((key) => `<kbd>${key}</kbd>`).join(' ')
+
 function showNotice() {
   document.getElementById('notice').innerHTML = `
     <span class="dot"></span>
-    <div><b>${t('notice.title')}</b><span class="line">${t('notice.press')} <kbd>Super</kbd> <kbd>A</kbd> ${t('notice.toSetUp')}</span></div>`
+    <div><b>${t('notice.title')}</b><span class="line">${t('notice.press')} ${hotkeyHtml()} ${t('notice.toSetUp')}</span></div>`
   document.body.classList.add('show-notice')
   setTimeout(() => document.body.classList.remove('show-notice'), NOTICE_MS)
 }
@@ -118,6 +129,7 @@ const onboarding = createOnboarding({
   request,
   post,
   browserLanguage: () => normalizeLanguage(navigator.language),
+  hotkey: () => state.hotkey,
   // "Start using Aria" / "Close" on the last screen: on to the chat.
   onDone: () => {
     setMode('chat')

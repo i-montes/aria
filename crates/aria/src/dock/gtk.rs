@@ -3,13 +3,13 @@
 //!
 //! Two WebKitGTK facts that cost the first Aria prototype days: the window must be sized with
 //! `set_size_request` (a default size never paints a layer surface with a WebView child), and
-//! `WEBKIT_DISABLE_DMABUF_RENDERER=1` must be set before GTK starts (done in `main.rs`).
+//! `WEBKIT_DISABLE_DMABUF_RENDERER=1` must be set before GTK starts (done in `ui.rs`).
 
+use super::{content_type, UI};
 use crate::visibility::{self, Command, Event, State};
 use aria_core::bridge::{DockMessage, PageMessage};
 use gtk::prelude::*;
 use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use include_dir::{include_dir, Dir};
 use javascriptcore::ValueExt;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -28,8 +28,6 @@ const DOCK_WIDTH: i32 = 470;
 const CLOSE_MS: u64 = 180;
 /// The corner notice fades after 8 s in the page (`NOTICE_MS` in app.js); the surface goes a bit later.
 const NOTICE_UNMAP_MS: u64 = 8600;
-
-static UI: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../ui");
 
 type OnMessage = Box<dyn Fn(PageMessage, &Rc<Dock>)>;
 
@@ -321,16 +319,4 @@ fn register_ui_scheme(context: &WebContext) {
             None => request.finish_error(&mut glib::Error::new(gio::IOErrorEnum::NotFound, "not found")),
         }
     });
-}
-
-fn content_type(path: &str) -> &'static str {
-    match path.rsplit('.').next().unwrap_or("") {
-        "html" => "text/html",
-        "css" => "text/css",
-        "js" | "mjs" => "text/javascript",
-        "json" => "application/json",
-        "svg" => "image/svg+xml",
-        "woff2" => "font/woff2",
-        _ => "application/octet-stream",
-    }
 }

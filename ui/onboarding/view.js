@@ -13,10 +13,11 @@ const STYLES = ['very-short', 'brief', 'detailed', 'technical', 'teaching']
 const LEVELS = ['low', 'medium', 'high']
 const DEFAULT_TURN_LIMIT = 30
 
-/** `env`: { root, t, request, post, setLanguage, browserLanguage, onDone? }. `onDone` runs when the user
+/** `env`: { root, t, request, post, setLanguage, browserLanguage, hotkey?, onDone? }. `onDone` runs when the user
  * presses the button of the "set up" screen (the dock goes to the chat); without it the dock closes. */
 export function createOnboarding(env) {
   const { root, t, request, post } = env
+  const hotkey = () => env.hotkey?.() ?? 'Super + A'
   const state = {
     view: 'welcome', // welcome | step | done
     mode: 'quick', // quick | full
@@ -40,17 +41,64 @@ export function createOnboarding(env) {
       typesafeSaved: false,
       reveal: {},
       drafts: { key: '', typesafeKey: '', extraWritable: '' },
-      key: { status: 'idle', error: null },
+      key: { status: 'idle', error: null, requested: false },
       typesafe: { status: 'idle', error: null },
-      oauth: { status: 'idle', error: null, url: null, token: 0 },
+      oauth: { status: 'idle', error: null, url: null, token: 0, requested: false },
     }
   }
 
   const uiFlags = () => ({
     signedIn: state.ui.signedIn,
+    keyChecking: state.ui.key.status === 'checking',
     typesafeSaved: state.ui.typesafeSaved,
     servicesConnected: SERVICES.filter((id) => state.connected.has(`mcp:${id}`)),
   })
+
+  // A control changes its own state; only the ones that add or remove fields redraw the step.
+  const structuralToggle = new Set(['service', 'askFirst', 'memory', 'limitTurns', 'planExecute'])
+  const structuralPick = new Set(['router', 'language', 'effort', 'packageSource'])
+
+  function paintSwitch(el, on) {
+    el.setAttribute('aria-checked', String(on))
+    const track = el.classList.contains('track') ? el : el.querySelector('.track')
+    track?.classList.toggle('on', on)
+  }
+
+  function paintCheck(el, on) {
+    el.setAttribute('aria-checked', String(on))
+    const box = el.querySelector('.box')
+    if (box) {
+      box.classList.toggle('on', on)
+      box.textContent = on ? '✓' : ''
+    }
+  }
+
+  function paintPick(el) {
+    const group = el.parentElement
+    if (!group) return
+    for (const option of group.querySelectorAll('[data-action="pick"]')) {
+      const selected = option === el
+      option.classList.toggle('selected', selected)
+      option.setAttribute('aria-pressed', String(selected))
+    }
+  }
+
+  /** The footer depends on the whole step, so a simple control still updates its disabled state. */
+  function paintContinue() {
+    const button = root.querySelector('[data-action="next"]')
+    if (button) button.disabled = !canContinue(state.step, state.settings, uiFlags()) || state.saving
+  }
+
+  function paintStepper(el) {
+    const row = el.closest?.('.stepper')
+    if (!row) return
+    const value = state.settings.subagents.turnLimit
+    row.querySelector('.readout').textContent = `${value} ${t('ob.agents.turns', { n: '' }).trim()}`
+    for (const button of row.querySelectorAll('[data-action="step"]')) {
+      const delta = Number(button.dataset.value)
+      button.disabled = delta < 0 ? value <= 5 : value >= 100
+    }
+  }
 
   const update = (mutate) => {
     const next = structuredClone(state.settings)
@@ -82,19 +130,32 @@ export function createOnboarding(env) {
     }
     state.ui.signedIn = isSignedIn(state.settings, connected)
     state.ui.typesafeSaved = state.connected.has('typesafe:api_key')
+    lastView = '' // a (re)opened setup starts at the top, not where the previous one was scrolled
     render()
   }
 
   // ---- rendering ------------------------------------------------------------------------------
 
   let lastView = ''
+  let focusAfterRender = ''
+
   function render() {
-    const focused = document.activeElement?.closest?.('[data-key]')?.dataset.key
-    root.innerHTML = state.view === 'welcome' ? welcomeHtml() : state.view === 'done' ? doneHtml() : stepHtml()
     const view = `${state.view}:${state.step}`
-    const target = view === lastView && focused ? root.querySelector(`[data-key="${CSS.escape(focused)}"]`) : null
+    const sameStep = view === lastView
+    // WebKit does not focus a button when it is clicked, so the active element is not the checkbox that
+    // was just pressed. The clicked widget's key is what brings the reader back to it after the redraw.
+    const focused = sameStep ? focusAfterRender || document.activeElement?.closest?.('[data-key]')?.dataset.key : ''
+    focusAfterRender = ''
+    // The step lives in a scrollable panel. Redrawing it and focusing the first control sent the form back
+    // to the top on every checkbox; keep the reader where they were instead.
+    const panel = globalThis.document?.getElementById?.('content')
+    const scrollTop = sameStep ? panel?.scrollTop ?? 0 : 0
+    root.innerHTML = state.view === 'welcome' ? welcomeHtml() : state.view === 'done' ? doneHtml() : stepHtml()
+    const target = focused ? root.querySelector(`[data-key="${CSS.escape(focused)}"]`) : null
     lastView = view
-    ;(target ?? root.querySelector('[data-nav]'))?.focus()
+    ;(target ?? root.querySelector('[data-nav]'))?.focus({ preventScroll: true })
+    if (panel) panel.scrollTop = scrollTop
+    maybeCheckStoredCredential()
   }
 
   function welcomeHtml() {
@@ -121,7 +182,7 @@ export function createOnboarding(env) {
     return `
       <span class="dot"></span>
       <h1>${c.esc(t('ob.done.title', { name }))}</h1>
-      <p class="intro">${c.esc(t('ob.done.desc', { name }))}</p>
+      <p class="intro">${c.esc(t('ob.done.desc', { name, hotkey: hotkey() }))}</p>
       <button class="primary" data-nav data-action="close">${c.esc(t('ob.done.close'))}</button>`
   }
 
@@ -229,12 +290,17 @@ export function createOnboarding(env) {
     let html = ''
     if (m.auth === 'key') {
       html += keyBlock({ field: 'key', label: t('ob.signin.keyLabel', { provider: m.label }), status: state.ui.key, draft: state.ui.drafts.key })
-      if (state.editing && state.ui.signedIn && state.ui.key.status === 'idle') html += c.info('green', '', t('ob.signin.existing'))
+      if (state.ui.signedIn && state.ui.key.status === 'saved') html += c.info('green', '', t('ob.signin.existing'))
     } else {
       const o = state.ui.oauth
-      const stateText = o.status === 'done' ? t('ob.signin.oauth.done') : o.status === 'waiting' ? t('ob.signin.oauth.waiting') : o.error ? t(`ob.error.${o.error}`) : t('ob.signin.oauth.hint')
+      const stateText =
+        o.status === 'done' ? t('ob.signin.oauth.done')
+        : o.status === 'checking' ? t('ob.signin.checking')
+        : o.status === 'waiting' ? t('ob.signin.oauth.waiting')
+        : o.error ? t(`ob.error.${o.error}`)
+        : t('ob.signin.oauth.hint')
       html += c.actionButton('oauth-start', t('ob.signin.oauth.button'), stateText, {
-        disabled: o.status === 'waiting' || o.status === 'done',
+        disabled: o.status === 'waiting' || o.status === 'done' || o.status === 'checking',
         tone: o.status === 'done' ? 'ok' : o.error ? 'error' : '',
       })
       if (o.status === 'waiting') {
@@ -514,13 +580,15 @@ export function createOnboarding(env) {
   function pick(field, value) {
     const [name] = field.split(':')
     if (name === 'provider') {
-      if (value === state.settings.provider.id) return
+      if (value === state.settings.provider.id) return false
       state.settings = applyProvider(state.settings, value)
       const keep = state.ui.drafts
       state.ui = {
         ...freshUi(),
         drafts: { ...keep, key: '' },
-        signedIn: isSignedIn(state.settings, [...state.connected]),
+        // An API key is signed in only after it is checked (checkStoredKey); an OAuth credential cannot
+        // be checked from here, so being on disk is enough.
+        signedIn: providerModule(value)?.auth === 'oauth' ? isSignedIn(state.settings, [...state.connected]) : false,
         typesafeSaved: state.connected.has('typesafe:api_key'),
       }
     } else if (name === 'language') {
@@ -544,7 +612,7 @@ export function createOnboarding(env) {
         else if (name === 'packageSource') s.integrations.packages.source = value
       })
     }
-    render()
+    return structuralPick.has(name)
   }
 
   function toggleField(field) {
@@ -569,7 +637,7 @@ export function createOnboarding(env) {
       else if (name === 'limitTurns') s.subagents.turnLimit = s.subagents.turnLimit === null ? DEFAULT_TURN_LIMIT : null
       else if (name === 'planExecute') s.subagents.planExecute = !s.subagents.planExecute
     })
-    render()
+    return structuralToggle.has(name)
   }
 
   /** Typing never re-renders (it would drop the cursor); it updates the state and the Continue button. */
@@ -624,6 +692,9 @@ export function createOnboarding(env) {
     const status = field === 'key' ? ui.key : ui.typesafe
     const draft = ui.drafts[field]
     if (status.status === 'checking' || !draft.trim()) return
+    // A key the user typed replaces the stored one: the automatic check of an existing key must not
+    // fire after this attempt, whichever way it ends.
+    if (field === 'key') ui.key.requested = true
     status.status = 'checking'
     status.error = null
     render()
@@ -634,13 +705,61 @@ export function createOnboarding(env) {
     if (state.ui !== ui) return
     if (reply.type === 'keyResult' && reply.ok) {
       status.status = 'saved'
-      if (field === 'key') ui.signedIn = true
-      else ui.typesafeSaved = true
+      if (field === 'key') {
+        ui.signedIn = true
+        ui.drafts[field] = ''
+        render()
+        // A key that just worked does not need a second confirmation: the flow goes on (quick and full).
+        if (!state.editing) next()
+        return
+      }
+      ui.typesafeSaved = true
       ui.drafts[field] = ''
-    } else {
-      status.status = 'idle'
-      status.error = reply.error ?? reply.code ?? 'generic'
+      render()
+      return
     }
+    status.status = 'idle'
+    status.error = reply.error ?? reply.code ?? 'generic'
+    render()
+  }
+
+  /** A credential that is already on disk is validated once, when the sign-in step opens. If it still
+   * works the flow goes on by itself (quick or full) instead of asking for it again. */
+  function maybeCheckStoredCredential() {
+    if (state.view !== 'step' || state.step !== 'auth') return
+    const m = module()
+    if (!m || !state.connected.has(credentialFor(state.settings.provider.id))) return
+    const slot = m.auth === 'key' ? state.ui.key : state.ui.oauth
+    if (slot.requested) return
+    if (m.auth === 'key' && slot.status === 'saved') return
+    if (m.auth === 'oauth' && slot.status === 'done') return
+    slot.requested = true
+    void checkStoredCredential(m)
+  }
+
+  async function checkStoredCredential(m) {
+    const ui = state.ui
+    const slot = m.auth === 'key' ? ui.key : ui.oauth
+    slot.status = 'checking'
+    slot.error = null
+    render()
+    const reply = await request({ type: 'checkKey', provider: m.keyProvider ?? state.settings.provider.id })
+    if (state.ui !== ui) return
+    // A check that cannot reach the provider does not disprove a credential that is on disk: the dock and
+    // Pi will say so when it is really used. Only a rejected credential stops the flow.
+    const valid = (reply.type === 'keyResult' && reply.ok) || reply.error === 'network-unavailable'
+    if (valid) {
+      slot.status = m.auth === 'oauth' ? 'done' : 'saved'
+      ui.signedIn = true
+      state.connected.add(credentialFor(state.settings.provider.id))
+      render()
+      // Only a fresh setup moves on its own; while editing, the user decides (they came here to change it).
+      if (!state.editing && (m.auth === 'oauth' || !ui.drafts.key.trim())) next()
+      return
+    }
+    slot.status = 'idle'
+    slot.error = reply.error ?? reply.code ?? 'generic'
+    ui.signedIn = false
     render()
   }
 
@@ -666,10 +785,13 @@ export function createOnboarding(env) {
     if (reply.type === 'oauthResult' && reply.ok) {
       o.status = 'done'
       ui.signedIn = true
-    } else {
-      o.status = 'idle'
-      o.error = reply.error ?? reply.code ?? 'oauth-failed'
+      render()
+      // A sign-in that just worked does not need a second confirmation either.
+      if (!state.editing) next()
+      return
     }
+    o.status = 'idle'
+    o.error = reply.error ?? reply.code ?? 'oauth-failed'
     render()
   }
 
@@ -750,17 +872,33 @@ export function createOnboarding(env) {
     const el = event.target.closest('[data-action]')
     if (!el || el.disabled) return
     const { action, field, value } = el.dataset
+    // WebKit does not focus a button on click; remember the widget so the redraw can focus it again.
+    focusAfterRender = el.dataset.key ?? el.closest?.('[data-key]')?.dataset.key ?? ''
     if (action === 'choose') return value === 'skip' ? skipSetup() : startFlow(value)
     if (action === 'back') return back()
     if (action === 'next') return next()
     if (action === 'defaults') return go('review')
     if (action === 'edit') return go(value)
     if (action === 'close') return env.onDone ? env.onDone() : post({ type: 'closeRequest' })
-    if (action === 'pick') return pick(field, value)
-    if (action === 'toggle') return toggleField(field)
+    if (action === 'pick') {
+      if (pick(field, value)) return render()
+      paintPick(el)
+      paintContinue()
+      return
+    }
+    if (action === 'toggle') {
+      const on = el.getAttribute('aria-checked') !== 'true'
+      if (toggleField(field)) return render()
+      paintSwitch(el, on)
+      paintContinue()
+      return
+    }
     if (action === 'reveal') {
       state.ui.reveal[field] = !state.ui.reveal[field]
-      return render()
+      const input = root.querySelector(`[data-field="${CSS.escape(field)}"][data-action="input"]`)
+      if (input) input.type = state.ui.reveal[field] ? 'text' : 'password'
+      el.textContent = state.ui.reveal[field] ? t('ob.signin.hide') : t('ob.signin.show')
+      return
     }
     if (action === 'save-key') return saveKey('key')
     if (action === 'save-typesafeKey') return saveKey('typesafeKey')
@@ -775,7 +913,8 @@ export function createOnboarding(env) {
       update((s) => {
         s.subagents.turnLimit = Math.max(5, Math.min(100, s.subagents.turnLimit + Number(value)))
       })
-      return render()
+      paintStepper(el)
+      return
     }
     if (action === 'add-chip') {
       const text = state.ui.drafts.extraWritable.trim()
@@ -789,19 +928,27 @@ export function createOnboarding(env) {
       return render()
     }
     if (action === 'check') {
+      const on = el.getAttribute('aria-checked') !== 'true'
       update((s) => {
         const list = s.subagents.autoSkills
         list.includes(value) ? list.splice(list.indexOf(value), 1) : list.push(value)
       })
-      return render()
+      paintCheck(el, on)
+      return
     }
     if (action === 'expert-on' || action === 'expert-ro') {
+      const on = el.getAttribute('aria-checked') !== 'true'
       update((s) => {
         const expert = s.subagents.experts.find((e) => e.name === value)
         if (action === 'expert-on') expert.enabled = !expert.enabled
         else expert.readOnly = !expert.readOnly
       })
-      return render()
+      paintSwitch(el, on)
+      if (action === 'expert-on') {
+        const readOnly = el.parentElement?.querySelector('[data-action="expert-ro"]')
+        if (readOnly) readOnly.disabled = !on
+      }
+      return
     }
   })
 

@@ -1,5 +1,7 @@
-//! One dock at a time, reached through a Unix socket in `$XDG_RUNTIME_DIR/aria/`. `aria toggle`
-//! sends a line to the running dock, and starts the dock first when nothing answers.
+//! One dock at a time, reached through a Unix socket. On Omarchy it lives in `$XDG_RUNTIME_DIR/aria/`
+//! (or the temp directory); on macOS it lives in `~/.aria/run/`, so a dock started by the LaunchAgent
+//! and a dock started from a terminal agree on the same path. `aria toggle` sends a line to the running
+//! dock, and starts the dock first when nothing answers.
 
 use std::io::Write;
 use std::os::unix::fs::DirBuilderExt;
@@ -24,8 +26,22 @@ impl std::fmt::Display for ControlError {
 }
 
 pub fn control_socket_path() -> PathBuf {
-    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(runtime).join("aria").join("control.sock")
+    #[cfg(target_os = "linux")]
+    {
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        runtime.join("aria").join("control.sock")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // A LaunchAgent and a terminal do not always share TMPDIR; ~/.aria/run is deterministic. ARIA_HOME
+        // keeps a development instance separate, the same way the rest of Aria's data works.
+        let root = std::env::var_os("ARIA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".aria"));
+        root.join("run").join("control.sock")
+    }
 }
 
 /// Binds the control socket. A live dock on it means `AlreadyRunning`; a file nobody listens on

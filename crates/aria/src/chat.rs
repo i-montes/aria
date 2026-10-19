@@ -13,7 +13,9 @@ use aria_engine::engine::{Engine, EngineEvent, SpawnSpec};
 use aria_engine::protocol::UiAnswer;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -66,9 +68,11 @@ impl Notifier for CountingNotifier {
 
 /// Omarchy's notifications: critical urgency and no expiry, so it stays until it is dismissed or
 /// clicked; the click runs `aria show`, which opens the dock.
+#[cfg(target_os = "linux")]
 pub struct OmarchyNotifier;
 
 /// The arguments for `omarchy-notification-send`.
+#[cfg(target_os = "linux")]
 pub fn notify_args(exe: &Path, title: &str, body: &str) -> Vec<String> {
     ["--app-name", "aria", "-u", "critical", "-t", "0", title, body, "--exec", &exe.display().to_string(), "show"]
         .iter()
@@ -86,6 +90,7 @@ fn detached(program: &str, args: &[String]) {
         .map(|mut child| std::thread::spawn(move || child.wait()));
 }
 
+#[cfg(target_os = "linux")]
 impl Notifier for OmarchyNotifier {
     fn send(&self, _key: &str, title: &str, body: &str) {
         if let Ok(exe) = std::env::current_exe() {
@@ -97,6 +102,34 @@ impl Notifier for OmarchyNotifier {
         detached("omarchy-notification-dismiss", &[NOTIFICATION_TITLE.to_string()]);
     }
 }
+
+/// The notifier the binary uses: Omarchy's on Linux, macOS's on Mac.
+#[cfg(target_os = "linux")]
+pub use OmarchyNotifier as PlatformNotifier;
+
+/// macOS notifications, through `osascript` for now. A notification from a program without an app
+/// bundle cannot carry a click action, so clicking it does not open Aria yet (docs/pending.md).
+#[cfg(target_os = "macos")]
+pub struct MacNotifier;
+
+/// A string literal for AppleScript: backslashes and quotes escaped.
+#[cfg(target_os = "macos")]
+pub fn apple_script_string(text: &str) -> String {
+    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+#[cfg(target_os = "macos")]
+impl Notifier for MacNotifier {
+    fn send(&self, _key: &str, title: &str, body: &str) {
+        let script = format!("display notification {} with title {}", apple_script_string(body), apple_script_string(title));
+        detached("osascript", &["-e".to_string(), script]);
+    }
+
+    fn dismiss(&self, _key: &str) {}
+}
+
+#[cfg(target_os = "macos")]
+pub use MacNotifier as PlatformNotifier;
 
 pub struct ChatCtx {
     pub paths: AriaPaths,
@@ -1703,6 +1736,7 @@ mod tests {
         assert!(!path.exists());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_notification_stays_until_dismissed_and_a_click_shows_the_dock() {
         let args = notify_args(std::path::Path::new("/opt/aria"), "Aria needs an answer", "Allow?");
@@ -1710,5 +1744,11 @@ mod tests {
             args,
             ["--app-name", "aria", "-u", "critical", "-t", "0", "Aria needs an answer", "Allow?", "--exec", "/opt/aria", "show"]
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_notifications_escape_applescript_literals() {
+        assert_eq!(apple_script_string(r#"a "b" \c"#), r#""a \"b\" \\c""#);
     }
 }

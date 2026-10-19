@@ -3,9 +3,10 @@
 Aria is a small Rust program that hosts a web page. The page is the interface; Rust owns everything that touches the system. They talk through one narrow channel.
 
 ```
- SUPER + A ──> Hyprland ──exec──> `aria toggle` ──unix socket──> the running dock (crates/aria)
-                                                                     │
-                       aria-hyprland: hotkey, focused monitor        │ layer-shell window + WebKitGTK
+ SUPER + A / Option + Space ──> Hyprland / Carbon ──> `aria toggle` ──unix socket──> the running dock (crates/aria)
+                                                                      │
+              aria-hyprland / aria-mac: hotkey, focused monitor       │ GTK layer-shell + WebKitGTK (Omarchy)
+                                                                      │ NSPanel + WKWebView (macOS)
                                                                      ▼
                                                   ui/ (the page)  <── messages ──>  handlers.rs (settings, keys, sign-ins)
                                                                                     chat.rs (sessions)
@@ -35,13 +36,15 @@ Aria is a small Rust program that hosts a web page. The page is the interface; R
   - `sessions` — the dock's tabs (`sessions.json`): ids, titles, the active one.
   - `files` — the `@` file picker's `.gitignore`-aware walk.
   - `quota` — the quota windows of the model's provider (OpenCode Go, a Claude plan).
-- **`aria-hyprland`** is the Hyprland adapter: it registers the hotkey at run time, asks which monitor has the focus, and reports config reloads. A Mac adapter would sit next to it with the same three jobs.
+- **`aria-hyprland`** is the Hyprland adapter: it registers the hotkey at run time, asks which monitor has the focus, and reports config reloads. On macOS, **`aria-mac`** sits next to it with the same two jobs: `Option + Space` through Carbon (no Accessibility permission, no config to reload) and the screen under the pointer (macOS has no focused monitor that survives app switches).
 - **`aria-engine`** speaks Pi's RPC protocol: strict JSONL framing, commands and their responses, events, extension dialogs, and one supervised child (`Engine::close` stops it: stdin closed, killed after three seconds).
-- **`aria`** is the binary. `main.rs` wires things, `control.rs` keeps one instance, `visibility.rs` decides when the dock is shown or closing (a pure state machine), `dock.rs` is the window, `handlers.rs` answers the page's setup messages, `chat.rs` owns the sessions: one Pi per tab, started when the tab is shown, restarted when a credential changes (a busy one when its run settles), with desktop notifications for a prompt nobody can see.
+- **`aria`** is the binary. `main.rs` wires things, `ui.rs` is the platform event loop (GTK/glib or `NSApplication`/`NSTimer`), `control.rs` keeps one instance, `visibility.rs` decides when the dock is shown or closing (a pure state machine), `dock/{gtk,mac}.rs` is the window (the same `Dock` API on both platforms), `handlers.rs` answers the page's setup messages, `chat.rs` owns the sessions: one Pi per tab, started when the tab is shown, restarted when a credential changes (a busy one when its run settles), with desktop notifications for a prompt nobody can see.
 
 ## The hotkey, without touching Hyprland's config
 
 At start, and again after every `configreloaded>>` event, Aria runs `hyprctl eval` with Lua that unbinds and rebinds `SUPER + A` to `aria toggle`, and adds the layer rule for the dock. Nothing is written to disk; a reload drops runtime binds, which is why Aria listens for it. If `$HYPRLAND_INSTANCE_SIGNATURE` is missing or stale (a service that outlives its Hyprland), the live instance is found under `$XDG_RUNTIME_DIR/hypr/`.
+
+On macOS the shortcut is `Option + Space`, registered with Carbon (`RegisterEventHotKey`) on the application event target. It is global without the Accessibility permission, and there is no config to reload, so it is registered once when the app starts. The trade-off: while Aria runs, Option + Space no longer types a non-breaking space anywhere.
 
 ## The dock
 
@@ -50,6 +53,8 @@ A GTK3 layer-shell surface, 700 px wide, anchored top, bottom and right of the f
 `visibility::step(state, event)` is the whole show/close logic: pressing Super + A during the open or close animation reverses it without flicker, and a close timer from an earlier close is ignored.
 
 Two WebKitGTK facts the first prototype paid for: set `WEBKIT_DISABLE_DMABUF_RENDERER=1` before GTK starts, and size the window with `set_size_request` (a default size never paints a layer surface with a web view in it).
+
+On macOS the dock is an `NSPanel` (borderless, nonactivating, status level, all spaces and full-screen auxiliary) holding a `WKWebView`: 700 px wide on the right of the screen's visible frame, so the menu bar and the Dock stay usable. It becomes key because the panel overrides `canBecomeKeyWindow`; opening remembers the frontmost app and closing gives it back. The page is served through `WKURLSchemeHandler` (the counterpart of the GTK URI scheme) and the page's existing `window.webkit.messageHandlers.aria` through `WKScriptMessageHandler`, so `ui/` has no platform fork. A click on the veil closes the dock; click-through outside the column is not implemented yet. The app sets a minimal `Edit` menu so Cmd+C/V/X/A reach the web view (macOS dispatches those shortcuts through the main menu; an accessory app has no visible bar, but the key equivalents work).
 
 ## The page
 
@@ -101,4 +106,4 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 
 ## What is not there yet
 
-The owner's extensions (phase 2, part 2b), settings driving Pi (2c), goals (phase 3), the state socket and external extensions (phase 4), Mac (phase 5). What the chat draws but nothing feeds yet is in [pending](pending.md). See the [roadmap](superpowers/specs/2026-10-18-aria-base-design.md#roadmap).
+Settings driving Pi (2c), goals (phase 3), the state socket and external extensions (phase 4), Windows. macOS (phase 5) is here for the dock, setup, chat and installer; click-through, notification clicks, a `.app` bundle and the macOS port of the sandbox extension are still pending (see [pending](pending.md)). What the chat draws but nothing feeds yet is in [pending](pending.md). See the [roadmap](superpowers/specs/2026-10-18-aria-base-design.md#roadmap).

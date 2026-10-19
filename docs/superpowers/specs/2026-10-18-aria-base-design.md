@@ -18,14 +18,14 @@ The owner has spent the last days building and testing a harness on top of Pi (t
 2. **Parity with today's Pi:** Aria ships its own pinned Pi and the owner's extensions inside the repo; the dock becomes the chat; every item of `ARIA-SETUP.md` works from Aria and reads its configuration from `settings.json`.
 3. **Autonomous goals:** a fork of `pi-goal-x` (MIT, github.com/tmonk/pi-goal-x). A goal runs until it is finished or the owner stops it — no run limit — resumes by itself after a reboot or crash, and by default works in its own git worktree inside the sandbox, never in the real checkout. The result stays on the worktree's branch for the owner to review; Aria never merges by itself.
 4. **State socket and external extensions:** every event (messages, tool calls, permissions, goals, quota, compaction…) is published on a local socket; an extension is any program, in any language, that connects to it, listens, and can register tools the agent can call (example: an automatic note-taker that writes notes from conversations and offers `notes_search`). Extension tools obey the same sandbox and permission rules as everything else.
-5. **Mac**, then Linux beyond Hyprland, then Windows.
+5. **Mac**, then Linux beyond Hyprland, then Windows. (macOS started on 2026-10-18, ahead of phases 3 and 4 at the owner's request: [design](2026-10-18-aria-mac-design.md).)
 
 Phases 2-5 are listed so the base leaves room for them; they get their own designs.
 
 ## Decided by the owner
 
 - **Language: Rust** for Aria itself. Pi (TypeScript) stays the agent engine inside Aria, and Aria ships its own copy of it: it must not depend on a Pi installed by the user or on `~/.pi/agent`.
-- **Platforms:** Omarchy (Hyprland) first and only for now; Mac next; Linux and Windows later. On Mac, use whatever is native and compatible.
+- **Platforms:** Omarchy (Hyprland) first and only at first; Mac next; Linux and Windows later. On Mac, use whatever is native and compatible. (The macOS platform layer is designed in [2026-10-18-aria-mac-design.md](2026-10-18-aria-mac-design.md).)
 - **Data lives in `~/.aria/`**, never in the repo. The repo only holds code. Aria's sandbox/workspace is under `~/.aria/` too.
 - **The configuration file is `settings`** (not "preferences"): one place for every setting of the project.
 - **Hotkey:** `SUPER + A` on Omarchy; on Mac a free, easy shortcut (proposal accepted: `Option + Space`).

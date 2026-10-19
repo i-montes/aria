@@ -1,7 +1,12 @@
 #!/bin/sh
 # Run: sh install/install.test.sh
-# Checks the installer without touching the system: its dry run, its embedded unit, its guards.
+# Checks the Omarchy installer without touching the system: its dry run, its embedded unit, its guards.
+# The macOS branch has its own test (install-mac.test.sh).
 set -eu
+if [ "$(uname -s)" != Linux ]; then
+  echo "skip: install.test.sh checks the Linux installer; run it on Omarchy"
+  exit 0
+fi
 here=$(cd "$(dirname "$0")" && pwd)
 installer="$here/install.sh"
 failures=0

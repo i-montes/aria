@@ -1,29 +1,31 @@
 #!/bin/sh
-# Aria installer for Omarchy (Hyprland with the Lua config).
+# Aria installer for Omarchy (Hyprland with the Lua config) and macOS.
 #
 #   curl -fsSL https://<your site>/install.sh | sh     install, or update in place
 #   sh install.sh --local target/release/aria          install a binary you built yourself
 #   sh install.sh --uninstall                          remove Aria (asks before deleting ~/.aria)
 #   sh install.sh --dry-run [...]                      print what would happen and change nothing
 #
-# It installs Aria's system libraries, puts the `aria` binary in ~/.local/bin, creates ~/.aria, installs
-# the pinned Pi under ~/.aria/pi/<version> (Node 22.19 or newer is required) and a
-# systemd user unit that starts the dock at login. It never writes to ~/.config/hypr/: the dock
-# registers SUPER + A with Hyprland itself, every time it starts.
+# It detects the platform. On Omarchy it installs Aria's system libraries and a systemd user unit that
+# starts the dock at login; on macOS it installs a LaunchAgent and needs no system packages. Both put
+# the `aria` binary in ~/.local/bin, create ~/.aria, and install the pinned Pi under
+# ~/.aria/pi/<version> (Node 22.19 or newer is required). On Omarchy it never writes to
+# ~/.config/hypr/: the dock registers SUPER + A with Hyprland itself, every time it starts. On macOS
+# the shortcut is Option + Space, registered by the dock with Carbon (no Accessibility permission).
 set -eu
 
-# Placeholders until releases are published; override with the environment.
-DOWNLOAD_URL=${ARIA_DOWNLOAD_URL:-https://aria.example/releases/latest/aria-x86_64-linux}
 BIN_DIR=${ARIA_BIN_DIR:-$HOME/.local/bin}
 DATA_DIR=${ARIA_HOME:-$HOME/.aria}
 UNIT_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
 UNIT=aria.service
+AGENT_DIR=$HOME/Library/LaunchAgents
+AGENT=com.aria.dock.plist
+LABEL=com.aria.dock
 PACKAGES="gtk3 webkit2gtk-4.1 gtk-layer-shell"
 
 # Only a real file has siblings: under `curl | sh` $0 is just "sh" and the current directory is not ours.
 SCRIPT_DIR=""
 if [ -f "$0" ]; then SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || SCRIPT_DIR=""; fi
-PI_VERSION_URL=${ARIA_PI_VERSION_URL:-${DOWNLOAD_URL%/*}/pi-version}
 PI_PACKAGE=@earendil-works/pi-coding-agent
 
 DRY_RUN=0
@@ -43,8 +45,36 @@ run() {
   fi
 }
 
+# The platform picks the artifact and the service manager. It is detected lazily, when an install (or a
+# platform-specific hook) actually needs it, so the test hooks (--check-node, --link-node) work with a
+# minimal PATH and a missing uname only matters then.
+PLATFORM=""
+# Placeholders until releases are published; override with the environment.
+DOWNLOAD_URL=${ARIA_DOWNLOAD_URL:-}
+PI_VERSION_URL=${ARIA_PI_VERSION_URL:-}
+
+detect_platform() {
+  [ -n "$PLATFORM" ] && return
+  platform=$(uname -s 2>/dev/null) || die "could not detect the system: uname is missing"
+  case "$platform" in
+    Linux) artifact=aria-x86_64-linux ;;
+    Darwin)
+      machine=$(uname -m 2>/dev/null) || die "could not detect the Mac architecture"
+      case "$machine" in
+        arm64) artifact=aria-aarch64-apple-darwin ;;
+        x86_64) artifact=aria-x86_64-apple-darwin ;;
+        *) die "unsupported Mac architecture: $machine" ;;
+      esac
+      ;;
+    *) die "unsupported system: $platform (Aria runs on Omarchy/Hyprland and macOS)" ;;
+  esac
+  PLATFORM=$platform
+  if [ -z "$DOWNLOAD_URL" ]; then DOWNLOAD_URL=https://aria.example/releases/latest/$artifact; fi
+  if [ -z "$PI_VERSION_URL" ]; then PI_VERSION_URL=${DOWNLOAD_URL%/*}/pi-version; fi
+}
+
 usage() {
-  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # The unit file. `curl | sh` has no sibling files, so the script carries it (install/aria.service
@@ -66,7 +96,44 @@ WantedBy=graphical-session.target
 UNIT
 }
 
+# The LaunchAgent. It starts the dock at login in the user's Aqua session and keeps its output in
+# ~/.aria/logs/aria.log. The executable is an absolute path: a LaunchAgent has no shell profile.
+print_agent() {
+  cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key><array><string>$BIN_DIR/aria</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>StandardOutPath</key><string>$DATA_DIR/logs/aria.log</string>
+  <key>StandardErrorPath</key><string>$DATA_DIR/logs/aria.log</string>
+</dict>
+</plist>
+PLIST
+}
+
+print_service() {
+  detect_platform
+  if [ "$PLATFORM" = Darwin ]; then print_agent; else print_unit; fi
+}
+
 check_session() {
+  detect_platform
+  if [ "$PLATFORM" = Darwin ]; then
+    if [ "$DRY_RUN" = 1 ]; then
+      say "would: check macOS 12 or newer"
+      return
+    fi
+    version=$(sw_vers -productVersion 2>/dev/null || echo "")
+    major=${version%%.*}
+    case "$major" in "" | *[!0-9]*) die "Aria needs macOS 12 or newer (could not read the version)" ;; esac
+    [ "$major" -ge 12 ] || die "Aria needs macOS 12 or newer (found $version)"
+    return
+  fi
   if [ "$DRY_RUN" = 1 ]; then
     say "would: check this is a Hyprland session with the Lua config (hyprctl eval 'return 1' prints ok)"
     return
@@ -76,6 +143,11 @@ check_session() {
 }
 
 install_packages() {
+  detect_platform
+  if [ "$PLATFORM" = Darwin ]; then
+    say "macOS: no system packages are needed"
+    return
+  fi
   if [ "$DRY_RUN" = 1 ]; then
     # shellcheck disable=SC2086
     run sudo pacman -S --needed $PACKAGES
@@ -114,6 +186,7 @@ link_node() {
 
 # Sets PI_VERSION to the pinned Pi: the repo's pi-version file next to this script, else the published one.
 read_pi_version() {
+  detect_platform
   if [ -n "${ARIA_PI_VERSION:-}" ]; then
     PI_VERSION=$ARIA_PI_VERSION
   elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../pi-version" ]; then
@@ -141,6 +214,7 @@ install_pi() {
 
 # The packages the owner's extensions use (pi-packages, pinned), installed into Aria's own Pi directory.
 install_pi_packages() {
+  detect_platform
   if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../pi-packages" ]; then
     packages=$(cat "$SCRIPT_DIR/../pi-packages")
   elif [ "$DRY_RUN" = 1 ]; then
@@ -157,6 +231,7 @@ install_pi_packages() {
 
 # Sets SOURCE to the binary to install: the --local one, or a downloaded and verified one.
 fetch_binary() {
+  detect_platform
   if [ -n "$LOCAL" ]; then
     SOURCE=$LOCAL
     return
@@ -171,13 +246,33 @@ fetch_binary() {
   curl -fsSL "$DOWNLOAD_URL" -o "$TMP/aria"
   curl -fsSL "$DOWNLOAD_URL.sha256" -o "$TMP/aria.sha256"
   expected=$(cut -d ' ' -f 1 "$TMP/aria.sha256")
-  actual=$(sha256sum "$TMP/aria" | cut -d ' ' -f 1)
+  actual=$(sha256_of "$TMP/aria")
   [ "$expected" = "$actual" ] || die "the downloaded binary does not match its checksum; nothing was installed"
   chmod +x "$TMP/aria"
   SOURCE=$TMP/aria
 }
 
+# sha256sum is Linux's; macOS has shasum.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d ' ' -f 1
+  else
+    shasum -a 256 "$1" | cut -d ' ' -f 1
+  fi
+}
+
 write_unit() {
+  detect_platform
+  if [ "$PLATFORM" = Darwin ]; then
+    run mkdir -p "$AGENT_DIR"
+    run install -d -m 700 "$DATA_DIR/logs"
+    if [ "$DRY_RUN" = 1 ]; then
+      say "would: write $AGENT_DIR/$AGENT"
+    else
+      print_agent > "$AGENT_DIR/$AGENT"
+    fi
+    return
+  fi
   run mkdir -p "$UNIT_DIR"
   if [ "$DRY_RUN" = 1 ]; then
     say "would: write $UNIT_DIR/$UNIT"
@@ -187,6 +282,7 @@ write_unit() {
 }
 
 do_install() {
+  detect_platform
   # Refuse a bad --local before anything else, so a mistake changes nothing.
   if [ -n "$LOCAL" ] && [ "$DRY_RUN" != 1 ] && [ ! -x "$LOCAL" ]; then die "$LOCAL is not an executable file"; fi
   check_session
@@ -194,7 +290,13 @@ do_install() {
   read_pi_version # before anything is installed: a version we cannot read must not leave a half install
   install_packages
   was_active=0
-  if [ "$DRY_RUN" != 1 ] && systemctl --user is-active --quiet "$UNIT" 2>/dev/null; then was_active=1; fi
+  if [ "$DRY_RUN" != 1 ]; then
+    if [ "$PLATFORM" = Darwin ]; then
+      launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 && was_active=1
+    else
+      systemctl --user is-active --quiet "$UNIT" 2>/dev/null && was_active=1
+    fi
+  fi
   fetch_binary
   # Pi and its packages first: if a download fails, nothing has been replaced and the running dock stays as it was.
   run install -d -m 700 "$DATA_DIR"
@@ -203,11 +305,28 @@ do_install() {
   install_pi_packages
   run install -Dm755 "$SOURCE" "$BIN_DIR/aria"
   write_unit
-  run systemctl --user daemon-reload
-  run systemctl --user enable --now "$UNIT"
-  # An update replaces the binary under a running dock: restart it so the new one runs.
-  if [ "$was_active" = 1 ]; then run systemctl --user restart "$UNIT"; fi
-  say "Aria is installed. Press Super+A to set it up."
+  if [ "$PLATFORM" = Darwin ]; then
+    uid=$(id -u)
+    # The LaunchAgent may already be loaded from an earlier install: unload it, then load the new file.
+    # bootstrap fails with "Input/output error" while the old instance is still exiting, so wait for the
+    # label to disappear first. `RunAtLoad` starts the new binary.
+    run launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
+    if [ "$DRY_RUN" != 1 ]; then
+      attempts=0
+      while launchctl print "gui/$uid/$LABEL" >/dev/null 2>&1 && [ "$attempts" -lt 50 ]; do
+        attempts=$((attempts + 1))
+        sleep 0.1
+      done
+    fi
+    run launchctl bootstrap "gui/$uid" "$AGENT_DIR/$AGENT"
+    say "Aria is installed. Press Option + Space to set it up."
+  else
+    run systemctl --user daemon-reload
+    run systemctl --user enable --now "$UNIT"
+    # An update replaces the binary under a running dock: restart it so the new one runs.
+    if [ "$was_active" = 1 ]; then run systemctl --user restart "$UNIT"; fi
+    say "Aria is installed. Press Super+A to set it up."
+  fi
 }
 
 # True only for a real directory (not a symlink) that is neither / nor the home directory and that
@@ -247,11 +366,17 @@ ask_delete_data() {
 }
 
 do_uninstall() {
-  run systemctl --user disable --now "$UNIT" || true
-  run rm -f "$UNIT_DIR/$UNIT" "$BIN_DIR/aria"
-  run systemctl --user daemon-reload
-  if [ "$DRY_RUN" = 1 ] || [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
-    run hyprctl eval 'hl.unbind("SUPER + A")' || true
+  detect_platform
+  if [ "$PLATFORM" = Darwin ]; then
+    run launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+    run rm -f "$AGENT_DIR/$AGENT" "$BIN_DIR/aria"
+  else
+    run systemctl --user disable --now "$UNIT" || true
+    run rm -f "$UNIT_DIR/$UNIT" "$BIN_DIR/aria"
+    run systemctl --user daemon-reload
+    if [ "$DRY_RUN" = 1 ] || [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+      run hyprctl eval 'hl.unbind("SUPER + A")' || true
+    fi
   fi
   ask_delete_data
   say "Aria is removed."
@@ -284,7 +409,7 @@ done
 case "$MODE" in
   install) do_install ;;
   uninstall) do_uninstall ;;
-  print-unit) print_unit ;;
+  print-unit) print_service ;;
   check-node) check_node ;;
   print-pi-version) read_pi_version; printf '%s\n' "$PI_VERSION" ;;
   link-node) link_node ;;

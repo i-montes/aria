@@ -2,9 +2,9 @@
 
 A personal assistant that lives on your desktop. Press **Super + A** and a dock opens over whatever you are doing, on the monitor you are looking at, to work with your files and tasks and to talk to you in your language.
 
-> **Status: phase 2 of 5, parts 2a and 2b.** Aria installs, opens with its hotkey, runs the first-run setup, and the dock is now a chat backed by its own pinned [Pi](https://github.com/earendil-works/pi) engine, working in the folder shown at the top of the dock. `/connect` connects a provider from the chat (Anthropic with your Claude plan or an API key, or OpenCode Go). The `+` opens another session as a tab (up to eight, each with its own Pi, so a background tab keeps working and tells you when it needs you). It runs with the owner's persona and his Pi extensions (router, sandbox, quota fallback, autocompaction, questions, subagents). The settings-to-Pi sync and the parity check are the next parts. See [the roadmap](docs/superpowers/specs/2026-10-18-aria-base-design.md#roadmap) and [phase 2](docs/superpowers/specs/2026-10-18-aria-phase2-parity-design.md).
+> **Status: phase 2 of 5, parts 2a and 2b, and the macOS platform layer.** Aria installs, opens with its hotkey, runs the first-run setup, and the dock is now a chat backed by its own pinned [Pi](https://github.com/earendil-works/pi) engine, working in the folder shown at the top of the dock. `/connect` connects a provider from the chat (Anthropic with your Claude plan or an API key, or OpenCode Go). The `+` opens another session as a tab (up to eight, each with its own Pi, so a background tab keeps working and tells you when it needs you). It runs with the owner's persona and his Pi extensions (router, sandbox, quota fallback, autocompaction, questions, subagents). The settings-to-Pi sync and the parity check are the next parts. See [the roadmap](docs/superpowers/specs/2026-10-18-aria-base-design.md#roadmap) and [phase 2](docs/superpowers/specs/2026-10-18-aria-phase2-parity-design.md).
 
-Supported today: **Omarchy** (Hyprland 0.56+ with the Lua configuration). Mac is next.
+Supported today: **Omarchy** (Hyprland 0.56+ with the Lua configuration, `Super + A`) and **macOS 12+** on Apple silicon or Intel (`Option + Space`). The Mac port is [phase 5 pulled forward](docs/superpowers/specs/2026-10-18-aria-mac-design.md): the dock, setup, chat and installer work; click-through, notification clicks and the sandbox extension are still on the list ([pending](docs/pending.md)).
 
 ## Install
 
@@ -12,13 +12,13 @@ Supported today: **Omarchy** (Hyprland 0.56+ with the Lua configuration). Mac is
 curl -fsSL https://<your site>/install.sh | sh
 ```
 
-The installer needs **Node 22.19 or newer** (it checks, and says so if not). It adds Aria's system libraries (it asks for `sudo` only if they are missing), puts the `aria` binary in `~/.local/bin`, creates `~/.aria/`, installs the pinned Pi engine in `~/.aria/pi/<version>` and a systemd user unit that starts the dock at login. It **never edits `~/.config/hypr/`**: Aria registers Super + A with Hyprland itself each time it starts.
+The installer detects the system. It needs **Node 22.19 or newer** (it checks, and says so if not). It puts the `aria` binary in `~/.local/bin`, creates `~/.aria/`, installs the pinned Pi engine in `~/.aria/pi/<version>`, and installs a login item: a **systemd user unit** on Omarchy, a **LaunchAgent** (`~/Library/LaunchAgents/com.aria.dock.plist`) on macOS. On Omarchy it adds Aria's system libraries, asking for `sudo` only if they are missing, and it **never edits `~/.config/hypr/`**: Aria registers `Super + A` with Hyprland itself each time it starts. On macOS it needs no `sudo`, no Accessibility permission and no system configuration: `Option + Space` is registered with Carbon, and the dock runs as an accessory app (no Dock icon).
 
 Run it again to update. To remove Aria: `sh install.sh --uninstall` (it asks before deleting `~/.aria`). Add `--dry-run` to any command to see what would happen without changing anything.
 
 ### Build it yourself
 
-You need Rust, `bun` (for the UI tests), and the libraries `gtk3`, `webkit2gtk-4.1` and `gtk-layer-shell`.
+You need Rust and `bun` (for the UI tests). On Omarchy you also need the libraries `gtk3`, `webkit2gtk-4.1` and `gtk-layer-shell`; on macOS the AppKit/WebKit frameworks come with the system.
 
 ```sh
 cargo build --release
@@ -39,7 +39,9 @@ sh install/install.sh --local target/release/aria
 | `~/.aria/agent/npm/`, `git/` | the pinned packages they use (`pi-packages`), installed by the installer |
 | `~/.aria/bin/` | `pi` (a shim to the pinned version, for Pi's own subagents) and `node` (a link the service uses) |
 | `~/.local/bin/aria` | The binary |
-| `~/.config/systemd/user/aria.service` | Starts the dock at login |
+| `~/.config/systemd/user/aria.service` | Starts the dock at login on Omarchy |
+| `~/Library/LaunchAgents/com.aria.dock.plist` | Starts the dock at login on macOS; output in `~/.aria/logs/aria.log` |
+| `~/.aria/run/control.sock` | The socket `aria toggle` talks to on macOS (on Omarchy it is `$XDG_RUNTIME_DIR/aria/control.sock`) |
 
 The repository only holds code; your data never lives in it.
 
@@ -71,8 +73,9 @@ bun tools/ui-sandbox/check.ts      # drives the chat in headless Chrome against 
 cargo test --workspace      # Rust: core, Hyprland, engine, dock
 cargo test -p aria --test live_pi -- --ignored   # the real Pi answering a prompt (needs the setup done)
 bun test ui                 # the UI's logic and its strings
-bun test extensions         # the owner's Pi extensions that run inside Aria
-sh install/install.test.sh  # the installer, without touching your system
+bun test extensions         # the owner's Pi extensions that run inside Aria (their sandbox tests are Linux-only)
+sh install/install.test.sh  # the installer's Omarchy branch, without touching your system (skipped on macOS)
+sh install/install-mac.test.sh  # the installer's macOS branch (skipped on Omarchy)
 ARIA_DEBUG=1 target/release/aria   # logs state changes and the page's console to the terminal
 ARIA_HOME=$(mktemp -d) target/release/aria   # try a first run without touching ~/.aria
 ```
@@ -80,4 +83,4 @@ ARIA_HOME=$(mktemp -d) target/release/aria   # try a first run without touching 
 ## Contributing a provider or a platform
 
 - A provider is one module: [docs/adding-a-provider.md](docs/adding-a-provider.md).
-- A platform (Mac, other Linux compositors) needs the three things `aria-hyprland` does today: a global hotkey, the focused monitor, and a floating panel that takes the keyboard when it opens.
+- A platform (Mac, other Linux compositors, Windows) needs the three things `aria-hyprland` and `aria-mac` do today: a global hotkey, the focused monitor, and a floating panel that takes the keyboard when it opens. The panel lives in `crates/aria/src/dock/`: `gtk.rs` on Omarchy, `mac.rs` on macOS, both behind the same `Dock` API; `ui.rs` hides the event loop. The installer branches on `uname -s` for the service manager and the artifact.

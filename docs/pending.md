@@ -41,6 +41,17 @@ The permission and write cards (sandbox, with its four choices), the quota card 
 - An API key, OpenCode Zen and an expired sign-in token show no bars. Aria does not refresh an expired Claude token (Pi does when it uses it); the bars come back after the next run.
 - The card is one component (`renderQuotaCard`): the header chip opens it and each session tab shows it on hover (led by the tab's title and state, with that session's model and context). Beside the name only the 5-hour chip shows; hovering it (or focusing it with the keyboard) opens a card with every window and when each resets. With several sessions the header shows tabs, not the bar.
 
+## macOS (phase 5, first pass)
+
+The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`). Left:
+
+- Click-through: the whole 700 px panel takes clicks; a click on the veil closes the dock instead of passing through to the app below.
+- Desktop notifications come from `osascript`; clicking one does not open the dock (an unbundled app has no notification action). The chat still posts one when a prompt is hidden.
+- The owner's `sandbox` extension uses `bwrap` (Linux); its tests fail on macOS and the chat runs without the sandbox. A macOS sandbox is not designed yet.
+- No `.app` bundle, signing or notarization, so the standard "open at login" UI and notification actions wait.
+- The panel opens on the screen under the pointer and joins all spaces; multi-monitor and full-screen behavior needs manual testing on the owner's layout.
+- `~/.local/bin` is not on the default macOS `PATH`, so the CLI is `~/.local/bin/aria toggle` (the hotkey does not need it).
+
 ## Smaller gaps
 
 - The agent-session view has no composer (the design has one): there is no way to steer a subagent yet.

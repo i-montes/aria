@@ -26,6 +26,9 @@ pub enum PageMessage {
     /// `provider` is `opencode-go`, `anthropic-api`, `typesafe` or `tavily`.
     #[serde(rename = "saveKey")]
     SaveKey { id: u64, provider: String, key: String },
+    /// Validate the key already stored for a provider (`auth.json`), without the page ever seeing it.
+    #[serde(rename = "checkKey")]
+    CheckKey { id: u64, provider: String },
     /// Start the Anthropic OAuth sign-in.
     #[serde(rename = "startOauth")]
     StartOAuth { id: u64 },
@@ -92,6 +95,9 @@ pub enum DockMessage {
     /// Show the corner notice ("Aria is installed — press Super A to set it up").
     #[serde(rename = "notice")]
     Notice,
+    /// The host's shortcut, for the notice and hints (`Super + A`, `Option + Space`).
+    #[serde(rename = "platform")]
+    Platform { hotkey: String },
     /// `connected` names what is really set up, never a secret: `provider:type` for each credential in
     /// `auth.json` (`anthropic:oauth`) and `mcp:<service>` for each configured MCP service.
     #[serde(rename = "settings")]
@@ -166,6 +172,10 @@ mod tests {
         assert_eq!(
             page(r#"{"type":"saveKey","id":3,"provider":"typesafe","key":"k"}"#),
             PageMessage::SaveKey { id: 3, provider: "typesafe".into(), key: "k".into() }
+        );
+        assert_eq!(
+            page(r#"{"type":"checkKey","id":6,"provider":"opencode-go"}"#),
+            PageMessage::CheckKey { id: 6, provider: "opencode-go".into() }
         );
         assert_eq!(page(r#"{"type":"startOauth","id":4}"#), PageMessage::StartOAuth { id: 4 });
         assert_eq!(
@@ -281,6 +291,10 @@ mod tests {
         assert_eq!(value(DockMessage::Open { monitor: "DP-2".into() }), json!({"type": "open", "monitor": "DP-2"}));
         assert_eq!(value(DockMessage::Close), json!({"type": "close"}));
         assert_eq!(value(DockMessage::Notice), json!({"type": "notice"}));
+        assert_eq!(
+            value(DockMessage::Platform { hotkey: "Option + Space".into() }),
+            json!({"type": "platform", "hotkey": "Option + Space"})
+        );
         assert_eq!(
             value(DockMessage::Settings { id: 1, settings: None, exists: false, problem: None, connected: vec!["mcp:tavily".into()] }),
             json!({"type": "settings", "id": 1, "settings": null, "exists": false, "problem": null, "connected": ["mcp:tavily"]})

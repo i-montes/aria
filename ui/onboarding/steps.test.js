@@ -119,6 +119,7 @@ describe('when Continue is allowed', () => {
   test('sign-in needs a saved key or finished OAuth', () => {
     expect(canContinue('auth', opencode, { signedIn: false })).toBe(false)
     expect(canContinue('auth', opencode, { signedIn: true })).toBe(true)
+    expect(canContinue('auth', opencode, { signedIn: true, keyChecking: true })).toBe(false)
   })
   test('the router needs the TypeSafe key unless Jev comes with the provider', () => {
     const api = setRouter(applyProvider(defaultSettings('en'), 'anthropic-api'), true)

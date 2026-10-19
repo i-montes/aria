@@ -32,8 +32,23 @@ function harness() {
     request: (message, onProgress) => new Promise((resolve) => pending.push({ message, onProgress, resolve })),
   }
   const ob = createOnboarding(env)
-  const click = (action, field, value) =>
-    listeners.click({ target: { closest: () => ({ dataset: { action, field, value }, disabled: false }) } })
+  // A click target with the few DOM methods the controller uses. The assertions are about the settings,
+  // so the visual in-place updates are no-ops here (a real browser exercises them).
+  const click = (action, field, value) => {
+    const el = {
+      dataset: { action, field, value },
+      disabled: false,
+      textContent: '',
+      parentElement: null,
+      getAttribute: () => 'false',
+      setAttribute: () => {},
+      classList: { contains: () => false, toggle: () => {} },
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    }
+    el.closest = (selector) => (selector === '[data-key]' ? el : null)
+    listeners.click({ target: { closest: () => el } })
+  }
   const type = (field, value) => {
     const input = Object.assign(new HTMLInputElement(), { dataset: { action: 'input', field }, value })
     listeners.input({ target: input })
@@ -154,6 +169,123 @@ describe('what is really connected', () => {
     expect(h.ob.snapshot().signedIn).toBe(false)
     h.ob.start(completed, ['opencode-go:api_key'])
     expect(h.ob.snapshot().signedIn).toBe(true)
+  })
+})
+
+describe('a key that is already there', () => {
+  const connected = ['opencode-go:api_key']
+  const openFlow = (mode) => {
+    const h = harness()
+    h.ob.start(null, connected)
+    h.click('choose', undefined, mode)
+    h.click('pick', 'provider', 'opencode-go')
+    h.click('next')
+    if (mode === 'full') h.click('next') // quota
+    return h
+  }
+
+  test('quick: the stored key is checked and the flow goes on to the assistant', async () => {
+    const h = openFlow('quick')
+    expect(h.ob.snapshot()).toMatchObject({ step: 'auth', signedIn: false, canContinue: false })
+    expect(h.lastRequest().message).toMatchObject({ type: 'checkKey', provider: 'opencode-go' })
+    h.lastRequest().resolve(keyOk)
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ step: 'assistant', signedIn: true, canContinue: true })
+  })
+
+  test('full: the stored key is checked and the flow goes on to the router', async () => {
+    const h = openFlow('full')
+    expect(h.ob.snapshot().step).toBe('auth')
+    expect(h.lastRequest().message).toMatchObject({ type: 'checkKey', provider: 'opencode-go' })
+    h.lastRequest().resolve(keyOk)
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ step: 'router', signedIn: true, canContinue: true })
+  })
+
+  test('a stored key that no longer works keeps the step and asks for a new one', async () => {
+    const h = openFlow('quick')
+    h.lastRequest().resolve({ type: 'keyResult', ok: false, error: 'key-rejected' })
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ step: 'auth', signedIn: false, canContinue: false })
+  })
+
+  test('editing: the check does not move the flow by itself', async () => {
+    const h = harness()
+    h.ob.start(completed, connected)
+    h.click('edit', undefined, 'auth')
+    expect(h.lastRequest().message).toMatchObject({ type: 'checkKey', provider: 'opencode-go' })
+    h.lastRequest().resolve(keyOk)
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ step: 'auth', signedIn: true, canContinue: true })
+  })
+
+  test('a key pasted and checked goes on by itself', async () => {
+    const h = harness()
+    h.ob.start(null)
+    h.click('choose', undefined, 'quick')
+    h.click('pick', 'provider', 'opencode-go')
+    h.click('next')
+    expect(h.pending).toHaveLength(0) // nothing on disk: no check
+    h.type('key', 'fresh-key')
+    h.click('save-key')
+    h.lastRequest().resolve(keyOk)
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ step: 'assistant', signedIn: true })
+  })
+})
+
+describe('the same for Anthropic', () => {
+  const openWith = (provider, connected) => {
+    const h = harness()
+    h.ob.start(null, connected)
+    h.click('choose', undefined, 'quick')
+    h.click('pick', 'provider', provider)
+    h.click('next')
+    return h
+  }
+
+  test('anthropic-api: a stored key is checked and the flow goes on', async () => {
+    const h = openWith('anthropic-api', ['anthropic:api_key'])
+    expect(h.ob.snapshot().step).toBe('auth')
+    expect(h.lastRequest().message).toMatchObject({ type: 'checkKey', provider: 'anthropic-api' })
+    h.lastRequest().resolve(keyOk)
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ step: 'assistant', signedIn: true })
+  })
+
+  test('anthropic-oauth: a stored sign-in is checked and the flow goes on', async () => {
+    const h = openWith('anthropic-oauth', ['anthropic:oauth'])
+    expect(h.lastRequest().message).toMatchObject({ type: 'checkKey', provider: 'anthropic-oauth' })
+    h.lastRequest().resolve(keyOk)
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ step: 'assistant', signedIn: true, oauth: 'done' })
+  })
+
+  test('anthropic-oauth: a sign-in that no longer works asks for it again', async () => {
+    const h = openWith('anthropic-oauth', ['anthropic:oauth'])
+    h.lastRequest().resolve({ type: 'keyResult', ok: false, error: 'key-rejected' })
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ step: 'auth', signedIn: false, oauth: 'idle' })
+  })
+
+  test('a check that cannot reach the provider trusts the stored credential and goes on', async () => {
+    const h = openWith('opencode-go', ['opencode-go:api_key'])
+    h.lastRequest().resolve({ type: 'keyResult', ok: false, error: 'network-unavailable' })
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ step: 'assistant', signedIn: true })
+  })
+
+  test('signing in from scratch goes on by itself too', async () => {
+    const h = harness()
+    h.ob.start(null)
+    h.click('choose', undefined, 'quick')
+    h.click('pick', 'provider', 'anthropic-oauth')
+    h.click('next')
+    expect(h.pending).toHaveLength(0) // nothing on disk: no check
+    h.click('oauth-start')
+    h.lastRequest().resolve(oauthOk)
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ step: 'assistant', signedIn: true, oauth: 'done' })
   })
 })
 

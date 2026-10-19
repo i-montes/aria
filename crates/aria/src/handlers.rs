@@ -3,7 +3,7 @@
 //! (`is_blocking`) and moves the replies back to the GTK thread.
 
 use aria_core::agent::{self, InstallCommand};
-use aria_core::auth::AuthStore;
+use aria_core::auth::{AuthStore, Credential};
 use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::json_file::JsonFileError;
 use aria_core::mcp::{self, McpError};
@@ -11,19 +11,29 @@ use aria_core::oauth::{self, OAuthError};
 use aria_core::paths::AriaPaths;
 use aria_core::providers;
 use aria_core::settings::{self, Settings, SettingsError};
-use aria_core::validate::{check_key, KeyCheck, KeyKind};
+use aria_core::validate::{check_key, KeyCheck, KeyKind, ProbeRequest};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// The program that opens a link in the user's browser.
+#[cfg(target_os = "linux")]
+const OPENER: &str = "xdg-open";
+#[cfg(target_os = "macos")]
+const OPENER: &str = "open";
+
 pub type Validator = Arc<dyn Fn(KeyKind, &str) -> KeyCheck + Send + Sync>;
 pub type Opener = Arc<dyn Fn(&str) + Send + Sync>;
+/// Checks a stored OAuth credential's token against its provider (the Claude usage endpoint).
+pub type OAuthChecker = Arc<dyn Fn(&ProbeRequest) -> KeyCheck + Send + Sync>;
 /// Runs `pi install` for the Claude provider; true when it exited well.
 pub type Installer = Arc<dyn Fn(&InstallCommand) -> bool + Send + Sync>;
 
 pub struct Ctx {
     pub paths: AriaPaths,
     pub validator: Validator,
+    /// Checks a stored OAuth token (Claude) without a browser.
+    pub oauth_checker: OAuthChecker,
     /// Opens a URL in the user's browser.
     pub opener: Opener,
     /// How long the browser sign-in may take.
@@ -40,8 +50,9 @@ impl Ctx {
         Ctx {
             paths,
             validator: Arc::new(check_key),
+            oauth_checker: Arc::new(aria_core::validate::check),
             opener: Arc::new(|url| {
-                let _ = Command::new("xdg-open").arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+                let _ = Command::new(OPENER).arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
             }),
             oauth_timeout: Duration::from_secs(300),
             notion_url: mcp::NOTION_URL.to_string(),
@@ -63,7 +74,14 @@ impl Ctx {
 
 /// Messages that wait on the network or the browser: run them off the GTK thread.
 pub fn is_blocking(message: &PageMessage) -> bool {
-    matches!(message, PageMessage::SaveKey { .. } | PageMessage::StartOAuth { .. } | PageMessage::StartMcpOAuth { .. } | PageMessage::InstallClaudeBridge { .. })
+    matches!(
+        message,
+        PageMessage::SaveKey { .. }
+            | PageMessage::CheckKey { .. }
+            | PageMessage::StartOAuth { .. }
+            | PageMessage::StartMcpOAuth { .. }
+            | PageMessage::InstallClaudeBridge { .. }
+    )
 }
 
 /// Messages for the chat (`chat::Chat`), which has its own worker.
@@ -90,6 +108,10 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         PageMessage::SaveKey { id, provider, key } => {
             let _ = ctx.paths.ensure_root();
             emit(save_key(id, &provider, &key, ctx));
+        }
+        PageMessage::CheckKey { id, provider } => {
+            let _ = ctx.paths.ensure_root();
+            emit(check_stored_key(id, &provider, ctx));
         }
         PageMessage::StartOAuth { id } => {
             let _ = ctx.paths.ensure_root();
@@ -208,11 +230,76 @@ fn save_key(id: u64, provider: &str, key: &str, ctx: &Ctx) -> DockMessage {
     }
     let store = AuthStore::new(ctx.paths.auth());
     for entry in entries {
-        if store.set(entry, &aria_core::auth::Credential::ApiKey { key: key.to_string() }).is_err() {
+        if store.set(entry, &Credential::ApiKey { key: key.to_string() }).is_err() {
             return key_result(id, Some("auth-file-broken"));
         }
     }
     key_result(id, None)
+}
+
+/// Checks the credential already in `auth.json` for a provider. The page never has the key: it asks, and
+/// the dock reads it and validates it. Used by the setup to go on when the credential it finds still works.
+fn check_stored_key(id: u64, provider: &str, ctx: &Ctx) -> DockMessage {
+    if provider == "anthropic-oauth" {
+        return check_stored_oauth(id, ctx);
+    }
+    let Some((kind, entries)) = key_target(provider) else {
+        return DockMessage::Error { id, code: "unknown-provider".into() };
+    };
+    if entries.is_empty() {
+        // Tavily's key lives in mcp.json and is checked when it is saved, not here.
+        return DockMessage::Error { id, code: "unknown-provider".into() };
+    }
+    let store = AuthStore::new(ctx.paths.auth());
+    let mut stored = None;
+    for entry in entries {
+        match store.get(entry) {
+            Ok(Some(credential)) => {
+                stored = Some(credential);
+                break;
+            }
+            Ok(None) => {}
+            Err(_) => return key_result(id, Some("auth-file-broken")),
+        }
+    }
+    match stored {
+        Some(Credential::ApiKey { key }) => match (ctx.validator)(kind, &key) {
+            KeyCheck::Valid => key_result(id, None),
+            KeyCheck::Rejected => key_result(id, Some("key-rejected")),
+            KeyCheck::Unavailable(_) => key_result(id, Some("network-unavailable")),
+        },
+        // An OAuth credential is not an API key and cannot be checked this way.
+        _ => key_result(id, Some("key-missing")),
+    }
+}
+
+/// A Claude sign-in is a token, not a key: it cannot be probed with `x-api-key`. An expired one is fine
+/// when it can be refreshed (Pi does that when it runs); a live one is confirmed against the same cheap
+/// usage endpoint the quota bars read.
+fn check_stored_oauth(id: u64, ctx: &Ctx) -> DockMessage {
+    let store = AuthStore::new(ctx.paths.auth());
+    let credential = match store.get("anthropic") {
+        Ok(Some(credential)) => credential,
+        Ok(None) => return key_result(id, Some("key-missing")),
+        Err(_) => return key_result(id, Some("auth-file-broken")),
+    };
+    let Credential::OAuth { access, refresh, expires } = credential else {
+        // An API key for the same provider is checked by the key path, not here.
+        return key_result(id, Some("key-missing"));
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0);
+    if expires <= now {
+        return if refresh.trim().is_empty() { key_result(id, Some("key-rejected")) } else { key_result(id, None) };
+    }
+    let request = aria_core::quota::request_for(&aria_core::quota::Source::Claude { token: access });
+    match (ctx.oauth_checker)(&request) {
+        KeyCheck::Valid => key_result(id, None),
+        KeyCheck::Rejected => key_result(id, Some("key-rejected")),
+        KeyCheck::Unavailable(_) => key_result(id, Some("network-unavailable")),
+    }
 }
 
 /// Makes the `claude-bridge` provider available to Aria's Pi: it needs Claude Code on the machine, and the package (about
@@ -296,17 +383,24 @@ mod tests {
         ctx: Ctx,
         opened: Arc<Mutex<Vec<String>>>,
         seen_keys: Arc<Mutex<Vec<(KeyKind, String)>>>,
+        checked_oauth: Arc<Mutex<Vec<String>>>,
     }
 
     fn harness(verdict: KeyCheck) -> Harness {
         let dir = tempfile::tempdir().unwrap();
         let opened = Arc::new(Mutex::new(Vec::new()));
         let seen_keys = Arc::new(Mutex::new(Vec::new()));
-        let (o, s) = (opened.clone(), seen_keys.clone());
+        let checked_oauth = Arc::new(Mutex::new(Vec::new()));
+        let (o, s, c) = (opened.clone(), seen_keys.clone(), checked_oauth.clone());
+        let key_verdict = verdict.clone();
         let ctx = Ctx {
             paths: AriaPaths { root: dir.path().to_path_buf() },
             validator: Arc::new(move |kind, key| {
                 s.lock().unwrap().push((kind, key.to_string()));
+                key_verdict.clone()
+            }),
+            oauth_checker: Arc::new(move |request| {
+                c.lock().unwrap().push(request.url.clone());
                 verdict.clone()
             }),
             opener: Arc::new(move |url| o.lock().unwrap().push(url.to_string())),
@@ -315,7 +409,7 @@ mod tests {
             installer: Arc::new(|_| false),
             path_var: String::new(),
         };
-        Harness { dir, ctx, opened, seen_keys }
+        Harness { dir, ctx, opened, seen_keys, checked_oauth }
     }
 
     fn run(h: &Harness, message: PageMessage) -> Vec<DockMessage> {
@@ -519,6 +613,103 @@ mod tests {
         let replies = run(&h, PageMessage::SaveKey { id: 10, provider: "mystery".into(), key: "k".into() });
         assert_eq!(replies, vec![DockMessage::Error { id: 10, code: "unknown-provider".into() }]);
         assert!(h.seen_keys.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_stored_key_is_checked_without_the_page_seeing_it() {
+        let h = harness(KeyCheck::Valid);
+        run(&h, PageMessage::SaveKey { id: 1, provider: "opencode-go".into(), key: "k1".into() });
+        h.seen_keys.lock().unwrap().clear();
+        let replies = run(&h, PageMessage::CheckKey { id: 2, provider: "opencode-go".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 2, ok: true, error: None }]);
+        assert_eq!(h.seen_keys.lock().unwrap().as_slice(), [(KeyKind::OpenCodeGo, "k1".to_string())]);
+    }
+
+    #[test]
+    fn checking_a_key_that_is_not_there_says_so() {
+        let h = harness(KeyCheck::Valid);
+        let replies = run(&h, PageMessage::CheckKey { id: 3, provider: "anthropic-api".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 3, ok: false, error: Some("key-missing".into()) }]);
+        assert!(h.seen_keys.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_stored_key_that_was_revoked_is_reported_and_kept() {
+        let h = harness(KeyCheck::Rejected);
+        AuthStore::new(h.ctx.paths.auth()).set("opencode-go", &Credential::ApiKey { key: "old".into() }).unwrap();
+        let before = std::fs::read_to_string(h.ctx.paths.auth()).unwrap();
+        let replies = run(&h, PageMessage::CheckKey { id: 4, provider: "opencode-go".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 4, ok: false, error: Some("key-rejected".into()) }]);
+        assert_eq!(std::fs::read_to_string(h.ctx.paths.auth()).unwrap(), before);
+    }
+
+    #[test]
+    fn checking_with_a_broken_auth_file_is_reported_and_the_file_is_kept() {
+        let h = harness(KeyCheck::Valid);
+        std::fs::write(h.ctx.paths.auth(), "{ nope").unwrap();
+        let replies = run(&h, PageMessage::CheckKey { id: 5, provider: "opencode-go".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 5, ok: false, error: Some("auth-file-broken".into()) }]);
+        assert_eq!(std::fs::read_to_string(h.ctx.paths.auth()).unwrap(), "{ nope");
+    }
+
+    #[test]
+    fn a_stored_anthropic_api_key_is_checked_like_any_other() {
+        let h = harness(KeyCheck::Valid);
+        run(&h, PageMessage::SaveKey { id: 6, provider: "anthropic-api".into(), key: "sk-ant-1".into() });
+        h.seen_keys.lock().unwrap().clear();
+        let replies = run(&h, PageMessage::CheckKey { id: 7, provider: "anthropic-api".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 7, ok: true, error: None }]);
+        assert_eq!(h.seen_keys.lock().unwrap().as_slice(), [(KeyKind::AnthropicApi, "sk-ant-1".to_string())]);
+    }
+
+    #[test]
+    fn a_stored_claude_sign_in_is_checked_against_the_usage_endpoint() {
+        let h = harness(KeyCheck::Valid);
+        AuthStore::new(h.ctx.paths.auth())
+            .set("anthropic", &Credential::OAuth { access: "tok".into(), refresh: "ref".into(), expires: i64::MAX })
+            .unwrap();
+        let replies = run(&h, PageMessage::CheckKey { id: 8, provider: "anthropic-oauth".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 8, ok: true, error: None }]);
+        assert_eq!(h.checked_oauth.lock().unwrap().as_slice(), ["https://api.anthropic.com/api/oauth/usage".to_string()]);
+    }
+
+    #[test]
+    fn an_expired_claude_sign_in_with_a_refresh_token_still_works_without_a_request() {
+        let h = harness(KeyCheck::Rejected);
+        AuthStore::new(h.ctx.paths.auth())
+            .set("anthropic", &Credential::OAuth { access: "old".into(), refresh: "ref".into(), expires: 1 })
+            .unwrap();
+        let replies = run(&h, PageMessage::CheckKey { id: 9, provider: "anthropic-oauth".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 9, ok: true, error: None }]);
+        assert!(h.checked_oauth.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_expired_claude_sign_in_that_cannot_be_refreshed_asks_to_sign_in_again() {
+        let h = harness(KeyCheck::Valid);
+        AuthStore::new(h.ctx.paths.auth())
+            .set("anthropic", &Credential::OAuth { access: "old".into(), refresh: String::new(), expires: 1 })
+            .unwrap();
+        let replies = run(&h, PageMessage::CheckKey { id: 10, provider: "anthropic-oauth".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 10, ok: false, error: Some("key-rejected".into()) }]);
+    }
+
+    #[test]
+    fn a_revoked_claude_token_is_reported() {
+        let h = harness(KeyCheck::Rejected);
+        AuthStore::new(h.ctx.paths.auth())
+            .set("anthropic", &Credential::OAuth { access: "tok".into(), refresh: "ref".into(), expires: i64::MAX })
+            .unwrap();
+        let replies = run(&h, PageMessage::CheckKey { id: 11, provider: "anthropic-oauth".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 11, ok: false, error: Some("key-rejected".into()) }]);
+        assert_eq!(h.checked_oauth.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn checking_a_claude_sign_in_that_is_not_there_says_so() {
+        let h = harness(KeyCheck::Valid);
+        let replies = run(&h, PageMessage::CheckKey { id: 12, provider: "anthropic-oauth".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 12, ok: false, error: Some("key-missing".into()) }]);
     }
 
     #[test]
