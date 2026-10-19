@@ -70,8 +70,8 @@ export function renderQuotaBars({ windows, provider, now } = {}, ui, t) {
       </div>`
   return `<div class="p-qb" tabindex="0" role="group" aria-label="${esc(t('chat.quotabars.title'))}">
     <div class="p-qb-inline is-${hero.level}">
-      <span class="p-qb-head"><span class="p-qb-label">${esc(hero.label)}</span><span class="p-qb-num">${hero.shown}%</span></span>
-      <span class="p-qb-track" aria-hidden="true"><span class="p-qb-fill" style="width: ${hero.percent}%"></span></span>
+      <span class="p-qb-ring" style="--p: ${hero.percent}" aria-hidden="true"></span>
+      <span class="p-qb-label">${esc(hero.label)}</span><span class="p-qb-num">${hero.shown}%</span>
     </div>
     <div class="p-qb-pop" role="tooltip">
       <div class="p-qb-pop-head"><span class="p-qb-pop-title">${esc(t('chat.quotabars.title'))}</span>${provider ? `<span class="p-qb-pop-provider">${esc(provider)}</span>` : ''}</div>
