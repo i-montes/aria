@@ -22,6 +22,37 @@ for step in 'sudo pacman -S --needed gtk3 webkit2gtk-4.1 gtk-layer-shell' 'insta
 done
 [ "$ordered" = 1 ] && pass "install dry run lists its steps in order"
 
+# Pi and Node: the pinned version is read from pi-version, Pi is installed under ~/.aria/pi/<version>
+pinned=$(tr -d '[:space:]' < "$here/../pi-version")
+tmp=$(mktemp -d)
+out=$(ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria 2>&1)
+printf '%s\n' "$out" | grep -qF "would: npm install --prefix $tmp/home/pi/$pinned --no-audit --no-fund @earendil-works/pi-coding-agent@$pinned" && pass "install dry run installs the pinned Pi ($pinned)" || fail "install dry run lacks the pinned Pi install"
+mkdir -p "$tmp/home/pi/$pinned/node_modules/.bin" && : > "$tmp/home/pi/$pinned/node_modules/.bin/pi" && chmod +x "$tmp/home/pi/$pinned/node_modules/.bin/pi"
+out=$(ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria 2>&1)
+printf '%s\n' "$out" | grep -qF 'npm install' && fail "an installed Pi is installed again" || pass "an installed Pi is not installed again"
+fake_node() { mkdir -p "$tmp/$1" && printf '#!/bin/sh\necho %s\n' "$2" > "$tmp/$1/node" && chmod +x "$tmp/$1/node" && printf '#!/bin/sh\n' > "$tmp/$1/npm" && chmod +x "$tmp/$1/npm"; }
+fake_node old v20.0.0
+fake_node new v22.23.2
+if PATH="$tmp/old:/usr/bin:/bin" sh "$installer" --check-node >/dev/null 2>"$tmp/err"; then fail "Node 20 was accepted"; else grep -qF 'Node 22.19 or newer' "$tmp/err" && pass "an old Node is refused with a clear message" || fail "the Node message is missing"; fi
+if PATH="$tmp/new:/usr/bin:/bin" sh "$installer" --check-node >/dev/null 2>&1; then pass "Node 22.23 is accepted"; else fail "Node 22.23 was refused"; fi
+if PATH="/usr/bin:/bin" sh -c 'command -v node >/dev/null' 2>/dev/null; then :; else
+  if PATH="/nonexistent" /bin/sh "$installer" --check-node >/dev/null 2>&1; then fail "a missing Node was accepted"; else pass "a missing Node is refused"; fi
+fi
+# npm is needed too, and is checked before anything is installed
+mkdir -p "$tmp/onlynode" && printf '#!/bin/sh\necho v22.23.2\n' > "$tmp/onlynode/node" && chmod +x "$tmp/onlynode/node" && ln -sf "$(command -v sed)" "$tmp/onlynode/sed"
+if PATH="$tmp/onlynode" /bin/sh "$installer" --check-node >/dev/null 2>"$tmp/err"; then fail "a Node without npm was accepted"; else grep -qi 'npm' "$tmp/err" && pass "a missing npm is refused with a clear message" || fail "the npm message is missing"; fi
+# the pinned version: next to the script when it is a real file, the published one when piped (curl | sh)
+printf '9.9.9\n' > "$tmp/published-pin"
+piped=$(cd "$here" && ARIA_PI_VERSION_URL="file://$tmp/published-pin" sh -s -- --print-pi-version < "$installer" 2>&1)
+[ "$piped" = "9.9.9" ] && pass "a piped installer reads the published pin, not a pi-version in the current directory's parent" || fail "piped installer used '$piped'"
+direct=$(sh "$installer" --print-pi-version 2>&1)
+[ "$direct" = "$pinned" ] && pass "a real script file reads the repo's pi-version" || fail "direct run used '$direct'"
+# the node link lets the service find Node without mise on its PATH
+mkdir -p "$tmp/linkhome"
+PATH="$tmp/new:/usr/bin:/bin" ARIA_HOME="$tmp/linkhome" sh "$installer" --link-node >/dev/null 2>&1
+[ "$(readlink "$tmp/linkhome/bin/node")" = "$tmp/new/node" ] && pass "the installer links Node into ~/.aria/bin" || fail "the Node link is missing or wrong"
+rm -r "$tmp"
+
 # uninstall dry run
 out=$(sh "$installer" --dry-run --uninstall 2>&1)
 printf '%s\n' "$out" | grep -qF 'would: systemctl --user disable --now aria.service' && pass "uninstall stops the unit" || fail "uninstall does not stop the unit"

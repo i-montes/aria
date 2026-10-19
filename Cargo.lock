@@ -7,6 +7,7 @@ name = "aria"
 version = "0.1.0"
 dependencies = [
  "aria-core",
+ "aria-engine",
  "aria-hyprland",
  "gdk",
  "gio",
@@ -34,6 +35,14 @@ dependencies = [
  "thiserror",
  "ureq",
  "url",
+]
+
+[[package]]
+name = "aria-engine"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

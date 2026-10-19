@@ -9,6 +9,10 @@ pub mod settings;
 pub mod validate;
 pub mod oauth;
 pub mod bridge;
+pub mod pi;
+pub mod agent;
+pub mod files;
+pub mod sessions;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

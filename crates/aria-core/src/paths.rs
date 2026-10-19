@@ -37,6 +37,31 @@ impl AriaPaths {
         self.root.join("mcp-auth.json")
     }
 
+    /// The open sessions (the dock's tabs): ids, titles and which one is active.
+    pub fn sessions(&self) -> PathBuf {
+        self.root.join("sessions.json")
+    }
+
+    /// Pi's agent directory (`PI_CODING_AGENT_DIR`): its own settings, links to our credentials, the
+    /// persona, extensions and sessions. Aria owns and regenerates it.
+    pub fn agent(&self) -> PathBuf {
+        self.root.join("agent")
+    }
+
+    /// First on the `PATH` of every Pi process: the `pi` shim and the `node` link.
+    pub fn bin(&self) -> PathBuf {
+        self.root.join("bin")
+    }
+
+    /// Where pinned Pi releases are installed, one directory per version.
+    pub fn pi_root(&self) -> PathBuf {
+        self.root.join("pi")
+    }
+
+    pub fn pi_install(&self, version: &str) -> PathBuf {
+        self.pi_root().join(version)
+    }
+
     /// Creates the root directory (mode 0700) when it is missing.
     pub fn ensure_root(&self) -> io::Result<()> {
         std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&self.root)
@@ -59,6 +84,15 @@ mod tests {
         assert_eq!(paths.settings(), PathBuf::from("/tmp/x/settings.json"));
         assert_eq!(paths.auth(), PathBuf::from("/tmp/x/auth.json"));
         std::env::remove_var("ARIA_HOME");
+    }
+
+    #[test]
+    fn agent_and_pi_paths() {
+        let paths = AriaPaths { root: PathBuf::from("/r") };
+        assert_eq!(paths.agent(), PathBuf::from("/r/agent"));
+        assert_eq!(paths.bin(), PathBuf::from("/r/bin"));
+        assert_eq!(paths.pi_root(), PathBuf::from("/r/pi"));
+        assert_eq!(paths.pi_install("1.3.0"), PathBuf::from("/r/pi/1.3.0"));
     }
 
     #[test]

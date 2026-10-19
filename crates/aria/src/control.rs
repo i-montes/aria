@@ -46,9 +46,9 @@ pub fn send(path: &Path, command: &str) -> std::io::Result<()> {
     stream.write_all(format!("{command}\n").as_bytes())
 }
 
-/// `aria toggle`: send `toggle`, starting `exe` (detached) first when no dock is running.
-pub fn toggle_or_start(path: &Path, exe: &Path) -> Result<(), ControlError> {
-    if send(path, "toggle").is_ok() {
+/// `aria toggle` / `aria show`: send `command`, starting `exe` (detached) first when no dock is running.
+pub fn command_or_start(path: &Path, exe: &Path, command: &str) -> Result<(), ControlError> {
+    if send(path, command).is_ok() {
         return Ok(());
     }
     Command::new(exe)
@@ -59,7 +59,7 @@ pub fn toggle_or_start(path: &Path, exe: &Path) -> Result<(), ControlError> {
         .map_err(|e| ControlError::Io(e.to_string()))?;
     for _ in 0..60 {
         std::thread::sleep(Duration::from_millis(50));
-        if send(path, "toggle").is_ok() {
+        if send(path, command).is_ok() {
             return Ok(());
         }
     }
@@ -73,6 +73,7 @@ mod tests {
 
     #[test]
     fn second_bind_is_already_running() {
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("aria").join("control.sock");
         let _first = bind_single_instance(&path).unwrap();
@@ -81,6 +82,7 @@ mod tests {
 
     #[test]
     fn stale_socket_is_replaced() {
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("control.sock");
         drop(UnixListener::bind(&path).unwrap()); // the file stays behind, nobody listens (a crash)
@@ -91,6 +93,7 @@ mod tests {
     #[test]
     fn send_reaches_the_running_instance() {
         use std::io::{BufRead, BufReader};
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("control.sock");
         let listener = bind_single_instance(&path).unwrap();

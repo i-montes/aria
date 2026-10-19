@@ -1,31 +1,35 @@
 //! `aria` runs the dock (resident, hidden until you press SUPER + A); `aria toggle` shows or hides
-//! it, starting it first when it is not running.
+//! it, and `aria show` only shows it (a notification's click uses that), starting it first when it
+//! is not running.
 
+mod chat;
 mod control;
 mod dock;
 mod handlers;
 mod visibility;
 
-use aria_core::bridge::DockMessage;
+use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::paths::AriaPaths;
 use aria_hyprland::Registration;
+use chat::{ChatCtx, OmarchyNotifier, Sessions};
 use dock::Dock;
+use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use visibility::Event;
 
 fn main() {
     match std::env::args().nth(1).as_deref() {
-        Some("toggle") => {
+        Some(command @ ("toggle" | "show")) => {
             let exe = std::env::current_exe().expect("own path");
-            if let Err(error) = control::toggle_or_start(&control::control_socket_path(), &exe) {
+            if let Err(error) = control::command_or_start(&control::control_socket_path(), &exe, command) {
                 eprintln!("aria: {error}");
                 std::process::exit(1);
             }
         }
         None => run_dock(),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show]");
             std::process::exit(2);
         }
     }
@@ -54,10 +58,41 @@ fn run_dock() {
     let (reply_sender, reply_receiver) = mpsc::channel::<DockMessage>();
     let paths = AriaPaths::from_env();
     let first_run = !paths.settings().exists();
-    let ctx = Arc::new(handlers::Ctx::real(paths));
+    let ctx = Arc::new(handlers::Ctx::real(paths.clone()));
+
+    // The chat owns Pi. Its messages go through one worker thread, in order, so a send is never
+    // overtaken by the abort that follows it.
+    let dock_visible = Arc::new(AtomicBool::new(false));
+    let visible_now = dock_visible.clone();
+    let chat = {
+        let sender = reply_sender.clone();
+        Sessions::new(
+            ChatCtx {
+                paths,
+                notifier: Arc::new(OmarchyNotifier),
+                dock_visible: dock_visible.clone(),
+                path_var: std::env::var("PATH").unwrap_or_default(),
+            },
+            Arc::new(move |message| {
+                let _ = sender.send(message);
+            }),
+        )
+    };
+    let (chat_sender, chat_receiver) = mpsc::channel::<PageMessage>();
+    let chat_for_visibility = chat.clone();
+    std::thread::spawn(move || {
+        for message in chat_receiver {
+            chat.handle(message);
+        }
+    });
+
     let dock = {
         let reply_sender = reply_sender.clone();
-        Dock::new(Box::new(move |message, _dock| {
+        Dock::new(dock_visible, Box::new(move |message, _dock| {
+            if handlers::is_chat(&message) {
+                let _ = chat_sender.send(message);
+                return;
+            }
             let (ctx, sender) = (ctx.clone(), reply_sender.clone());
             let emit = move |reply: DockMessage| {
                 let _ = sender.send(reply);
@@ -92,10 +127,19 @@ fn run_dock() {
             }
         }
     });
+    let mut was_visible = false;
     glib::timeout_add_local(Duration::from_millis(16), move || {
+        // A dock that just hid with a question still open needs its notification.
+        let visible = visible_now.load(std::sync::atomic::Ordering::SeqCst);
+        if was_visible && !visible {
+            chat_for_visibility.dock_visibility_changed();
+        }
+        was_visible = visible;
         while let Ok(command) = receiver.try_recv() {
-            if command == "toggle" {
-                dock.feed(Event::Toggle);
+            match command.as_str() {
+                "toggle" => dock.feed(Event::Toggle),
+                "show" => dock.show(),
+                _ => {}
             }
         }
         while let Ok(reply) = reply_receiver.try_recv() {
@@ -114,3 +158,9 @@ fn run_dock() {
     eprintln!("aria: ready, press SUPER + A");
     gtk::main();
 }
+
+/// Tests that start child processes or hold a listening socket take turns: a fork in one test
+/// leaves copies of every open descriptor in the child until it execs, which keeps a dropped socket
+/// "listening" and a freshly written script "busy" for a moment.
+#[cfg(test)]
+pub(crate) static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
