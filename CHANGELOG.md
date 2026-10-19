@@ -22,6 +22,7 @@ Checked on install: the 26 files in `~/.config/hypr/` had identical modification
 | `~/.aria/bin/node` | symlink to the Node found on the installer's `PATH` (the service has no mise on its `PATH`) (new) | none, new | `rm ~/.aria/bin/node` |
 | `~/.aria/bin/pi` | shim that runs the pinned Pi, written when the chat first starts Pi (new) | none, new | `rm ~/.aria/bin/pi` |
 | `~/.aria/agent/` | Pi's directory: its `settings.json`, links to `auth.json`/`mcp.json`/`mcp-auth.json`, `SYSTEM.md`, sessions (new; the links point at the files Aria already owns) | none, new | `rm -r ~/.aria/agent` |
-| `~/.local/bin/aria` | the binary, now with the chat (replaced) | the previous build is gone; rebuild from the earlier commit | `git checkout 0e6fde5 && cargo build --release` |
+| `~/.aria/sessions.json` | the open session tabs, mode 600 (new, written by the dock) | none, new | `rm ~/.aria/sessions.json` (the tabs start over; Pi's sessions stay) |
+| `~/.local/bin/aria` | the binary, now with the chat and the session tabs (replaced) | the previous build is gone; rebuild from the earlier commit | `git checkout 0e6fde5 && cargo build --release` |
 
 Notes: the desktop notification for a prompt that nobody can see is sent with `omarchy-notification-send -u critical -t 0 … --exec aria show`; a test notification sent the same way was dismissed with `omarchy-notification-dismiss`. `~/.pi` was not touched.
