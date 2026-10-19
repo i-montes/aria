@@ -2,14 +2,16 @@
 // outside its sandbox (a command, a file write) and asks for a decision. Fed by a dialog title
 // `{"aria":1,"kind":"sandbox"|"write",…}` (see cards.js).
 //
-// Props: { id, kind, summary?, detail?, jev? }
+// Props: { id, kind, summary?, detail?, jev?, options? }
 //   id       the extension dialog's id; answers go back to it
 //   kind     "sandbox" (default) | "write": picks the icon and the default title
 //   summary  the heading; the kind's default title when empty
 //   detail   the command (sandbox) or the path (write), in the dark code box
 //   jev      Jev's review: a string, or an object with `review` or `text`
+//   options  [{ value, label, primary? }]: the extension's own choices (one button each, answering with `value`);
+//            without them: allow / always / deny
 // ui: unused. t(key, vars) translates.
-// Emits: data-chat="permission" data-id data-choice="allow|always|deny"
+// Emits: data-chat="permission" data-id data-choice="<option value>" (allow|always|deny by default)
 import { esc } from '../../onboarding/components.js'
 
 const lock = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>'
@@ -18,21 +20,21 @@ const file = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24"
 const text = (value) => (typeof value === 'string' ? value : '')
 const review = (jev) => (typeof jev === 'string' ? jev : text(jev?.review) || text(jev?.text))
 
-export function renderPermission({ id, kind, summary, detail, jev } = {}, ui, t) {
+export function renderPermission({ id, kind, summary, detail, jev, options } = {}, ui, t) {
   const write = kind === 'write'
   const title = text(summary) || t(write ? 'chat.perm.write' : 'chat.perm.sandbox')
   const command = text(detail)
   const note = review(jev)
   const choice = (name, label, cls) =>
-    `<button type="button" class="p-perm-btn ${cls}" data-chat="permission" data-id="${esc(id)}" data-choice="${name}">${esc(label)}</button>`
+    `<button type="button" class="p-perm-btn ${cls}" data-chat="permission" data-id="${esc(id)}" data-choice="${esc(name)}">${esc(label)}</button>`
   return `<div class="p-perm" role="group" aria-label="${esc(title)}">
   <div class="p-perm-head">${write ? file : lock}<span>${esc(title)}</span></div>
   ${command ? `<div class="p-perm-cmd${write ? ' p-perm-path' : ''}">${write ? '' : '<span class="p-perm-prompt" aria-hidden="true">$</span>'}<code class="p-perm-code">${esc(command)}</code></div>` : ''}
   ${note ? `<p class="p-perm-review"><span class="p-perm-jev">jev</span> ${esc(note)}</p>` : ''}
   <div class="p-perm-actions">
-    ${choice('allow', t('chat.perm.allow'), 'p-perm-primary')}
-    ${choice('always', t('chat.perm.always'), 'p-perm-secondary')}
-    ${choice('deny', t('chat.perm.deny'), 'p-perm-secondary')}
+    ${Array.isArray(options) && options.length
+      ? options.map((o, i) => choice(o.value, o.label, o.primary || (i === 0 && !options.some((x) => x.primary)) ? 'p-perm-primary' : 'p-perm-secondary')).join('\n    ')
+      : [choice('allow', t('chat.perm.allow'), 'p-perm-primary'), choice('always', t('chat.perm.always'), 'p-perm-secondary'), choice('deny', t('chat.perm.deny'), 'p-perm-secondary')].join('\n    ')}
   </div>
 </div>`
 }

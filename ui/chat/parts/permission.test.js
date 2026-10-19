@@ -53,3 +53,30 @@ describe('permission card', () => {
     for (const key of Object.keys(TEXTS.en)) expect(key.startsWith('chat.perm.')).toBe(true)
   })
 })
+
+describe('the options an extension gives', () => {
+  const options = [
+    { value: 'Yes, just this once', label: 'Yes, just this once', primary: true },
+    { value: "Yes, and don't ask again for git push this session", label: "Yes, and don't ask again for git push this session" },
+    { value: 'Yes, no sandbox for the rest of the session', label: 'Yes, no sandbox for the rest of the session' },
+    { value: 'No', label: 'No' },
+  ]
+
+  test('one button per option, in order, each sending its own value', () => {
+    const html = renderPermission({ id: 'p1', kind: 'sandbox', summary: 'Restart the database', options }, {}, t)
+    const choices = [...html.matchAll(/data-choice="([^"]*)"/g)].map((m) => m[1])
+    expect(choices).toEqual(['Yes, just this once', 'Yes, and don&#39;t ask again for git push this session', 'Yes, no sandbox for the rest of the session', 'No'])
+    expect(html).not.toContain('data-choice="allow"')
+  })
+
+  test('the primary option is the filled button', () => {
+    const html = renderPermission({ id: 'p1', options }, {}, t)
+    expect(html).toMatch(/class="p-perm-btn p-perm-primary"[^>]*data-choice="Yes, just this once"/)
+  })
+
+  test('values and labels are escaped', () => {
+    const html = renderPermission({ id: 'p1', options: [{ value: '"><script>', label: '<b>x</b>' }] }, {}, t)
+    expect(html).not.toContain('<script>')
+    expect(html).not.toContain('<b>x')
+  })
+})

@@ -228,6 +228,14 @@ const script = `(async () => {
   $('#chat-input').value = ''
   $('[data-chat="settings"]').click(); await wait(120)
   check('opening the settings tells the dock the chat is not shown', window.__sent.some((m) => m.type === 'chatShown' && m.shown === false))
+  // 15. the sandbox's card shows its four choices and answers with the chosen string
+  await reset(); window.__sent.length = 0
+  ;[...document.querySelectorAll('nav button')].find((b) => b.textContent === 'Permission request').click(); await wait(80)
+  const permButtons = [...document.querySelectorAll('[data-chat="permission"]')]
+  check('the sandbox card has its four choices', permButtons.length === 4, permButtons.map((b) => b.textContent).join(' | '))
+  permButtons[3].click(); await wait(60)
+  check('choosing sends that exact option back', sent().some((m) => m.type === 'uiAnswer' && m.value === 'No'), JSON.stringify(sent().slice(-1)))
+  check('and leaves its label as the note', $('#chat-list').textContent.includes('No') && !$('[data-chat="permission"]'))
   // 9. no model button next to the working folder
   document.querySelector('[data-chat="add"]').click(); await wait(60)
   check('no model button beside the working folder, with one session or several', !$('.chat-path-row .p-meter') && !$('.chat-path-row .p-composer-model'))

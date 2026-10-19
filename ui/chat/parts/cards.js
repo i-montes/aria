@@ -15,6 +15,9 @@
 //                           multi? }]  (non-object entries are dropped; see question.js)
 //   write     path:    string ("")   the file to be changed
 //             summary: string ("")   what changes
+//             detail:  string ("")   the tool and path, in the code box
+//   sandbox, write and quota may carry `options: [{ value, label, primary? }]`: the strings the extension's
+//   `ctx.ui.select` accepts back; the card shows one button per option and answers with its `value`.
 // Extra fields are kept untouched. The dialog's id and its answer channel stay Pi's: the card is
 // shown while the dialog exists and answered through it.
 //
@@ -25,8 +28,14 @@ const KINDS = new Set(['sandbox', 'quota', 'question', 'write'])
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const str = (value) => (typeof value === 'string' ? value : '')
 
+/** The options the extension accepts back (`ctx.ui.select`'s strings): `{ value, label, primary? }`, bad entries dropped. */
+const options = (list) =>
+  Array.isArray(list)
+    ? list.filter((o) => isObject(o) && typeof o.value === 'string' && typeof o.label === 'string').map((o) => (o.primary === true ? { value: o.value, label: o.label, primary: true } : { value: o.value, label: o.label }))
+    : []
+
 const FIELDS = {
-  sandbox: (c) => ({ summary: str(c.summary), detail: str(c.detail), jev: typeof c.jev === 'string' || isObject(c.jev) ? c.jev : '' }),
+  sandbox: (c) => ({ summary: str(c.summary), detail: str(c.detail), jev: typeof c.jev === 'string' || isObject(c.jev) ? c.jev : '', options: options(c.options) }),
   quota: (c) => {
     const percent = Math.round(Number(c.percent))
     const seconds = typeof c.countdown === 'number' ? Math.floor(c.countdown) : NaN
@@ -34,10 +43,11 @@ const FIELDS = {
       percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : 0,
       freeModel: str(c.freeModel),
       countdown: Number.isFinite(seconds) && seconds >= 0 ? seconds : null,
+      options: options(c.options),
     }
   },
   question: (c) => ({ questions: Array.isArray(c.questions) ? c.questions.filter(isObject) : [] }),
-  write: (c) => ({ path: str(c.path), summary: str(c.summary) }),
+  write: (c) => ({ path: str(c.path), summary: str(c.summary), detail: str(c.detail), options: options(c.options) }),
 }
 
 export function parseCardTitle(title) {

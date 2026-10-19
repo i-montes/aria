@@ -16,6 +16,7 @@ import { createBashToolDefinition } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import { commandPreview, covers, coversPath, emptyGrants, grantDir, grantUnits } from './grants.ts'
 import { CLASSIFIER, parseReview, REVIEW_TIMEOUT_MS, reviewLine, reviewRequest } from './review.ts'
+import { canAsk, sandboxCard } from './card.ts'
 import { BLOCK_NOTE, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, resolvePath, secretDirs, secretFiles, subagentProblem, wrapCommand, writableRoots } from './policy.ts'
 
 const hasBwrap = (() => {
@@ -71,20 +72,21 @@ export default function sandbox(pi: ExtensionAPI) {
     }
   }
 
-  /** Ask in the TUI; true when the user allowed it (once or for the session). A command that runs
+  /** Ask the user (terminal or dock); true when the user allowed it (once or for the session). A command that runs
    * arbitrary code can only be allowed again as that exact command. */
   const askOutside = async (ctx: any, command: string, reason: string | undefined) => {
     const description = reason?.trim() ?? ''
     const g = grantUnits(command)
     const forUnits = g && !g.broad ? `Yes, and don't ask again for ${g.units.join(', ')} this session` : null
     const forExact = forUnits ? null : 'Yes, and allow this exact command this session'
-    const title = [
-      'Run outside the sandbox?',
-      description || '(no description given)',
-      reviewLine(await review(ctx, command, description)),
-      `› ${commandPreview(command)}`,
-    ].join('\n')
-    const pick = await ctx.ui.select(title, [ONCE, forUnits ?? forExact!, ALL, NO])
+    const verdict = reviewLine(await review(ctx, command, description))
+    const options = [ONCE, forUnits ?? forExact!, ALL, NO]
+    // In Aria's dock the question is the chat's permission card; in the terminal, the same text as always.
+    const title =
+      ctx.mode === 'rpc'
+        ? sandboxCard('sandbox', { summary: description, detail: commandPreview(command), jev: verdict.replace(/^Jev: /, '') }, options)
+        : ['Run outside the sandbox?', description || '(no description given)', verdict, `› ${commandPreview(command)}`].join('\n')
+    const pick = await ctx.ui.select(title, options)
     if (pick === forUnits && g) g.units.forEach((u) => grants.programs.add(u))
     else if (pick === forExact) grants.exact.add(command.trim())
     else if (pick === ALL) grants.all = true
@@ -114,7 +116,7 @@ export default function sandbox(pi: ExtensionAPI) {
       // Allowed for the session: straight outside, without failing inside first.
       if (covers(grants, command)) return plain.execute(id, { command, timeout }, signal, onUpdate, ctx)
       if (outsideSandbox) {
-        if (ctx?.mode !== 'tui') return refuse('Running outside the sandbox needs the user\'s permission, and there is nobody here to ask. Find another way inside the project or explain what is needed.')
+        if (!canAsk(ctx)) return refuse('Running outside the sandbox needs the user\'s permission, and there is nobody here to ask. Find another way inside the project or explain what is needed.')
         if (!(await askOutside(ctx, command, reason))) return refuse('The user said no: the command did not run outside the sandbox.')
         return plain.execute(id, { command, timeout }, signal, onUpdate, ctx)
       }
@@ -144,9 +146,14 @@ export default function sandbox(pi: ExtensionAPI) {
     if (name === 'read' || isWritable(path, here)) return
     const { real } = resolvePath(path, here)
     if (coversPath(grants, real)) return
-    if (ctx?.mode === 'tui') {
+    if (canAsk(ctx)) {
       const forDir = `Yes, and allow writing in ${tilde(grantDir(real))} this session`
-      const pick = await ctx.ui.select(`Write outside the project?\n${name} ${tilde(real)}`, [ONCE, forDir, ALL, NO])
+      const options = [ONCE, forDir, ALL, NO]
+      const title =
+        ctx.mode === 'rpc'
+          ? sandboxCard('write', { path: tilde(real), detail: `${name} ${tilde(real)}` }, options)
+          : `Write outside the project?\n${name} ${tilde(real)}`
+      const pick = await ctx.ui.select(title, options)
       if (pick === forDir) grants.dirs.add(grantDir(real))
       else if (pick === ALL) grants.all = true
       if (pick === ONCE || pick === forDir || pick === ALL) {
@@ -154,7 +161,7 @@ export default function sandbox(pi: ExtensionAPI) {
         return
       }
     }
-    return { block: true, reason: `${path} is outside the project, /tmp and the caches: the sandbox does not allow writing it${ctx?.mode === 'tui' ? ' (the user said no)' : ''}.` }
+    return { block: true, reason: `${path} is outside the project, /tmp and the caches: the sandbox does not allow writing it${canAsk(ctx) ? ' (the user said no)' : ''}.` }
   })
 
   // A new session (startup, /new, /resume, fork) starts with no permissions.
