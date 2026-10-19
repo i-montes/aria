@@ -1,0 +1,13 @@
+/* The quota bars beside the assistant's name (render: quotabars.js). Solid fills. */
+.p-qb { display: flex; align-items: center; gap: 12px; min-width: 0; font-family: 'Geist Mono', ui-monospace, monospace; color: #EDEDEF; }
+.p-qb-item { display: flex; flex-direction: column; gap: 4px; width: 58px; flex: 0 1 58px; min-width: 40px; cursor: default; }
+.p-qb-head { display: flex; align-items: baseline; justify-content: space-between; gap: 4px; font-size: 10.5px; line-height: 12px; }
+.p-qb-label { color: #9A9AA3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-qb-num { color: #D6D6DC; font-variant-numeric: tabular-nums; }
+.p-qb-track { display: block; height: 3px; border-radius: 2px; background: #26262b; overflow: hidden; }
+.p-qb-fill { display: block; height: 100%; border-radius: 2px; background: #B9A8FF; transition: width 300ms ease; }
+.p-qb-item.is-warn .p-qb-fill { background: #F0B44C; }
+.p-qb-item.is-warn .p-qb-num { color: #F0B44C; }
+.p-qb-item.is-crit .p-qb-fill { background: #FF7A7A; }
+.p-qb-item.is-crit .p-qb-num { color: #FF9A9A; }
+@media (prefers-reduced-motion: reduce) { .p-qb-fill { transition: none; } }

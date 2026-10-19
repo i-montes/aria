@@ -18,6 +18,7 @@ import * as permission from './parts/permission.js'
 import * as phases from './parts/phases.js'
 import * as question from './parts/question.js'
 import * as quota from './parts/quota.js'
+import * as quotabars from './parts/quotabars.js'
 import * as session from './parts/session.js'
 import * as subagents from './parts/subagents.js'
 import * as tabs from './parts/tabs.js'
@@ -26,7 +27,7 @@ import * as tools from './parts/tools.js'
 import * as user from './parts/user.js'
 import * as working from './parts/working.js'
 
-export const PARTS = [answers, assistant, commands, composer, connect, divider, doc, files, index, jev, memory, meter, models, note, permission, phases, question, quota, session, subagents, tabs, tasks, tools, user, working]
+export const PARTS = [answers, assistant, commands, composer, connect, divider, doc, files, index, jev, memory, meter, models, note, permission, phases, question, quota, quotabars, session, subagents, tabs, tasks, tools, user, working]
 
 const OWN = {
   en: {

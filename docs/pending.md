@@ -37,6 +37,12 @@ them yet. Each row says what is missing and which part of the roadmap brings it.
 - Showing the sign-in's email or plan in the card needs a profile call the sign-in does not make today.
 - Disconnecting a provider (removing its credential or the package) has no command yet.
 
+## The quota bars
+
+- OpenCode Go's windows (5h, Week, Month) are read from `GET /zen/go/v1/usage` and were checked against the real answer. A Claude plan's windows (5h, Week and any per-model one such as Fable) are read from `GET /api/oauth/usage` with the sign-in's token, an endpoint Anthropic does not document: its answer format is parsed defensively and has **not** been checked against a real account (none is connected yet).
+- An API key, OpenCode Zen and an expired sign-in token show no bars. Aria does not refresh an expired Claude token (Pi does when it uses it); the bars come back after the next run.
+- With several sessions the header shows tabs, not bars.
+
 ## Smaller gaps
 
 - The agent-session view has no composer (the design has one): there is no way to steer a subagent yet.
