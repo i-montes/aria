@@ -78,7 +78,7 @@ export function planPrompt(idea: string): string {
     `I want to plan this: ${idea}`,
     '',
     `Follow the Superpowers flow. Read with \`read\` and follow the whole \`brainstorming\` skill (${skill('brainstorming')}). Don't offer the visual companion. Once I approve the design and the written spec, read and follow \`writing-plans\` (${skill('writing-plans')}).`,
-    'Ask the brainstorming questions (and the choice between approaches) with the `ask_user` tool: one question per call, with 2-4 options and your recommended one first. To approve the design or the written spec, ask with `ask_user` too.',
+    'Ask the brainstorming questions (and the choice between approaches) with the `ask_user` tool, in batches: put in one call up to 4 questions that do not depend on each other\'s answers, each with 2-4 options and your recommended one first; a question that depends on an earlier answer goes in the next call. This replaces the skill\'s "one question at a time". To approve the design or the written spec, ask with `ask_user` too.',
     'Save the spec and the plan in `docs/superpowers/` of the repo that receives the change (if it touches several repos, the one that receives most of it; the plan says which tasks go in each repo). Tell me at the start which repo and path you will save them in.',
     RISK_QUESTION,
     'When the plan is done, don\'t offer me a choice of how to execute it: tell me to review it and run it with `/execute <plan path>`.',

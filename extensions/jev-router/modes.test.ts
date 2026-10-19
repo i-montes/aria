@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { isPlanPath, notAPlan, planMayWrite, routedMode } from './modes.ts'
+import { isPlanPath, notAPlan, planMayWrite, routedMode, planPrompt } from './modes.ts'
 import { exhausted, parseGoUsage } from './usage.ts'
 
 const widget = join(homedir(), 'Projects', 'acme', 'checkout-widget')
@@ -53,5 +53,13 @@ describe('which modes the router works in', () => {
     expect(routedMode('rpc')).toBe(true)
     expect(routedMode('json')).toBe(false)
     expect(routedMode(undefined)).toBe(false)
+  })
+})
+
+describe('the /plan questions', () => {
+  test('come in batches of independent questions, not one per call', () => {
+    const prompt = planPrompt('a recipes app')
+    expect(prompt).not.toContain('one question per call')
+    expect(prompt).toContain('up to 4')
   })
 })

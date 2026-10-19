@@ -34,6 +34,10 @@ Tests: `bun test extensions`.
     `.aria-files` in `~/.aria/agent`) as never writable by the model, whatever was granted. It is only active under Aria
     (both `PI_CODING_AGENT_DIR` and `ARIA_PROJECTS_DIR` set).
   - `quota-fallback/ask.ts` (new): `quotaQuestion` builds the quota card in RPC, the old text in the terminal.
+  - `jev-router/modes.ts`: `/plan` asks the brainstorming questions in batches of up to 4 independent ones, not one
+    per call (the owner asked for it).
+  - `ask-user/index.ts`: the tool's description asks for one batch of up to 4 independent questions per call, even when
+    a skill asks one at a time (the dock shows them as one card; the owner asked for it).
   - `ask-user/questions.ts`: `questionCard`, `parseCardAnswers` and `TALK_LABEL`. `ask-user/dock.ts` (new) asks with
     the card through `ui.input` with the abort signal; `index.ts` calls it in RPC.
 - **Without bwrap** (macOS has none) the sandbox no longer refuses every command: each one asks first, with the same

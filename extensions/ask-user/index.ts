@@ -48,7 +48,7 @@ export default function askUser(pi: ExtensionAPI) {
     name: 'ask_user',
     label: 'Question',
     description:
-      'Ask the user 1-4 questions, each with 2-4 options; the user can always write their own answer instead. Use it only when you are blocked on a decision that is genuinely the user\'s: one you cannot settle from the request, the code or a sensible default (design choices while planning, scope, what to do with uncommitted changes you did not make, a process that is not yours). Do not use it to ask "should I continue?" or for facts you can check yourself. Put the option you recommend first with `recommended: true`. Write questions and options in Spanish.',
+      'Ask the user 1-4 questions, each with 2-4 options; the user can always write their own answer instead. Use it only when you are blocked on a decision that is genuinely the user\'s: one you cannot settle from the request, the code or a sensible default (design choices while planning, scope, what to do with uncommitted changes you did not make, a process that is not yours). Do not use it to ask "should I continue?" or for facts you can check yourself. Ask everything you need to decide now in ONE call: put up to 4 questions that do not depend on each other\'s answers together, even when a skill says to ask one question at a time; only a question whose options depend on an earlier answer waits for the next call. Put the option you recommend first with `recommended: true`. Write questions and options in Spanish.',
     promptSnippet: 'ask_user: ask the user multiple-choice questions when a decision is theirs',
     parameters: AskParams,
     exposure: 'model-only',
