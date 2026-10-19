@@ -355,5 +355,7 @@
   "chat.status.idle": "en reposo",
   "chat.undo.closed": "Se cerró \"{title}\"",
   "chat.undo": "Deshacer",
-  "chat.tab.moreNeeds": "+{n} · una sesión oculta te necesita"
+  "chat.tab.moreNeeds": "+{n} · una sesión oculta te necesita",
+  "chat.problem.workdir-unavailable": "Aria no pudo crear su carpeta de trabajo. Revisa la carpeta de proyectos en los ajustes.",
+  "chat.problem.pi-settings-invalid": "El archivo de ajustes del motor (~/.aria/agent/settings.json) no se puede leer. Corrígelo o bórralo, y Aria lo vuelve a escribir."
 }

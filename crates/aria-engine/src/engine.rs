@@ -99,7 +99,7 @@ impl Engine {
                     if let Ok(Some(status)) = child.lock().unwrap().try_wait() {
                         break status.code();
                     }
-                    std::thread::sleep(Duration::from_millis(10));
+                    std::thread::sleep(Duration::from_millis(25));
                 };
                 let _ = events.send(EngineEvent::Exited { code });
             });
@@ -151,10 +151,11 @@ impl Engine {
         self.write_line(&protocol::ui_response(id, &answer))
     }
 
-    /// Closes stdin (Pi's orderly shutdown), waits up to 3 s, then kills the process.
-    pub fn shutdown(self) {
+    /// Closes stdin (Pi's orderly shutdown), waits up to `grace`, then kills the process. Works through a shared
+    /// reference, so whoever holds the engine can stop it.
+    pub fn close(&self, grace: Duration) {
         self.stdin.lock().unwrap().take();
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + grace;
         while Instant::now() < deadline {
             if matches!(self.child.lock().unwrap().try_wait(), Ok(Some(_))) {
                 return;
@@ -162,6 +163,11 @@ impl Engine {
             std::thread::sleep(Duration::from_millis(20));
         }
         let _ = self.child.lock().unwrap().kill();
+    }
+
+    /// `close` with the default three seconds.
+    pub fn shutdown(self) {
+        self.close(Duration::from_secs(3));
     }
 }
 

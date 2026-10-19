@@ -1,6 +1,6 @@
 # Aria base — design
 
-Date: 2026-10-18. Status: draft for review.
+Date: 2026-10-18. Status: approved by the owner (2026-10-18); phase 1 built.
 
 ## Intent
 

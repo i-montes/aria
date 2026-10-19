@@ -7,11 +7,14 @@ Aria is a small Rust program that hosts a web page. The page is the interface; R
                                                                      │
                        aria-hyprland: hotkey, focused monitor        │ layer-shell window + WebKitGTK
                                                                      ▼
-                                                  ui/ (the page)  <── messages ──>  handlers.rs
+                                                  ui/ (the page)  <── messages ──>  handlers.rs (settings, keys, sign-ins)
+                                                                                    chat.rs (sessions)
+                                                                                       │ one per tab
+                                                                     aria-engine: `pi --mode rpc` child (JSONL)
                                                                                        │
-                                                         aria-core: settings, auth, providers, validation, OAuth
+                                                         aria-core: settings, auth, providers, agent dir, quota…
                                                                                        │
-                                                                          ~/.aria/settings.json, auth.json
+                                                ~/.aria/ settings.json, auth.json, sessions.json, agent/, pi/<version>/
 ```
 
 ## The crates
@@ -27,8 +30,14 @@ Aria is a small Rust program that hosts a web page. The page is the interface; R
   - `oauth` — sign-ins by authorization code + PKCE with a loopback callback: `anthropic` (Claude Pro/Max), `mcp` (Notion: discovery from the 401, dynamic client registration), and the `pkce` and `loopback` pieces they share.
   - `testing` (feature `testing`) — a fake Notion-like server so the OAuth flow can be tested without the network.
   - `bridge` — the messages between the dock and the page (below).
+  - `pi` — the pinned Pi (`pi-version`): where it is installed, whether Node can run it, the `pi` shim for Pi's own children.
+  - `agent` — Pi's directory, `~/.aria/agent/`: its `settings.json`, links to the credential files, the persona, one sessions folder (`sessions/aria`), the Claude provider package.
+  - `sessions` — the dock's tabs (`sessions.json`): ids, titles, the active one.
+  - `files` — the `@` file picker's `.gitignore`-aware walk.
+  - `quota` — the quota windows of the model's provider (OpenCode Go, a Claude plan).
 - **`aria-hyprland`** is the Hyprland adapter: it registers the hotkey at run time, asks which monitor has the focus, and reports config reloads. A Mac adapter would sit next to it with the same three jobs.
-- **`aria`** is the binary. `main.rs` wires things, `control.rs` keeps one instance, `visibility.rs` decides when the dock is shown or closing (a pure state machine), `dock.rs` is the window, `handlers.rs` answers the page.
+- **`aria-engine`** speaks Pi's RPC protocol: strict JSONL framing, commands and their responses, events, extension dialogs, and one supervised child (`Engine::close` stops it: stdin closed, killed after three seconds).
+- **`aria`** is the binary. `main.rs` wires things, `control.rs` keeps one instance, `visibility.rs` decides when the dock is shown or closing (a pure state machine), `dock.rs` is the window, `handlers.rs` answers the page's setup messages, `chat.rs` owns the sessions: one Pi per tab, started when the tab is shown, restarted when a credential changes (a busy one when its run settles), with desktop notifications for a prompt nobody can see.
 
 ## The hotkey, without touching Hyprland's config
 
@@ -50,7 +59,13 @@ Two WebKitGTK facts the first prototype paid for: set `WEBKIT_DISABLE_DMABUF_REN
 - `onboarding/steps.js` — the onboarding as data and pure functions; **the working state is the settings object itself**.
 - `onboarding/components.js` — form widgets that return HTML (every dynamic value escaped).
 - `onboarding/view.js` — the screens and one delegated event handler.
-- `i18n.js` and `i18n/*.json` — every visible string, English and Spanish.
+- `i18n.js` and `i18n/*.json` — every visible string, English and Spanish (the chat's parts bring their own `TEXTS`, merged by `chat/texts.js`).
+- `chat/state.js` — one conversation as data: a pure reducer over Pi's events and the dock's messages.
+- `chat/sessions.js` — the tabs as data.
+- `chat/parts/` — one module per component of the design (messages, tool chips, cards, pickers, tabs, quota card…), each pure (props in, escaped HTML out) with its CSS and tests. A component is reused, never copied.
+- `chat/thread.js`, `chat/view.js` — the thread, and the controller that composes the parts and wires them to the bridge.
+
+`tools/ui-sandbox/` serves the page with a stubbed bridge and drives it in headless Chrome (`check.ts`).
 
 The defaults and the provider catalog exist in Rust and in JS; both are tested against the golden JSON in `crates/aria-core/tests/golden/` so they cannot drift (`cargo test -p aria-core regenerate_golden -- --ignored` rewrites them after an intended change).
 
@@ -65,20 +80,25 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 | `saveKey` | check a key with its provider and, only if it is accepted, store it (`opencode-go`, `anthropic-api`, `typesafe` in `auth.json`; `tavily` in `mcp.json`) |
 | `startOauth`, `startMcpOauth` | start the Anthropic sign-in, or an MCP server's (`notion`) |
 | `openUrl` | open an `https://` link in the browser |
+| `installClaudeBridge`, `enginesRestart` | install the Claude provider; restart every Pi after a credential changed |
+| `sessionsLoad`, `sessionsSave`, `sessionClose`, `chatShown` | the tabs; is the chat on screen (not the settings) |
+| `session` (wrapping `chatSend`, `chatAbort`, `chatLoad`, `chatClearQueue`, `uiAnswer`, `listCommands`, `listModels`, `setModel`, `listFiles`) | everything about one tab's conversation |
 
 | Dock → page | Meaning |
 |---|---|
 | `open`, `close`, `notice` | animate the dock; show the first-run corner notice |
 | `settings`, `saved`, `keyResult`, `oauthUrl`, `oauthResult`, `error` | answers; failures carry a string key such as `key-rejected`. `settings` also lists what is really connected (`opencode-go:api_key`, `anthropic:oauth`, `mcp:notion`…), never a secret, so the setup does not have to assume it |
 | `problem` | something prevents Aria from working (for example `hyprland-classic-config`) |
+| `sessions` | the saved tabs |
+| `session` (wrapping `chatState`, `chatEvent`, `chatDialog`, `chatDialogClosed`, `chatEngine`, `chatQuota`, and the replies `commands`, `models`, `files`, `saved`, `error`) | what one tab's Pi says |
 
 ## Data and safety
 
 - Everything Aria stores is under `~/.aria/`. `settings.json` never holds a secret; `auth.json`, `mcp.json` and `mcp-auth.json` are mode `600`.
-- Files are written atomically (temp file and rename), and a file that cannot be parsed is reported, never overwritten.
+- Files are written atomically (a unique temp file and rename), and a file that cannot be parsed is reported, never overwritten (a broken `sessions.json` is moved to `sessions.json.broken`).
 - A key is validated against its provider before it is stored, and a rejected or unreachable check writes nothing.
 - The installer never edits `~/.config/hypr/`.
 
-## What phase 1 does not do
+## What is not there yet
 
-No chat, no agent, no goals, no extension socket, and no Mac. See the [roadmap](superpowers/specs/2026-10-18-aria-base-design.md#roadmap).
+The owner's extensions (phase 2, part 2b), settings driving Pi (2c), goals (phase 3), the state socket and external extensions (phase 4), Mac (phase 5). What the chat draws but nothing feeds yet is in [pending](pending.md). See the [roadmap](superpowers/specs/2026-10-18-aria-base-design.md#roadmap).

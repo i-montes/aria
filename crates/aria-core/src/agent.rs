@@ -40,8 +40,40 @@ fn link(target: &Path, at: &Path) -> io::Result<()> {
     std::os::unix::fs::symlink(target, at)
 }
 
-/// Creates or refreshes the agent directory for the given settings (`None` before the setup).
+/// Every session's file, whatever the working folder (Pi is started with `--session-dir` pointing here).
+pub fn sessions_dir(paths: &AriaPaths) -> PathBuf {
+    paths.agent().join("sessions").join("aria")
+}
+
+/// Pi used to keep sessions in one folder per working folder: move them into `sessions_dir`, never over a newer one.
+fn gather_sessions(paths: &AriaPaths) -> io::Result<()> {
+    let root = paths.agent().join("sessions");
+    let target = sessions_dir(paths);
+    std::fs::create_dir_all(&target)?;
+    let Ok(folders) = std::fs::read_dir(&root) else { return Ok(()) };
+    for folder in folders.filter_map(Result::ok) {
+        let path = folder.path();
+        if path == target || !path.is_dir() {
+            continue;
+        }
+        for file in std::fs::read_dir(&path)?.filter_map(Result::ok) {
+            let to = target.join(file.file_name());
+            if file.path().extension().is_some_and(|e| e == "jsonl") && !to.exists() {
+                std::fs::rename(file.path(), to)?;
+            }
+        }
+        let _ = std::fs::remove_dir(&path); // only when it is empty now
+    }
+    Ok(())
+}
+
+/// Starts of several sessions can prepare at once; the files are written one at a time.
+static PREPARE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Creates or refreshes the agent directory for the given settings (`None` before the setup). A Pi `settings.json` that
+/// does not parse is an `InvalidData` error and is left as it is (it lists the installed packages).
 pub fn prepare(paths: &AriaPaths, settings: Option<&Settings>) -> io::Result<()> {
+    let _one_at_a_time = PREPARE.lock().unwrap_or_else(|e| e.into_inner());
     let agent = paths.agent();
     std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&agent)?;
     std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o700))?;
@@ -61,8 +93,13 @@ pub fn prepare(paths: &AriaPaths, settings: Option<&Settings>) -> io::Result<()>
         ours["defaultProvider"] = json!(provider);
         ours["defaultModel"] = json!(model);
     }
-    let original = read_json(&settings_path).ok().flatten().unwrap_or_else(|| Value::Object(Default::default()));
+    let original = match read_json(&settings_path) {
+        Ok(found) => found.unwrap_or_else(|| Value::Object(Default::default())),
+        Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidData, error.to_string())),
+    };
     write_json_atomic(&settings_path, &merge_preserving(original, ours), 0o600)?;
+
+    gather_sessions(paths)?;
 
     let system = agent.join("SYSTEM.md");
     if !system.exists() {
@@ -233,6 +270,57 @@ mod tests {
         prepare(&paths, Some(&settings_with_daily("opencode-go/glm-5.3"))).unwrap();
         let value = read_json(&paths.agent().join("settings.json")).unwrap().unwrap();
         assert_eq!(value["packages"], json!([CLAUDE_BRIDGE_PACKAGE]));
+    }
+
+    #[test]
+    fn sessions_live_in_one_folder_and_older_ones_move_there() {
+        let (_dir, paths) = paths();
+        let old = paths.agent().join("sessions").join("--home-u-Projects--");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("2026-10-18T00-00-00-000Z_tab-1.jsonl"), "{}").unwrap();
+        prepare(&paths, None).unwrap();
+        assert_eq!(sessions_dir(&paths), paths.agent().join("sessions").join("aria"));
+        assert!(sessions_dir(&paths).join("2026-10-18T00-00-00-000Z_tab-1.jsonl").exists(), "moved, so the tab keeps its history");
+        assert!(!old.join("2026-10-18T00-00-00-000Z_tab-1.jsonl").exists());
+    }
+
+    #[test]
+    fn a_session_already_in_the_folder_is_not_overwritten_by_an_old_copy() {
+        let (_dir, paths) = paths();
+        std::fs::create_dir_all(sessions_dir(&paths)).unwrap();
+        std::fs::write(sessions_dir(&paths).join("a_tab.jsonl"), "new").unwrap();
+        let old = paths.agent().join("sessions").join("--x--");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("a_tab.jsonl"), "old").unwrap();
+        prepare(&paths, None).unwrap();
+        assert_eq!(std::fs::read_to_string(sessions_dir(&paths).join("a_tab.jsonl")).unwrap(), "new");
+    }
+
+    #[test]
+    fn a_broken_pi_settings_file_is_reported_not_replaced() {
+        let (_dir, paths) = paths();
+        std::fs::create_dir_all(paths.agent()).unwrap();
+        std::fs::write(paths.agent().join("settings.json"), "{ broken").unwrap();
+        let error = prepare(&paths, None).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read_to_string(paths.agent().join("settings.json")).unwrap(), "{ broken");
+    }
+
+    #[test]
+    fn many_starts_at_once_all_prepare_fine() {
+        let (_dir, paths) = paths();
+        std::fs::write(paths.auth(), "{}").unwrap();
+        let settings = settings_with_daily("opencode-go/glm-5.3");
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let (paths, settings) = (paths.clone(), settings.clone());
+                std::thread::spawn(move || prepare(&paths, Some(&settings)).map_err(|e| e.to_string()))
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+        assert_eq!(read_json(&paths.agent().join("settings.json")).unwrap().unwrap()["defaultModel"], "glm-5.3");
     }
 
     #[test]

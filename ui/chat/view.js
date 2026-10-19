@@ -20,7 +20,7 @@ import { formatElapsed } from './parts/working.js'
 import {
   MAX_SESSIONS, addSession, applyStatus, closeSession, createTabs, renameSession, selectSession, setTitleIfEmpty, toSaved, undoClose,
 } from './sessions.js'
-import { addNote, addQueued, addUser, answerDialog, answersForCard, clearQueue, createChat, reduce } from './state.js'
+import { addNote, addQueued, addUser, answerDialog, tookBack, answersForCard, clearQueue, createChat, reduce } from './state.js'
 import { renderThread } from './thread.js'
 
 /** `/home/ana/Projects` -> `~/Projects` (Linux and Mac homes); anything else stays as it is. */
@@ -529,8 +529,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     if (/^\/model(\s|$)/.test(text)) return // the model picker answers this one
     const session = tabs.active
     const chat = chatOf(session)
-    const slash = text.startsWith('/') // extension commands run at once, even during a run
-    if (chat.running && !slash) {
+    // Extension commands (and Aria's own) run at once, even during a run; a skill or a prompt template is an ordinary
+    // message for Pi and has to wait in the queue like one.
+    const name = text.startsWith('/') ? text.slice(1).split(/\s/)[0] : null
+    const command = name !== null ? commandsBy.get(session)?.find((c) => c.name === name) : null
+    const immediate = name !== null && (!command || command.source === 'extension' || command.source === 'aria')
+    if (chat.running && !immediate) {
       post({ type: 'chatSend', text, behavior: 'followUp' }, session)
       chats.set(session, addQueued(chat, text))
     } else {
@@ -1167,9 +1171,23 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     },
     /** What a session said: its chat messages (`chatState`, `chatEvent`, `chatDialog`, …). */
     receive(session, message) {
-      if (message.type === 'chatState' && message.model !== chatOf(session).model) commandsBy.delete(session)
+      // A late reply for a tab that is gone (closed, its undo window over) must not bring its state back.
+      if (!tabs.sessions.some((s) => s.id === session) && tabs.closed?.entry?.id !== session) return
+      // A new Pi (a restart, another model) can offer other commands: ask again.
+      if ((message.type === 'chatState' && message.model !== chatOf(session).model) || (message.type === 'chatEngine' && message.state !== 'ready')) {
+        commandsBy.delete(session)
+      }
       const before = chatOf(session)
       chats.set(session, reduce(before, message))
+      // A refused message goes back to the composer (when it is empty), so nothing looks sent that was not.
+      const giveBack = chatOf(session).giveBack
+      if (giveBack !== null && giveBack !== undefined) {
+        if (session === tabs.active && input && !input.value) {
+          input.value = giveBack
+          composerKey = ''
+        } else if (session !== tabs.active && !drafts.get(session)) drafts.set(session, giveBack)
+        chats.set(session, tookBack(chatOf(session)))
+      }
       tabs = applyStatus(tabs, session, chatOf(session), session === tabs.active)
       // A background session that starts waiting for an answer says so.
       if (message.type === 'chatDialog' && session !== tabs.active) {

@@ -173,9 +173,10 @@ describe('history', () => {
     expect(state.messages[4].text).toBe('thanks')
   })
 
-  test('history never replaces a conversation already on the page (it can arrive after the first message)', () => {
+  test('history never replaces a conversation already on the page: it goes in front of it', () => {
     const state = run(addUser(createChat(), 'just typed'), ev({ type: 'history', messages: history }))
-    expect(state.messages).toEqual([{ kind: 'user', text: 'just typed' }])
+    expect(state.messages.at(-1)).toEqual({ kind: 'user', text: 'just typed' })
+    expect(state.messages[0]).toEqual({ kind: 'user', text: 'list files' })
   })
 
   test('history does not cut a reply that is already streaming', () => {
@@ -329,13 +330,6 @@ describe('the provider quota', () => {
   })
 })
 
-describe('the route line from the router', () => {
-  test('a jev event becomes a route line before the next answer', () => {
-    const state = run(createChat(), ev({ type: 'aria_jev', mode: 'focused task', action: 'searches memory' }))
-    expect(state.messages.at(-1)).toEqual({ kind: 'jev', mode: 'focused task', action: 'searches memory' })
-  })
-})
-
 describe('a card sent by an extension (a dialog whose title is JSON)', () => {
   test('the dialog keeps its parsed card so the view can choose the renderer', () => {
     const title = JSON.stringify({ aria: 1, kind: 'quota', percent: 98, freeModel: 'opencode-go/cat-jam-free', countdown: 300 })
@@ -353,6 +347,9 @@ describe('a card sent by an extension (a dialog whose title is JSON)', () => {
     let state = reduce(createChat(), { type: 'chatDialog', id: 'u1', method: 'select', request: { title, options: ['Allow once', 'Block'] }, hidden: false })
     state = answerDialog(state, 'u1', 'deny')
     expect(state.messages.at(-1)).toMatchObject({ kind: 'note', label: 'sandbox', key: 'chat.result.deny' })
+    state = reduce(state, { type: 'chatDialog', id: 'u2', method: 'select', request: { title, options: ['Allow git for this session'] }, hidden: false })
+    state = answerDialog(state, 'u2', 'Allow git for this session')
+    expect(state.messages.at(-1)).toEqual({ kind: 'note', label: 'sandbox', text: 'Allow git for this session' })
   })
 })
 
@@ -381,5 +378,48 @@ describe('what the question card leaves in the thread', () => {
     let state = reduce(createChat(), { type: 'chatDialog', id: 'u1', method: 'input', request: { title }, hidden: false })
     state = answerDialog(state, 'u1', [{ header: 'Fallback', selected: ['Git hash'], talk: false }])
     expect(state.messages.at(-1)).toEqual({ kind: 'answers', answers: [{ header: 'Fallback', selected: ['Git hash'], talk: false }] })
+  })
+})
+
+describe('review fixes before 2b', () => {
+  test('a refused prompt leaves the thread, and the page learns the text to give back', () => {
+    let state = addUser(createChat(), 'hello')
+    state = reduce(state, ev({ type: 'command_failed', command: 'prompt', error: 'Cannot submit a prompt while compaction is in progress', text: 'hello' }))
+    expect(state.messages.map((m) => m.kind)).toEqual(['notice'])
+    expect(state.giveBack).toBe('hello')
+  })
+
+  test('a refused queued prompt leaves the queue', () => {
+    let state = addQueued(run(createChat(), ev({ type: 'agent_start' })), 'later')
+    state = reduce(state, ev({ type: 'command_failed', command: 'prompt', error: 'no', text: 'later' }))
+    expect(state.queue).toEqual([])
+    expect(state.giveBack).toBe('later')
+  })
+
+  test('a failure without a text changes nothing but the notice', () => {
+    const state = reduce(addUser(createChat(), 'x'), ev({ type: 'command_failed', command: 'set_model', error: 'no' }))
+    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'notice'])
+    expect(state.giveBack).toBeNull()
+  })
+
+  test('history that arrives after the first message goes before it', () => {
+    const history = [
+      { role: 'user', content: 'earlier question' },
+      { role: 'assistant', content: [{ type: 'text', text: 'earlier answer' }] },
+      { role: 'user', content: 'just typed' },
+    ]
+    const state = reduce(addUser(createChat(), 'just typed'), ev({ type: 'history', messages: history }))
+    expect(state.messages.map((m) => m.text)).toEqual(['earlier question', 'earlier answer', 'just typed'])
+  })
+
+  test('history without the typed message still goes before it', () => {
+    const state = reduce(addUser(createChat(), 'new'), ev({ type: 'history', messages: [{ role: 'user', content: 'old' }] }))
+    expect(state.messages.map((m) => m.text)).toEqual(['old', 'new'])
+  })
+
+  test('a stopped engine is not running', () => {
+    const state = run(createChat(), ev({ type: 'agent_start' }), { type: 'chatEngine', state: 'stopped' })
+    expect(state.running).toBe(false)
+    expect(state.engine).toBe('stopped')
   })
 })

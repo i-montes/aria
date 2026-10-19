@@ -75,6 +75,7 @@ pub fn is_chat(message: &PageMessage) -> bool {
             | PageMessage::SessionsSave { .. }
             | PageMessage::SessionClose { .. }
             | PageMessage::EnginesRestart
+            | PageMessage::ChatShown { .. }
     )
 }
 
@@ -116,6 +117,7 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         | PageMessage::ChatAbort
         | PageMessage::ChatLoad
         | PageMessage::EnginesRestart
+        | PageMessage::ChatShown { .. }
         | PageMessage::ChatClearQueue { .. }
         | PageMessage::UiAnswer { .. }
         | PageMessage::ListCommands { .. }

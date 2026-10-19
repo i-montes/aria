@@ -96,6 +96,8 @@ function renderProblem() {
 function setMode(mode) {
   state.mode = mode
   document.body.classList.toggle('mode-chat', mode === 'chat')
+  // While the settings are open a prompt cannot be seen: the dock notifies for it as if it were closed.
+  post({ type: 'chatShown', shown: mode === 'chat' })
 }
 
 const NOTICE_MS = 8000

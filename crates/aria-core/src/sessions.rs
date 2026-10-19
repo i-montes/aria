@@ -43,14 +43,21 @@ impl SessionList {
     }
 }
 
-/// A missing or unreadable file is an empty list: the tabs are a convenience, never a reason to fail.
+/// A missing file is an empty list. A file that does not parse is moved aside (`sessions.json.broken`) and the list starts
+/// empty: the tabs are a convenience, never a reason to fail, and the old file is never overwritten.
 pub fn load(paths: &AriaPaths) -> SessionList {
-    read_json(&paths.sessions())
-        .ok()
-        .flatten()
-        .and_then(|value| serde_json::from_value::<SessionList>(value).ok())
-        .map(SessionList::sanitized)
-        .unwrap_or_default()
+    let parsed = match read_json(&paths.sessions()) {
+        Ok(None) => return SessionList::default(),
+        Ok(Some(value)) => serde_json::from_value::<SessionList>(value).ok(),
+        Err(_) => None,
+    };
+    match parsed {
+        Some(list) => list.sanitized(),
+        None => {
+            let _ = std::fs::rename(paths.sessions(), paths.root.join("sessions.json.broken"));
+            SessionList::default()
+        }
+    }
 }
 
 pub fn save(paths: &AriaPaths, list: &SessionList) -> io::Result<()> {
@@ -120,11 +127,13 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_or_broken_file_is_an_empty_list() {
+    fn a_missing_or_broken_file_is_an_empty_list_and_a_broken_one_is_kept_aside() {
         let (_dir, paths) = paths();
         assert_eq!(load(&paths), SessionList::default());
         std::fs::write(paths.sessions(), "{ not json").unwrap();
         assert_eq!(load(&paths), SessionList::default());
+        assert_eq!(std::fs::read_to_string(paths.root.join("sessions.json.broken")).unwrap(), "{ not json");
+        assert!(!paths.sessions().exists(), "moved, so the next save cannot overwrite it");
         std::fs::write(paths.sessions(), r#"{"sessions": 3}"#).unwrap();
         assert_eq!(load(&paths), SessionList::default());
     }

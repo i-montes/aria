@@ -11,7 +11,6 @@ import * as files from './parts/files.js'
 import * as index from './parts/index.js'
 import * as jev from './parts/jev.js'
 import * as memory from './parts/memory.js'
-import * as meter from './parts/meter.js'
 import * as models from './parts/models.js'
 import * as note from './parts/note.js'
 import * as permission from './parts/permission.js'
@@ -27,7 +26,7 @@ import * as tools from './parts/tools.js'
 import * as user from './parts/user.js'
 import * as working from './parts/working.js'
 
-export const PARTS = [answers, assistant, commands, composer, connect, divider, doc, files, index, jev, memory, meter, models, note, permission, phases, question, quota, quotabars, session, subagents, tabs, tasks, tools, user, working]
+export const PARTS = [answers, assistant, commands, composer, connect, divider, doc, files, index, jev, memory, models, note, permission, phases, question, quota, quotabars, session, subagents, tabs, tasks, tools, user, working]
 
 const OWN = {
   en: {
@@ -49,7 +48,6 @@ const OWN = {
     'chat.toast.open': 'Open',
     'chat.toast.needs': 'needs your answer',
     'chat.memory.open': 'Memory',
-    'chat.meter.noModel': 'no model',
     'chat.cmd.memory': 'Open the memory panel',
     'chat.cmd.model': 'Switch the model',
     'chat.cmd.connect': 'Connect a provider (Anthropic, OpenCode Go)',
@@ -73,7 +71,6 @@ const OWN = {
     'chat.toast.open': 'Abrir',
     'chat.toast.needs': 'necesita tu respuesta',
     'chat.memory.open': 'Memoria',
-    'chat.meter.noModel': 'sin modelo',
     'chat.cmd.memory': 'Abrir el panel de memoria',
     'chat.cmd.model': 'Cambiar de modelo',
     'chat.cmd.connect': 'Conectar un proveedor (Anthropic, OpenCode Go)',

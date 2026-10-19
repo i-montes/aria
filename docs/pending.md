@@ -4,18 +4,9 @@ The chat has every element of the design (`design/Aria.html`, `design/components
 tested as UI, with their data contract written at the top of each module in `ui/chat/parts/`, but nothing feeds
 them yet. Each row says what is missing and which part of the roadmap brings it.
 
-## Needs the owner's extensions to speak the dock's language (phase 2, part 2b)
+## Needs the owner's extensions (phase 2, part 2b — see its plan)
 
-| What the design shows | What is missing | Contract (already in the UI) |
-|---|---|---|
-| Permission card (leave the sandbox, write outside) with Jev's review | the `sandbox` extension must ask through `ui.select(title, ["allow","always","deny"])` with a JSON title | `{"aria":1,"kind":"sandbox"\|"write", summary, detail, path, jev}` (`ui/chat/parts/cards.js`); the answer is the option code |
-| Quota card with the countdown | the `quota-fallback` extension, same mechanism, options `["free","keep"]` and the dialog's `timeout` | `{"aria":1,"kind":"quota", percent, freeModel, countdown}` |
-| Question card (`ask_user`), then the answers card | `ask-user` must ask through `ui.input` with a JSON title; the answer is a JSON string | `{"aria":1,"kind":"question", questions:[{question, header, options:[{label, description, recommended}], multi}]}`; answer `[{question, answers, talk?}]` |
-| Jev line before an answer ("focused task · searches memory") | `jev-router` must emit its route as a session event | `{type:"aria_jev", mode, action}` |
-| "engram: saved the decisions" note after compaction | `autocompact` must notify through `ui.notify` | already shown as a notice from `ui_notice` |
-| Working phases "planning", "writing the spec", "splitting into phases" | `/plan` flow events | the phase names are in `ui/chat/parts/working.js`; `state.js` maps tool names to the others |
-| Quota in the header meter and in the tab tooltips (used %, resets) | the quota extension's readings | `renderMeter({used, resets})`, tab `quota`; `hasQuota` is false until then |
-| Subagents view (Alt+A) and an agent's session | the Rust-hosted subagent socket (`PI_WATCH_SOCK`) and the `parallel` tool events | `chat.setAgents([{id, role, task, status, kind}])`; session steps per `ui/chat/parts/session.js` |
+The cards, the Jev route line and the subagents panel are drawn and tested; part 2b makes the extensions send them. The contracts the extensions will follow are written in `docs/superpowers/plans/2026-10-19-aria-phase2b-extensions.md` (a card is a dialog whose `title` is `{"aria":1,"kind":…, "options":[…]}`; the Jev line is a `setStatus('aria-jev', …)`; the subagents come from Aria's own watch socket).
 
 ## Needs the goals engine (phase 3)
 
@@ -33,7 +24,7 @@ them yet. Each row says what is missing and which part of the roadmap brings it.
 
 ## The Claude provider
 
-- `/connect` installs the Claude provider (`claude-bridge`) for the sign-in route and needs Claude Code on the machine; the quota of a Claude plan is not readable yet, so the header meter shows none for it.
+- `/connect` installs the Claude provider (`claude-bridge`) for the sign-in route and needs Claude Code on the machine. Closing the card does not cancel a sign-in still waiting in the browser (it times out after five minutes).
 - Showing the sign-in's email or plan in the card needs a profile call the sign-in does not make today.
 - Disconnecting a provider (removing its credential or the package) has no command yet.
 
@@ -64,5 +55,5 @@ them yet. Each row says what is missing and which part of the roadmap brings it.
 ## Deliberate differences from the design
 
 - The working folder row and the settings button (owner's decisions).
-- The header has no model button or meter (owner's decision; the design has one beside the name): the model is the chip under the input and shows in each tab's tooltip. The meter's part (`parts/meter.js`) is kept for when its quota and context readings have a place.
+- The header has no model button or meter (owner's decision; the design has one beside the name): the model is the chip under the input; the quota chip beside the name and each tab's hover open the same quota card, with the model and the context.
 - Buttons and cards use solid fills; only the border takes the accent (owner's taste).

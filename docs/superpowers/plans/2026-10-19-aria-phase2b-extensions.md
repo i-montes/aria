@@ -29,6 +29,15 @@
 - A subagent that connects, crashes or never sends `end` must end as failed or done in the panel, never "running" forever (Task 7 tests).
 - The same files must keep working in the owner's own Pi (`~/.pi/agent`): the env fallback and `mode === 'tui'` paths (Task 2 test `agentDir falls back to ~/.pi/agent`).
 
+## Done before starting (review of what was built, 2026-10-19)
+
+A fresh review of `main` found problems this plan builds on; they were fixed first (branch `pre-2b-fixes`): Pi processes are really stopped (`Engine::close`), a restart after `/connect` waits for a run to settle, dialogs Pi drops when a run settles are closed (with their notification), a notification for a card reads its summary (not the JSON), sessions live in one folder (`agent::sessions_dir`, `--session-dir`) so a changed projects folder keeps every tab's history, no `$HOME` fallback for the working folder (`workdir-unavailable`), `prepare` is safe with several sessions starting at once, a broken Pi `settings.json` is reported (`pi-settings-invalid`) instead of wiping `packages`, a refused prompt goes back to the composer, history that arrives late goes in front of what was typed, the chat counts as unseen while the settings are open, late replies for a closed tab are dropped, the duplicate `meter` part is gone. Consequences for the tasks below:
+
+- Task 1: rewrite `leaves_an_existing_system_md_alone` for the hash rule; `prepare` already holds a global lock.
+- Task 3: install the packages from the installer (the dock's `PATH` may not have `npm`); `ARIA_PROJECTS_DIR` is the real working folder (never `$HOME`); the page's command cache is already cleared when a Pi restarts.
+- Tasks 4–6: the old `aria_jev` reducer case was removed; Task 6 adds the `setStatus` path. Esc stops a run first: a question card stays answerable only while its run is going (Pi drops it on abort).
+- Task 7: `setAgents` is shared by all tabs today; make it per session.
+
 ---
 
 ### Task 1: The persona (fixes "it answered with a table")

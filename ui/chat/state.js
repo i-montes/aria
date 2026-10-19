@@ -17,7 +17,7 @@ import { parseCardTitle } from './parts/cards.js'
 export function createChat() {
   return {
     workdir: '', running: false, engine: 'idle', model: null, thinking: null, context: null, problem: null,
-    messages: [], dialogs: [], queue: [], delivered: [], phase: 'working', startedAt: null, quota: [],
+    messages: [], dialogs: [], queue: [], delivered: [], phase: 'working', startedAt: null, quota: [], giveBack: null,
   }
 }
 
@@ -195,8 +195,6 @@ function reduceEvent(state, event) {
       }
       return { ...state, queue, delivered: [...state.delivered, ...gone] }
     }
-    case 'aria_jev':
-      return push(state, { kind: 'jev', mode: event.mode, action: event.action })
     case 'message_update': {
       const update = event.assistantMessageEvent ?? {}
       const next = streamUpdate(state, update)
@@ -219,15 +217,33 @@ function reduceEvent(state, event) {
         : push({ ...state, phase: 'working' }, { kind: 'divider', key: 'chat.compacted' })
     case 'engine_exited':
       return push({ ...state, running: false }, notice('error', { key: 'chat.engine.exited' }))
-    case 'command_failed':
-      return push(state, notice('error', { text: event.error ?? event.command }))
+    case 'command_failed': {
+      // A refused prompt (Pi was compacting, a command that needed a queue) leaves the thread or the queue, and its
+      // text goes back to the composer (`giveBack`), so nothing looks sent that was not.
+      let next = state
+      if (typeof event.text === 'string') {
+        const queued = state.queue.findIndex((q) => q.text === event.text)
+        const shown = state.messages.findLastIndex((m) => m.kind === 'user' && m.text === event.text)
+        if (queued >= 0) next = { ...state, queue: state.queue.filter((_, i) => i !== queued) }
+        else if (shown >= 0) next = withMessages(state, state.messages.filter((_, i) => i !== shown))
+        next = { ...next, giveBack: event.text }
+      }
+      return push(next, notice('error', { text: event.error ?? event.command }))
+    }
     case 'ui_notice':
       return event.request?.method === 'notify'
         ? push(state, notice(TONES[event.request.notifyType] ?? 'info', { text: event.request.message }))
         : state
-    case 'history':
-      // Only into an empty page: it can arrive after the first message or while a reply streams.
-      return state.messages.length ? state : withMessages(state, fromHistory(event.messages))
+    case 'history': {
+      // The conversation so far. It can arrive after the owner already typed (a cold start): what Pi had before that
+      // goes in front. While only a reply streams (no message of the owner on the page), it is left alone.
+      const past = fromHistory(event.messages)
+      if (!state.messages.length) return withMessages(state, past)
+      const first = state.messages.find((m) => m.kind === 'user')
+      if (!first) return state
+      const at = past.findLastIndex((m) => m.kind === 'user' && m.text === first.text)
+      return withMessages(state, [...(at >= 0 ? past.slice(0, at) : past), ...state.messages])
+    }
     case 'session_reset':
       return { ...withMessages(state, []), queue: [], delivered: [], dialogs: [] }
     default:
@@ -258,7 +274,9 @@ export function reduce(state, message) {
     case 'chatQuota':
       return { ...state, quota: Array.isArray(message.windows) ? message.windows : state.quota }
     case 'chatEngine':
-      return { ...state, engine: message.state }
+      return message.state === 'stopped' || message.state === 'exited'
+        ? { ...state, engine: message.state, running: false, startedAt: null }
+        : { ...state, engine: message.state }
     case 'chatDialog': {
       const dialog = { id: message.id, method: message.method, request: message.request, card: parseCardTitle(message.request?.title) }
       return { ...state, dialogs: [...state.dialogs.filter((d) => d.id !== message.id), dialog] }
@@ -274,6 +292,8 @@ export const addUser = (state, text) => push(state, { kind: 'user', text })
 /** A one-line fact in the thread that did not come from Pi (a provider was connected). */
 export const addNote = (state, label, text) => push(state, { kind: 'note', label, text })
 export const addQueued = (state, text) => ({ ...state, queue: [...state.queue, { text }] })
+/** The composer took back a refused message's text. */
+export const tookBack = (state) => ({ ...state, giveBack: null })
 export const clearQueue = (state, at) => ({ ...state, queue: at === undefined ? [] : state.queue.filter((_, i) => i !== at) })
 
 /** The question card's answers as the answers card draws them: its header, what was picked, whether it was only talked about. */
@@ -296,5 +316,8 @@ export function answerDialog(state, id, choice) {
   if (kind === 'question') {
     return Array.isArray(choice) ? push(next, { kind: 'answers', answers: choice }) : push(next, { kind: 'note', label: 'ask', key: 'chat.askSkipped' })
   }
-  return choice ? push(next, { kind: 'note', label: CARD_LABEL[kind] ?? kind, key: `chat.result.${choice}`, text: String(choice) }) : next
+  if (!choice) return next
+  // The known codes have a sentence ("allowed once"); an extension's own option is shown as it was written.
+  const known = ['allow', 'always', 'deny', 'free', 'keep'].includes(choice)
+  return push(next, known ? { kind: 'note', label: CARD_LABEL[kind] ?? kind, key: `chat.result.${choice}`, text: String(choice) } : { kind: 'note', label: CARD_LABEL[kind] ?? kind, text: String(choice) })
 }

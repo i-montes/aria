@@ -71,6 +71,7 @@ fn run_dock() {
                 paths,
                 notifier: Arc::new(OmarchyNotifier),
                 dock_visible: dock_visible.clone(),
+                chat_shown: Arc::new(AtomicBool::new(true)),
                 path_var: std::env::var("PATH").unwrap_or_default(),
                 quota_fetcher: Arc::new(aria_core::quota::real_fetcher),
             },

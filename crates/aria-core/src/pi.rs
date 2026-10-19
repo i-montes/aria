@@ -86,7 +86,9 @@ pub fn write_shim(paths: &AriaPaths, install: &PiInstall) -> io::Result<PathBuf>
     std::fs::create_dir_all(paths.bin())?;
     let shim = paths.bin().join("pi");
     let script = format!("#!/bin/sh\nexec '{}' \"$@\"\n", install.binary.display());
-    let tmp = paths.bin().join(".pi.tmp");
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = paths.bin().join(format!(".pi.{}.{n}.tmp", std::process::id()));
     std::fs::write(&tmp, script)?;
     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
     std::fs::rename(&tmp, &shim)?;
