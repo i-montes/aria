@@ -53,26 +53,48 @@ describe('the compact bar', () => {
 })
 
 describe('the card on hover', () => {
-  const rows = (html) => html.slice(html.indexOf('p-qb-pop')).match(/class="p-qb-row is-/g)?.length ?? 0
+  const card = (html) => html.slice(html.indexOf('class="p-qb-pop"'))
+  const windowsIn = (html) => (card(html).match(/class="p-qb-(hero|row) is-/g) ?? []).length
 
-  test('the card lists every window, 5h first, each with label, bar, percent and when it resets', () => {
+  test('the 5-hour window leads the card as a hero, big number, the time it resets in, and a thick bar', () => {
     const html = renderQuotaBars({ windows: go, now: NOW }, {}, t)
-    expect(rows(html)).toBe(3)
-    const card = html.slice(html.indexOf('p-qb-pop'))
-    expect(card.indexOf('>5h<')).toBeLessThan(card.indexOf('chat.quotabars.week'))
-    expect(card.indexOf('chat.quotabars.week')).toBeLessThan(card.indexOf('chat.quotabars.month'))
-    expect(card).toContain('42%')
-    expect(card).toContain('17%')
-    expect(card).toContain('6%')
-    expect(card).toContain('chat.quotabars.resets when=3h 20m')
-    expect(card).toContain('chat.quotabars.resets when=5d')
-    expect(card).toContain('chat.quotabars.title')
+    const hero = html.slice(html.indexOf('class="p-qb-hero'), html.indexOf('class="p-qb-list"'))
+    expect(hero).toContain('chat.quotabars.window.5h')
+    expect(hero).toContain('>42<')
+    expect(hero).toContain('chat.quotabars.resets when=3h 20m')
+    expect(hero).toContain('width: 42%')
+  })
+
+  test('the other windows follow as compact rows: label, bar, percent and the time left on one line', () => {
+    const html = renderQuotaBars({ windows: go, now: NOW }, {}, t)
+    expect(windowsIn(html)).toBe(3)
+    const list = html.slice(html.indexOf('class="p-qb-list"'))
+    expect(list.match(/class="p-qb-row is-/g)).toHaveLength(2)
+    expect(list.indexOf('chat.quotabars.week')).toBeLessThan(list.indexOf('chat.quotabars.month'))
+    expect(list).toContain('17%')
+    expect(list).toContain('6%')
+    expect(list).toContain('5d')
+    const week = list.slice(list.indexOf('p-qb-row is-'), list.indexOf('p-qb-row is-', list.indexOf('p-qb-row is-') + 5))
+    for (const part of ['p-qb-row-label', 'p-qb-row-track', 'p-qb-row-num', 'p-qb-row-reset']) expect(week).toContain(part)
+  })
+
+  test('the header names the provider when it is known', () => {
+    const html = renderQuotaBars({ windows: go, provider: 'OpenCode Go', now: NOW }, {}, t)
+    expect(card(html)).toContain('OpenCode Go')
+    expect(card(renderQuotaBars({ windows: go, now: NOW }, {}, t))).not.toContain('p-qb-pop-provider')
   })
 
   test('a per-model window (Fable) is one more row under the model\'s name', () => {
     const html = renderQuotaBars({ windows: [...go, { id: 'fable', label: 'Fable', percent: 88 }], now: NOW }, {}, t)
-    expect(rows(html)).toBe(4)
-    expect(html).toContain('>Fable<')
+    expect(windowsIn(html)).toBe(4)
+    expect(card(html)).toContain('>Fable<')
+  })
+
+  test('a single window is only the hero; with no 5-hour window the first stands as the hero', () => {
+    expect(card(renderQuotaBars({ windows: [go[0]], now: NOW }, {}, t))).not.toContain('class="p-qb-list"')
+    const html = renderQuotaBars({ windows: [go[1], go[2]], now: NOW }, {}, t)
+    expect(html.slice(html.indexOf('class="p-qb-hero'))).toContain('chat.quotabars.window.week')
+    expect(windowsIn(html)).toBe(2)
   })
 
   test('a window that never says when it resets shows no reset text, and a past one neither', () => {
@@ -80,21 +102,21 @@ describe('the card on hover', () => {
     expect(renderQuotaBars({ windows: [{ id: '5h', label: '5h', percent: 3, resetsAt: '2020-01-01T00:00:00Z' }], now: NOW }, {}, t)).not.toContain('chat.quotabars.resets')
   })
 
-  test('every row has its own level, and bar and number are clamped to 0..100', () => {
+  test('every window has its own level, and bar and number are clamped to 0..100', () => {
     const html = renderQuotaBars({ windows: [{ id: '5h', label: '5h', percent: 180 }, { id: 'week', label: 'Week', percent: -5 }, { id: 'month', label: 'Month', percent: 85 }] }, {}, t)
-    const card = html.slice(html.indexOf('p-qb-pop'))
-    expect(card).toContain('p-qb-row is-crit')
-    expect(card).toContain('p-qb-row is-ok')
-    expect(card).toContain('p-qb-row is-warn')
+    expect(card(html)).toContain('p-qb-hero is-crit')
+    expect(card(html)).toContain('p-qb-row is-ok')
+    expect(card(html)).toContain('p-qb-row is-warn')
     expect(html).not.toContain('180')
     expect(html).not.toContain('-5')
-    expect(card).toContain('width: 100%')
-    expect(card).toContain('width: 0%')
+    expect(card(html)).toContain('width: 100%')
+    expect(card(html)).toContain('width: 0%')
   })
 
-  test('labels and ids are escaped', () => {
-    const html = renderQuotaBars({ windows: [{ id: '<b>', label: '<script>alert(1)</script>', percent: 5 }] }, {}, t)
+  test('labels, ids and the provider are escaped', () => {
+    const html = renderQuotaBars({ windows: [{ id: '5h', label: '5h', percent: 5 }, { id: '<b>', label: '<script>alert(1)</script>', percent: 5 }], provider: '<i>x</i>' }, {}, t)
     expect(html).not.toContain('<script>')
+    expect(html).not.toContain('<i>x')
     expect(html).toContain('&lt;script&gt;')
   })
 })
