@@ -115,6 +115,9 @@ const script = `(async () => {
   check('typing in the memory search keeps its focus', document.activeElement?.dataset?.chatField === 'memory-search' && document.activeElement.value === 'ru')
   window.aria.chat.escape(); await wait(40)
 
+  // 9. no model button next to the working folder
+  document.querySelector('[data-chat="add"]').click(); await wait(60)
+  check('no model button beside the working folder, with one session or several', !$('.chat-path-row .p-meter') && !$('.chat-path-row .p-composer-model'))
   // 8. the textarea is not replaced just because text appeared
   const before = $('#chat-input'); typeIn('abc'); typeIn('abc\\ndef'); await wait(40)
   check('typing and adding a line does not replace the textarea', $('#chat-input') === before && before.rows === 2, before.rows)

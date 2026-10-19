@@ -13,7 +13,6 @@ body.open.mode-chat .chat { animation: enter 300ms var(--content) both; }
 .chat-name { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 .chat-new:disabled { cursor: not-allowed; color: #5d5d66; border-color: #26262b; }
 .chat-path-row { flex: none; display: flex; align-items: center; gap: 8px; }
-#chat-meter-slot:empty { display: none; }
 
 .icon-btn { display: grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; cursor: pointer; border-radius: 9px; border: 1px solid var(--line-strong); background: var(--surface); color: #B4B4BC; }
 .icon-btn:hover, .icon-btn:focus-visible { border-color: var(--accent-border); outline: none; }

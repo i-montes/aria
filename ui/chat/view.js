@@ -182,7 +182,6 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     <div id="chat-undo"></div>
     <div class="chat-path-row">
       <div class="chat-path" id="chat-path"></div>
-      <span id="chat-meter-slot"></span>
       <button type="button" class="icon-btn" data-chat="settings" data-nav aria-label="${esc(t('chat.settings'))}" title="${esc(t('chat.settings'))}">${ICON.gear}</button>
     </div>
     <div id="chat-banner"></div>
@@ -248,8 +247,6 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     $('chat-header').innerHTML = `${left}
       <button type="button" class="icon-btn chat-new" data-chat="add" ${full ? 'disabled' : ''} aria-label="${esc(t('chat.new'))}" title="${esc(t('chat.new'))}">${ICON.plus}</button>
       <button type="button" class="icon-btn" data-chat="close-dock" aria-label="${esc(t('chat.close'))}" title="${esc(t('chat.close'))}">${ICON.close}</button>`
-    // The meter sits in the header's identity block in the design; with tabs it moves to the path row.
-    $('chat-meter-slot').innerHTML = multi ? meterHtml() : ''
   }
 
   function drawThread() {

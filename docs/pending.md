@@ -52,5 +52,5 @@ them yet. Each row says what is missing and which part of the roadmap brings it.
 ## Deliberate differences from the design
 
 - The working folder row and the settings button (owner's decisions).
-- With several tabs the meter moves from the header to the row of the working folder (the header has no room).
+- With several tabs the header's meter is not shown (the design only has it for a single session); the model is under the input, and in each tab's tooltip.
 - Buttons and cards use solid fills; only the border takes the accent (owner's taste).
