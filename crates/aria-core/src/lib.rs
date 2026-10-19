@@ -12,6 +12,7 @@ pub mod bridge;
 pub mod pi;
 pub mod agent;
 pub mod files;
+pub mod quota;
 pub mod sessions;
 
 #[cfg(any(test, feature = "testing"))]

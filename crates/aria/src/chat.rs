@@ -24,6 +24,7 @@ pub type Emit = Arc<dyn Fn(DockMessage) + Send + Sync>;
 const NOTIFICATION_TITLE: &str = "Aria needs an answer";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FILE_LIMIT: usize = 50;
+const QUOTA_MAX_AGE: Duration = Duration::from_secs(20);
 
 /// Raises and removes the desktop notification for a prompt nobody can see.
 ///
@@ -102,6 +103,8 @@ pub struct ChatCtx {
     pub dock_visible: Arc<AtomicBool>,
     /// The `PATH` Pi inherits (the shim directory goes in front of it).
     pub path_var: String,
+    /// Reads a provider's quota (a fake in tests).
+    pub quota_fetcher: Arc<aria_core::quota::Fetcher>,
 }
 
 #[derive(Default)]
@@ -118,6 +121,9 @@ struct Inner {
     thinking: Option<String>,
     /// How full the context window is (percent), from `get_session_stats`; `None` until known or just after a compaction.
     context: Option<f64>,
+    /// The provider's quota windows as last read, and when (so a run that follows another does not ask again).
+    quota: Option<Vec<aria_core::quota::Window>>,
+    quota_at: Option<std::time::Instant>,
     /// The folder the running Pi was started in (what the header must show, whatever the settings say now).
     workdir: Option<PathBuf>,
 }
@@ -229,6 +235,9 @@ impl Chat {
     fn load(&self) {
         let problem = self.problem();
         self.emit(self.state_message(problem));
+        if let Some(windows) = self.inner.lock().unwrap().quota.clone() {
+            self.emit(DockMessage::ChatQuota { windows });
+        }
         if problem.is_none() {
             // Showing a session wakes its Pi: that is what brings the conversation (and its model) back.
             let _ = self.ensure_engine();
@@ -317,6 +326,28 @@ impl Chat {
         self.emit(self.state_message(None));
     }
 
+    /// Reads the quota of the model's provider and tells the page. Unless `force`, a reading less than 20 s old is kept (runs
+    /// can follow each other closely); a model change always asks. A model whose provider has nothing to read reports none.
+    fn refresh_quota(&self, force: bool) {
+        let model = {
+            let inner = self.inner.lock().unwrap();
+            if !force && inner.quota_at.is_some_and(|at| at.elapsed() < QUOTA_MAX_AGE) {
+                return;
+            }
+            inner.model.clone().or_else(|| self.settings().and_then(|s| s.models.daily))
+        };
+        let Some(model) = model else { return };
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+        let source = aria_core::quota::source_for(&model, &aria_core::auth::AuthStore::new(self.ctx.paths.auth()), now_ms);
+        self.inner.lock().unwrap().quota_at = Some(std::time::Instant::now());
+        let chat = self.clone();
+        std::thread::spawn(move || {
+            let windows = source.and_then(|s| aria_core::quota::fetch(&s, &*chat.ctx.quota_fetcher)).unwrap_or_default();
+            chat.inner.lock().unwrap().quota = Some(windows.clone());
+            chat.emit(DockMessage::ChatQuota { windows });
+        });
+    }
+
     /// Tells the page what Pi is using and replays the session's history.
     fn announce(&self, engine: &Engine) {
         if let Ok(response) = engine.request("get_state", json!({}), REQUEST_TIMEOUT) {
@@ -331,6 +362,8 @@ impl Chat {
             }
         }
         self.refresh_context(engine);
+        // Not forced: a run that already settled may have asked a moment ago.
+        self.refresh_quota(false);
     }
 
     fn list(&self, id: u64, command: &'static str, key: &'static str) {
@@ -365,6 +398,7 @@ impl Chat {
                 Ok(response) if response.success => {
                     chat.inner.lock().unwrap().model = Some(model.clone());
                     chat.emit(chat.state_message(None));
+                    chat.refresh_quota(true);
                     chat.emit(DockMessage::Saved { id });
                 }
                 _ => chat.emit(DockMessage::Error { id, code: "model-rejected".into() }),
@@ -419,6 +453,7 @@ impl Chat {
                             if let Some(engine) = self.current_engine() {
                                 let chat = self.clone();
                                 std::thread::spawn(move || chat.refresh_context(&engine));
+                                self.refresh_quota(false);
                             }
                         }
                         _ => {}
@@ -521,6 +556,9 @@ impl Chat {
             inner.generation += 1; // whatever the old Pi still says is ignored
             inner.engine = None;
             inner.running = false;
+            // A credential may have changed (that is why Pis restart): the quota is read afresh next time.
+            inner.quota = None;
+            inner.quota_at = None;
             let open: Vec<String> = inner.dialogs.drain().map(|(id, _)| id).collect();
             let dismiss = !inner.notified.is_empty();
             inner.notified.clear();
@@ -666,6 +704,7 @@ mod tests {
         paths: AriaPaths,
         chat: Chat,
         messages: Receiver<DockMessage>,
+        quota_calls: Arc<std::sync::atomic::AtomicUsize>,
         notifier: Arc<TestNotifier>,
         visible: Arc<AtomicBool>,
         workdir: PathBuf,
@@ -704,8 +743,15 @@ mod tests {
         });
         let notifier = Arc::new(TestNotifier::default());
         let visible = Arc::new(AtomicBool::new(true));
-        let ctx = ChatCtx { paths: paths.clone(), notifier: notifier.clone(), dock_visible: visible.clone(), path_var: "/usr/bin:/bin".into() };
-        Harness { _turn: turn, backlog: Mutex::new(Vec::new()), _dir: dir, paths, chat: Chat::new(Arc::new(ctx), emit, "s1".into()), messages, notifier, visible, workdir }
+        std::fs::write(paths.auth(), r#"{"opencode-go":{"type":"api_key","key":"go-key"}}"#).unwrap();
+        let quota_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = quota_calls.clone();
+        let quota_fetcher: Arc<aria_core::quota::Fetcher> = Arc::new(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Some(json!({"usage": {"rolling": {"status": "ok", "percent": 42}, "weekly": {"status": "ok", "percent": 17}, "monthly": {"status": "ok", "percent": 6}}}))
+        });
+        let ctx = ChatCtx { paths: paths.clone(), notifier: notifier.clone(), dock_visible: visible.clone(), path_var: "/usr/bin:/bin".into(), quota_fetcher };
+        Harness { _turn: turn, quota_calls, backlog: Mutex::new(Vec::new()), _dir: dir, paths, chat: Chat::new(Arc::new(ctx), emit, "s1".into()), messages, notifier, visible, workdir }
     }
 
     fn harness() -> Harness {
@@ -941,7 +987,7 @@ mod tests {
         let h = harness();
         std::fs::remove_file(h.paths.bin().join("node")).unwrap();
         // /usr/bin:/bin may hold a real node on this machine; point the chat at an empty PATH instead.
-        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), path_var: "/nonexistent".into() };
+        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), path_var: "/nonexistent".into(), quota_fetcher: Arc::new(|_| None) };
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);
         let chat = Chat::new(Arc::new(ctx), Arc::new(move |m| { let _ = sender.lock().unwrap().send(m); }), "s1".into());
@@ -1080,7 +1126,7 @@ mod tests {
         let emit: Emit = Arc::new(move |m| {
             let _ = sender.lock().unwrap().send(m);
         });
-        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), path_var: "/usr/bin:/bin".into() };
+        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), path_var: "/usr/bin:/bin".into(), quota_fetcher: Arc::new(|_| None) };
         let sessions = Sessions::new(ctx, emit);
         SessionsHarness { h, sessions, messages }
     }
@@ -1247,6 +1293,58 @@ mod tests {
         h.chat.handle(PageMessage::ChatClearQueue { keep: vec!["the one that stays".into()] });
         // the fake Pi answers a prompt with agent_start: it was sent again after the queue was emptied
         wait_for(&h, "the kept message sent again", |m| event_of(m, "agent_start"));
+    }
+
+    fn go_usage() -> serde_json::Value {
+        json!({"usage": {"rolling": {"status": "ok", "percent": 42}, "weekly": {"status": "ok", "percent": 17}, "monthly": {"status": "ok", "percent": 6}}})
+    }
+
+    #[test]
+    fn the_provider_quota_is_reported_once_pi_is_ready() {
+        let h = harness();
+        send(&h, "hello");
+        match wait_for(&h, "the quota", |m| matches!(m, DockMessage::ChatQuota { .. })) {
+            DockMessage::ChatQuota { windows } => {
+                assert_eq!(windows.iter().map(|w| (w.id.as_str(), w.percent)).collect::<Vec<_>>(), vec![("5h", 42.0), ("week", 17.0), ("month", 6.0)]);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn a_model_whose_provider_has_no_quota_to_read_reports_none() {
+        let h = harness();
+        send(&h, "x");
+        wait_for(&h, "the first quota", |m| matches!(m, DockMessage::ChatQuota { windows } if !windows.is_empty()));
+        h.chat.handle(PageMessage::SetModel { id: 1, model: "anthropic/claude-sonnet-5-5".into() });
+        wait_for(&h, "an empty quota for the new model", |m| matches!(m, DockMessage::ChatQuota { windows } if windows.is_empty()));
+    }
+
+    #[test]
+    fn the_quota_is_not_asked_again_at_every_run_but_is_after_a_model_change() {
+        let h = harness();
+        send(&h, "one");
+        wait_for(&h, "the first quota", |m| matches!(m, DockMessage::ChatQuota { .. }));
+        wait_for(&h, "first settle", |m| event_of(m, "agent_settled"));
+        send(&h, "two");
+        wait_for(&h, "second settle", |m| event_of(m, "agent_settled"));
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(h.quota_calls.load(Ordering::SeqCst), 1, "the second run came right after: no new request");
+        h.chat.handle(PageMessage::SetModel { id: 2, model: "opencode-go/glm-5.3".into() });
+        wait_for(&h, "saved", |m| matches!(m, DockMessage::Saved { id: 2 }));
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(h.quota_calls.load(Ordering::SeqCst), 2, "a model change asks at once");
+    }
+
+    #[test]
+    fn showing_a_session_again_replays_the_last_quota() {
+        let h = harness();
+        send(&h, "x");
+        wait_for(&h, "the quota", |m| matches!(m, DockMessage::ChatQuota { .. }));
+        drain(&h);
+        h.chat.handle(PageMessage::ChatLoad);
+        wait_for(&h, "the quota again", |m| matches!(m, DockMessage::ChatQuota { windows } if windows.len() == 3));
+        assert_eq!(h.quota_calls.load(Ordering::SeqCst), 1, "replayed, not fetched again");
     }
 
     #[test]

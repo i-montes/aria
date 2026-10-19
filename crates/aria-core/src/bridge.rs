@@ -3,6 +3,7 @@
 //! expect an answer carry an `id` that the answer repeats.
 
 use serde::{Deserialize, Serialize};
+use crate::quota::Window as QuotaWindow;
 use crate::sessions::SessionEntry;
 use serde_json::Value;
 
@@ -114,6 +115,9 @@ pub enum DockMessage {
     #[serde(rename = "chatEvent")]
     ChatEvent { event: Value },
     /// An extension dialog; `hidden` says the dock was not visible when it arrived.
+    /// How much of the provider's quota is spent, for the model in use (empty when the provider has none to read).
+    #[serde(rename = "chatQuota")]
+    ChatQuota { windows: Vec<QuotaWindow> },
     #[serde(rename = "chatDialog")]
     ChatDialog { id: String, method: String, request: Value, hidden: bool },
     #[serde(rename = "chatDialogClosed")]
@@ -242,6 +246,10 @@ mod tests {
         assert_eq!(
             value(DockMessage::ChatDialog { id: "u1".into(), method: "select".into(), request: json!({"title": "Allow?"}), hidden: true }),
             json!({"type": "chatDialog", "id": "u1", "method": "select", "request": {"title": "Allow?"}, "hidden": true})
+        );
+        assert_eq!(
+            value(DockMessage::ChatQuota { windows: vec![QuotaWindow { id: "5h".into(), label: "5h".into(), percent: 42.0, resets_at: Some("2026-10-19T03:00:00Z".into()) }] }),
+            json!({"type": "chatQuota", "windows": [{"id": "5h", "label": "5h", "percent": 42.0, "resetsAt": "2026-10-19T03:00:00Z"}]})
         );
         assert_eq!(value(DockMessage::ChatDialogClosed { id: "u1".into() }), json!({"type": "chatDialogClosed", "id": "u1"}));
         assert_eq!(value(DockMessage::ChatEngine { state: "ready".into() }), json!({"type": "chatEngine", "state": "ready"}));
