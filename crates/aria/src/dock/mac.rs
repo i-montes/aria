@@ -296,7 +296,12 @@ impl Dock {
 
     fn hide(&self) {
         self.panel.orderOut(None);
-        if let Some(app) = self.previous_app.borrow_mut().take() {
+        let previous = self.previous_app.borrow_mut().take();
+        // Only while Aria still has the focus: if the user went to another app with the dock open, that app keeps it.
+        if !NSApplication::sharedApplication(self.mtm).isActive() {
+            return;
+        }
+        if let Some(app) = previous {
             #[allow(deprecated)]
             app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
         }
@@ -324,7 +329,7 @@ impl Dock {
 
     fn page_message(self: &Rc<Self>, message: PageMessage) {
         if std::env::var_os("ARIA_DEBUG").is_some() {
-            eprintln!("aria: page {message:?}");
+            eprintln!("aria: page {}", message.log_name());
         }
         match message {
             PageMessage::Ready => self.page_ready(),

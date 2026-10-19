@@ -150,6 +150,14 @@ pub enum DockMessage {
     Sessions { id: u64, sessions: Vec<SessionEntry>, active: Option<String> },
 }
 
+impl PageMessage {
+    /// The variant's name, for logs: a message can carry a key (`SaveKey`), so its fields are never printed.
+    pub fn log_name(&self) -> String {
+        let debug = format!("{self:?}");
+        debug.split(|c: char| !c.is_alphanumeric()).next().unwrap_or_default().to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,6 +165,13 @@ mod tests {
 
     fn page(text: &str) -> PageMessage {
         serde_json::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn a_page_message_is_logged_by_its_name_only_never_with_a_secret() {
+        let message = PageMessage::SaveKey { id: 1, provider: "opencode-go".into(), key: "sk-secret".into() };
+        assert_eq!(message.log_name(), "SaveKey");
+        assert_eq!(PageMessage::Ready.log_name(), "Ready");
     }
 
     #[test]
