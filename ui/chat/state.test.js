@@ -472,3 +472,21 @@ describe('a card can only answer with the options the dialog really has', () => 
     expect(reduce(createChat(), { type: 'chatDialog', id: 'u1', method: 'input', request: { title }, hidden: false }).dialogs[0].card.kind).toBe('question')
   })
 })
+
+describe('a tool call being written', () => {
+  const update = (e) => ev({ type: 'message_update', assistantMessageEvent: e })
+  test('its arguments (JSON) never show as the answer while they stream', () => {
+    const state = run(
+      createChat(),
+      ev({ type: 'message_start', message: { role: 'assistant' } }),
+      delta(0, 'Let me look.'),
+      update({ type: 'toolcall_start', contentIndex: 1 }),
+      update({ type: 'toolcall_delta', contentIndex: 1, delta: '{"command":"ls' }),
+      update({ type: 'toolcall_delta', contentIndex: 1, delta: ' src"}' }),
+      update({ type: 'toolcall_end', contentIndex: 1, toolCall: { id: 't1', name: 'bash', arguments: { command: 'ls src' } } }),
+    )
+    const last = state.messages.at(-1)
+    expect(last.text).toBe('Let me look.')
+    expect(last.thinking ?? '').toBe('')
+  })
+})

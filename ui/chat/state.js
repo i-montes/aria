@@ -72,7 +72,10 @@ function lastStreamingAssistant(state) {
 function streamUpdate(state, update) {
   const current = lastStreamingAssistant(state)
   if (!current) return state
-  const field = update.type.startsWith('thinking') ? 'thoughts' : 'texts'
+  // Only the answer and the reasoning stream into the thread. A tool call's arguments (\`toolcall_*\`, JSON) are not
+  // text: the call shows up as a chip when it runs.
+  const field = update.type.startsWith('thinking') ? 'thoughts' : update.type.startsWith('text') ? 'texts' : null
+  if (!field) return state
   const kind = update.type.split('_')[1] // start | delta | end
   const blocks = { ...current[field] }
   if (kind === 'delta') blocks[update.contentIndex] = (blocks[update.contentIndex] ?? '') + update.delta
