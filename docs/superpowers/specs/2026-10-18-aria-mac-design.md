@@ -70,6 +70,19 @@ The small interface promised by the base design is made of three pieces:
 - **Control socket:** `~/.aria/run/control.sock` (or `$ARIA_HOME/run/...`), so the LaunchAgent and a terminal
   agree. Omarchy keeps `$XDG_RUNTIME_DIR/aria/control.sock`.
 
+## The setup (both systems)
+
+The first Mac install made these changes to the onboarding; they apply on Omarchy too:
+
+- When the sign-in step opens and a credential for the chosen provider is already in `auth.json`, the dock validates
+  it (`checkKey`: an API key against its provider, a Claude sign-in against the usage endpoint; the page never sees
+  the secret). If it works, a new setup goes on by itself; if it was rejected, the step asks for a new one.
+- A key that is saved and accepted, or a browser sign-in that finishes, goes on by itself.
+- A check that cannot reach the provider (`network-unavailable`) trusts the stored credential; Pi says so later if
+  it really does not work.
+- While editing the settings nothing moves by itself.
+- The setup's notice and its last screen name the host's shortcut (`DockMessage::Platform`).
+
 ## The installer
 
 `install/install.sh` runs on both systems:
