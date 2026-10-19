@@ -29,6 +29,9 @@ const hasBwrap = (() => {
   }
 })()
 
+/** macOS: no bwrap exists, so every command asks (see route.ts). */
+const NO_BOX = !hasBwrap && process.platform === 'darwin'
+
 const textOf = (r: any) => (r?.content ?? []).map((c: any) => c?.text ?? '').join('\n')
 const withNote = (r: any) => ({ ...r, content: [...(r.content ?? []), { type: 'text', text: BLOCK_NOTE }] })
 const refuse = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true, details: undefined })
@@ -50,7 +53,9 @@ export default function sandbox(pi: ExtensionAPI) {
   const showStatus = (ctx: any) => {
     const allowed = [...grants.programs, ...(grants.exact.size ? [`${grants.exact.size} exact command(s)`] : []), ...[...grants.dirs].map(tilde)]
     const status = !hasBwrap
-      ? '⚠ no sandbox on this system: every command asks first'
+      ? NO_BOX
+        ? '⚠ no sandbox on this system: every command asks first'
+        : '⚠ sandbox without bwrap'
       : grants.all
         ? '🔓 no sandbox (this session)'
         : allowed.length
@@ -86,7 +91,7 @@ export default function sandbox(pi: ExtensionAPI) {
     const title =
       ctx.mode === 'rpc'
         ? sandboxCard('sandbox', { summary: description, detail: commandPreview(command), jev: verdict.replace(/^Jev: /, '') }, options)
-        : ['Run outside the sandbox?', description || '(no description given)', verdict, `› ${commandPreview(command)}`].join('\n')
+        : [NO_BOX ? 'Run this command? (no sandbox on this system)' : 'Run outside the sandbox?', description || '(no description given)', verdict, `› ${commandPreview(command)}`].join('\n')
     const pick = await ctx.ui.select(title, options, { signal: ctx.signal })
     if (pick === forUnits && g) g.units.forEach((u) => grants.programs.add(u))
     else if (pick === forExact) grants.exact.add(command.trim())
@@ -108,22 +113,23 @@ export default function sandbox(pi: ExtensionAPI) {
       reason: Type.Optional(
         Type.String({
           description:
-            `${hasBwrap ? 'With outsideSandbox' : 'Always (this system has no sandbox, so the user approves every command)'}: what the command does, for the user, in the user's language and at most 12 words (e.g. 'Restarts the project's Postgres container'). The user reads only this, not the command.`,
+            `${NO_BOX ? 'Always (this system has no sandbox, so the user approves every command)' : 'With outsideSandbox'}: what the command does, for the user, in the user's language and at most 12 words (e.g. 'Restarts the project's Postgres container'). The user reads only this, not the command.`,
         }),
       ),
     }),
     async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
       const { command, timeout, outsideSandbox, reason } = params
       // Allowed for the session: straight outside, without failing inside first. Without bwrap every command asks.
-      const route = bashRoute({ covered: covers(grants, command), outside: !!outsideSandbox, hasBwrap, canAsk: canAsk(ctx) })
+      const route = bashRoute({ covered: covers(grants, command), outside: !!outsideSandbox, hasBwrap, canAsk: canAsk(ctx), platform: process.platform })
       if (route === 'plain') return plain.execute(id, { command, timeout }, signal, onUpdate, ctx)
       if (route === 'refuse-nobody') {
         return refuse(
           hasBwrap
             ? 'Running outside the sandbox needs the user\'s permission, and there is nobody here to ask. Find another way inside the project or explain what is needed.'
-            : 'There is no sandbox on this system (bwrap is missing), so every command needs the user\'s permission, and there is nobody here to ask.',
+            : 'There is no sandbox on this system, so every command needs the user\'s permission, and there is nobody here to ask.',
         )
       }
+      if (route === 'refuse-no-bwrap') return refuse('The sandbox cannot run: bwrap is missing (sudo pacman -S bubblewrap). No commands run without it.')
       if (route === 'ask') {
         if (!(await askOutside(ctx, command, reason))) return refuse('The user said no: the command did not run.')
         return plain.execute(id, { command, timeout }, signal, onUpdate, ctx)
@@ -199,7 +205,7 @@ export default function sandbox(pi: ExtensionAPI) {
           `Writable: ${writableRoots(here).join(', ')}`,
           `Hidden: ${[...secretDirs(), ...secretFiles()].join(', ')}`,
           `Allowed outside this session: ${allowed}`,
-          hasBwrap ? 'bwrap: ok' : 'bwrap: not installed (commands are refused)',
+          hasBwrap ? 'bwrap: ok' : NO_BOX ? 'bwrap: not available on this system (every command asks first)' : 'bwrap: not installed (commands are refused)',
         ].join('\n'),
         'info',
       )
