@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { addUser, createChat, reduce } from './state.js'
-import { insertFile, pickerQuery, renderDialog, renderEmpty, renderMessages, renderPath, renderProblem, shortPath } from './view.js'
+import { insertFile, pickerQuery, renderDialog, renderEmpty, renderMessages, renderPath, renderProblem, renderTabs, renderUndo, shortPath } from './view.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const ev = (event) => ({ type: 'chatEvent', event })
@@ -154,5 +154,77 @@ describe('pickers', () => {
   test('insertFile replaces the @ token with the path and one space', () => {
     expect(insertFile('look at @src/ma now', 15, 8, 'src/main.rs')).toEqual({ text: 'look at @src/main.rs now', caret: 21 })
     expect(insertFile('see @sr', 7, 4, 'src/a.rs')).toEqual({ text: 'see @src/a.rs ', caret: 14 })
+  })
+})
+
+describe('the tab bar', () => {
+  const tab = (id, extra = {}) => ({ id, title: id, status: 'idle', unread: false, ...extra })
+  const bar = (sessions, active = sessions[0].id, closed = null) => ({ sessions, active, closed })
+
+  test('titles are escaped and the active tab is marked', () => {
+    const html = renderTabs(bar([tab('a', { title: '<img onerror=x>' }), tab('b')], 'b'), t)
+    expect(html).not.toContain('<img')
+    expect(html).toContain('&lt;img onerror=x&gt;')
+    expect(html).toMatch(/aria-selected="true"[^>]*data-session="b"|data-session="b"[^>]*aria-selected="true"/)
+    expect(html.match(/aria-selected="true"/g)).toHaveLength(1)
+  })
+
+  test('an untitled session shows the placeholder title', () => {
+    expect(renderTabs(bar([tab('a', { title: '' })]), t)).toContain('chat.untitled')
+  })
+
+  test('each tab carries its status, and unread shows', () => {
+    const html = renderTabs(bar([tab('a', { status: 'working' }), tab('b', { status: 'needs' }), tab('c', { status: 'done', unread: true })]), t)
+    expect(html).toContain('status-working')
+    expect(html).toContain('status-needs')
+    expect(html).toContain('status-done')
+    expect(html).toContain('unread')
+  })
+
+  test('close buttons exist only when there is more than one session', () => {
+    expect(renderTabs(bar([tab('a')]), t)).not.toContain('data-chat="close-tab"')
+    expect(renderTabs(bar([tab('a'), tab('b')]), t).match(/data-chat="close-tab"/g)).toHaveLength(2)
+  })
+
+  test('the plus button opens a new session', () => {
+    expect(renderTabs(bar([tab('a')]), t)).toContain('data-chat="add"')
+  })
+
+  test('more than four sessions show an overflow count and, open, a menu with the rest', () => {
+    const sessions = Array.from({ length: 6 }, (_, i) => tab(`s${i}`))
+    const closed = renderTabs(bar(sessions), t)
+    expect(closed).toContain('chat.tab.more n=2')
+    expect(closed).not.toContain('role="menu"')
+    const open = renderTabs(bar(sessions), t, { menuOpen: true })
+    expect(open).toContain('role="menu"')
+    expect(open.match(/data-chat="select"[^>]*data-session="s[45]"/g)).toHaveLength(2)
+  })
+
+  test('a tab being renamed shows a field with its title', () => {
+    const html = renderTabs(bar([tab('a', { title: 'My <plan>' })]), t, { renaming: 'a' })
+    expect(html).toContain('data-chat-rename')
+    expect(html).toContain('value="My &lt;plan&gt;"')
+  })
+
+  test('the undo bar names the closed session', () => {
+    expect(renderUndo(bar([tab('a')]), t)).toBe('')
+    const html = renderUndo(bar([tab('a')], 'a', { entry: tab('x', { title: 'Old <one>' }), index: 1 }), t)
+    expect(html).toContain('Old &lt;one&gt;')
+    expect(html).toContain('data-chat="undo"')
+  })
+})
+
+describe('texts', () => {
+  test('every text key the chat view and state use exists in both languages', () => {
+    const read = (file) => readFileSync(new URL(file, import.meta.url), 'utf8')
+    const source = read('./view.js') + read('./state.js')
+    const keys = new Set([...source.matchAll(/\bt\('(chat\.[a-zA-Z.-]+)'/g)].map((m) => m[1]))
+    for (const status of ['working', 'needs', 'done', 'idle']) keys.add(`chat.status.${status}`)
+    for (const key of [...source.matchAll(/key: '(chat\.[a-zA-Z.-]+)'/g)].map((m) => m[1])) keys.add(key)
+    expect(keys.size).toBeGreaterThan(20)
+    for (const lang of ['en', 'es']) {
+      const catalog = JSON.parse(read(`../i18n/${lang}.json`))
+      for (const key of keys) expect(catalog[key], `${lang}: ${key}`).toBeDefined()
+    }
   })
 })

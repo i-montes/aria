@@ -2,6 +2,9 @@
 // controller that wires them to the bridge. The state lives in `state.js`; everything dynamic is
 // escaped with `esc`.
 import { esc } from '../onboarding/components.js'
+import {
+  addSession, applyStatus, closeSession, createTabs, renameSession, selectSession, setTitleIfEmpty, toSaved, undoClose, visibleTabs,
+} from './sessions.js'
 import { addUser, answerDialog, createChat, reduce } from './state.js'
 
 /** `/home/ana/Projects` -> `~/Projects` (Linux and Mac homes); anything else stays as it is. */
@@ -120,6 +123,43 @@ function renderPicker(picker, t) {
   return `<div class="picker-title">${esc(t(titleKey))}</div>${rows}`
 }
 
+/** The tab bar: one tab per session with its state, an overflow menu, and the `+`. `ui`: { menuOpen, renaming }. */
+export function renderTabs(tabs, t, ui = {}) {
+  const { visible, overflow } = visibleTabs(tabs)
+  const closable = tabs.sessions.length > 1
+  const label = (s) => esc(s.title || t('chat.untitled'))
+  const tab = (s) => {
+    const on = s.id === tabs.active
+    const body =
+      ui.renaming === s.id
+        ? `<input class="tab-input" data-chat-rename data-session="${esc(s.id)}" value="${esc(s.title)}" aria-label="${esc(t('chat.tab.rename'))}" spellcheck="false" autocomplete="off">`
+        : `<button type="button" class="tab-main" role="tab" aria-selected="${on}" data-chat="select" data-session="${esc(s.id)}" title="${esc(`${s.title || t('chat.untitled')} · ${t(`chat.status.${s.status}`)}`)}">
+             <span class="tab-dot" aria-hidden="true"></span><span class="tab-title">${label(s)}</span>
+           </button>
+           ${closable ? `<button type="button" class="tab-x" data-chat="close-tab" data-session="${esc(s.id)}" aria-label="${esc(t('chat.tab.close', { title: s.title || t('chat.untitled') }))}">×</button>` : ''}`
+    return `<div class="tab status-${esc(s.status)}${on ? ' on' : ''}${s.unread ? ' unread' : ''}">${body}</div>`
+  }
+  const menu = ui.menuOpen
+    ? `<div class="tab-menu" role="menu" aria-label="${esc(t('chat.tab.menu'))}">${overflow
+        .map(
+          (s) => `<button type="button" role="menuitem" class="tab-menu-row status-${esc(s.status)}${s.unread ? ' unread' : ''}" data-chat="select" data-session="${esc(s.id)}">
+        <span class="tab-dot" aria-hidden="true"></span><span class="tab-title">${label(s)}</span><span class="tab-state">${esc(t(`chat.status.${s.status}`))}</span></button>`,
+        )
+        .join('')}</div>`
+    : ''
+  const more = overflow.length
+    ? `<button type="button" class="tab-more" data-chat="menu" aria-haspopup="true" aria-expanded="${!!ui.menuOpen}">${esc(t('chat.tab.more', { n: overflow.length }))}</button>`
+    : ''
+  return `<div class="tabs" role="tablist" aria-label="${esc(t('chat.sessions'))}">${visible.map(tab).join('')}${more}<button type="button" class="tab-add" data-chat="add" aria-label="${esc(t('chat.new'))}" title="${esc(t('chat.new'))}">+</button></div>${menu}`
+}
+
+/** "Closed <title> · Undo", shown for a few seconds after a tab is closed. */
+export function renderUndo(tabs, t) {
+  if (!tabs.closed) return ''
+  const title = tabs.closed.entry.title || t('chat.untitled')
+  return `<div class="undo"><span>${esc(t('chat.undo.closed', { title }))}</span><button type="button" class="link" data-chat="undo">${esc(t('chat.undo'))}</button></div>`
+}
+
 const icon = {
   send: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
   stop: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="3"/></svg>',
@@ -127,17 +167,29 @@ const icon = {
   gear: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
 }
 
+const UNDO_MS = 8000
+
 /**
  * `root` is the chat's container. `send(message)` posts to the dock; `request(message)` posts and
- * resolves with the reply; `onSettings()` opens the settings.
+ * resolves with the reply; `onSettings()` opens the settings. Every chat message goes out wrapped
+ * in `{ type: 'session', session, message }`: each tab is its own session and its own Pi.
  */
-export function createChatView({ root, t, send, request, onSettings }) {
-  let state = createChat()
-  const expanded = new Set()
-  let picker = null // { kind, items: [{label, hint, value}], index, start, token }
+export function createChatView({ root, t, send, request, onSettings, makeId = () => crypto.randomUUID() }) {
+  let tabs = createTabs(null, makeId)
+  const chats = new Map() // session id -> its conversation (state.js)
+  const drafts = new Map() // session id -> what was typed and not sent
+  let picker = null // { kind, items: [{label, hint, value}], index, start }
   let commands = null
   let fileToken = 0
   let fileTimer = null
+  let undoTimer = null
+  const ui = { menuOpen: false, renaming: null }
+
+  const chatOf = (id) => chats.get(id) ?? createChat()
+  const current = () => chatOf(tabs.active)
+  const post = (message, session = tabs.active) => send({ type: 'session', session, message })
+  const ask = (message, session = tabs.active) => request({ type: 'session', session, message })
+  const save = () => send({ type: 'sessionsSave', ...toSaved(tabs) })
 
   let input = null
   let banner = ''
@@ -147,9 +199,10 @@ export function createChatView({ root, t, send, request, onSettings }) {
   /** Builds the chat's HTML. Called once the texts are loaded (and again when the language changes). */
   function mount() {
     root.innerHTML = `
+    <div id="chat-tabs"></div>
+    <div id="chat-undo"></div>
     <header class="chat-head">
       <div class="chat-path" id="chat-path"></div>
-      <button type="button" class="icon-btn" data-chat="new" data-nav aria-label="${esc(t('chat.new'))}" title="${esc(t('chat.new'))}">${icon.plus}</button>
       <button type="button" class="icon-btn" data-chat="settings" data-nav aria-label="${esc(t('chat.settings'))}" title="${esc(t('chat.settings'))}">${icon.gear}</button>
     </header>
     <div id="chat-banner"></div>
@@ -167,20 +220,30 @@ export function createChatView({ root, t, send, request, onSettings }) {
       <span class="hints"><kbd>/</kbd> ${esc(t('chat.hint.commands'))} · <kbd>@</kbd> ${esc(t('chat.hint.files'))}</span>
     </div>`
     input = $('chat-input')
+    input.value = drafts.get(tabs.active) ?? ''
     dialogsKey = ''
     bindInput()
     render()
   }
 
+  const expandedOf = new Map() // session id -> open tool groups
+  const expanded = () => {
+    if (!expandedOf.has(tabs.active)) expandedOf.set(tabs.active, new Set())
+    return expandedOf.get(tabs.active)
+  }
+
   function render() {
     if (!input) return
+    const state = current()
+    $('chat-tabs').innerHTML = renderTabs(tabs, t, ui)
+    $('chat-undo').innerHTML = renderUndo(tabs, t)
     $('chat-path').innerHTML = renderPath(state, t)
     $('chat-problem').innerHTML = renderProblem(state, t)
     const list = $('chat-list')
     const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80
-    list.innerHTML = renderEmpty(state, t) + renderMessages(state, t, expanded)
+    list.innerHTML = renderEmpty(state, t) + renderMessages(state, t, expanded())
     if (nearBottom) list.scrollTop = list.scrollHeight
-    const key = state.dialogs.map((d) => d.id).join('|')
+    const key = `${tabs.active}:${state.dialogs.map((d) => d.id).join('|')}`
     if (key !== dialogsKey) {
       dialogsKey = key
       $('chat-dialogs').innerHTML = state.dialogs.map((d) => renderDialog(d, t)).join('')
@@ -194,6 +257,79 @@ export function createChatView({ root, t, send, request, onSettings }) {
     pick.hidden = !picker
     pick.innerHTML = renderPicker(picker, t)
     $('chat-banner').innerHTML = banner
+    if (ui.renaming) root.querySelector('[data-chat-rename]')?.focus()
+  }
+
+  // ---- tabs -----------------------------------------------------------------------------------
+
+  /** Shows another session: its draft, its conversation, and a `chatLoad` so its Pi (and any dialog) wakes up. */
+  function switchTo(next) {
+    if (next === tabs.active) return
+    drafts.set(tabs.active, input.value)
+    closePickerSilently()
+    tabs = selectSession(tabs, next)
+    input.value = drafts.get(next) ?? ''
+    autosize()
+    commands = null
+    ui.menuOpen = false
+    save()
+    post({ type: 'chatLoad' })
+    render()
+    input.focus()
+  }
+
+  function addTab() {
+    const id = makeId()
+    drafts.set(tabs.active, input.value)
+    tabs = addSession(tabs, id)
+    if (tabs.active !== id) return // already at the limit
+    closePickerSilently()
+    input.value = ''
+    autosize()
+    commands = null
+    ui.menuOpen = false
+    save()
+    post({ type: 'chatLoad' })
+    render()
+    input.focus()
+  }
+
+  function closeTab(id) {
+    const wasActive = id === tabs.active
+    const before = tabs
+    tabs = closeSession(tabs, id)
+    if (tabs === before) return
+    ui.menuOpen = false
+    send({ type: 'sessionClose', session: id })
+    clearTimeout(undoTimer)
+    undoTimer = setTimeout(() => {
+      if (tabs.closed) chats.delete(tabs.closed.entry.id)
+      tabs = { ...tabs, closed: null }
+      render()
+    }, UNDO_MS)
+    if (wasActive) {
+      closePickerSilently()
+      input.value = drafts.get(tabs.active) ?? ''
+      autosize()
+      post({ type: 'chatLoad' })
+    }
+    save()
+    render()
+  }
+
+  function undo() {
+    clearTimeout(undoTimer)
+    tabs = undoClose(tabs)
+    save()
+    render()
+  }
+
+  function commitRename(id, title) {
+    ui.renaming = null
+    tabs = renameSession(tabs, id, title)
+    save()
+    render()
+    input.focus()
   }
 
   // ---- composer -------------------------------------------------------------------------------
@@ -201,9 +337,14 @@ export function createChatView({ root, t, send, request, onSettings }) {
   function submit() {
     const text = input.value.trim()
     if (!text) return
-    send({ type: 'chatSend', text, behavior: state.running ? 'steer' : null })
-    state = addUser(state, text)
+    const session = tabs.active
+    post({ type: 'chatSend', text, behavior: current().running ? 'steer' : null }, session)
+    chats.set(session, addUser(chatOf(session), text))
+    const before = tabs
+    tabs = setTitleIfEmpty(tabs, session, text)
+    if (tabs !== before) save()
     input.value = ''
+    drafts.delete(session)
     autosize()
     closePicker()
     render()
@@ -216,39 +357,46 @@ export function createChatView({ root, t, send, request, onSettings }) {
     input.style.height = `${Math.min(input.scrollHeight, 154)}px`
   }
 
-  function closePicker() {
+  function closePickerSilently() {
     picker = null
     fileToken++
+  }
+
+  function closePicker() {
+    closePickerSilently()
     render()
   }
 
   async function updatePicker() {
-    const ask = pickerQuery(input.value, input.selectionStart ?? input.value.length)
-    if (!ask) return picker?.kind === 'model' ? undefined : closePicker()
-    if (ask.kind === 'command') {
+    const ask_ = pickerQuery(input.value, input.selectionStart ?? input.value.length)
+    if (!ask_) return picker?.kind === 'model' ? undefined : closePicker()
+    const session = tabs.active
+    if (ask_.kind === 'command') {
       if (!commands) {
-        const reply = await request({ type: 'listCommands' })
+        const reply = await ask({ type: 'listCommands' }, session)
         commands = (reply.commands ?? []).map((c) => ({ label: `/${c.name}`, hint: c.description ?? '', value: c.name }))
       }
-      const items = commands.filter((c) => c.value.toLowerCase().includes(ask.query.toLowerCase())).slice(0, 8)
-      picker = { kind: 'command', items, index: 0, start: ask.start }
+      const items = commands.filter((c) => c.value.toLowerCase().includes(ask_.query.toLowerCase())).slice(0, 8)
+      picker = { kind: 'command', items, index: 0, start: ask_.start }
       return render()
     }
     clearTimeout(fileTimer)
     const token = ++fileToken
     fileTimer = setTimeout(async () => {
-      const reply = await request({ type: 'listFiles', query: ask.query })
-      if (token !== fileToken) return // a newer keystroke or a closed picker
-      picker = { kind: 'file', items: (reply.files ?? []).slice(0, 8).map((f) => ({ label: f, hint: '', value: f })), index: 0, start: ask.start }
+      const reply = await ask({ type: 'listFiles', query: ask_.query }, session)
+      if (token !== fileToken || session !== tabs.active) return // a newer keystroke, a closed picker or another tab
+      picker = { kind: 'file', items: (reply.files ?? []).slice(0, 8).map((f) => ({ label: f, hint: '', value: f })), index: 0, start: ask_.start }
       render()
     }, 120)
   }
 
   async function openModels() {
     if (picker?.kind === 'model') return closePicker()
-    const reply = await request({ type: 'listModels' })
+    const session = tabs.active
+    const reply = await ask({ type: 'listModels' }, session)
+    if (session !== tabs.active) return
     const items = (reply.models ?? []).map((m) => ({ label: m.name ?? m.id, hint: `${m.provider}/${m.id}`, value: `${m.provider}/${m.id}` }))
-    picker = { kind: 'model', items, index: Math.max(0, items.findIndex((i) => i.value === state.model)), start: 0 }
+    picker = { kind: 'model', items, index: Math.max(0, items.findIndex((i) => i.value === current().model)), start: 0 }
     render()
   }
 
@@ -257,7 +405,7 @@ export function createChatView({ root, t, send, request, onSettings }) {
     if (!item) return
     if (picker.kind === 'model') {
       closePicker()
-      request({ type: 'setModel', model: item.value })
+      ask({ type: 'setModel', model: item.value })
       return
     }
     const caret = input.selectionStart ?? input.value.length
@@ -308,25 +456,39 @@ export function createChatView({ root, t, send, request, onSettings }) {
   // ---- clicks ---------------------------------------------------------------------------------
 
   function answer(id, fields) {
-    send({ type: 'uiAnswer', id, ...fields })
-    state = answerDialog(state, id)
+    post({ type: 'uiAnswer', id, ...fields })
+    chats.set(tabs.active, answerDialog(current(), id))
+    tabs = applyStatus(tabs, tabs.active, current(), true)
     render()
     input.focus()
   }
 
   root.addEventListener('click', (event) => {
     const el = event.target.closest('[data-chat]')
-    if (!el) return
-    const { chat, id, value, index } = el.dataset
+    if (!el) {
+      if (ui.menuOpen) {
+        ui.menuOpen = false
+        render()
+      }
+      return
+    }
+    const { chat, id, value, index, session } = el.dataset
     if (chat === 'send') return submit()
-    if (chat === 'stop') return send({ type: 'chatAbort' })
-    if (chat === 'new') return send({ type: 'chatNew' })
+    if (chat === 'stop') return post({ type: 'chatAbort' })
     if (chat === 'settings') return onSettings?.()
     if (chat === 'model') return openModels()
     if (chat === 'pick') return choose(Number(index))
+    if (chat === 'select') return switchTo(session)
+    if (chat === 'add') return addTab()
+    if (chat === 'close-tab') return closeTab(session)
+    if (chat === 'undo') return undo()
+    if (chat === 'menu') {
+      ui.menuOpen = !ui.menuOpen
+      return render()
+    }
     if (chat === 'toggle-tools') {
       const at = Number(index)
-      if (!expanded.delete(at)) expanded.add(at)
+      if (!expanded().delete(at)) expanded().add(at)
       return render()
     }
     if (chat === 'answer') return answer(id, { value })
@@ -338,16 +500,46 @@ export function createChatView({ root, t, send, request, onSettings }) {
     }
   })
 
+  root.addEventListener('dblclick', (event) => {
+    const main = event.target.closest?.('.tab-main')
+    if (!main) return
+    ui.renaming = main.dataset.session
+    render()
+  })
+
+  root.addEventListener('keydown', (event) => {
+    const field = event.target?.dataset?.chatRename !== undefined ? event.target : null
+    if (!field) return
+    if (event.key === 'Enter') commitRename(field.dataset.session, field.value)
+    else if (event.key === 'Escape') {
+      event.stopPropagation()
+      ui.renaming = null
+      render()
+    }
+  })
+
+  root.addEventListener('focusout', (event) => {
+    const field = event.target?.dataset?.chatRename !== undefined ? event.target : null
+    if (field && ui.renaming === field.dataset.session) commitRename(field.dataset.session, field.value)
+  })
+
   return {
-    /** A dock message about the chat (`chatState`, `chatEvent`, `chatDialog`, …). */
-    receive(message) {
-      if (message.type === 'chatState' && message.model !== state.model) commands = null
-      state = reduce(state, message)
+    /** The tabs saved last time (`sessionsLoad`'s reply); creates and saves a first session when there are none. */
+    setSessions(saved) {
+      tabs = createTabs(saved, makeId)
+      if (!saved?.sessions?.length) save()
+      render()
+    },
+    /** What a session said: its chat messages (`chatState`, `chatEvent`, `chatDialog`, …). */
+    receive(session, message) {
+      if (message.type === 'chatState' && session === tabs.active && message.model !== chatOf(session).model) commands = null
+      chats.set(session, reduce(chatOf(session), message))
+      tabs = applyStatus(tabs, session, chatOf(session), session === tabs.active)
       render()
     },
     mount,
     show() {
-      send({ type: 'chatLoad' })
+      post({ type: 'chatLoad' })
       render()
       input?.focus()
     },

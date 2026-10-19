@@ -318,7 +318,7 @@
   "chat.placeholder": "Escríbele a Aria",
   "chat.send": "Enviar",
   "chat.stop": "Detener",
-  "chat.new": "Chat nuevo",
+  "chat.new": "Sesión nueva",
   "chat.settings": "Ajustes",
   "chat.working": "Trabajando…",
   "chat.path.unknown": "Carpeta de trabajo sin definir",
@@ -342,5 +342,17 @@
   "chat.problem.pi-missing": "El motor (Pi) no está instalado. Vuelve a ejecutar el instalador de Aria.",
   "chat.problem.node-missing": "Hace falta Node 22.19 o más nuevo para ejecutar el motor. Instálalo y vuelve a ejecutar el instalador de Aria.",
   "chat.problem.agent-dir-unwritable": "Aria no pudo escribir la carpeta de su motor en ~/.aria/agent. Revisa los permisos de la carpeta.",
-  "chat.problem.pi-failed": "El motor no arrancó. Inténtalo otra vez; si sigue fallando, vuelve a ejecutar el instalador de Aria."
+  "chat.problem.pi-failed": "El motor no arrancó. Inténtalo otra vez; si sigue fallando, vuelve a ejecutar el instalador de Aria.",
+  "chat.untitled": "Sesión nueva",
+  "chat.sessions": "Sesiones",
+  "chat.tab.close": "Cerrar {title}",
+  "chat.tab.rename": "Renombrar sesión",
+  "chat.tab.more": "+{n}",
+  "chat.tab.menu": "Más sesiones",
+  "chat.status.working": "trabajando",
+  "chat.status.needs": "te necesita",
+  "chat.status.done": "lista",
+  "chat.status.idle": "en reposo",
+  "chat.undo.closed": "Se cerró \"{title}\"",
+  "chat.undo": "Deshacer"
 }

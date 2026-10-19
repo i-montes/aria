@@ -213,7 +213,12 @@ impl Chat {
     }
 
     fn load(&self) {
-        self.emit(self.state_message(self.problem()));
+        let problem = self.problem();
+        self.emit(self.state_message(problem));
+        if problem.is_none() {
+            // Showing a session wakes its Pi: that is what brings the conversation (and its model) back.
+            let _ = self.ensure_engine();
+        }
         let open: Vec<(String, Value)> = self.inner.lock().unwrap().dialogs.iter().map(|(id, raw)| (id.clone(), raw.clone())).collect();
         for (id, raw) in open {
             let method = raw["method"].as_str().unwrap_or_default().to_string();
@@ -735,7 +740,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_load_reports_the_working_folder_and_model_without_starting_pi() {
+    fn chat_load_reports_the_folder_and_model_then_starts_pi_and_replays_the_history() {
         let h = harness();
         h.chat.handle(PageMessage::ChatLoad);
         match wait_for(&h, "chatState", |m| matches!(m, DockMessage::ChatState { .. })) {
@@ -747,7 +752,18 @@ mod tests {
             }
             _ => unreachable!(),
         }
-        assert!(drain(&h).is_empty(), "loading must not start Pi");
+        // Showing a session wakes its Pi, so the conversation it had comes back without a first message.
+        wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        let history = wait_for(&h, "history", |m| event_of(m, "history"));
+        assert!(matches!(history, DockMessage::ChatEvent { ref event } if event["messages"][0]["content"] == json!("earlier")));
+    }
+
+    #[test]
+    fn chat_load_with_a_missing_pi_only_reports_the_problem() {
+        let h = harness_with(false);
+        h.chat.handle(PageMessage::ChatLoad);
+        wait_for(&h, "the problem", |m| matches!(m, DockMessage::ChatState { problem: Some(p), .. } if p == "pi-missing"));
+        assert!(drain(&h).iter().all(|m| !matches!(m, DockMessage::ChatEngine { .. })));
     }
 
     #[test]

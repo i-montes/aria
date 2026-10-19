@@ -318,7 +318,7 @@
   "chat.placeholder": "Message Aria",
   "chat.send": "Send",
   "chat.stop": "Stop",
-  "chat.new": "New chat",
+  "chat.new": "New session",
   "chat.settings": "Settings",
   "chat.working": "Working…",
   "chat.path.unknown": "Working folder not set yet",
@@ -342,5 +342,17 @@
   "chat.problem.pi-missing": "The engine (Pi) is not installed. Run the Aria installer again.",
   "chat.problem.node-missing": "Node 22.19 or newer is needed to run the engine. Install it, then run the Aria installer again.",
   "chat.problem.agent-dir-unwritable": "Aria could not write its engine folder in ~/.aria/agent. Check the folder's permissions.",
-  "chat.problem.pi-failed": "The engine did not start. Try again; if it keeps failing, run the Aria installer again."
+  "chat.problem.pi-failed": "The engine did not start. Try again; if it keeps failing, run the Aria installer again.",
+  "chat.untitled": "New session",
+  "chat.sessions": "Sessions",
+  "chat.tab.close": "Close {title}",
+  "chat.tab.rename": "Rename session",
+  "chat.tab.more": "+{n}",
+  "chat.tab.menu": "More sessions",
+  "chat.status.working": "working",
+  "chat.status.needs": "needs you",
+  "chat.status.done": "done",
+  "chat.status.idle": "idle",
+  "chat.undo.closed": "Closed \"{title}\"",
+  "chat.undo": "Undo"
 }

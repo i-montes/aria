@@ -83,3 +83,35 @@ body.open.mode-chat .chat { animation: enter 300ms var(--content) both; }
 .chat-foot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; font: 12px ui-monospace, "Geist Mono", monospace; color: #9A9AA3; padding-left: 4px; }
 .model-chip { cursor: pointer; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 9px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); color: #D6D6DC; font: inherit; }
 .hints { white-space: nowrap; }
+
+/* The session tabs (design/components/session-tabs). Solid fills; hover and selection never change a
+   background's opacity, only the border takes the accent. */
+.tabs { flex: none; display: flex; align-items: center; gap: 4px; min-width: 0; position: relative; }
+.tab { position: relative; display: flex; align-items: center; min-width: 0; flex: 0 1 auto; max-width: 160px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); }
+.tab.on { background: var(--surface-2); border-color: var(--accent-border); }
+.tab:not(.on):hover, .tab:focus-within { border-color: var(--line-strong); }
+.tab-main { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 6px 28px 6px 10px; border: 0; background: transparent; cursor: pointer; text-align: left; font-size: 12.5px; color: #9A9AA3; }
+.tab.on .tab-main { color: var(--text); font-weight: 500; }
+.tab.unread .tab-main { color: #E4E4E8; font-weight: 500; }
+.tab:only-child .tab-main { padding-right: 10px; }
+.tab-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: #4A4A52; }
+.status-working .tab-dot { background: var(--accent); animation: glow 1400ms ease-in-out infinite; }
+.status-needs .tab-dot { background: var(--warn); }
+.status-done .tab-dot { background: var(--ok); }
+.tab-x { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: #9A9AA3; cursor: pointer; font-size: 14px; line-height: 1; opacity: 0; }
+.tab.on .tab-x, .tab:hover .tab-x, .tab:focus-within .tab-x { opacity: 1; }
+.tab-x:hover, .tab-x:focus-visible { color: var(--text); outline: none; }
+.tab-input { width: 130px; padding: 6px 10px; border: 0; border-radius: 8px; background: var(--field); color: var(--text); font: inherit; font-size: 12.5px; }
+.tab-input:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent-border); }
+.tab-add, .tab-more { flex: none; height: 30px; min-width: 30px; padding: 0 9px; border-radius: 9px; border: 1px solid var(--line-strong); background: var(--surface); color: #B4B4BC; cursor: pointer; font-size: 14px; }
+.tab-more { font: 12px ui-monospace, "Geist Mono", monospace; }
+.tab-add:hover, .tab-add:focus-visible, .tab-more:hover, .tab-more:focus-visible, .tab-main:focus-visible { border-color: var(--accent-border); outline: none; }
+.tab-menu { position: absolute; z-index: 5; top: 40px; right: 0; width: 260px; padding: 6px; border-radius: 12px; background: #141417; border: 1px solid var(--line-strong); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55); }
+.tab-menu-row { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px; border-radius: 9px; border: 1px solid transparent; background: #141417; cursor: pointer; text-align: left; font-size: 13px; color: #D6D6DC; }
+.tab-menu-row:hover, .tab-menu-row:focus-visible { border-color: var(--accent-border); outline: none; }
+.tab-menu-row .tab-title { flex: 1; }
+.tab-state { flex: none; font-size: 11.5px; color: var(--muted); }
+.undo { flex: none; display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 9px; background: var(--surface); border: 1px solid var(--line-strong); font-size: 12.5px; color: #B4B4BC; }
+.undo:empty { display: none; }
+#chat-tabs:empty, #chat-undo:empty { display: none; }

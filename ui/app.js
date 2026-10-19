@@ -24,7 +24,8 @@ function request(message, onProgress) {
   const id = nextId++
   return new Promise((resolve) => {
     pending.set(id, { resolve, onProgress })
-    post({ ...message, id })
+    // A session message keeps its request id inside, where the dock's reply carries it back.
+    post(message.type === 'session' ? { ...message, message: { ...message.message, id } } : { ...message, id })
   })
 }
 
@@ -46,11 +47,7 @@ const handlers = {
   },
   close: () => document.body.classList.remove('open'),
   // The chat's messages need the catalogs too (and the chat view), so they wait for the boot.
-  chatState: (message) => booted.then(() => chat.receive(message)),
-  chatEvent: (message) => booted.then(() => chat.receive(message)),
-  chatDialog: (message) => booted.then(() => chat.receive(message)),
-  chatDialogClosed: (message) => booted.then(() => chat.receive(message)),
-  chatEngine: (message) => booted.then(() => chat.receive(message)),
+  session: (message) => booted.then(() => chat.receive(message.session, message.message)),
   // These need the catalogs, so they wait for the boot to finish.
   notice: () => booted.then(showNotice),
   problem: (message) =>
@@ -64,6 +61,15 @@ window.aria = {
   send: post,
   request,
   receive(message) {
+    if (message.type === 'session') {
+      const inner = message.message
+      const answered = 'id' in inner ? pending.get(inner.id) : undefined
+      if (answered) {
+        pending.delete(inner.id)
+        return answered.resolve(inner)
+      }
+      return handlers.session(message)
+    }
     const waiting = 'id' in message ? pending.get(message.id) : undefined
     if (waiting) {
       if (message.type === 'oauthUrl') return waiting.onProgress?.(message)
@@ -174,6 +180,7 @@ async function boot() {
     i18n.setLanguage(reply.settings.assistant.language)
     chat.mount()
   }
+  chat.setSessions(await request({ type: 'sessionsLoad' }))
   onboarding.start(reply.settings, reply.connected)
   setMode(reply.settings?.setup?.completed ? 'chat' : 'setup')
   renderProblem()
