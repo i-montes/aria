@@ -2,6 +2,7 @@
 // cards, panels) and wires them to the bridge, plus the few pure helpers it keeps (tested without a
 // browser). Conversations live in `state.js`, the tabs in `sessions.js`, the HTML of each element in
 // `parts/` and `thread.js`. Everything dynamic is escaped with `esc`.
+import { patchHtml } from './patch.js'
 import { esc } from '../onboarding/components.js'
 import { renderAgentSession } from './parts/session.js'
 import { renderCommandPicker, filterCommands, stepActive, clampActive } from './parts/commands.js'
@@ -261,7 +262,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const ex = expanded()
     const connectHtml = ui.connect ? `<div class="thread-item" id="chat-connect">${renderConnect(ui.connect, {}, t)}</div>` : ''
     keepingFocus(list, () => {
-      list.innerHTML = renderThread(state, { expanded: ex.open, openRows: ex.rows, moreOpen: ex.more, now: Date.now() }, t) + connectHtml
+      patchHtml(list, renderThread(state, { expanded: ex.open, openRows: ex.rows, moreOpen: ex.more, now: Date.now() }, t) + connectHtml)
     })
     if (nearBottom || (ui.connect && ui.connect.justOpened)) list.scrollTop = list.scrollHeight
     if (ui.connect) ui.connect.justOpened = false

@@ -263,6 +263,24 @@ const script = `(async () => {
   const before = $('#chat-input'); typeIn('abc'); typeIn('abc\\ndef'); await wait(40)
   check('typing and adding a line does not replace the textarea', $('#chat-input') === before && before.rows === 2, before.rows)
 
+  // 8b. streaming redraws only what changed: earlier messages keep their nodes, a tool call's JSON never shows
+  await reset()
+  const activeTab = $('#chat-header [aria-selected="true"]')?.dataset.session ?? 's1'
+  const on = (event) => sess({ type: 'chatEvent', event }, activeTab)
+  on({ type: 'agent_start' })
+  on({ type: 'message_start', message: { role: 'assistant' } })
+  on({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'An earlier answer.' }] } })
+  on({ type: 'message_start', message: { role: 'assistant' } })
+  on({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Part one.' } })
+  await settle()
+  const firstItem = $('#chat-list .thread-item')
+  on({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: ' Part two.' } })
+  on({ type: 'message_update', assistantMessageEvent: { type: 'toolcall_delta', contentIndex: 1, delta: '{"command":"ls"}' } })
+  await settle()
+  check('a streamed delta keeps the earlier messages as the same elements', firstItem?.textContent.includes('An earlier answer') && firstItem.isConnected && $('#chat-list .thread-item') === firstItem, firstItem?.textContent)
+  check('a tool call being written never shows its JSON', !$('#chat-list').textContent.includes('"command"'), $('#chat-list').textContent.slice(-120))
+  on({ type: 'agent_settled', aborted: false })
+
   // 9. the setup (settings): a control redraws the step through its components, keeping the scroll and the focus
   $('[data-chat="settings"]').click(); await wait(200)
   $('#flow [data-action="edit"][data-value="agents"]')?.click(); await wait(120)
