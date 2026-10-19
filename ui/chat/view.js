@@ -226,17 +226,29 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
 
   function drawHeader() {
     const key = JSON.stringify([
-      tabs.sessions.map((s) => [s.id, s.title, s.status, s.unread, chatOf(s.id).model, chatOf(s.id).context]),
+      tabs.sessions.map((s) => [s.id, s.title, s.status, s.unread, chatOf(s.id).model, chatOf(s.id).context, chatOf(s.id).quota]),
       tabs.active, ui.menuOpen, ui.renaming, assistantName(), settings?.compaction?.percent, current().quota,
     ])
     if (key === headerKey && $('chat-header').firstChild) return
     headerKey = key
     const multi = tabs.sessions.length > 1
     const full = tabs.sessions.length >= MAX_SESSIONS
-    const sessions = tabs.sessions.map((s) => ({ ...s, model: modelLabel(chatOf(s.id).model), context: chatOf(s.id).context ?? 0, quota: 0, free: false }))
+    // Each tab's hover card is the quota card, fed with that session's own model, context and quota windows.
+    const sessions = tabs.sessions.map((s) => {
+      const chat = chatOf(s.id)
+      const model = chat.model ?? ''
+      return {
+        ...s,
+        model: modelLabel(model),
+        context: chat.context ?? 0,
+        provider: providerLabel(model.split('/')[0]),
+        quotaWindows: chat.quota,
+        free: /free$/.test(model),
+      }
+    })
     const left = multi
-      ? renderSessionTabs({ ...tabs, sessions }, { maxVisible: 3, hideNew: true, hideUndo: true, menuOpen: ui.menuOpen, renaming: ui.renaming, hasQuota: false }, t)
-      : `<div class="chat-identity"><span class="chat-dot" aria-hidden="true"></span><span class="chat-name">${esc(assistantName())}</span>${renderQuotaBars({ windows: current().quota, provider: providerLabel((current().model ?? '').split('/')[0]) }, {}, t)}</div>`
+      ? renderSessionTabs({ ...tabs, sessions }, { maxVisible: 3, hideNew: true, hideUndo: true, menuOpen: ui.menuOpen, renaming: ui.renaming }, t)
+      : `<div class="chat-identity"><span class="chat-dot" aria-hidden="true"></span><span class="chat-name">${esc(assistantName())}</span>${renderQuotaBars({ windows: current().quota, provider: providerLabel((current().model ?? '').split('/')[0]), facts: { model: modelLabel(current().model), context: current().context } }, {}, t)}</div>`
     $('chat-header').innerHTML = `${left}
       <button type="button" class="icon-btn chat-new" data-chat="add" ${full ? 'disabled' : ''} aria-label="${esc(t('chat.new'))}" title="${esc(t('chat.new'))}">${ICON.plus}</button>
       <button type="button" class="icon-btn" data-chat="close-dock" aria-label="${esc(t('chat.close'))}" title="${esc(t('chat.close'))}">${ICON.close}</button>`

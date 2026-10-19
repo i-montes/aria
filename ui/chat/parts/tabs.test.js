@@ -120,30 +120,34 @@ describe('the design behaviours', () => {
     expect(html).toContain('chat.status.working')
   })
 
-  test('the tooltip carries model, context and quota and only shows with more than one session', () => {
-    const one = render(bar([tab('a')]))
-    expect(one).not.toContain('role="tooltip"')
-    const sessions = [tab('a', { model: 'GLM 5', context: 42.4, quota: 11 }), tab('b', { model: 'Big Pickle', free: true, context: 6 }), tab('c')]
-    const html = render(bar(sessions), { quota: 62, hasQuota: true })
+  const WINDOWS = [{ id: '5h', label: '5h', percent: 42, resetsAt: null }, { id: 'week', label: 'Week', percent: 17, resetsAt: null }]
+
+  test('hovering a tab shows the same quota card as the header chip, and only with more than one session', () => {
+    expect(render(bar([tab('a')]))).not.toContain('role="tooltip"')
+    const sessions = [tab('a', { quotaWindows: WINDOWS, provider: 'OpenCode Go', model: 'GLM 5', context: 42.4 }), tab('b', { quotaWindows: WINDOWS }), tab('c')]
+    const html = render(bar(sessions))
     expect(html.match(/role="tooltip"/g)).toHaveLength(3)
+    expect(html.match(/class="p-qb-card"/g)).toHaveLength(3)
+    expect(html).toContain('OpenCode Go')
+    expect(html).toContain('p-qb-hero')
+    expect(html).toContain('width: 42%')
+    expect(html).toContain('chat.quotabars.window.5h')
     expect(html).toContain('GLM 5')
     expect(html).toContain('>42%<')
-    expect(html).toContain('>11%<')
-    expect(html).toContain('>62%<')
-    expect(html).toContain('width: 62%')
-    expect(html).toContain('width: 11%')
-    expect(html).toContain('chat.tabs.freeModel') // the free one has no quota block
-    expect(html.match(/chat\.tabs\.quota/g)).toHaveLength(2) // header of the two quota tips (a and c)
-    expect(html).toContain('Big Pickle')
   })
 
-  test('the session bar never passes the account bar; no quota says so', () => {
-    const html = render(bar([tab('a', { quota: 90 }), tab('b')]), { quota: 40, hasQuota: true })
-    expect(html).toContain('width: 40%')
-    expect(html).not.toContain('width: 90%')
-    const none = render(bar([tab('a'), tab('b')]), { hasQuota: false })
-    expect(none).toContain('chat.tabs.noQuota')
-    expect(none).not.toContain('chat.tabs.session')
+  test('the card of a tab starts with the tab\'s title and state', () => {
+    const html = render(bar([tab('a', { title: 'Fix the build', status: 'working', quotaWindows: WINDOWS }), tab('b')]))
+    const first = html.slice(html.indexOf('class="p-qb-card"'))
+    expect(first.indexOf('Fix the build')).toBeLessThan(first.indexOf('p-qb-hero'))
+    expect(first).toContain('chat.status.working')
+  })
+
+  test('a session whose provider has no quota to read says so, and a free model says that', () => {
+    const none = render(bar([tab('a', { quotaWindows: [] }), tab('b')]))
+    expect(none).toContain('chat.quotabars.none')
+    const free = render(bar([tab('a', { free: true }), tab('b')]))
+    expect(free).toContain('chat.quotabars.free')
   })
 
   test('tooltips of the right half of the bar open to the left', () => {
@@ -191,7 +195,7 @@ describe('escaping', () => {
   })
 
   test('numbers coming from the data are clamped, not injected', () => {
-    const html = render(bar([tab('a', { quota: '1"><script>', context: '9999' }), tab('b')]), { quota: '"><b>', hasQuota: true })
+    const html = render(bar([tab('a', { quotaWindows: [{ id: '5h', label: '5h', percent: '1"><script>' }], context: '9999' }), tab('b')]))
     expect(html).not.toContain('<script>')
     expect(html).not.toContain('<b>')
     expect(html).toContain('>100%<') // context clamps to 100
