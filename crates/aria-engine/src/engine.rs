@@ -65,7 +65,8 @@ pub struct Engine {
 impl Engine {
     pub fn spawn(spec: SpawnSpec) -> Result<(Engine, Receiver<EngineEvent>), EngineError> {
         let mut command = Command::new(&spec.program);
-        command.args(&spec.args).current_dir(&spec.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        command.args(&spec.args).current_dir(&spec.cwd).stdin(Stdio::piped()).stdout(Stdio::piped())// Pi's diagnostics go nowhere unless ARIA_DEBUG_PI is set (then to the dock's own stderr).
+        .stderr(if std::env::var_os("ARIA_DEBUG_PI").is_some() { Stdio::inherit() } else { Stdio::null() });
         for (key, value) in &spec.env {
             command.env(key, value);
         }
