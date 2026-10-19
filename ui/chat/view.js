@@ -822,10 +822,10 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
 
   // ---- the thread's scroll and index -------------------------------------------------------------
 
-  // As the design's message index: it opens when the pointer reaches the right edge of the thread (the last 56 px),
+  // As the design's message index, but it opens only when the pointer is over the thread's scrollbar (its last 8 px),
   // follows the pointer while it stays over the chips' area (300 px), and closes shortly after it leaves. The thread's
   // own scrollbar stays usable: nothing of the index takes the pointer except the chips themselves.
-  const INDEX_OPEN_ZONE = 56
+  const INDEX_OPEN_ZONE = 8 // just the thread's scrollbar (6 px wide) and a hair around it
   const INDEX_KEEP_ZONE = 300
   const INDEX_HIDE_MS = 160
   let indexHide = null
