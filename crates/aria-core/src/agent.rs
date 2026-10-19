@@ -20,6 +20,9 @@ const PLACEHOLDER_SYSTEM: &str = "You are Aria, a personal desktop assistant. Ke
 /// The owner's persona and experts (`agent-files/` in the repo), written into the agent directory.
 static AGENT_FILES: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../agent-files");
 
+/// The owner's Pi extensions (`extensions/` in the repo), written into `agent/extensions/`.
+static EXTENSIONS: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../extensions");
+
 /// Which files Aria wrote, with the sha256 of what it wrote: a file whose content still has that hash was not edited by
 /// the owner and may follow a new version; any other content is the owner's and is kept.
 const MARKER: &str = ".aria-files";
@@ -170,6 +173,8 @@ pub fn prepare(paths: &AriaPaths, settings: Option<&Settings>) -> io::Result<()>
 
     // The owner's persona and experts; one the owner edited is kept.
     install_embedded(&agent, &AGENT_FILES, "", &[&sha256_hex(PLACEHOLDER_SYSTEM.as_bytes())])?;
+    // His extensions, adapted to run in Aria (see extensions/README.md); one he edited is kept.
+    install_embedded(&agent, &EXTENSIONS, "extensions", &[])?;
     Ok(())
 }
 
@@ -323,6 +328,30 @@ mod tests {
         record_written(&paths.agent(), "agents/reviewer.md", b"old reviewer").unwrap();
         prepare(&paths, None).unwrap();
         assert_eq!(std::fs::read_to_string(paths.agent().join("agents/reviewer.md")).unwrap(), include_str!("../../../agent-files/agents/reviewer.md"));
+    }
+
+    #[test]
+    fn unpacks_the_owners_extensions_without_their_tests() {
+        let (_dir, paths) = paths();
+        prepare(&paths, None).unwrap();
+        let extensions = paths.agent().join("extensions");
+        for name in ["jev-router", "sandbox", "quota-fallback", "autocompact", "ask-user", "subagent-mode", "subagent-watch"] {
+            assert!(extensions.join(name).join("index.ts").is_file(), "{name}");
+        }
+        assert!(extensions.join("lib/agent-dir.ts").is_file(), "the shared helper");
+        assert!(extensions.join("subagent-mode/SUBAGENT.md").is_file(), "the files an extension reads");
+        assert!(!extensions.join("sandbox/policy.test.ts").exists(), "no tests");
+        assert!(!extensions.join("README.md").exists(), "no readme");
+    }
+
+    #[test]
+    fn keeps_an_extension_the_owner_edited() {
+        let (_dir, paths) = paths();
+        prepare(&paths, None).unwrap();
+        let file = paths.agent().join("extensions/autocompact/index.ts");
+        std::fs::write(&file, "// my change").unwrap();
+        prepare(&paths, None).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "// my change");
     }
 
     #[test]

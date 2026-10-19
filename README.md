@@ -49,6 +49,8 @@ crates/aria-core/      what does not depend on the system: paths, settings, cred
 crates/aria-hyprland/  the hotkey, the focused monitor and reload events, through Hyprland's own IPC
 crates/aria-engine/    Pi's RPC protocol and the supervised Pi child process
 crates/aria/           the `aria` binary: the dock window, the chat and the glue between the crates
+agent-files/           the owner's persona and experts, written into Aria's Pi
+extensions/            the owner's Pi extensions, adapted to run in Aria (see its README)
 ui/                    the dock's web page: plain HTML, CSS and JS modules, embedded in the binary;
                        ui/chat/parts/ holds one module per component of the design
 tools/ui-sandbox/      the page without Pi, to see and try every chat state
@@ -67,6 +69,7 @@ bun tools/ui-sandbox/check.ts      # drives the chat in headless Chrome against 
 cargo test --workspace      # Rust: core, Hyprland, engine, dock
 cargo test -p aria --test live_pi -- --ignored   # the real Pi answering a prompt (needs the setup done)
 bun test ui                 # the UI's logic and its strings
+bun test extensions         # the owner's Pi extensions that run inside Aria
 sh install/install.test.sh  # the installer, without touching your system
 ARIA_DEBUG=1 target/release/aria   # logs state changes and the page's console to the terminal
 ARIA_HOME=$(mktemp -d) target/release/aria   # try a first run without touching ~/.aria
