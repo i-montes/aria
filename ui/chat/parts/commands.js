@@ -126,12 +126,11 @@ export function renderCommandPicker({ items = [], query = '', active = 0, open =
   const on = clampActive(active, n)
   const rows = list
     .map(({ item, nameRanges, descRanges }, i) => {
-      const tag = item.hint || item.source || ''
       return `<li role="option" id="p-cmd-opt-${i}" aria-selected="${i === on}" data-chat="picker-hover" data-index="${i}">
         <button type="button" class="p-cmd-row${i === on ? ' on' : ''}" data-chat="pick" data-index="${i}">
           <span class="p-cmd-name"><span class="p-cmd-slash">/</span>${hl(segments(String(item.name ?? ''), nameRanges), 'p-cmd-hl')}</span>
-          <span class="p-cmd-desc">${hl(segments(String(item.description ?? ''), descRanges), 'p-cmd-desc-hl')}</span>
-          <span class="p-cmd-tail">${tag ? `<kbd class="p-cmd-kbd">${esc(tag)}</kbd>` : ''}${enter}</span>
+          <span class="p-cmd-desc" title="${esc(String(item.description ?? ''))}">${hl(segments(String(item.description ?? ''), descRanges), 'p-cmd-desc-hl')}</span>
+          <span class="p-cmd-tail">${enter}</span>
         </button>
       </li>`
     })

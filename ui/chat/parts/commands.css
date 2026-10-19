@@ -30,7 +30,7 @@
   font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #8A8A94; }
 .p-cmd-foot kbd { font-family: inherit; color: #D6D6DC; }
 @media (prefers-reduced-motion: reduce) { .p-cmd, .p-cmd * { transition: none !important; } }
-.p-cmd-row { grid-template-columns: 92px minmax(0, 1fr) auto; min-height: 44px; padding: 6px 8px; }
+.p-cmd-row { grid-template-columns: 124px minmax(0, 1fr) auto; min-height: 44px; padding: 6px 8px; }
 .p-cmd-name { min-width: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; font-weight: 500; line-height: 18px; color: #F4F4F5; overflow-wrap: anywhere; }
 .p-cmd-slash { color: #8A8A94; }
 .p-cmd-hl { color: #B9A8FF; font-weight: 600; }
@@ -39,3 +39,9 @@
 .p-cmd-tail { display: flex; align-items: center; gap: 8px; }
 .p-cmd-kbd { padding: 1px 6px; border: 1px solid #34343B; border-radius: 5px; background: #1C1C21; color: #B4B4BC;
   font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 16px; }
+
+/* A row is /name and a one-line description; hovering (or focusing) it shows the whole description. */
+.p-cmd-row { align-items: start; }
+.p-cmd-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.p-cmd-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+.p-cmd-row:hover .p-cmd-desc, .p-cmd-row:focus-visible .p-cmd-desc { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
