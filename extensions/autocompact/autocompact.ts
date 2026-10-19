@@ -2,11 +2,12 @@
 // compacts when the context passes `contextWindow - reserveTokens`, so the share becomes a
 // per-model `compaction.modelOverrides[...].reserveTokens` in settings.json. 0 turns automatic
 // compaction off. Pure functions here; index.ts reads and writes the files.
+import { ariaConfig, DEFAULTS, hasAriaConfig } from '../lib/config.ts'
 import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentDir } from '../lib/agent-dir.ts'
 
-export const DEFAULT_PERCENT = 40
+export const DEFAULT_PERCENT = DEFAULTS.compaction.percent
 // Pi's own default reserve. reserveTokens also caps the summary's length (80% of it), so it never
 // goes lower, even at 100%.
 export const MIN_RESERVE = 16384
@@ -42,6 +43,11 @@ export function applyPercent(settings: any, models: ModelInfo[], percent: number
     overrides[key] = { ...overrides[key], reserveTokens: reserveFor(m.contextWindow, percent) }
   }
   return { ...settings, compaction: { ...compaction, modelOverrides: overrides } }
+}
+
+/** The share in use: Aria's setting under Aria, the owner's autocompact.json otherwise. */
+export function compactPercent(file = PERCENT_FILE): number {
+  return hasAriaConfig() ? ariaConfig().compaction.percent : readPercent(file)
 }
 
 export function readPercent(file = PERCENT_FILE): number {

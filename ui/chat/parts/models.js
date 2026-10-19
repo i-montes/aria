@@ -50,6 +50,11 @@ export const providerLabel = (id) => PROVIDERS[id] ?? String(id ?? '')
 const nameOf = (m) => String(m.name || m.id || '')
 const refOf = (m) => (m.provider ? `${m.provider}/${m.id}` : String(m.id ?? ''))
 
+/** OpenCode Zen (`opencode/*`) is billed per request: listed only when the settings allow it (`models.allowPayPerUse`);
+ * the model in use (`current`, provider/id) always stays. */
+export const withoutPayPerUse = (models, allowed, current) =>
+  allowed ? models : models.filter((m) => m.provider !== 'opencode' || refOf(m) === current)
+
 /**
  * Ranks the models for `query`: the name starts with it (0), it is inside the name (1 + position),
  * it is in the id, provider, description, tag or tier (50). Ties keep the original order.

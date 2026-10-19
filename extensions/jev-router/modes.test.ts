@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { isPlanPath, notAPlan, planMayWrite, routedMode, planPrompt } from './modes.ts'
+import { isPlanPath, notAPlan, planMayWrite, routedMode, planPrompt, PLAN_MODEL, planModel, planQuotaThreshold, planThinking } from './modes.ts'
 import { exhausted, parseGoUsage } from './usage.ts'
 
 const widget = join(homedir(), 'Projects', 'acme', 'checkout-widget')
@@ -62,4 +62,30 @@ describe('the /plan questions', () => {
     expect(prompt).not.toContain('one question per call')
     expect(prompt).toContain('up to 4')
   })
+})
+
+describe("plan mode follows Aria's settings", () => {
+  const { mkdtempSync: mk, writeFileSync: wr } = require('node:fs')
+  const { tmpdir: tmp } = require('node:os')
+  const saved = process.env.PI_CODING_AGENT_DIR
+  const withConfig = (config: unknown, run: () => void) => {
+    const dir = mk(join(tmp(), 'aria-modes-'))
+    if (config) wr(join(dir, 'aria.json'), JSON.stringify(config))
+    process.env.PI_CODING_AGENT_DIR = dir
+    try { run() } finally { if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved }
+  }
+
+  test('the plan model and effort come from the config', () =>
+    withConfig({ models: { plan: { provider: 'anthropic', id: 'claude-x' }, planThinking: 'max' }, quota: { planSwitchAt: 80 } }, () => {
+      expect(planModel()).toEqual({ provider: 'anthropic', id: 'claude-x' })
+      expect(planThinking()).toBe('max')
+      expect(planQuotaThreshold()).toBe(80)
+    }))
+
+  test('without a config the plan model is glm-5.3 at high, switching at 90%', () =>
+    withConfig(null, () => {
+      expect(planModel()).toEqual(PLAN_MODEL)
+      expect(planThinking()).toBe('high')
+      expect(planQuotaThreshold()).toBe(90)
+    }))
 })

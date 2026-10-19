@@ -43,5 +43,14 @@ Tests: `bun test extensions`.
 - **Without bwrap** (macOS has none) the sandbox no longer refuses every command: each one asks first, with the same
   permission card and choices (`sandbox/route.ts`). Nothing runs unconfined without the user. On Linux nothing
   changes: without bwrap commands are still refused.
+- **Aria's settings** (phase 2c) reach the extensions through one file, `aria.json` in the agent directory, read by
+  `lib/config.ts`. Without it every value is the one these files always had (`DEFAULTS`), so the owner's own Pi is
+  unchanged. Under Aria:
+  - `jev-router`: the `/plan` model, its effort and its quota threshold (`planModel`, `planThinking`,
+    `planQuotaThreshold` in `modes.ts`); the effort decision moved to `effort.ts` (`effortFor`), where Aria's fixed
+    level and "top level on free models" apply. Outside Aria, `jev-router-effort.json` decides as before.
+  - `quota-fallback`: the free model, the threshold, the countdown, asking first and what no answer does (`freeModel`,
+    `switchThreshold`, `askTimeoutMs`; `choiceFrom` gained `onNoAnswer`).
+  - `autocompact`: the share comes from the settings (`compactPercent`); outside Aria, `autocompact.json`.
 - **Left out:** `jev-router/eval.ts`, `sandbox/review-eval.ts` and `sandbox/accept.sh`, which run real models against the
   owner's own Pi.

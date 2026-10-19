@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { exhausted, type GoUsage } from '../jev-router/usage.ts'
+import { ariaConfig, DEFAULTS, type Model } from '../lib/config.ts'
 
 // Free inside Go; not used for training, kept 30 days for safety per OpenCode's policy (checked
 // 2026-10-14). Picked on 2026-10-14 from the 5-task benchmark (bugfix, feature, repo exploration,
@@ -11,9 +12,12 @@ import { exhausted, type GoUsage } from '../jev-router/usage.ts'
 // 20+ min on the feature task and step-5-preview-free kept answering 429. The Zen free tier
 // (opencode/*-free) refuses any client but OpenCode itself, so Go's free models are the only ones
 // Pi can use.
-export const FREE_MODEL = { provider: 'opencode-go', id: 'cat-jam-free' } as const
+export const FREE_MODEL = DEFAULTS.quota.freeModel
+/** The free model: Aria's setting, or FREE_MODEL. */
+export const freeModel = (): Model => ariaConfig().quota.freeModel
 // The user's pick (2026-10-14): use almost all the paid quota, switch just before it runs out.
-export const THRESHOLD = 98
+export const THRESHOLD = DEFAULTS.quota.switchAt
+export const switchThreshold = (): number => ariaConfig().quota.switchAt
 export const CACHE_FILE = join(tmpdir(), 'pi-go-usage.json')
 export const CACHE_TTL_MS = 60_000
 
@@ -53,7 +57,8 @@ export function decide(s: {
     if (!isPaidGo(s.current)) return null
     return { kind: 'switch', window: spent.name, percent: spent.window.percent, resetsAt: spent.window.resetsAt }
   }
-  const onFree = s.current?.provider === FREE_MODEL.provider && s.current?.id === FREE_MODEL.id
+  const free = freeModel()
+  const onFree = s.current?.provider === free.provider && s.current?.id === free.id
   if (s.switchedFrom && onFree) return { kind: 'restore', to: s.switchedFrom }
   return null
 }
@@ -62,7 +67,8 @@ export function decide(s: {
 // (the user's pick, 2026-10-18: the free model keeps prompts 30 days, so it is their call). The
 // answer is shared with every pi process (subagents follow the TUI's choice) and holds for that
 // quota window; reaching 100% asks again.
-export const ASK_TIMEOUT_MS = 5 * 60_000
+export const ASK_TIMEOUT_MS = DEFAULTS.quota.countdownMs
+export const askTimeoutMs = (): number => ariaConfig().quota.countdownMs
 export const DECISION_FILE = join(tmpdir(), 'pi-go-switch-decision.json')
 export type Choice = 'switch' | 'stay'
 
@@ -88,11 +94,11 @@ export function writeDecision(key: string, choice: Choice, file = DECISION_FILE)
   }
 }
 
-/** What an answer from the dialog means: no pick at the timeout switches, Esc stays. */
-export function choiceFrom(pick: string | undefined, switchLabel: string, stayLabel: string, waitedMs: number, timeoutMs = ASK_TIMEOUT_MS): Choice {
+/** What an answer from the dialog means: no pick at the timeout does `onNoAnswer` (switch by default), Esc stays. */
+export function choiceFrom(pick: string | undefined, switchLabel: string, stayLabel: string, waitedMs: number, timeoutMs = ASK_TIMEOUT_MS, onNoAnswer = 'switch'): Choice {
   if (pick === switchLabel) return 'switch'
   if (pick === stayLabel) return 'stay'
-  return waitedMs >= timeoutMs - 1000 ? 'switch' : 'stay'
+  return waitedMs >= timeoutMs - 1000 && onNoAnswer !== 'stay' ? 'switch' : 'stay'
 }
 
 // One usage lookup per minute shared by every pi process (the main agent and its subagents).

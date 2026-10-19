@@ -2,7 +2,8 @@
 // /plan: both spend the same OpenCode Go account, so one answer per quota window covers every
 // switch (and every pi process, through DECISION_FILE). Without a TUI and without an answer yet it
 // switches, as before.
-import { ASK_TIMEOUT_MS, type Choice, choiceFrom, decisionKey, FREE_MODEL, readDecision, writeDecision } from './fallback.ts'
+import { ariaConfig } from '../lib/config.ts'
+import { askTimeoutMs, type Choice, choiceFrom, decisionKey, freeModel, readDecision, writeDecision } from './fallback.ts'
 
 export interface Spent {
   window: string
@@ -13,6 +14,8 @@ export interface Spent {
 /** The question and its choices: the chat's quota card in Aria's dock, plain text in the terminal, nothing without a UI. */
 export function quotaQuestion(ctx: any, spent: Spent, fromId: string): { title: string; options: string[] } | null {
   if (!ctx?.hasUI || (ctx.mode !== 'tui' && ctx.mode !== 'rpc')) return null
+  const FREE_MODEL = freeModel()
+  const ASK_TIMEOUT_MS = askTimeoutMs()
   const SWITCH = `Switch to ${FREE_MODEL.id} now`
   const STAY = `Stay on ${fromId}`
   const options = [SWITCH, STAY]
@@ -43,18 +46,20 @@ export async function confirmFreeSwitch(ctx: any, spent: Spent, fromId: string):
   const key = decisionKey(spent)
   const saved = readDecision(key)
   if (saved) return saved
-  const question = quotaQuestion(ctx, spent, fromId)
+  const quota = ariaConfig().quota
+  // Asking first is a setting in Aria; without asking it switches (quota-fallback says so).
+  const question = quota.askFirst ? quotaQuestion(ctx, spent, fromId) : null
   if (!question) return 'switch'
   const [SWITCH, STAY] = question.options
   const title = question.title
   const started = Date.now()
   let pick: string | undefined
   try {
-    pick = await ctx.ui.select(title, [SWITCH, STAY], { timeout: ASK_TIMEOUT_MS })
+    pick = await ctx.ui.select(title, [SWITCH, STAY], { timeout: quota.countdownMs })
   } catch {
     pick = undefined
   }
-  const choice = choiceFrom(pick, SWITCH, STAY, Date.now() - started)
+  const choice = choiceFrom(pick, SWITCH, STAY, Date.now() - started, quota.countdownMs, quota.onNoAnswer)
   writeDecision(key, choice)
   return choice
 }

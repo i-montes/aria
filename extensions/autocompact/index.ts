@@ -3,7 +3,7 @@
 // start). `/autocompact <0-100>` changes the share and reloads Pi so it applies right away;
 // `/autocompact` alone shows it.
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
-import { DEFAULT_PERCENT, parsePercent, readPercent, syncSettings, writePercent } from './autocompact.ts'
+import { compactPercent, DEFAULT_PERCENT, parsePercent, syncSettings, writePercent } from './autocompact.ts'
 
 export default function (pi: ExtensionAPI) {
   const models = (ctx: any) => {
@@ -16,7 +16,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on('session_start', (_event: any, ctx: any) => {
     try {
-      syncSettings(models(ctx), readPercent())
+      syncSettings(models(ctx), compactPercent())
     } catch {
       // settings.json unreadable: leave it to Pi
     }
@@ -25,7 +25,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand('autocompact', {
     description: `Automatic compaction at this % of the context window (0 = off, default ${DEFAULT_PERCENT}).`,
     handler: async (args: string, ctx: any) => {
-      const now = readPercent()
+      const now = compactPercent()
       if (!args.trim()) {
         ctx.ui.notify(now === 0 ? 'Auto-compaction is off. /autocompact <1-100> turns it on.' : `Auto-compaction at ${now}% of the context window.`, 'info')
         return

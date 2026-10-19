@@ -1,7 +1,7 @@
 // Run: bun test extensions
 import { describe, expect, test } from 'bun:test'
 import { parseCardTitle } from '../../ui/chat/parts/cards.js'
-import { quotaQuestion } from './ask.ts'
+import { confirmFreeSwitch, quotaQuestion } from './ask.ts'
 import { ASK_TIMEOUT_MS, FREE_MODEL } from './fallback.ts'
 
 const spent = { window: '5-hour', percent: 98 }
@@ -29,5 +29,26 @@ describe('the quota question', () => {
   test('with nobody to ask there is no question (it switches, as before)', () => {
     expect(quotaQuestion({ mode: 'json', hasUI: false }, spent, 'x')).toBeNull()
     expect(quotaQuestion(undefined, spent, 'x')).toBeNull()
+  })
+})
+
+describe('asking first is a setting', () => {
+  const { mkdtempSync: mk, writeFileSync: wr } = require('node:fs')
+  const { tmpdir: tmp } = require('node:os')
+  const { join: jn } = require('node:path')
+  test('with askFirst off it switches without asking', async () => {
+    const saved = process.env.PI_CODING_AGENT_DIR
+    const dir = mk(jn(tmp(), 'aria-ask-'))
+    wr(jn(dir, 'aria.json'), JSON.stringify({ quota: { askFirst: false } }))
+    process.env.PI_CODING_AGENT_DIR = dir
+    let asked = false
+    try {
+      const ctx = { hasUI: true, mode: 'rpc', ui: { select: async () => ((asked = true), undefined) } }
+      expect(await confirmFreeSwitch(ctx, { window: `5-hour-${Date.now()}`, percent: 98 }, 'deepseek')).toBe('switch')
+      expect(asked).toBe(false)
+    } finally {
+      if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR
+      else process.env.PI_CODING_AGENT_DIR = saved
+    }
   })
 })

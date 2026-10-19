@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { applyPercent, DEFAULT_PERCENT, MIN_RESERVE, parsePercent, readPercent, reserveFor, syncSettings, writePercent } from './autocompact.ts'
+import { applyPercent, compactPercent, DEFAULT_PERCENT, MIN_RESERVE, parsePercent, readPercent, reserveFor, syncSettings, writePercent } from './autocompact.ts'
 
 const big = { provider: 'opencode-go', id: 'big', contextWindow: 1_000_000 }
 const small = { provider: 'opencode-go', id: 'small', contextWindow: 128_000 }
@@ -54,4 +54,22 @@ describe('files', () => {
     expect(JSON.parse(readFileSync(f, 'utf8')).compaction.modelOverrides['opencode-go/big'].reserveTokens).toBe(600_000)
     expect(syncSettings([big], 40, f)).toBe(false)
   })
+})
+
+describe("compaction follows Aria's settings", () => {
+  const saved = process.env.PI_CODING_AGENT_DIR
+  const at = (config: unknown, run: (dir: string) => void) => {
+    const dir = mkdtempSync(join(require('node:os').tmpdir(), 'aria-compact-'))
+    if (config) writeFileSync(join(dir, 'aria.json'), JSON.stringify(config))
+    process.env.PI_CODING_AGENT_DIR = dir
+    try { run(dir) } finally { if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved }
+  }
+  test('the percent comes from the config', () => at({ compaction: { percent: 70 } }, (dir) => {
+    writeFileSync(join(dir, 'autocompact.json'), JSON.stringify({ percent: 90 }))
+    expect(compactPercent(join(dir, 'autocompact.json'))).toBe(70)
+  }))
+  test('without a config autocompact.json decides', () => at(null, (dir) => {
+    writeFileSync(join(dir, 'autocompact.json'), JSON.stringify({ percent: 90 }))
+    expect(compactPercent(join(dir, 'autocompact.json'))).toBe(90)
+  }))
 })

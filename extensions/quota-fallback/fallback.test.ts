@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { choiceFrom, decide, decisionKey, FREE_MODEL, isFree, isPaidGo, readDecision, writeDecision, readCachedUsage, writeCachedUsage } from './fallback.ts'
+import { ASK_TIMEOUT_MS, askTimeoutMs, choiceFrom, decide, decisionKey, FREE_MODEL, freeModel, isFree, isPaidGo, readCachedUsage, readDecision, switchThreshold, writeCachedUsage, writeDecision } from './fallback.ts'
 import type { GoUsage } from '../jev-router/usage.ts'
 
 const usage = (rolling: number, weekly: number, status = 'ok'): GoUsage => ({
@@ -97,5 +97,37 @@ describe('switch decision', () => {
     writeDecision(decisionKey(near), 'stay', file)
     expect(readDecision(decisionKey(near), file)).toBe('stay')
     expect(readDecision(decisionKey({ ...near, percent: 100 }), file)).toBeNull()
+  })
+})
+
+describe("the fallback follows Aria's settings", () => {
+  const { mkdtempSync: mk, writeFileSync: wr } = require('node:fs')
+  const { tmpdir: tmp } = require('node:os')
+  const { join: jn } = require('node:path')
+  const saved = process.env.PI_CODING_AGENT_DIR
+  const withConfig = (config: unknown, run: () => void) => {
+    const dir = mk(jn(tmp(), 'aria-quota-'))
+    if (config) wr(jn(dir, 'aria.json'), JSON.stringify(config))
+    process.env.PI_CODING_AGENT_DIR = dir
+    try { run() } finally { if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved }
+  }
+
+  test('the free model, threshold and countdown come from the config', () =>
+    withConfig({ quota: { switchAt: 95, freeModel: { provider: 'opencode-go', id: 'other-free' }, countdownMs: 60000 } }, () => {
+      expect(freeModel()).toEqual({ provider: 'opencode-go', id: 'other-free' })
+      expect(switchThreshold()).toBe(95)
+      expect(askTimeoutMs()).toBe(60000)
+    }))
+
+  test('without a config: cat-jam-free at 98%, five minutes', () =>
+    withConfig(null, () => {
+      expect(freeModel()).toEqual(FREE_MODEL)
+      expect(switchThreshold()).toBe(98)
+      expect(askTimeoutMs()).toBe(ASK_TIMEOUT_MS)
+    }))
+
+  test('on no answer, stay keeps the model', () => {
+    expect(choiceFrom(undefined, 'S', 'K', 300000, 300000, 'stay')).toBe('stay')
+    expect(choiceFrom(undefined, 'S', 'K', 300000, 300000, 'switch')).toBe('switch')
   })
 })

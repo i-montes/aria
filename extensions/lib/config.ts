@@ -2,7 +2,7 @@
 // settings (crates/aria-core/src/agent_config.rs). The owner's own Pi has no such file, and then every value is the
 // one the extensions have always used. A field that is missing or of the wrong type falls back on its own, so an
 // older or newer Aria never breaks an extension. Read on every call: Pi restarts when the settings change anyway.
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentDir } from './agent-dir.ts'
 
@@ -50,6 +50,9 @@ function merge(fallback: unknown, value: unknown, path: string): unknown {
   }
   return typeof value === typeof fallback && !(typeof value === 'number' && !Number.isFinite(value)) ? value : fallback
 }
+
+/** Is this Pi Aria's (it has `aria.json`)? The owner's own Pi keeps its own files (effort, autocompact). */
+export const hasAriaConfig = (): boolean => existsSync(join(agentDir(), 'aria.json'))
 
 export function ariaConfig(): AriaConfig {
   let found: unknown = {}

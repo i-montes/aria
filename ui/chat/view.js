@@ -11,7 +11,7 @@ import { PROVIDERS, renderConnect } from './parts/connect.js'
 import { renderFilePicker, filterFiles } from './parts/files.js'
 import { indexItems, indexLayout, renderIndex } from './parts/index.js'
 import { renderMemory, initialMemoryUi, reduceMemoryUi } from './parts/memory.js'
-import { renderModelPicker, orderedModels, providerLabel } from './parts/models.js'
+import { renderModelPicker, orderedModels, providerLabel, withoutPayPerUse } from './parts/models.js'
 import { questionAnswers, questionInit, questionReduce, normalizeQuestions, renderQuestion } from './parts/question.js'
 import { renderQuotaBars } from './parts/quotabars.js'
 import { renderSubagents } from './parts/subagents.js'
@@ -597,7 +597,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     $('chat-overlay').querySelector('[data-chat-field="model-search"]')?.focus()
     const reply = await ask({ type: 'listModels' }, session)
     if (picker?.kind !== 'model' || session !== tabs.active) return // closed or moved on meanwhile
-    picker = { ...picker, items: reply.models ?? [] }
+    picker = { ...picker, items: withoutPayPerUse(reply.models ?? [], settings?.models?.allowPayPerUse === true, current().model ?? '') }
     drawOverlay()
   }
 

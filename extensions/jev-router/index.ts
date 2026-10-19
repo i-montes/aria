@@ -46,7 +46,6 @@ import {
   READ_ONLY_NOTE, jevStatus } from './route.ts'
 import {
   executePrompt,
-  FREE_PLAN_MODEL,
   gitRoot,
   isPlanPath,
   LARGE_CONTEXT_TOKENS,
@@ -55,17 +54,19 @@ import {
   notAPlan,
   PLAN_BLOCK_REASON,
   PLAN_DIRS_TEXT,
-  PLAN_MODEL,
-  PLAN_THINKING,
+  planModel,
+  planThinking,
   planMayWrite,
   planPrompt,
-  QUOTA_THRESHOLD,
+  planQuotaThreshold,
   routedMode,
 } from './modes.ts'
 import { checkKill } from './process-guard.ts'
 import { exhausted, fetchGoUsage } from './usage.ts'
 import { confirmFreeSwitch } from '../quota-fallback/ask.ts'
-import { isFree } from '../quota-fallback/fallback.ts'
+import { freeModel, isFree } from '../quota-fallback/fallback.ts'
+import { ariaConfig, hasAriaConfig } from '../lib/config.ts'
+import { effortFor, RANK } from './effort.ts'
 import { agentDir } from '../lib/agent-dir.ts'
 
 const CLASSIFY_TIMEOUT_MS = 3000
@@ -120,7 +121,7 @@ export default function (pi: ExtensionAPI) {
   // Model and thinking level to go back to when plan mode ends.
   let restore: { model: any; thinking: string } | null = null
   // The model plan mode is using (GLM, or the free one when the quota is nearly spent).
-  let planModelId: string = PLAN_MODEL.id
+  let planModelId: string = planModel().id
   // Set when plan mode writes a plan file; plan mode ends when that run settles.
   let planWritten = false
 
@@ -164,16 +165,10 @@ export default function (pi: ExtensionAPI) {
     }
     lastSet = pi.getThinkingLevel()
   }
-  const RANK = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
-  const levelFor = (route: Hints['route'], b: string) => {
-    if (route === 'quick') return 'low'
-    if (route === 'think') return RANK.indexOf(b) >= RANK.indexOf('high') ? b : 'high'
-    return b
-  }
   const applyThinking = (model: any, route?: Hints['route']) => {
     try {
       base ??= pi.getThinkingLevel()
-      const level = fixed ?? (isFree(model) ? 'max' : route ? levelFor(route, base) : base)
+      const level = effortFor({ route, free: isFree(model), base, fixed, config: ariaConfig() })
       if (pi.getThinkingLevel() !== level) setLevel(level)
     } catch {
       // keep whatever level is set
@@ -186,7 +181,8 @@ export default function (pi: ExtensionAPI) {
     if (!routed(ctx)) return
     modelKey = keyOf(ctx.model)
     base = pi.getThinkingLevel()
-    fixed = readFixedEffort()
+    // Under Aria the settings say it (aria.json, effortFor); the owner's own Pi keeps its effort file.
+    fixed = hasAriaConfig() ? null : readFixedEffort()
     showEffort(ctx)
     if (mode === 'normal') applyThinking(ctx.model)
   })
@@ -439,8 +435,10 @@ export default function (pi: ExtensionAPI) {
   /** The plan model for now: GLM, or the free one when the Go quota is at the threshold. */
   async function choosePlanModel(ctx: any): Promise<{ model: any; note: string | null }> {
     const usage = await fetchGoUsage()
-    let spent = usage ? exhausted(usage, QUOTA_THRESHOLD) : null
+    let spent = usage ? exhausted(usage, planQuotaThreshold()) : null
     // Same account and quota as quota-fallback: one shared answer decides both.
+    const PLAN_MODEL = planModel()
+    const FREE_PLAN_MODEL = freeModel()
     if (spent && (await confirmFreeSwitch(ctx, { window: spent.name, ...spent.window }, PLAN_MODEL.id)) === 'stay') spent = null
     const pick = spent ? FREE_PLAN_MODEL : PLAN_MODEL
     const note = spent
@@ -480,7 +478,7 @@ export default function (pi: ExtensionAPI) {
         return
       }
       planModelId = model.id
-      setLevel(isFree(model) ? 'max' : PLAN_THINKING)
+      setLevel(isFree(model) ? 'max' : planThinking())
       setMode('plan', ctx)
       if (note) ctx.ui.notify(note, 'warning')
       pi.sendUserMessage(planPrompt(idea))

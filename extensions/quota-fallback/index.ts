@@ -9,7 +9,7 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { fetchGoUsage } from '../jev-router/usage.ts'
 import { confirmFreeSwitch } from './ask.ts'
-import { decide, FREE_MODEL, readCachedUsage, shortDate, THRESHOLD, writeCachedUsage, type ModelLike } from './fallback.ts'
+import { decide, freeModel, readCachedUsage, shortDate, switchThreshold, writeCachedUsage, type ModelLike } from './fallback.ts'
 
 export default function (pi: ExtensionAPI) {
   if (process.env.PI_QUOTA_FALLBACK === '0') return
@@ -25,7 +25,8 @@ export default function (pi: ExtensionAPI) {
 
   const check = async (ctx: any) => {
     try {
-      const d = decide({ usage: await usageNow(), current: ctx.model, switchedFrom, threshold: THRESHOLD })
+      const FREE_MODEL = freeModel()
+      const d = decide({ usage: await usageNow(), current: ctx.model, switchedFrom, threshold: switchThreshold() })
       if (!d) return
       if (d.kind === 'switch') {
         const free = ctx.modelRegistry.find(FREE_MODEL.provider, FREE_MODEL.id)

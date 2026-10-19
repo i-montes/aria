@@ -11,22 +11,27 @@ import { existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { agentDir, projectsDir } from '../lib/agent-dir.ts'
+import { ariaConfig, DEFAULTS, type Model } from '../lib/config.ts'
 
 export type Mode = 'normal' | 'plan' | 'execute'
 
 // The user picked this model for planning (2026-10-13, trying glm-5.3 after deepseek-v4-pro); it
 // stays inside the OpenCode Go plan.
-export const PLAN_MODEL = { provider: 'opencode-go', id: 'glm-5.3' } as const
+export const PLAN_MODEL = DEFAULTS.models.plan
+/** The planning model: Aria's setting, or PLAN_MODEL. */
+export const planModel = (): Model => ariaConfig().models.plan
 // Used instead when the Go quota is nearly spent (see usage.ts): the same free model as the
 // quota-fallback extension (cat-jam-free since 2026-10-14; longcat-2.5-preview-free before, which
 // looped once in /plan and was the slowest in the coding benchmark).
 export { FREE_MODEL as FREE_PLAN_MODEL } from '../quota-fallback/fallback.ts'
-export const PLAN_THINKING = 'high'
+export const PLAN_THINKING = DEFAULTS.models.planThinking
+export const planThinking = (): string => ariaConfig().models.planThinking
 // At or above this percentage of the 5-hour or the weekly Go window, /plan uses the free model.
 /** Modes with a person behind them: the terminal, `pi -p`, and Aria's dock (RPC). Subagents (`json`) are not routed. */
 export const routedMode = (mode: string | undefined): boolean => mode === 'tui' || mode === 'print' || mode === 'rpc'
 
-export const QUOTA_THRESHOLD = 90
+export const QUOTA_THRESHOLD = DEFAULTS.quota.planSwitchAt
+export const planQuotaThreshold = (): number => ariaConfig().quota.planSwitchAt
 // /plan warns before starting in a session that already carries this much context.
 export const LARGE_CONTEXT_TOKENS = 100_000
 

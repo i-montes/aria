@@ -1,7 +1,7 @@
 // Run: bun test ui/chat/parts/models.test.js
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { TEXTS, filterModels, orderedModels, providerLabel, renderModelPicker } from './models.js'
+import { TEXTS, filterModels, orderedModels, providerLabel, renderModelPicker, withoutPayPerUse } from './models.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const hostile = '<script>alert("x")</script> & \'q\''
@@ -173,5 +173,21 @@ describe('texts', () => {
     for (const lang of ['en', 'es']) for (const key of used) expect(TEXTS[lang][key], `${lang}: ${key}`).toBeTruthy()
     expect(Object.keys(TEXTS.es).sort()).toEqual(Object.keys(TEXTS.en).sort())
     for (const key of Object.keys(TEXTS.en)) expect(key.startsWith('chat.models.')).toBe(true)
+  })
+})
+
+describe('pay-per-use models (ARIA-SETUP item 7)', () => {
+  const models = [
+    { provider: 'opencode-go', id: 'deepseek-v4.1-flash' },
+    { provider: 'opencode', id: 'claude-x' },
+    { provider: 'opencode', id: 'gpt-y' },
+    { provider: 'anthropic', id: 'claude-z' },
+  ]
+  test('are hidden unless allowed', () => {
+    expect(withoutPayPerUse(models, false, '').map((m) => m.id)).toEqual(['deepseek-v4.1-flash', 'claude-z'])
+    expect(withoutPayPerUse(models, true, '')).toEqual(models)
+  })
+  test('the model in use always stays listed', () => {
+    expect(withoutPayPerUse(models, false, 'opencode/gpt-y').map((m) => m.id)).toContain('gpt-y')
   })
 })
