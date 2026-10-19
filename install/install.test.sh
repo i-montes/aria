@@ -19,7 +19,7 @@ line_of() { printf '%s\n' "$1" | grep -nF -- "$2" | head -1 | cut -d: -f1; }
 out=$(sh "$installer" --dry-run --local /tmp/fake-aria 2>&1)
 last=0
 ordered=1
-for step in 'sudo pacman -S --needed gtk3 webkit2gtk-4.1 gtk-layer-shell' 'install -d -m 700' 'install -Dm755 /tmp/fake-aria' 'systemctl --user daemon-reload' 'systemctl --user enable --now aria.service'; do
+for step in 'sudo pacman -S --needed gtk3 webkit2gtk-4.1 gtk-layer-shell bubblewrap iproute2' 'install -d -m 700' 'install -Dm755 /tmp/fake-aria' 'systemctl --user daemon-reload' 'systemctl --user enable --now aria.service'; do
   at=$(line_of "$out" "would: $step") || at=""
   if [ -z "$at" ]; then fail "install dry run lacks 'would: $step'"; ordered=0
   elif [ "$at" -le "$last" ]; then fail "install dry run has '$step' out of order"; ordered=0

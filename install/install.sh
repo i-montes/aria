@@ -21,7 +21,9 @@ UNIT=aria.service
 AGENT_DIR=$HOME/Library/LaunchAgents
 AGENT=com.aria.dock.plist
 LABEL=com.aria.dock
-PACKAGES="gtk3 webkit2gtk-4.1 gtk-layer-shell"
+# The dock's toolkit, plus bubblewrap (the sandbox runs every command in bwrap) and iproute2 (the process guard tells the
+# model to find a port's process with `ss`). bun is not needed: only the checks use it.
+PACKAGES="gtk3 webkit2gtk-4.1 gtk-layer-shell bubblewrap iproute2"
 
 # Only a real file has siblings: under `curl | sh` $0 is just "sh" and the current directory is not ours.
 SCRIPT_DIR=""
