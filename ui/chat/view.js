@@ -10,7 +10,6 @@ import { PROVIDERS, renderConnect } from './parts/connect.js'
 import { renderFilePicker, filterFiles } from './parts/files.js'
 import { indexItems, indexLayout, renderIndex } from './parts/index.js'
 import { renderMemory, initialMemoryUi, reduceMemoryUi } from './parts/memory.js'
-import { renderMeter } from './parts/meter.js'
 import { renderModelPicker, orderedModels } from './parts/models.js'
 import { questionAnswers, questionInit, questionReduce, normalizeQuestions, renderQuestion } from './parts/question.js'
 import { renderSubagents } from './parts/subagents.js'
@@ -224,15 +223,6 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
 
   // ---- drawing --------------------------------------------------------------------------------
 
-  const meterHtml = () => {
-    const state = current()
-    return renderMeter(
-      { model: modelLabel(state.model) || t('chat.meter.noModel'), used: 0, context: state.context ?? 0, free: false, hasQuota: false, compactAt: settings?.compaction?.percent ?? 40 },
-      {},
-      t,
-    )
-  }
-
   function drawHeader() {
     const key = JSON.stringify([
       tabs.sessions.map((s) => [s.id, s.title, s.status, s.unread, chatOf(s.id).model, chatOf(s.id).context]),
@@ -245,7 +235,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const sessions = tabs.sessions.map((s) => ({ ...s, model: modelLabel(chatOf(s.id).model), context: chatOf(s.id).context ?? 0, quota: 0, free: false }))
     const left = multi
       ? renderSessionTabs({ ...tabs, sessions }, { maxVisible: 3, hideNew: true, hideUndo: true, menuOpen: ui.menuOpen, renaming: ui.renaming, hasQuota: false }, t)
-      : `<div class="chat-identity"><span class="chat-dot" aria-hidden="true"></span><span class="chat-name">${esc(assistantName())}</span>${meterHtml()}</div>`
+      : `<div class="chat-identity"><span class="chat-dot" aria-hidden="true"></span><span class="chat-name">${esc(assistantName())}</span></div>`
     $('chat-header').innerHTML = `${left}
       <button type="button" class="icon-btn chat-new" data-chat="add" ${full ? 'disabled' : ''} aria-label="${esc(t('chat.new'))}" title="${esc(t('chat.new'))}">${ICON.plus}</button>
       <button type="button" class="icon-btn" data-chat="close-dock" aria-label="${esc(t('chat.close'))}" title="${esc(t('chat.close'))}">${ICON.close}</button>`
