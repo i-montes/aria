@@ -47,9 +47,12 @@ export function createOnboarding(env) {
     }
   }
 
+  /** Where the reader is; a reply that arrives after they moved must not move them again. */
+  const here = () => `${state.view}:${state.step}`
+
   const uiFlags = () => ({
     signedIn: state.ui.signedIn,
-    keyChecking: state.ui.key.status === 'checking',
+    keyChecking: state.ui.key.status === 'checking' || state.ui.oauth.status === 'checking',
     typesafeSaved: state.ui.typesafeSaved,
     servicesConnected: SERVICES.filter((id) => state.connected.has(`mcp:${id}`)),
   })
@@ -655,6 +658,7 @@ export function createOnboarding(env) {
     render()
     const provider = field === 'typesafeKey' ? 'typesafe' : module().keyProvider
     const credential = field === 'typesafeKey' ? 'typesafe:api_key' : credentialFor(state.settings.provider.id)
+    const at = here()
     const reply = await request({ type: 'saveKey', provider, key: draft })
     if (reply.type === 'keyResult' && reply.ok) state.connected.add(credential) // it IS stored, whatever the page shows now
     if (state.ui !== ui) return
@@ -665,7 +669,7 @@ export function createOnboarding(env) {
         ui.drafts[field] = ''
         render()
         // A key that just worked does not need a second confirmation: the flow goes on (quick and full).
-        if (!state.editing) next()
+        if (!state.editing && here() === at) next()
         return
       }
       ui.typesafeSaved = true
@@ -698,6 +702,7 @@ export function createOnboarding(env) {
     slot.status = 'checking'
     slot.error = null
     render()
+    const at = here()
     const reply = await request({ type: 'checkKey', provider: m.keyProvider ?? state.settings.provider.id })
     if (state.ui !== ui) return
     // A check that cannot reach the provider does not disprove a credential that is on disk: the dock and
@@ -709,7 +714,7 @@ export function createOnboarding(env) {
       state.connected.add(credentialFor(state.settings.provider.id))
       render()
       // Only a fresh setup moves on its own; while editing, the user decides (they came here to change it).
-      if (!state.editing && (m.auth === 'oauth' || !ui.drafts.key.trim())) next()
+      if (!state.editing && here() === at && (m.auth === 'oauth' || !ui.drafts.key.trim())) next()
       return
     }
     slot.status = 'idle'
@@ -729,6 +734,7 @@ export function createOnboarding(env) {
     o.error = null
     o.url = null
     render()
+    const at = here()
     const reply = await request({ type: 'startOauth' }, (progress) => {
       if (!current()) return
       o.url = progress.url
@@ -742,7 +748,7 @@ export function createOnboarding(env) {
       ui.signedIn = true
       render()
       // A sign-in that just worked does not need a second confirmation either.
-      if (!state.editing) next()
+      if (!state.editing && here() === at) next()
       return
     }
     o.status = 'idle'

@@ -453,10 +453,52 @@ describe('every control redraws the step from the settings (the components draw 
   test('a redraw keeps the reader where they were in the step', () => {
     const panel = { scrollTop: 0 }
     globalThis.document.getElementById = (id) => (id === 'content' ? panel : null)
-    const h = agentsStep()
-    panel.scrollTop = 420
-    h.click('expert-on', undefined, completed.subagents.experts[0].name)
-    expect(panel.scrollTop).toBe(420)
-    delete globalThis.document.getElementById
+    try {
+      const h = agentsStep()
+      panel.scrollTop = 420
+      h.click('expert-on', undefined, completed.subagents.experts[0].name)
+      expect(panel.scrollTop).toBe(420)
+    } finally {
+      delete globalThis.document.getElementById
+    }
+  })
+})
+
+describe('a reply that arrives after the user moved on', () => {
+  test('a stored-key check that finishes after the user went back does not pull them forward', async () => {
+    const h = harness()
+    h.ob.start(null, ['opencode-go:api_key'])
+    h.click('choose', undefined, 'quick')
+    h.click('pick', 'provider', 'opencode-go')
+    h.click('next')
+    const check = h.lastRequest()
+    h.click('back')
+    expect(h.ob.snapshot().step).toBe('provider')
+    check.resolve(keyOk)
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ view: 'step', step: 'provider' })
+  })
+
+  test('a browser sign-in that finishes after the user went back does not pull them forward', async () => {
+    const h = harness()
+    h.ob.start(null)
+    h.click('choose', undefined, 'quick')
+    h.click('pick', 'provider', 'anthropic-oauth')
+    h.click('next')
+    h.click('oauth-start')
+    const signIn = h.lastRequest()
+    h.click('back')
+    signIn.resolve(oauthOk)
+    await flush()
+    expect(h.ob.snapshot().step).toBe('provider')
+  })
+
+  test('while a stored Claude sign-in is being checked, Continue waits', () => {
+    const h = harness()
+    h.ob.start(null, ['anthropic:oauth'])
+    h.click('choose', undefined, 'quick')
+    h.click('pick', 'provider', 'anthropic-oauth')
+    h.click('next')
+    expect(h.ob.snapshot()).toMatchObject({ step: 'auth', oauth: 'checking', canContinue: false })
   })
 })
