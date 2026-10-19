@@ -2,6 +2,7 @@
 //! and replies through `emit`; the caller runs `SaveKey` and `StartOAuth` on a worker thread
 //! (`is_blocking`) and moves the replies back to the GTK thread.
 
+use aria_core::agent::{self, InstallCommand};
 use aria_core::auth::AuthStore;
 use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::json_file::JsonFileError;
@@ -17,6 +18,8 @@ use std::time::Duration;
 
 pub type Validator = Arc<dyn Fn(KeyKind, &str) -> KeyCheck + Send + Sync>;
 pub type Opener = Arc<dyn Fn(&str) + Send + Sync>;
+/// Runs `pi install` for the Claude provider; true when it exited well.
+pub type Installer = Arc<dyn Fn(&InstallCommand) -> bool + Send + Sync>;
 
 pub struct Ctx {
     pub paths: AriaPaths,
@@ -27,6 +30,9 @@ pub struct Ctx {
     pub oauth_timeout: Duration,
     /// Notion's MCP address (a parameter so tests can point it at a fake server).
     pub notion_url: String,
+    pub installer: Installer,
+    /// The `PATH` Pi would inherit (to find Claude Code and Node).
+    pub path_var: String,
 }
 
 impl Ctx {
@@ -39,20 +45,36 @@ impl Ctx {
             }),
             oauth_timeout: Duration::from_secs(300),
             notion_url: mcp::NOTION_URL.to_string(),
+            installer: Arc::new(|command| {
+                Command::new(&command.program)
+                    .args(&command.args)
+                    .envs(command.env.iter().map(|(k, v)| (k, v)))
+                    .current_dir(&command.cwd)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|status| status.success())
+            }),
+            path_var: std::env::var("PATH").unwrap_or_default(),
         }
     }
 }
 
 /// Messages that wait on the network or the browser: run them off the GTK thread.
 pub fn is_blocking(message: &PageMessage) -> bool {
-    matches!(message, PageMessage::SaveKey { .. } | PageMessage::StartOAuth { .. } | PageMessage::StartMcpOAuth { .. })
+    matches!(message, PageMessage::SaveKey { .. } | PageMessage::StartOAuth { .. } | PageMessage::StartMcpOAuth { .. } | PageMessage::InstallClaudeBridge { .. })
 }
 
 /// Messages for the chat (`chat::Chat`), which has its own worker.
 pub fn is_chat(message: &PageMessage) -> bool {
     matches!(
         message,
-        PageMessage::Session { .. } | PageMessage::SessionsLoad { .. } | PageMessage::SessionsSave { .. } | PageMessage::SessionClose { .. }
+        PageMessage::Session { .. }
+            | PageMessage::SessionsLoad { .. }
+            | PageMessage::SessionsSave { .. }
+            | PageMessage::SessionClose { .. }
+            | PageMessage::EnginesRestart
     )
 }
 
@@ -80,6 +102,10 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
                 emit(DockMessage::Error { id, code: "unknown-service".into() });
             }
         }
+        PageMessage::InstallClaudeBridge { id } => {
+            let _ = ctx.paths.ensure_root();
+            emit(install_claude_bridge(id, ctx));
+        }
         PageMessage::OpenUrl { url } => {
             if url.starts_with("https://") {
                 (ctx.opener)(&url);
@@ -89,6 +115,7 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         PageMessage::ChatSend { .. }
         | PageMessage::ChatAbort
         | PageMessage::ChatLoad
+        | PageMessage::EnginesRestart
         | PageMessage::ChatClearQueue { .. }
         | PageMessage::UiAnswer { .. }
         | PageMessage::ListCommands { .. }
@@ -186,6 +213,28 @@ fn save_key(id: u64, provider: &str, key: &str, ctx: &Ctx) -> DockMessage {
     key_result(id, None)
 }
 
+/// Makes the `claude-bridge` provider available to Aria's Pi: it needs Claude Code on the machine, and the package (about
+/// 300 MB, once). Claude Code is checked first so nothing is downloaded for a provider that could not run.
+fn install_claude_bridge(id: u64, ctx: &Ctx) -> DockMessage {
+    let error = |code: &str| DockMessage::Error { id, code: code.into() };
+    let Ok(install) = aria_core::pi::locate(&ctx.paths, aria_core::pi::pinned_version()) else { return error("pi-missing") };
+    if aria_core::pi::locate_tool(&ctx.paths, "claude", &ctx.path_var).is_none() {
+        return error("claude-code-missing");
+    }
+    if agent::claude_bridge_installed(&ctx.paths) {
+        return DockMessage::Saved { id };
+    }
+    if agent::prepare(&ctx.paths, None).is_err() {
+        return error("claude-bridge-install-failed");
+    }
+    let command = agent::claude_bridge_install_command(&ctx.paths, &install, &ctx.path_var);
+    if (ctx.installer)(&command) && agent::claude_bridge_installed(&ctx.paths) {
+        DockMessage::Saved { id }
+    } else {
+        error("claude-bridge-install-failed")
+    }
+}
+
 fn oauth_error_key(error: &OAuthError) -> &'static str {
     match error {
         OAuthError::StateMismatch => "oauth-state",
@@ -261,6 +310,8 @@ mod tests {
             opener: Arc::new(move |url| o.lock().unwrap().push(url.to_string())),
             oauth_timeout: Duration::from_millis(150),
             notion_url: "http://127.0.0.1:9/mcp".into(),
+            installer: Arc::new(|_| false),
+            path_var: String::new(),
         };
         Harness { dir, ctx, opened, seen_keys }
     }
@@ -273,6 +324,86 @@ mod tests {
 
     fn auth(h: &Harness) -> AuthStore {
         AuthStore::new(h.ctx.paths.auth())
+    }
+
+    // ---- the Claude provider -----------------------------------------------------------------------
+
+    use aria_core::agent::{claude_bridge_installed, InstallCommand, CLAUDE_BRIDGE_PACKAGE};
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A pinned Pi and a Claude Code that are really there (empty scripts), and an installer that records what it was asked.
+    fn with_pi_and_claude(h: &mut Harness, claude: bool) -> Arc<Mutex<Vec<InstallCommand>>> {
+        let binary = h.ctx.paths.pi_install(aria_core::pi::pinned_version()).join("node_modules/.bin/pi");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if claude {
+            std::fs::create_dir_all(h.ctx.paths.bin()).unwrap();
+            std::fs::write(h.ctx.paths.bin().join("claude"), "#!/bin/sh\n").unwrap();
+        }
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let (ran_in, agent) = (ran.clone(), h.ctx.paths.agent());
+        h.ctx.installer = Arc::new(move |command: &InstallCommand| {
+            ran_in.lock().unwrap().push(command.clone());
+            // what `pi install` leaves behind
+            std::fs::create_dir_all(agent.join("npm/node_modules/pi-claude-agent-sdk")).unwrap();
+            std::fs::write(agent.join("settings.json"), format!(r#"{{"packages":["{CLAUDE_BRIDGE_PACKAGE}"]}}"#)).unwrap();
+            true
+        });
+        ran
+    }
+
+    #[test]
+    fn installing_the_claude_provider_runs_pi_install_and_says_saved() {
+        let mut h = harness(KeyCheck::Valid);
+        let ran = with_pi_and_claude(&mut h, true);
+        assert_eq!(run(&h, PageMessage::InstallClaudeBridge { id: 5 }), vec![DockMessage::Saved { id: 5 }]);
+        let ran = ran.lock().unwrap();
+        assert_eq!(ran.len(), 1);
+        assert_eq!(ran[0].args, vec!["install".to_string(), CLAUDE_BRIDGE_PACKAGE.to_string()]);
+        assert!(claude_bridge_installed(&h.ctx.paths));
+    }
+
+    #[test]
+    fn an_already_installed_claude_provider_is_not_downloaded_again() {
+        let mut h = harness(KeyCheck::Valid);
+        let ran = with_pi_and_claude(&mut h, true);
+        run(&h, PageMessage::InstallClaudeBridge { id: 1 });
+        assert_eq!(run(&h, PageMessage::InstallClaudeBridge { id: 2 }), vec![DockMessage::Saved { id: 2 }]);
+        assert_eq!(ran.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn without_claude_code_nothing_is_downloaded() {
+        let mut h = harness(KeyCheck::Valid);
+        let ran = with_pi_and_claude(&mut h, false);
+        h.ctx.path_var = "/nonexistent".into();
+        assert_eq!(run(&h, PageMessage::InstallClaudeBridge { id: 3 }), vec![DockMessage::Error { id: 3, code: "claude-code-missing".into() }]);
+        assert!(ran.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn without_the_pinned_pi_it_says_so() {
+        let mut h = harness(KeyCheck::Valid);
+        h.ctx.path_var = "/nonexistent".into();
+        assert_eq!(run(&h, PageMessage::InstallClaudeBridge { id: 4 }), vec![DockMessage::Error { id: 4, code: "pi-missing".into() }]);
+    }
+
+    #[test]
+    fn a_failed_install_is_reported_and_leaves_nothing_listed() {
+        let mut h = harness(KeyCheck::Valid);
+        with_pi_and_claude(&mut h, true);
+        h.ctx.installer = Arc::new(|_| false);
+        assert_eq!(run(&h, PageMessage::InstallClaudeBridge { id: 6 }), vec![DockMessage::Error { id: 6, code: "claude-bridge-install-failed".into() }]);
+        assert!(!claude_bridge_installed(&h.ctx.paths));
+    }
+
+    #[test]
+    fn an_install_that_exits_well_but_left_no_package_is_a_failure() {
+        let mut h = harness(KeyCheck::Valid);
+        with_pi_and_claude(&mut h, true);
+        h.ctx.installer = Arc::new(|_| true); // lies: installs nothing
+        assert_eq!(run(&h, PageMessage::InstallClaudeBridge { id: 7 }), vec![DockMessage::Error { id: 7, code: "claude-bridge-install-failed".into() }]);
     }
 
     #[test]

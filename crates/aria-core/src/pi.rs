@@ -58,14 +58,20 @@ pub fn meets_minimum(version: (u32, u32, u32)) -> bool {
     version >= MIN_NODE
 }
 
-/// Node as Pi will find it: the installer's link in `~/.aria/bin` first (a service has no `mise` on its
-/// `PATH`), then the given `PATH` string.
-pub fn locate_node(paths: &AriaPaths, path_var: &str) -> Option<PathBuf> {
-    let linked = paths.bin().join("node");
+/// A tool Pi's children need (`node`, `claude`) as they will find it: the installer's link in `~/.aria/bin` first (a
+/// service has no `mise` on its `PATH`), then the given `PATH` string.
+pub fn locate_tool(paths: &AriaPaths, name: &str, path_var: &str) -> Option<PathBuf> {
+    let linked = paths.bin().join(name);
     if linked.exists() {
         return Some(linked);
     }
-    std::env::split_paths(path_var).map(|dir| dir.join("node")).find(|candidate| candidate.is_file())
+    std::env::split_paths(path_var).map(|dir| dir.join(name)).find(|candidate| candidate.is_file())
+}
+
+/// Node as Pi will find it: the installer's link in `~/.aria/bin` first (a service has no `mise` on its
+/// `PATH`), then the given `PATH` string.
+pub fn locate_node(paths: &AriaPaths, path_var: &str) -> Option<PathBuf> {
+    locate_tool(paths, "node", path_var)
 }
 
 /// Is there a Node that can run Pi?
@@ -183,6 +189,19 @@ mod tests {
         fake_node(&old, "v18.0.0");
         assert_eq!(locate_node(&paths, old.to_str().unwrap()), Some(paths.bin().join("node")));
         assert!(node_ok(&paths, old.to_str().unwrap()));
+    }
+
+    #[test]
+    fn the_claude_code_link_wins_over_the_path_and_a_missing_one_is_none() {
+        let (dir, paths) = paths();
+        assert_eq!(locate_tool(&paths, "claude", "/nonexistent"), None);
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("claude"), "#!/bin/sh\n").unwrap();
+        assert_eq!(locate_tool(&paths, "claude", elsewhere.to_str().unwrap()), Some(elsewhere.join("claude")));
+        std::fs::create_dir_all(paths.bin()).unwrap();
+        std::fs::write(paths.bin().join("claude"), "#!/bin/sh\n").unwrap();
+        assert_eq!(locate_tool(&paths, "claude", elsewhere.to_str().unwrap()), Some(paths.bin().join("claude")));
     }
 
     #[test]

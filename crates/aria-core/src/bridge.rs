@@ -58,6 +58,13 @@ pub enum PageMessage {
     SetModel { id: u64, model: String },
     #[serde(rename = "listFiles")]
     ListFiles { id: u64, query: String },
+    /// Download and list the Claude provider (`claude-bridge`) in Aria's Pi; replies `saved`, or an `error` whose `code` is
+    /// `pi-missing`, `claude-code-missing` or `claude-bridge-install-failed`.
+    #[serde(rename = "installClaudeBridge")]
+    InstallClaudeBridge { id: u64 },
+    /// A credential or package changed: every session's Pi stops and starts again when next used, so it sees the change.
+    #[serde(rename = "enginesRestart")]
+    EnginesRestart,
     /// A chat message for one session (each session is its own tab and its own Pi).
     #[serde(rename = "session")]
     Session { session: String, message: Box<PageMessage> },
@@ -167,6 +174,8 @@ mod tests {
         assert_eq!(page(r#"{"type":"chatSend","text":"hi"}"#), PageMessage::ChatSend { text: "hi".into(), behavior: None });
         assert_eq!(page(r#"{"type":"chatAbort"}"#), PageMessage::ChatAbort);
         assert_eq!(page(r#"{"type":"chatLoad"}"#), PageMessage::ChatLoad);
+        assert_eq!(page(r#"{"type":"installClaudeBridge","id":12}"#), PageMessage::InstallClaudeBridge { id: 12 });
+        assert_eq!(page(r#"{"type":"enginesRestart"}"#), PageMessage::EnginesRestart);
         assert_eq!(page(r#"{"type":"chatClearQueue"}"#), PageMessage::ChatClearQueue { keep: vec![] });
         assert_eq!(
             page(r#"{"type":"chatClearQueue","keep":["a","b"]}"#),

@@ -51,6 +51,11 @@ direct=$(sh "$installer" --print-pi-version 2>&1)
 mkdir -p "$tmp/linkhome"
 PATH="$tmp/new:/usr/bin:/bin" ARIA_HOME="$tmp/linkhome" sh "$installer" --link-node >/dev/null 2>&1
 [ "$(readlink "$tmp/linkhome/bin/node")" = "$tmp/new/node" ] && pass "the installer links Node into ~/.aria/bin" || fail "the Node link is missing or wrong"
+# Claude Code (the Claude provider needs it) is linked too when it is there, and its absence is fine
+[ ! -e "$tmp/linkhome/bin/claude" ] && pass "no Claude Code, no link" || fail "a Claude link appeared from nowhere"
+printf '#!/bin/sh\n' > "$tmp/new/claude" && chmod +x "$tmp/new/claude"
+PATH="$tmp/new:/usr/bin:/bin" ARIA_HOME="$tmp/linkhome" sh "$installer" --link-node >/dev/null 2>&1
+[ "$(readlink "$tmp/linkhome/bin/claude")" = "$tmp/new/claude" ] && pass "the installer links Claude Code into ~/.aria/bin" || fail "the Claude Code link is missing or wrong"
 rm -r "$tmp"
 
 # uninstall dry run

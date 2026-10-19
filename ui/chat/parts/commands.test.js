@@ -135,11 +135,28 @@ describe('renderCommandPicker', () => {
     expect(html).toContain('chat.commands.emptyHint')
   })
 
-  test('the hint (key shortcut) or the source shows beside a command', () => {
-    const html = renderCommandPicker(picker({ items: [{ name: 'agents', description: 'd', hint: 'alt+a', source: 'builtin' }, { name: 'memory', description: 'd', source: 'skill' }] }), {}, t)
-    expect(html).toContain('>alt+a</kbd>')
-    expect(html).toContain('>skill</kbd>')
+  test('a row shows only /name and its description: no tag, no shortcut', () => {
+    const html = renderCommandPicker(picker({ items: [{ name: 'agents', description: 'Show the subagents', hint: 'alt+a', source: 'builtin' }, { name: 'memory', description: 'd', source: 'skill' }] }), {}, t)
+    expect(html).not.toContain('>alt+a</kbd>')
+    expect(html).not.toContain('>skill</kbd>')
     expect(html).not.toContain('>builtin</kbd>')
+    expect(html).toContain('/</span>')
+  })
+
+  test('the description is one line in the row, and the whole of it is in the tooltip and shown on hover', () => {
+    const long = 'Plan with the planning model, then write the spec and split it into phases before building anything'
+    const html = renderCommandPicker(picker({ items: [{ name: 'plan', description: long, source: 'extension' }] }), {}, t)
+    expect(html).toContain(`title="${long}"`)
+    expect(html).toContain('p-cmd-desc')
+    const css = readFileSync(new URL('./commands.css', import.meta.url), 'utf8')
+    expect(css).toMatch(/\.p-cmd-desc\s*\{[^}]*text-overflow:\s*ellipsis/)
+    expect(css).toMatch(/\.p-cmd-row:hover \.p-cmd-desc[^{]*\{[^}]*white-space:\s*normal/)
+  })
+
+  test('a description with markup in its tooltip is escaped', () => {
+    const html = renderCommandPicker(picker({ items: [{ name: 'x', description: hostile }] }), {}, t)
+    expect(html).not.toContain('title="<script>')
+    expect(html).toContain('title="&lt;script&gt;')
   })
 
   test('names, descriptions and sources are escaped', () => {

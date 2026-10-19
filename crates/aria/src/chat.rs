@@ -585,6 +585,13 @@ impl Sessions {
                 let _ = self.ctx.paths.ensure_root();
                 let _ = sessions::save(&self.ctx.paths, &SessionList { sessions: entries, active });
             }
+            PageMessage::EnginesRestart => {
+                // Credentials or packages changed: every Pi stops; the page's next `chatLoad` starts it again.
+                let chats: Vec<Chat> = self.chats.lock().unwrap().values().cloned().collect();
+                for chat in chats {
+                    chat.shutdown();
+                }
+            }
             PageMessage::SessionClose { session } => {
                 let chat = self.chats.lock().unwrap().remove(&session);
                 if let Some(chat) = chat {
@@ -1158,6 +1165,24 @@ mod tests {
         s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "back".into(), behavior: None }));
         wait_session(&s, "a new start", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "starting"));
         wait_session(&s, "its reply", "aa", settled);
+    }
+
+    #[test]
+    fn restarting_the_engines_stops_every_pi_and_the_next_use_starts_a_fresh_one() {
+        let s = sessions_harness();
+        for id in ["aa", "bb"] {
+            s.sessions.handle(in_session(id, PageMessage::ChatSend { text: "x".into(), behavior: None }));
+            wait_session(&s, "ready", id, |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        }
+        s.h.visible.store(false, Ordering::SeqCst);
+        s.sessions.test_send_raw("aa", "ask");
+        wait_session(&s, "the dialog", "aa", |m| matches!(m, DockMessage::ChatDialog { .. }));
+        s.sessions.handle(PageMessage::EnginesRestart);
+        wait_session(&s, "the dialog closing", "aa", |m| matches!(m, DockMessage::ChatDialogClosed { .. }));
+        // showing a session again wakes a new Pi, which sees the changed credentials
+        s.sessions.handle(in_session("bb", PageMessage::ChatLoad));
+        wait_session(&s, "a new start", "bb", |m| matches!(m, DockMessage::ChatEngine { state } if state == "starting"));
+        wait_session(&s, "ready again", "bb", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
     }
 
     #[test]

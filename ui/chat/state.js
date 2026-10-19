@@ -269,6 +269,8 @@ export function reduce(state, message) {
 }
 
 export const addUser = (state, text) => push(state, { kind: 'user', text })
+/** A one-line fact in the thread that did not come from Pi (a provider was connected). */
+export const addNote = (state, label, text) => push(state, { kind: 'note', label, text })
 export const addQueued = (state, text) => ({ ...state, queue: [...state.queue, { text }] })
 export const clearQueue = (state, at) => ({ ...state, queue: at === undefined ? [] : state.queue.filter((_, i) => i !== at) })
 

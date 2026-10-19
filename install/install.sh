@@ -104,9 +104,11 @@ check_node() {
 link_node() {
   run install -d -m 700 "$DATA_DIR/bin"
   if [ "$DRY_RUN" = 1 ]; then
-    say "would: link $DATA_DIR/bin/node to the Node on your PATH"
+    say "would: link $DATA_DIR/bin/node to the Node on your PATH (and claude, when Claude Code is installed)"
   else
     ln -sf "$(command -v node)" "$DATA_DIR/bin/node"
+    # Claude Code, when installed, is what the Claude provider runs; Pi's processes find it through the same directory.
+    if command -v claude >/dev/null 2>&1; then ln -sf "$(command -v claude)" "$DATA_DIR/bin/claude"; fi
   fi
 }
 
