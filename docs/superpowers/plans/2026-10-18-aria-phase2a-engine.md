@@ -228,3 +228,41 @@
 - [ ] **Step 4: Check the persistent notification** on the owner's shell: `omarchy-notification-send` with critical urgency and no expiry stays on screen; record whether the explicit expiry of `0` is needed in the notifier and in `CHANGELOG.md`.
 - [ ] **Step 5: Run** `cargo test --workspace && bun test && sh install/install.test.sh` — Expected: PASS (all).
 - [ ] **Step 6: Update** `CHANGELOG.md` (new files under `~/.aria/{pi,agent,bin}`, installed binary, shim) and `README.md` (Node requirement, what the dock does now); **Commit** `docs: phase 2a changelog and readme`.
+
+---
+
+## Addendum: sessions as tabs (owner's decision after Task 8)
+
+The owner pointed out that the design's `+` opens a **new session as a tab**, with several sessions at once. This replaces the plan's single "New chat" button (Task 5/6/8). Decisions (mine, from the design component `session-tabs.dc.html`): one Pi process per session (`--session-id <id>`), the page owns the tab list and statuses, Rust owns the engines and persists the list in `~/.aria/sessions.json`, a notification is raised per session but dismissed only when no session has one left.
+
+### Task 10: Sessions in Rust
+
+**Files:**
+- Create: `crates/aria-core/src/sessions.rs`
+- Modify: `crates/aria-core/src/{bridge.rs,paths.rs,lib.rs}`, `crates/aria/src/{chat.rs,main.rs,handlers.rs}`
+- Test: unit tests in those files
+
+**Interfaces:**
+- Produces:
+  - `AriaPaths::sessions() -> PathBuf` (`<root>/sessions.json`).
+  - `sessions::SessionList { sessions: Vec<SessionEntry { id: String, title: String }>, active: Option<String> }`; `sessions::load(&AriaPaths) -> SessionList` (a missing or broken file is an empty list); `sessions::save(&AriaPaths, &SessionList) -> io::Result<()>` (atomic, mode 0600, at most 8 entries, ids kept only if `[A-Za-z0-9-]{1,64}`).
+  - Bridge: `PageMessage::Session { session: String, message: Box<PageMessage> }` (carries every chat message to one session), `SessionsLoad { id }`, `SessionsSave { sessions, active }`, `SessionClose { session }`; `DockMessage::Session { session: String, message: Box<DockMessage> }`, `Sessions { id, sessions, active }`. `ChatNew` is removed (a new session is a new tab).
+  - `chat::Sessions::new(ctx: ChatCtx, emit: Emit) -> Sessions` with `handle(&self, PageMessage)`: routes a `Session` message to that session's `Chat` (created on first use; its engine runs `--session-id <session>`), handles `SessionsLoad/Save/Close` (close drops that session's engine: stdin closed, dialogs closed, its notification dismissed), and `dock_visibility_changed()` for all sessions. Every `Chat` emits through a wrapper that tags `DockMessage::Session`.
+  - `Notifier::send(&self, key: &str, title: &str, body: &str)` and `dismiss(&self, key: &str)`; a counting wrapper dismisses the real notification only when no key is left.
+- Tests: bridge shapes; `sessions` round trip, cap of 8, bad ids dropped, broken file → empty; `two_sessions_run_their_own_pi_at_once`; `a_dialog_in_one_session_does_not_dismiss_anothers_notification`; `closing_a_session_stops_its_pi_and_closes_its_dialogs`; `a_session_message_for_an_unknown_id_creates_it`; `sessions_list_persists_across_restart`.
+
+### Task 11: Tabs in the page
+
+**Files:**
+- Create: `ui/chat/sessions.js`, `ui/chat/sessions.test.js`
+- Modify: `ui/chat/view.js`, `ui/chat/view.test.js`, `ui/chat.css`, `ui/app.js`, `ui/i18n/{en,es}.json`
+- Test: `bun test ui`
+
+**Interfaces:**
+- Produces: `sessions.js` — pure tab state: `createTabs(saved?) -> { sessions: [{ id, title, status, unread }], active, closed }`, `addSession(tabs, id) -> tabs` (max 8, new one active, title `''` until the first message), `selectSession`, `closeSession` (keeps the entry for undo; the last session is never closed), `undoClose`, `renameSession`, `titleFromMessage(text) -> string` (first line, 28 chars max with an ellipsis), `applyStatus(tabs, id, chatState, isActive) -> tabs` (`working` while running, `needs` while a dialog is open, `done` + `unread` when a background run settles, otherwise `idle`), `visibleTabs(tabs, max = 4) -> { visible, overflow }` (the active one is always visible), `toSaved(tabs)`.
+- The chat view keeps one `ChatState` per session, draws the tab bar (`renderTabs`, `renderOverflow`), the `+` button, per-tab close buttons, double-click rename, the "closed X · Undo" bar, and wraps every message it sends in `{type:'session', session, message}`. `app.js` unwraps `session` dock messages (a reply with an `id` resolves its pending request; the rest goes to the chat view with its session id) and loads/saves the tab list through `sessionsLoad`/`sessionsSave`.
+- Tests: tab reducer cases above; `renderTabs` escapes titles and marks the active tab and statuses; overflow keeps the active tab visible.
+
+### Task 12: Live check and docs
+
+- Run two sessions at once against the real Pi (`--session-id` per tab), check a background tab raises "needs you", update `README.md`, `CHANGELOG.md` (`~/.aria/sessions.json`), then one more focused review of the new commits.
