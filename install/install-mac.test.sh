@@ -3,10 +3,6 @@
 # Checks the macOS branch of the installer without touching the system: dry run, LaunchAgent, guards.
 # The Omarchy branch has its own test (install.test.sh).
 set -eu
-if [ "$(uname -s)" != Darwin ]; then
-  echo "skip: install-mac.test.sh checks the macOS installer; run it on a Mac"
-  exit 0
-fi
 here=$(cd "$(dirname "$0")" && pwd)
 installer="$here/install.sh"
 failures=0
@@ -24,6 +20,14 @@ printf '#!/bin/sh\n' > "$tmp/node/npm"
 chmod +x "$tmp/node/node" "$tmp/node/npm"
 printf '#!/bin/sh\n' > "$tmp/fake-aria"
 chmod +x "$tmp/fake-aria"
+# Off a Mac (Linux CI, the Omarchy machine) the system is faked: uname says Darwin arm64, sw_vers says 26.0, and
+# launchctl knows no agent. A dry run runs none of them for real.
+if [ "$(uname -s)" != Darwin ]; then
+  printf '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; *) echo Darwin ;; esac\n' > "$tmp/node/uname"
+  printf '#!/bin/sh\necho 26.0\n' > "$tmp/node/sw_vers"
+  printf '#!/bin/sh\nexit 1\n' > "$tmp/node/launchctl"
+  chmod +x "$tmp/node/uname" "$tmp/node/sw_vers" "$tmp/node/launchctl"
+fi
 # The installer is a plain sh script; keep the real system tools and fake Node/npm.
 export PATH="$tmp/node:/usr/bin:/bin:/usr/sbin:/sbin"
 
@@ -37,7 +41,8 @@ for step in \
   'would: check macOS 12 or newer' \
   'macOS: no system packages are needed' \
   "would: npm install --prefix $tmp/home/pi/" \
-  "would: install -Dm755 $tmp/fake-aria $tmp/bin/aria" \
+  "would: mkdir -p $tmp/bin" \
+  "would: install -m 755 $tmp/fake-aria $tmp/bin/aria" \
   "would: mkdir -p $tmp/user/Library/LaunchAgents" \
   "would: write $tmp/user/Library/LaunchAgents/com.aria.dock.plist" \
   "would: launchctl bootstrap gui/$(id -u) $tmp/user/Library/LaunchAgents/com.aria.dock.plist"; do
@@ -61,7 +66,8 @@ for expected in \
   '<string>com.aria.dock</string>' \
   "<string>$tmp/bin/aria</string>" \
   "<string>$tmp/home/logs/aria.log</string>" \
-  '<key>LimitLoadToSessionType</key><string>Aqua</string>'; do
+  '<key>LimitLoadToSessionType</key><string>Aqua</string>' \
+  '<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>'; do
   printf '%s\n' "$plist" | grep -qF "$expected" && pass "LaunchAgent has $expected" || fail "LaunchAgent lacks $expected"
 done
 

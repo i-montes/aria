@@ -97,7 +97,8 @@ UNIT
 }
 
 # The LaunchAgent. It starts the dock at login in the user's Aqua session and keeps its output in
-# ~/.aria/logs/aria.log. The executable is an absolute path: a LaunchAgent has no shell profile.
+# ~/.aria/logs/aria.log, and starts it again if it crashes (systemd's Restart=on-failure). The executable is an absolute
+# path: a LaunchAgent has no shell profile.
 print_agent() {
   cat <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -107,6 +108,7 @@ print_agent() {
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key><array><string>$BIN_DIR/aria</string></array>
   <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ProcessType</key><string>Interactive</string>
   <key>LimitLoadToSessionType</key><string>Aqua</string>
   <key>StandardOutPath</key><string>$DATA_DIR/logs/aria.log</string>
@@ -114,6 +116,16 @@ print_agent() {
 </dict>
 </plist>
 PLIST
+}
+
+# GNU install creates the folder with -D; the BSD install of macOS has no such flag, and ~/.local/bin often does not exist.
+install_binary() {
+  if [ "$PLATFORM" = Darwin ]; then
+    run mkdir -p "$BIN_DIR"
+    run install -m 755 "$SOURCE" "$BIN_DIR/aria"
+  else
+    run install -Dm755 "$SOURCE" "$BIN_DIR/aria"
+  fi
 }
 
 print_service() {
@@ -303,7 +315,7 @@ do_install() {
   link_node
   install_pi
   install_pi_packages
-  run install -Dm755 "$SOURCE" "$BIN_DIR/aria"
+  install_binary
   write_unit
   if [ "$PLATFORM" = Darwin ]; then
     uid=$(id -u)
