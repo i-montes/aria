@@ -39,6 +39,24 @@ at_binary=$(line_of "$out" "would: install -Dm755")
 [ -n "$at_packages" ] && [ -n "$at_binary" ] && [ "$at_packages" -lt "$at_binary" ] && pass "packages are installed before the binary is replaced (a failure leaves the old one running)" || fail "packages come after the binary"
 rm -r "$tmp"
 
+# Engram (memory): the pinned release from engram-version, verified, into ~/.aria/bin, before the binary is replaced
+engram_version=$(head -1 "$here/../engram-version" | tr -d '[:space:]')
+tmp=$(mktemp -d)
+out=$(ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria 2>&1)
+at_engram=$(line_of "$out" "would: install engram $engram_version")
+at_binary=$(line_of "$out" "would: install -Dm755")
+[ -n "$at_engram" ] && [ -n "$at_binary" ] && [ "$at_engram" -lt "$at_binary" ] && pass "Engram $engram_version is installed before the binary is replaced" || fail "the dry run does not install Engram first"
+# a download that does not match its checksum is refused and nothing is installed
+mkdir -p "$tmp/pkg" && printf '#!/bin/sh\necho engram %s\n' "$engram_version" > "$tmp/pkg/engram" && chmod +x "$tmp/pkg/engram"
+tar czf "$tmp/engram.tar.gz" -C "$tmp/pkg" engram
+if ARIA_HOME="$tmp/home" ARIA_ENGRAM_URL="file://$tmp/engram.tar.gz" sh "$installer" --install-engram >/dev/null 2>"$tmp/err"; then fail "a download with the wrong checksum was installed"
+else grep -qi 'checksum' "$tmp/err" && [ ! -e "$tmp/home/bin/engram" ] && pass "a download with the wrong checksum is refused" || fail "the checksum refusal is unclear or left a file"; fi
+# the right one is installed, and a second run keeps it
+sum=$(sha256sum "$tmp/engram.tar.gz" | cut -d ' ' -f 1)
+if ARIA_HOME="$tmp/home" ARIA_ENGRAM_URL="file://$tmp/engram.tar.gz" ARIA_ENGRAM_SHA256="$sum" sh "$installer" --install-engram >/dev/null 2>&1 && [ -x "$tmp/home/bin/engram" ]; then pass "a verified Engram goes into ~/.aria/bin"; else fail "a verified Engram was not installed"; fi
+out=$(ARIA_HOME="$tmp/home" ARIA_ENGRAM_URL="file:///nonexistent" sh "$installer" --install-engram 2>&1) && printf '%s\n' "$out" | grep -qF "Engram $engram_version is already installed" && pass "an installed Engram is not downloaded again" || fail "an installed Engram is downloaded again"
+rm -r "$tmp"
+
 # Pi and Node: the pinned version is read from pi-version, Pi is installed under ~/.aria/pi/<version>
 pinned=$(tr -d '[:space:]' < "$here/../pi-version")
 tmp=$(mktemp -d)

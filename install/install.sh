@@ -264,6 +264,50 @@ fetch_binary() {
   SOURCE=$TMP/aria
 }
 
+# Engram, Aria's memory: the release pinned in engram-version (its first line is the version, then one
+# "<platform> <sha256>" line per build) into ~/.aria/bin, verified against that checksum. Aria keeps its own copy and
+# its own database (~/.aria/engram), apart from an Engram the user may have.
+ENGRAM_RELEASES=https://github.com/Gentleman-Programming/engram/releases/download
+install_engram() {
+  detect_platform
+  if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../engram-version" ]; then
+    pins=$(cat "$SCRIPT_DIR/../engram-version")
+  elif [ "$DRY_RUN" = 1 ]; then
+    say "would: download ${DOWNLOAD_URL%/*}/engram-version"
+    say "would: install engram (the pinned version) into $DATA_DIR/bin/engram"
+    return
+  else
+    pins=$(curl -fsSL "${DOWNLOAD_URL%/*}/engram-version") || die "could not download the pinned Engram version"
+  fi
+  version=$(printf '%s\n' "$pins" | head -1 | tr -d '[:space:]')
+  case "$PLATFORM/$(uname -m)" in
+    Linux/x86_64) build=linux_amd64 ;;
+    Linux/aarch64 | Linux/arm64) build=linux_arm64 ;;
+    Darwin/arm64) build=darwin_arm64 ;;
+    Darwin/x86_64) build=darwin_amd64 ;;
+    *) die "Engram has no build for this machine ($(uname -m))" ;;
+  esac
+  target="$DATA_DIR/bin/engram"
+  if [ -x "$target" ] && "$target" --version 2>/dev/null | grep -qF "$version"; then
+    say "Engram $version is already installed"
+    return
+  fi
+  url=${ARIA_ENGRAM_URL:-$ENGRAM_RELEASES/v$version/engram_${version}_$build.tar.gz}
+  expected=${ARIA_ENGRAM_SHA256:-$(printf '%s\n' "$pins" | awk -v b="$build" '$1 == b { print $2 }')}
+  if [ "$DRY_RUN" = 1 ]; then
+    say "would: install engram $version into $target from $url (verified)"
+    return
+  fi
+  work=$(mktemp -d)
+  if ! curl -fsSL "$url" -o "$work/engram.tar.gz"; then rm -rf "$work"; die "could not download Engram from $url"; fi
+  if [ "$(sha256_of "$work/engram.tar.gz")" != "$expected" ]; then rm -rf "$work"; die "the Engram download does not match its checksum; nothing was installed"; fi
+  if ! tar xzf "$work/engram.tar.gz" -C "$work" engram; then rm -rf "$work"; die "the Engram download has no engram binary"; fi
+  install -d -m 700 "$DATA_DIR/bin"
+  install -m 755 "$work/engram" "$target"
+  rm -rf "$work"
+  say "Installed Engram $version"
+}
+
 # sha256sum is Linux's; macOS has shasum.
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -315,6 +359,7 @@ do_install() {
   link_node
   install_pi
   install_pi_packages
+  install_engram
   install_binary
   write_unit
   if [ "$PLATFORM" = Darwin ]; then
@@ -407,6 +452,7 @@ while [ $# -gt 0 ]; do
     --check-node) MODE=check-node ;; # test hooks
     --print-pi-version) MODE=print-pi-version ;;
     --link-node) MODE=link-node ;;
+    --install-engram) MODE=install-engram ;; # test hook
     --can-delete) # test hook: exit 0 when the directory is one uninstall would delete
       [ $# -ge 2 ] || die "--can-delete needs a directory"
       safe_to_delete "$2"
@@ -425,4 +471,5 @@ case "$MODE" in
   check-node) check_node ;;
   print-pi-version) read_pi_version; printf '%s\n' "$PI_VERSION" ;;
   link-node) link_node ;;
+  install-engram) install_engram ;;
 esac

@@ -269,6 +269,12 @@ pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::
     std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&agent)?;
     std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o700))?;
 
+    // Memory: Aria's Engram server in mcp.json (before mcp.json is linked below, so a first one is linked too).
+    if let Some(settings) = settings {
+        // An mcp.json that does not parse is left as it is (mcp.rs never replaces one) and the chat still starts.
+        let _ = crate::mcp::sync_memory(paths, &settings.memory);
+    }
+
     for (source, name) in [(paths.auth(), "auth.json"), (paths.mcp(), "mcp.json"), (paths.mcp_auth(), "mcp-auth.json")] {
         let at = agent.join(name);
         if source.exists() {
@@ -294,6 +300,15 @@ pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::
             None => SUPERPOWERS_SKILLS.iter().map(|s| s.to_string()).collect(),
         };
         *packages = with_package_filters(packages.take(), &skills);
+    }
+    // A folder of Pi packages the setup names (integrations.packages, source "path") is listed once.
+    if let Some(local) = settings.and_then(|s| local_packages(&s.integrations.packages)) {
+        let list = original.as_object_mut().map(|o| o.entry("packages").or_insert_with(|| json!([])));
+        if let Some(Value::Array(list)) = list {
+            if !list.iter().any(|p| p.as_str() == Some(local.as_str())) {
+                list.push(json!(local));
+            }
+        }
     }
     write_json_atomic(&settings_path, &merge_preserving(original, ours), 0o600)?;
 
@@ -327,6 +342,16 @@ pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::
     // His extensions, adapted to run in Aria (see extensions/README.md); one he edited is kept.
     kept.extend(install_embedded(&agent, &EXTENSIONS, "extensions", &[])?);
     Ok(kept)
+}
+
+/// The local package folder of the setup (`~` expanded), when it names one.
+fn local_packages(packages: &crate::settings::Packages) -> Option<String> {
+    let path = packages.path.trim();
+    if packages.source != "path" || path.is_empty() {
+        return None;
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    Some(path.strip_prefix("~/").map(|rest| format!("{home}/{rest}")).unwrap_or_else(|| path.to_string()))
 }
 
 /// Is the Claude provider listed in Pi's settings and downloaded?
@@ -574,6 +599,27 @@ mod tests {
         let mut settings: Settings = serde_json::from_str(include_str!("../tests/golden/settings-provider-opencode-go.json")).unwrap();
         settings.assistant.language = "es".into();
         settings
+    }
+
+    #[test]
+    fn memory_on_gives_arias_pi_its_engram_server() {
+        let (_dir, paths) = paths();
+        prepare(&paths, Some(&owners_settings())).unwrap();
+        let mcp: Value = serde_json::from_str(&std::fs::read_to_string(paths.agent().join("mcp.json")).unwrap()).unwrap();
+        assert_eq!(mcp["mcpServers"]["engram"]["args"][2], "aria");
+    }
+
+    #[test]
+    fn a_local_package_folder_from_the_settings_is_listed_once() {
+        let (_dir, paths) = paths();
+        let mut settings = owners_settings();
+        settings.integrations.packages.source = "path".into();
+        settings.integrations.packages.path = "/srv/pi-packages/meeting".into();
+        prepare(&paths, Some(&settings)).unwrap();
+        prepare(&paths, Some(&settings)).unwrap();
+        let pi: Value = serde_json::from_str(&std::fs::read_to_string(paths.agent().join("settings.json")).unwrap()).unwrap();
+        let listed = pi["packages"].as_array().unwrap().iter().filter(|p| p == &&json!("/srv/pi-packages/meeting")).count();
+        assert_eq!(listed, 1);
     }
 
     #[test]

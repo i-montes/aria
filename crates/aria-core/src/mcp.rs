@@ -6,6 +6,7 @@
 use crate::json_file::{read_json, write_json_atomic, JsonFileError};
 use crate::paths::AriaPaths;
 use serde_json::{json, Map, Value};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::Path;
 
 pub const NOTION_URL: &str = "https://mcp.notion.com/mcp";
@@ -70,6 +71,50 @@ pub fn add_notion_server(paths: &AriaPaths) -> Result<(), McpError> {
             })
         });
     })
+}
+
+/// The seven Engram tools the owner's persona calls directly (ARIA-SETUP item 16).
+const ENGRAM_DIRECT: [&str; 7] = ["mem_context", "mem_search", "mem_get_observation", "mem_save", "mem_update", "mem_judge", "mem_session_summary"];
+
+/// Aria's own Engram entry: the binary the installer puts in `~/.aria/bin` and a database of its own in
+/// `~/.aria/engram` (the owner's decision: Aria's memories do not mix with his terminal Pi's).
+fn aria_engram(paths: &AriaPaths, project: &str) -> Value {
+    let exposure: Map<String, Value> = ENGRAM_DIRECT.iter().map(|t| (t.to_string(), json!("direct"))).collect();
+    json!({
+        "command": paths.bin().join("engram").display().to_string(),
+        "args": ["mcp", "--project", project, "--tools=agent"],
+        "env": { "ENGRAM_DATA_DIR": paths.root.join("engram").display().to_string() },
+        "toolExposure": exposure,
+    })
+}
+
+/// An `engram` entry is Aria's when it runs Aria's binary on Aria's database; any other is the owner's.
+fn is_arias_engram(paths: &AriaPaths, entry: &Value) -> bool {
+    entry["command"].as_str() == Some(&paths.bin().join("engram").display().to_string())
+        && entry["env"]["ENGRAM_DATA_DIR"].as_str() == Some(&paths.root.join("engram").display().to_string())
+}
+
+/// Memory on: Aria's Engram entry, with the settings' project. Memory off: Aria's entry goes. An `engram` entry Aria
+/// did not write is never changed, and the file is only written when something changes.
+pub fn sync_memory(paths: &AriaPaths, memory: &crate::settings::Memory) -> Result<(), McpError> {
+    let file = read_object(&paths.mcp())?;
+    let current = file.get("mcpServers").and_then(|s| s.get("engram")).cloned();
+    let project = if memory.project.trim().is_empty() { "aria" } else { memory.project.trim() };
+    let wanted = aria_engram(paths, project);
+    match (&current, memory.enabled) {
+        (Some(entry), _) if !is_arias_engram(paths, entry) => Ok(()),
+        (Some(entry), true) if *entry == wanted => Ok(()),
+        (None, false) => Ok(()),
+        (_, true) => {
+            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(paths.root.join("engram"))?;
+            update_servers(paths, |servers| {
+                servers.insert("engram".into(), wanted);
+            })
+        }
+        (Some(_), false) => update_servers(paths, |servers| {
+            servers.remove("engram");
+        }),
+    }
 }
 
 /// Saves a server's OAuth record under Pi's key, keeping the other servers' records.
@@ -187,5 +232,54 @@ mod tests {
         assert_eq!(std::fs::metadata(paths.mcp_auth()).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(file["mcp__notion|https://mcp.notion.com/mcp"]["tokens"]["access_token"], "a");
         assert_eq!(file["mcp__figma|https://mcp.figma.com/mcp"]["tokens"]["access_token"], "f");
+    }
+
+    fn memory(enabled: bool, project: &str) -> crate::settings::Memory {
+        crate::settings::Memory { enabled, project: project.into() }
+    }
+
+    fn servers(paths: &AriaPaths) -> Value {
+        serde_json::from_str::<Value>(&std::fs::read_to_string(paths.mcp()).unwrap()).unwrap()["mcpServers"].clone()
+    }
+
+    #[test]
+    fn memory_on_writes_arias_engram_entry_with_the_project_and_its_own_database() {
+        let (_dir, paths) = paths();
+        sync_memory(&paths, &memory(true, "casa")).unwrap();
+        let engram = &servers(&paths)["engram"];
+        assert_eq!(engram["command"], json!(paths.bin().join("engram").display().to_string()));
+        assert_eq!(engram["args"], json!(["mcp", "--project", "casa", "--tools=agent"]));
+        assert_eq!(engram["env"]["ENGRAM_DATA_DIR"], json!(paths.root.join("engram").display().to_string()));
+        assert_eq!(engram["toolExposure"]["mem_save"], "direct");
+        assert_eq!(engram["toolExposure"].as_object().unwrap().len(), 7);
+    }
+
+    #[test]
+    fn memory_off_removes_only_arias_entry() {
+        let (_dir, paths) = paths();
+        sync_memory(&paths, &memory(true, "aria")).unwrap();
+        set_tavily_key(&paths, "k").unwrap();
+        sync_memory(&paths, &memory(false, "aria")).unwrap();
+        let list = servers(&paths);
+        assert!(list.get("engram").is_none());
+        assert!(list.get("tavily").is_some());
+    }
+
+    #[test]
+    fn a_hand_written_engram_entry_is_never_touched() {
+        let (_dir, paths) = paths();
+        let own = json!({"mcpServers": {"engram": {"command": "/usr/local/bin/engram", "args": ["mcp"]}, "rea": {"command": "rea"}}});
+        std::fs::write(paths.mcp(), serde_json::to_string_pretty(&own).unwrap()).unwrap();
+        sync_memory(&paths, &memory(true, "casa")).unwrap();
+        assert_eq!(servers(&paths), own["mcpServers"]);
+        sync_memory(&paths, &memory(false, "casa")).unwrap();
+        assert_eq!(servers(&paths), own["mcpServers"]);
+    }
+
+    #[test]
+    fn nothing_is_written_when_nothing_changes() {
+        let (_dir, paths) = paths();
+        sync_memory(&paths, &memory(false, "aria")).unwrap();
+        assert!(!paths.mcp().exists(), "memory off and no file: no file is created");
     }
 }
