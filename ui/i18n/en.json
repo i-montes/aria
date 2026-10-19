@@ -355,5 +355,7 @@
   "chat.status.idle": "idle",
   "chat.undo.closed": "Closed \"{title}\"",
   "chat.undo": "Undo",
-  "chat.tab.moreNeeds": "+{n} · a hidden session needs you"
+  "chat.tab.moreNeeds": "+{n} · a hidden session needs you",
+  "chat.problem.workdir-unavailable": "Aria could not create its working folder. Check the projects folder in the settings.",
+  "chat.problem.pi-settings-invalid": "The engine's settings file (~/.aria/agent/settings.json) does not parse. Fix it or delete it, and Aria writes it again."
 }

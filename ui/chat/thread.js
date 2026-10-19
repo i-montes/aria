@@ -25,7 +25,7 @@ function renderCard(dialog, t) {
   if (card.kind === 'quota') {
     return renderQuota({ id: dialog.id, percent: card.percent, freeModel: card.freeModel, secondsLeft: card.countdown }, {}, t)
   }
-  return renderPermission({ id: dialog.id, kind: card.kind, summary: card.summary ?? card.path, detail: card.detail ?? card.path, jev: card.jev }, {}, t)
+  return renderPermission({ id: dialog.id, kind: card.kind, summary: card.summary || card.path, detail: card.detail || card.path, jev: card.jev }, {}, t)
 }
 
 export function renderThread(state, ui = {}, t) {

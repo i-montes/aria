@@ -221,6 +221,13 @@ const script = `(async () => {
   rowsNow()[4].dispatchEvent(new MouseEvent('mousemove', { clientX: box4.left + 25, clientY: box4.top + 12, bubbles: true })); await wait(40)
   check('a real pointer move selects again', rowsNow()[4].classList.contains('on'), rowsNow().findIndex((r) => r.classList.contains('on')))
   window.aria.chat.escape(); await wait(30)
+  // 14. review fixes: a refused message comes back to the composer; settings open means "not seen"
+  await reset(); window.__sent.length = 0
+  typeIn('REFUSE'); key($('#chat-input'), 'Enter'); await wait(120)
+  check('a refused message leaves the thread and comes back to the composer', ![...document.querySelectorAll('#chat-list .p-user')].some((el) => el.textContent.includes('REFUSE')) && $('#chat-input').value === 'REFUSE' && $('#chat-list').textContent.includes('compaction'), $('#chat-input').value)
+  $('#chat-input').value = ''
+  $('[data-chat="settings"]').click(); await wait(120)
+  check('opening the settings tells the dock the chat is not shown', window.__sent.some((m) => m.type === 'chatShown' && m.shown === false))
   // 9. no model button next to the working folder
   document.querySelector('[data-chat="add"]').click(); await wait(60)
   check('no model button beside the working folder, with one session or several', !$('.chat-path-row .p-meter') && !$('.chat-path-row .p-composer-model'))

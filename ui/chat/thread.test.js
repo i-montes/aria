@@ -52,7 +52,8 @@ describe('the thread', () => {
   })
 
   test('notes, dividers, route lines and answers each go through their part', () => {
-    let state = run(createChat(), ev({ type: 'aria_jev', mode: 'focused task', action: 'searches memory' }), ev({ type: 'compaction_end', result: { tokensBefore: 1 }, aborted: false }))
+    let state = run(createChat(), ev({ type: 'compaction_end', result: { tokensBefore: 1 }, aborted: false }))
+    state = { ...state, messages: [...state.messages, { kind: 'jev', mode: 'focused task', action: 'searches memory' }] }
     state = { ...state, messages: [...state.messages, { kind: 'note', label: 'engram', text: 'saved <it>' }, { kind: 'answers', answers: [{ header: 'Scope', selected: ['Small'] }] }] }
     const html = renderThread(state, {}, t)
     expect(html).toContain('p-jev')
@@ -76,6 +77,11 @@ describe('the thread', () => {
     const html = renderThread(state, {}, t)
     expect(html).not.toContain('data-chat="permission"')
     expect(html).toContain('allowed once')
+  })
+
+  test('a write card without a summary is headed by its path', () => {
+    const html = renderThread(run(createChat(), dialog('w1', { kind: 'write', path: '~/notes.md' })), {}, t)
+    expect(html).toContain('~/notes.md')
   })
 
   test('the question card is not in the thread (it is an overlay) and plain dialogs are not either', () => {

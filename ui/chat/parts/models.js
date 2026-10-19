@@ -1,4 +1,4 @@
-// The model picker (design/components/model-picker), opened by `/model` or from the meter.
+// The model picker (design/components/model-picker), opened by `/model` or from the model chip under the input.
 //
 // Props: { models: [{ provider, id, name, description?, tag?, tier? }], current, query, active, open }
 //   models   what Pi can use. `description` is the second line (default `provider/id`), `tag` the

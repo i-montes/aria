@@ -1,22 +1,20 @@
-// The session tabs (design/components/session-tabs): one tab per session with its state dot and a
-// tooltip (model, context, quota), an overflow menu for what does not fit, rename, close, `+` and the
+// The session tabs (design/components/session-tabs): one tab per session with its state dot and, on hover,
+// the quota card (quotabars.js: model, context, quota), an overflow menu for what does not fit, rename, close, `+` and the
 // undo bar shown after closing a tab.
 //
-// Props (`tabs`): { sessions: [{ id, title, status, unread, model?, context?, quota?, free? }], active, closed }
+// Props (`tabs`): { sessions: [{ id, title, status, unread, model?, context?, quotaWindows?, provider?, free? }], active, closed }
 //   status   'working' | 'needs' | 'done' | 'idle'; `unread` (finished while away) looks like done
 //   model    display name of the model, shown in the tooltip
 //   context  context window used by that session, 0..100 (percent)
 //   quotaWindows  the provider's quota windows for that session's model (see quotabars.js); provider: its readable name
 //   free     the session runs on a free model: the tooltip says it uses no quota
 //   closed   { entry, index } of the tab just closed (from sessions.js), for the undo bar
-// ui: { menuOpen, renaming, maxVisible, hideNew, hideUndo, quota, hasQuota }
+// ui: { menuOpen, renaming, maxVisible, hideNew, hideUndo }
 //   menuOpen   the overflow menu is open
 //   renaming   id of the session whose title is being edited
 //   maxVisible tabs shown before the rest go to the overflow (default 4, at least 2); the active tab always shows
 //   hideNew    omit the `+` button
 //   hideUndo   omit the undo bar
-//   quota      the account's quota used, 0..100; `hasQuota` false says the provider has none to read
-//              (default: true when `quota` is given)
 // t: translate(key, vars).
 //
 // Emits:
@@ -77,7 +75,6 @@ const toneOf = (s) => {
   const status = statusOf(s)
   return status === 'working' || status === 'needs' ? status : status === 'done' || s.unread ? 'done' : 'idle'
 }
-const pct = (value) => Math.min(100, Math.max(0, Math.round(Number(value)) || 0))
 
 const X =
   '<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>'
@@ -126,7 +123,7 @@ export function renderSessionTabs(tabs, ui = {}, t = (key) => key) {
   const moreLabel = hiddenNeeds ? t('chat.tab.moreNeeds', { n: overflow.length }) : t('chat.tabs.moreLabel', { n: overflow.length })
   const more = overflow.length
     ? `<div class="p-tabs-menu-wrap">
-        <button type="button" class="p-tabs-more${hiddenNeeds ? ' needs' : hiddenUnread ? ' unread' : ''}" data-chat="menu" aria-haspopup="true" aria-expanded="${menuOpen}" aria-label="${esc(moreLabel)}" title="${esc(moreLabel)}">${esc(t('chat.tab.more', { n: overflow.length }))}</button>${
+        <button type="button" class="p-tabs-more${hiddenNeeds ? ' needs' : hiddenUnread ? ' unread' : ''}" data-chat="menu" aria-haspopup="true" aria-expanded="${menuOpen}" aria-label="${esc(moreLabel)}">${esc(t('chat.tab.more', { n: overflow.length }))}</button>${
           menuOpen
             ? `<div class="p-tabs-menu" role="menu" aria-label="${esc(t('chat.tab.menu'))}">${overflow
                 .map((s) => {
