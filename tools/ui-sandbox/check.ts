@@ -186,6 +186,24 @@ const script = `(async () => {
   check('a missing Claude Code is explained and the card goes back to the choice', $('.p-connect-error')?.textContent.includes('Claude Code') && $('[data-op="method"][data-value="key"]'), $('#chat-connect')?.textContent.slice(0, 120))
   window.sim.installError = null
   check('Esc closes the card first', window.aria.chat.escape() === true && !$('#chat-connect'))
+  // 13. the keyboard's choice is not undone by a pointer that rests on a row
+  await reset(); typeIn('/'); await wait(160)
+  const rowsNow = () => [...document.querySelectorAll('.p-cmd-row')]
+  const box = rowsNow()[3].getBoundingClientRect()
+  const px = box.left + 20, py = box.top + 10
+  rowsNow()[3].dispatchEvent(new MouseEvent('mousemove', { clientX: px, clientY: py, bubbles: true })); await wait(40)
+  check('moving the pointer onto a row selects it', rowsNow()[3].classList.contains('on'))
+  key($('#chat-input'), 'ArrowUp'); await wait(40)
+  const refire = () => { const under = document.elementFromPoint(px, py); under?.dispatchEvent(new MouseEvent('mouseover', { clientX: px, clientY: py, bubbles: true })); under?.dispatchEvent(new MouseEvent('mousemove', { clientX: px, clientY: py, bubbles: true })) }
+  refire(); await wait(40) // the browser re-sends hover for the new row under a pointer that did not move
+  check('the keyboard choice stays while the pointer rests on another row', rowsNow()[2].classList.contains('on'), rowsNow().findIndex((r) => r.classList.contains('on')))
+  key($('#chat-input'), 'ArrowUp'); await wait(40); refire(); await wait(40)
+  key($('#chat-input'), 'ArrowUp'); await wait(40); refire(); await wait(40)
+  check('and keeps moving with the keyboard', rowsNow().findIndex((r) => r.classList.contains('on')) === 0, rowsNow().findIndex((r) => r.classList.contains('on')))
+  const box4 = rowsNow()[4].getBoundingClientRect()
+  rowsNow()[4].dispatchEvent(new MouseEvent('mousemove', { clientX: box4.left + 25, clientY: box4.top + 12, bubbles: true })); await wait(40)
+  check('a real pointer move selects again', rowsNow()[4].classList.contains('on'), rowsNow().findIndex((r) => r.classList.contains('on')))
+  window.aria.chat.escape(); await wait(30)
   // 9. no model button next to the working folder
   document.querySelector('[data-chat="add"]').click(); await wait(60)
   check('no model button beside the working folder, with one session or several', !$('.chat-path-row .p-meter') && !$('.chat-path-row .p-composer-model'))

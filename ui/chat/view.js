@@ -1122,9 +1122,15 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     }
   })
 
-  root.addEventListener('mouseover', (event) => {
+  // A row is selected by the pointer MOVING onto it, never by it resting there: after the keyboard moves the selection the
+  // list is redrawn, the browser re-sends hover for the row under a pointer that did not move, and that must not win.
+  let pointerAt = { x: -1, y: -1 }
+  root.addEventListener('mousemove', (event) => {
+    const moved = event.clientX !== pointerAt.x || event.clientY !== pointerAt.y
+    pointerAt = { x: event.clientX, y: event.clientY }
+    if (!moved || !picker) return
     const li = event.target.closest?.('[data-chat="picker-hover"]')
-    if (li && picker && picker.active !== Number(li.dataset.index)) {
+    if (li && picker.active !== Number(li.dataset.index)) {
       picker = { ...picker, active: Number(li.dataset.index) }
       drawOverlay()
     }
