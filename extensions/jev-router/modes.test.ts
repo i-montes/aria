@@ -1,21 +1,31 @@
-// Run: bun test ~/.pi/agent/extensions/jev-router/modes.test.ts
-import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+// Run: bun test extensions/jev-router/modes.test.ts
+import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { isPlanPath, notAPlan, planMayWrite, routedMode, planPrompt, PLAN_MODEL, planModel, planQuotaThreshold, planThinking, shouldClassify } from './modes.ts'
 import { exhausted, parseGoUsage } from './usage.ts'
 
-const widget = join(homedir(), 'Projects', 'acme', 'checkout-widget')
-const gateway = join(homedir(), 'Projects', 'acme', 'checkout-api')
+// Two git repos in a projects folder of their own, outside /tmp (which plan mode may always write): modes.ts reads the
+// folder (ARIA_PROJECTS_DIR) once, when it loads.
+mkdirSync(join(homedir(), '.cache'), { recursive: true })
+const projects = mkdtempSync(join(homedir(), '.cache', 'aria-plan-test-'))
+afterAll(() => rmSync(projects, { recursive: true, force: true }))
+const widget = join(projects, 'acme', 'checkout-widget')
+const gateway = join(projects, 'acme', 'checkout-api')
+for (const repo of [widget, gateway]) mkdirSync(join(repo, '.git'), { recursive: true })
+const savedProjects = process.env.ARIA_PROJECTS_DIR
+process.env.ARIA_PROJECTS_DIR = projects
+const { isPlanPath, notAPlan, planMayWrite, routedMode, planPrompt, PLAN_MODEL, planModel, planQuotaThreshold, planThinking, shouldClassify } = await import('./modes.ts')
+if (savedProjects === undefined) delete process.env.ARIA_PROJECTS_DIR
+else process.env.ARIA_PROJECTS_DIR = savedProjects
 
 describe('planMayWrite', () => {
   test('spec in the repo Pi runs in', () => expect(planMayWrite('docs/superpowers/specs/x.md', widget)).toBe(true))
-  test('plan in another repo under ~/Projects', () => expect(planMayWrite(`${gateway}/docs/superpowers/plans/x.md`, widget)).toBe(true))
+  test('plan in another repo under the projects folder', () => expect(planMayWrite(`${gateway}/docs/superpowers/plans/x.md`, widget)).toBe(true))
   test('.git of the repo (commit)', () => expect(planMayWrite(`${widget}/.git/index`, widget)).toBe(true))
   test('/tmp', () => expect(planMayWrite('/tmp/notes.md', widget)).toBe(true))
   test('source code is refused', () => expect(planMayWrite('src/main.ts', widget)).toBe(false))
-  test('outside ~/Projects is refused', () => expect(planMayWrite(join(homedir(), '.bashrc'), widget)).toBe(false))
+  test('outside the projects folder is refused', () => expect(planMayWrite(join(homedir(), '.bashrc'), widget)).toBe(false))
 })
 
 test('isPlanPath', () => {
