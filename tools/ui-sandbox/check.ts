@@ -146,6 +146,29 @@ const script = `(async () => {
   check('after answering the composer comes back and takes the keyboard', wrapStyle() === 'visible' && document.activeElement === $('#chat-input'), wrapStyle() + ' ' + document.activeElement?.id)
   await reset()
 
+  // 4b. Scrolling a picker: the row under the moving pointer is marked, and the list stays where it was scrolled
+  typeIn('/'); await wait(120)
+  const cmdList = $('.p-cmd-list')
+  check('the command list is long enough to scroll', cmdList && cmdList.scrollHeight > cmdList.clientHeight + 40, cmdList && [cmdList.scrollHeight, cmdList.clientHeight].join(' '))
+  cmdList.scrollTop = 40; await wait(60)
+  const listTop = cmdList.getBoundingClientRect().top
+  const under = [...cmdList.querySelectorAll('li[data-chat="picker-hover"]')].find((li) => li.getBoundingClientRect().top > listTop + 20)
+  under.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 300, clientY: under.getBoundingClientRect().top + 5 }))
+  await wait(80)
+  check('hovering a row while scrolled keeps the scroll', $('.p-cmd-list') === cmdList && Math.abs(cmdList.scrollTop - 40) < 2, $('.p-cmd-list')?.scrollTop)
+  check('the hovered row is the marked one', under.querySelector('.p-cmd-row')?.classList.contains('on') && under.getAttribute('aria-selected') === 'true')
+  window.aria.chat.escape(); await reset()
+  $('[data-chat="open-models"]')?.click(); await wait(200)
+  const modelList = $('.p-models-list')
+  check('the model list is long enough to scroll', modelList && modelList.scrollHeight > modelList.clientHeight + 40, modelList && [modelList.scrollHeight, modelList.clientHeight].join(' '))
+  modelList.scrollTop = 60; await wait(60)
+  const modelTop = modelList.getBoundingClientRect().top
+  const overModel = [...modelList.querySelectorAll('li[data-chat="picker-hover"]')].find((li) => li.getBoundingClientRect().top > modelTop + 20)
+  overModel.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 310, clientY: overModel.getBoundingClientRect().top + 5 }))
+  await wait(80)
+  check('hovering a model while scrolled keeps the scroll and marks it', $('.p-models-list') === modelList && Math.abs(modelList.scrollTop - 60) < 2 && overModel.querySelector('.p-models-row')?.classList.contains('on'), $('.p-models-list')?.scrollTop)
+  window.aria.chat.escape(); await reset()
+
   // 5. Esc order
   typeIn('/'); await wait(120)
   check('the command picker opens', $('.p-cmd.is-open'))

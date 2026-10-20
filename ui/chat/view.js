@@ -1182,9 +1182,20 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const li = event.target.closest?.('[data-chat="picker-hover"]')
     if (li && picker.active !== Number(li.dataset.index)) {
       picker = { ...picker, active: Number(li.dataset.index) }
-      drawOverlay()
+      markActive()
     }
   })
+
+  // The pointer only moves the mark: redrawing the list would put its scroll back to the top, and scrolling it to the
+  // marked row would undo the wheel. The keyboard still redraws and scrolls (drawOverlay).
+  function markActive() {
+    for (const li of $('chat-overlay').querySelectorAll('li[data-chat="picker-hover"]')) {
+      const on = Number(li.dataset.index) === picker.active
+      li.querySelector('button')?.classList.toggle('on', on)
+      // The model list's aria-selected is the model in use, not the mark.
+      if (picker.kind !== 'model') li.setAttribute('aria-selected', String(on))
+    }
+  }
 
   return {
     /** The tabs saved last time (`sessionsLoad`'s reply); creates and saves a first session when there are none. */

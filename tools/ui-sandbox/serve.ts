@@ -34,6 +34,8 @@ const sandbox = `<script>
     { provider: 'opencode-go', id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', tag: 'daily' },
     { provider: 'opencode-go', id: 'glm-5.3', name: 'GLM 5.3', tag: 'strong' },
     { provider: 'opencode-go', id: 'cat-jam-free', name: 'Cat Jam', tag: 'free', tier: 'free' },
+    // Enough for the list to scroll, as the real one does.
+    ...['qwen3.8-max', 'mimo-v2.6-pro', 'kimi-k3', 'minimax-m3', 'deepseek-v4-pro', 'qwen3.8-plus', 'qwen3.8-coder', 'kimi-k3-thinking'].map((id) => ({ provider: 'opencode-go', id, name: id })),
   ]
   window.webkit = { messageHandlers: { aria: { postMessage(m) {
     window.__sent.push(m)
