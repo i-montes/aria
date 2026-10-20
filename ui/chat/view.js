@@ -361,6 +361,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       hasText: value.trim().length > 0,
       rows: Math.min(6, Math.max(1, value.split('\n').length)),
       showHints: true,
+      agents: current().agents.length > 0,
       model: modelLabel(model) || undefined,
       modelTitle: model ?? undefined,
     }

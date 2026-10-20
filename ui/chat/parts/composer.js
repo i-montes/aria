@@ -52,7 +52,7 @@ const ICON = {
 
 const key = (name) => `<span class="p-composer-key">${name}</span>`
 
-export function renderComposer({ busy = false, hasText = false, rows = 1, showHints = true, placeholder, model, modelTitle } = {}, ui = {}, t = (k) => k) {
+export function renderComposer({ busy = false, hasText = false, rows = 1, showHints = true, agents = false, placeholder, model, modelTitle } = {}, ui = {}, t = (k) => k) {
   const lines = Math.min(6, Math.max(1, Math.round(Number(rows)) || 1))
   const hint = busy ? t('chat.composer.queuePlaceholder') : (placeholder ?? t('chat.composer.placeholder'))
   const stop = busy
@@ -65,7 +65,7 @@ export function renderComposer({ busy = false, hasText = false, rows = 1, showHi
   const send = busy
     ? ''
     : `<button type="button" id="chat-send" class="p-composer-btn p-composer-send" data-chat="send" aria-label="${esc(t('chat.composer.send'))}">${ICON.send}</button>`
-  // Under the input: the model (opens the picker), then the shortcuts; while Aria works, only that Enter queues the message
+  // Under the input: the model (opens the picker), then the shortcuts (alt+a only when the session has subagents); while Aria works, only that Enter queues the message
   // (the line has room for one hint next to the model).
   const chip = model
     ? `<button type="button" class="p-composer-model" data-chat="open-models"${modelTitle ? ` title="${esc(modelTitle)}"` : ''}>${esc(model)}</button>`
@@ -78,8 +78,8 @@ ${
           ? `
       <span>${key('enter')} ${esc(t('chat.composer.hint.queue'))}</span>`
           : `
-      <span><kbd class="p-composer-kbd">/</kbd> ${esc(t('chat.composer.hint.commands'))}</span>
-      <span>${key('alt+a')} ${esc(t('chat.composer.hint.agents'))}</span>`
+      <span><kbd class="p-composer-kbd">/</kbd> ${esc(t('chat.composer.hint.commands'))}</span>${agents ? `
+      <span>${key('alt+a')} ${esc(t('chat.composer.hint.agents'))}</span>` : ''}`
       }
     </div>`
   return `<div class="p-composer">

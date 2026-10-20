@@ -64,14 +64,21 @@ describe('renderComposer', () => {
   })
 
   test('idle: "/ for commands" and "alt+a subagents"; while Aria works only "enter queues your message" takes their place', () => {
-    const idle = renderComposer({}, {}, t)
+    const idle = renderComposer({ agents: true }, {}, t)
     expect(idle).toContain('<kbd class="p-composer-kbd">/</kbd> chat.composer.hint.commands')
     expect(idle).toContain('<span class="p-composer-key">alt+a</span> chat.composer.hint.agents')
     expect(idle).not.toContain('chat.composer.hint.queue')
-    const busy = renderComposer({ busy: true }, {}, t)
+    const busy = renderComposer({ busy: true, agents: true }, {}, t)
     expect(busy).toContain('<span class="p-composer-key">enter</span> chat.composer.hint.queue')
     expect(busy).not.toContain('chat.composer.hint.commands')
     expect(busy).not.toContain('alt+a')
+  })
+
+  test('without subagents there is no "alt+a subagents"', () => {
+    const html = renderComposer({}, {}, t)
+    expect(html).toContain('chat.composer.hint.commands')
+    expect(html).not.toContain('alt+a')
+    expect(html).not.toContain('chat.composer.hint.agents')
   })
 
   test('the model sits under the input, first on the hints row, and opens the model picker', () => {
