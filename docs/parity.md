@@ -37,7 +37,7 @@ Check kinds:
 | 8 | Classifier `opencode/jev-1.13-free`, exact id | test | `extensions/jev-router/route.test.ts::the classifier is the free Jev` | pass 2026-10-19 |
 | 9 | `/plan` on `glm-5.3` at `high` | test | `extensions/jev-router/modes.test.ts::without a config the plan model is glm-5.3 at high, switching at 90%` | pass 2026-10-19 |
 | 10 | Free fallback `cat-jam-free` from 98% | test | `extensions/quota-fallback/fallback.test.ts::without a config: cat-jam-free at 98%, five minutes` | pass 2026-10-19 |
-| 10 | Always asking first | test | `extensions/quota-fallback/ask.test.ts::with askFirst off it switches without asking` | pass 2026-10-19 |
+| 10 | Always asking first | test | `extensions/lib/config.test.ts::without aria.json every value is today` | pass 2026-10-19 |
 | 10 | Only OpenCode Go offers fallback models | test | `crates/aria-core/src/agent_config.rs::a_provider_without_a_free_tier_has_no_quota_section` | pass 2026-10-19 |
 | 11 | Claude Max through `claude-bridge` | test | `crates/aria-core/src/agent.rs::the_claude_provider_is_installed_when_settings_list_it_and_its_files_exist` | pass 2026-10-19 |
 | 11 | It answers on the Max plan | manual | With a `claude-bridge` model picked in the dock, `hola` answers and the Claude quota bars move. | manual — owner |
@@ -69,7 +69,9 @@ Check kinds:
 | 22 | `/agents` | difference | The dock opens the subagents panel with Alt+A; `/agents` (the terminal overlay) does nothing there (`docs/pending.md`). | difference |
 | 23 | `ask_user`: 1-4 questions, recommended option first | test | `extensions/ask-user/questions.test.ts::the recommended option goes first, marked` | pass 2026-10-19 |
 | 23 | An answer lifts read-only mode for the turn | manual | In a read-only turn, after the model asks with `ask_user` and the answer arrives, its next write goes through (`extensions/jev-router/index.ts`, the `ask_user` handler). | manual — owner |
-| 24 | Writes only to the project, `/tmp` and caches; credentials hidden | test | `extensions/sandbox/policy.test.ts::project, /tmp and existing caches` | pass 2026-10-19 |
+| 24 | Writes only to the project, `/tmp` and caches | test | `extensions/sandbox/policy.test.ts::project, /tmp and existing caches` | pass 2026-10-19 |
+| 24 | Credentials hidden, Aria's included | test | `extensions/sandbox/policy.test.ts::aria\'s credentials too` | pass 2026-10-19 |
+| 24 | Credentials hidden in the real box, links included | test | `extensions/sandbox/policy.test.ts::neither the link nor its target can be read` | pass 2026-10-19 |
 | 24 | Leaving asks, with Jev's review | test | `extensions/sandbox/route.test.ts::outside after asking, when the model asks for it` | pass 2026-10-19 |
 | 24 | Jev's review | eval | `extensions/sandbox/review-eval.ts` | 10/10 2026-10-19 |
 | 24 | Session grants by program and subcommand | test | `extensions/sandbox/grants.test.ts::program and subcommand` | pass 2026-10-19 |
