@@ -59,32 +59,26 @@ describe('renderComposer', () => {
   })
 
   test('the hints line shows by default and can be hidden', () => {
-    const html = renderComposer({}, {}, t)
-    expect(html).toContain('p-composer-hints')
-    expect(html).toContain('<kbd class="p-composer-kbd">/</kbd>')
-    expect(html).toContain('chat.composer.hint.commands')
-    expect(html).toContain('alt+a')
+    expect(renderComposer({}, {}, t)).toContain('p-composer-hints')
     expect(renderComposer({ showHints: false }, {}, t)).not.toContain('p-composer-hints')
   })
 
-  test('the shortcuts read "/ for commands" and "alt+a subagents", with no leading "type"', () => {
-    const html = renderComposer({}, {}, t)
-    expect(html).not.toContain('chat.composer.hint.type')
-    expect(html).toContain('<kbd class="p-composer-kbd">/</kbd> chat.composer.hint.commands')
-  })
-
-  test('the "enter send · shift+enter new line" text is gone', () => {
-    const html = renderComposer({}, {}, t)
-    expect(html).not.toContain('shift+enter')
-    expect(html).not.toContain('chat.composer.hint.send')
-    expect(html).not.toContain('chat.composer.hint.newline')
+  test('only "enter queues your message" is left, and only while Aria works', () => {
+    const idle = renderComposer({}, {}, t)
+    expect(idle).not.toContain('chat.composer.hint')
+    expect(idle).not.toContain('alt+a')
+    expect(idle).not.toContain('p-composer-kbd')
+    const busy = renderComposer({ busy: true }, {}, t)
+    expect(busy).toContain('<span class="p-composer-key">enter</span> chat.composer.hint.queue')
+    expect(busy).not.toContain('chat.composer.hint.commands')
+    expect(busy).not.toContain('alt+a')
   })
 
   test('the model sits under the input, first on the hints row, and opens the model picker', () => {
     const html = renderComposer({ model: 'DeepSeek V4.1 Flash', modelTitle: 'opencode-go/deepseek-v4.1-flash' }, {}, t)
     const hints = html.slice(html.indexOf('p-composer-hints'))
     expect(hints.indexOf('p-composer-model')).toBeGreaterThan(-1)
-    expect(hints.indexOf('p-composer-model')).toBeLessThan(hints.indexOf('chat.composer.hint.commands'))
+    expect(renderComposer({ busy: true, model: 'M' }, {}, t).indexOf('p-composer-model')).toBeLessThan(renderComposer({ busy: true, model: 'M' }, {}, t).indexOf('chat.composer.hint.queue'))
     expect(html).toContain('data-chat="open-models"')
     expect(html).toContain('DeepSeek V4.1 Flash')
     expect(html).toContain('title="opencode-go/deepseek-v4.1-flash"')
