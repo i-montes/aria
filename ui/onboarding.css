@@ -121,6 +121,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .action-row .state { line-height: 1.4; }
 
 /* The settings screen: an overview of cards (the welcome screen's), one page per section, and a bar to save. */
+/* The panel head pulls its back button 10 px left; the setup's column clips what overflows it, so here it stays inside. */
+#flow .p-head-back { margin-left: 0; }
 .settings-intro { margin: 14px 0 16px; }
 .settings-cards .card { margin-bottom: 8px; }
 .settings-card .description { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.5; }
