@@ -103,6 +103,8 @@ const firstLine = (text) => {
 /** The text split into lines; one trailing newline does not make an extra line. */
 const toLines = (text) => (typeof text === 'string' && text ? text.replace(/\n$/, '').split('\n') : [])
 
+const baseName = (path) => path.replace(/\/+$/, '').split('/').pop() || path
+
 const argPath = (args) => {
   const path = args?.path ?? args?.file_path
   return typeof path === 'string' && path ? path : ''
@@ -113,8 +115,12 @@ export function toolLabel(call, t) {
   if (call.think) return t('chat.tools.thinking')
   const name = call.name
   switch (toolKind(name)) {
-    case 'run':
-      return t('chat.tools.run')
+    case 'run': {
+      // What the command does, in the user's words (the sandbox's bash asks the model for it), like the design's
+      // "Rebuild and verify"; the command itself is the chip.
+      const reason = typeof call.args?.reason === 'string' ? call.args.reason.trim() : ''
+      return reason || t('chat.tools.run')
+    }
     case 'read':
       return t('chat.tools.read')
     case 'search':
@@ -136,6 +142,8 @@ export function toolLabel(call, t) {
 export function toolChip(call) {
   if (call.think) return firstLine(call.text)
   const { name, args = {}, summary } = call
+  // A file is shown by its name, as in the design (`env.ts`); the open row and the tooltip have the rest.
+  if (['read', 'write', 'edit'].includes(name) && (argPath(args) || summary)) return baseName(argPath(args) || String(summary))
   if (summary && summary !== name) return String(summary)
   const first = (value) => (typeof value === 'string' ? value.split('\n')[0] : '')
   switch (name) {
@@ -242,6 +250,9 @@ const isOn = (value, index) => (value instanceof Set ? value.has(index) : value 
 function detailLines(call, t) {
   if (call.think) return toLines(call.text).map((text) => ({ tone: '', text }))
   const out = [] // { tone, text }
+  // The whole command or path, which the row's chip may cut short.
+  if (call.name === 'bash' && typeof call.args?.command === 'string' && call.args.command.trim()) out.push({ tone: 'cmd', text: `$ ${call.args.command.trim()}` })
+  else if (argPath(call.args) && toolChip(call) !== argPath(call.args)) out.push({ tone: 'cmd', text: argPath(call.args) })
   const diff = callDiff(call)
   if (diff) {
     const clipped = diff.lines.slice(0, DETAIL_DIFF_LINES)
@@ -252,7 +263,7 @@ function detailLines(call, t) {
   const tone = call.status === 'error' ? 'err' : ''
   for (const text of result.lines) out.push({ tone, text })
   if (result.hidden) out.push({ tone: 'muted', text: t('chat.tools.more_lines', { n: result.hidden }) })
-  if (!out.length) out.push({ tone: 'muted', text: t(call.status === 'running' ? 'chat.tools.running' : 'chat.tools.no_output') })
+  if (!out.some((l) => l.tone !== 'cmd')) out.push({ tone: 'muted', text: t(call.status === 'running' ? 'chat.tools.running' : 'chat.tools.no_output') })
   return out
 }
 
@@ -270,7 +281,7 @@ function row(call, openRows, animate, t) {
       <button type="button" class="p-tools-row status-${status}${open ? ' is-open' : ''}" data-chat="toggle-tool-row" data-id="${esc(call.id)}" aria-expanded="${open}">
         <span class="p-tools-ico"><span class="p-tools-icon" data-icon="${kind}">${ICONS[kind]}</span>${CHEVRON('p-tools-chevron')}</span>
         <span class="p-tools-label">${esc(toolLabel(call, t))}${sr}</span>${chip ? `
-        <span class="p-tools-cmd${kind === 'tool' || kind === 'think' ? ' is-sans' : ''}">${esc(chip)}</span>` : ''}
+        <span class="p-tools-cmd${kind === 'tool' || kind === 'think' ? ' is-sans' : ''}" title="${esc(chip)}">${esc(chip)}</span>` : ''}
       </button>
       <div class="p-tools-detail${open ? ' is-open' : ''}"><div class="p-tools-clip"><div class="p-tools-lines">${lines}</div></div></div>
     </div>`

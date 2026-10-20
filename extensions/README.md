@@ -32,6 +32,8 @@ Tests: `bun test extensions`.
   - `sandbox/card.ts` (new): `canAsk` (a UI in `tui` or `rpc`) and `sandboxCard`. `sandbox/index.ts` asks with card
     titles in RPC (running outside the sandbox, writing outside the project) and passes the run's abort signal to its
     dialogs.
+  - `sandbox/index.ts`: bash's `reason` is asked for on every command, not only with `outsideSandbox`: the dock shows it
+    as the step's title (the design's "Rebuild and verify"), with the command cut to one line beside it.
   - `sandbox/policy.ts`: `isAgentCode` marks Aria's own Pi files (`extensions/`, `agents/`, `SYSTEM.md`, `settings.json`,
     `.aria-files` in `~/.aria/agent`) as never writable by the model, whatever was granted. It is only active under Aria
     (both `PI_CODING_AGENT_DIR` and `ARIA_PROJECTS_DIR` set).

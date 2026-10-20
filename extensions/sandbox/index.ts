@@ -115,7 +115,7 @@ export default function sandbox(pi: ExtensionAPI) {
       reason: Type.Optional(
         Type.String({
           description:
-            `${NO_BOX ? 'Always (this system has no sandbox, so the user approves every command)' : 'With outsideSandbox'}: what the command does, for the user, in the user's language and at most 12 words (e.g. 'Restarts the project's Postgres container'). The user reads only this, not the command.`,
+            `Always: what the command does, for the user, in the user's language and at most 6 words (e.g. 'Rebuild and verify', 'Wait for the download'). Aria's chat shows it as the step's title instead of the command${NO_BOX ? ', and the user approves every command by it (this system has no sandbox)' : ', and with outsideSandbox the user approves by it'}; the user reads only this, not the command.`,
         }),
       ),
     }),

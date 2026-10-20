@@ -260,3 +260,32 @@ describe('thinking steps (design: the "Thinking" rows)', () => {
     expect(renderTools({ index: 0, calls: [think] }, {}, tt)).toContain('chat.tools.thought')
   })
 })
+
+describe('a row stays one line, as in the design', () => {
+  test('a command is labelled with what it does (its reason) when it has one', () => {
+    expect(toolLabel(call({ args: { command: 'pnpm build && pnpm test', reason: 'Rebuild and verify' } }), t)).toBe('Rebuild and verify')
+    expect(toolLabel(call({ args: { command: 'pnpm build' } }), t)).toBe('Run command')
+  })
+
+  test('a file chip is the file name, not its whole path', () => {
+    expect(toolChip(call({ name: 'read', args: { path: '/home/ana/project/src/env.ts' }, summary: '/home/ana/project/src/env.ts' }))).toBe('env.ts')
+    expect(toolChip(call({ name: 'edit', args: { path: 'src/env.ts' }, summary: 'src/env.ts' }))).toBe('env.ts')
+  })
+
+  test('the chip carries its whole text as a tooltip, and the open row shows the whole command', () => {
+    const long = 'for i in $(seq 1 30); do sleep 10; done'
+    const html = renderTools({ calls: [call({ args: { command: long, reason: 'Wait for the download' }, summary: long })], live: false }, { open: true, openRows: new Set(['c1']) }, t)
+    expect(html).toContain(`class="p-tools-cmd" title="${long.replace(/"/g, '&quot;')}"`)
+    expect(html).toMatch(/p-tools-line is-cmd">\$ for i in/)
+  })
+
+  test('the label keeps its width (a long one ends in …) and the chip takes what is left, on one line', () => {
+    const css = require('node:fs').readFileSync(new URL('./tools.css', import.meta.url), 'utf8')
+    const rule = (sel) => css.match(new RegExp(`\\${sel} \\{([^}]*)\\}`))?.[1] ?? ''
+    expect(rule('.p-tools-label')).toContain('flex: 0 1 auto')
+    expect(rule('.p-tools-label')).toContain('white-space: nowrap')
+    expect(rule('.p-tools-cmd')).toContain('flex: 1 1 0')
+    expect(rule('.p-tools-cmd')).toContain('white-space: nowrap')
+    expect(rule('.p-tools-cmd')).toContain('text-overflow: ellipsis')
+  })
+})
