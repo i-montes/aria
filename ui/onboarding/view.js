@@ -295,6 +295,9 @@ export function createOnboarding(env) {
   function routerStep() {
     const s = state.settings
     const included = module().jevIncluded
+    // Jev through TypeSafe, for providers that do not include it, is not built yet: without OpenCode Go there is no
+    // router to turn on (the provider's defaults leave it off).
+    if (!included) return c.bullets([t('ob.router.b1'), t('ob.router.b2'), t('ob.router.b3'), t('ob.router.b4')]) + c.info('amber', t('ob.router.unavailable.title'), t('ob.router.unavailable.desc'))
     let html =
       c.bullets([t('ob.router.b1'), t('ob.router.b2'), t('ob.router.b3'), t('ob.router.b4')]) +
       c.choice('router', t('ob.router.question'), [
@@ -506,10 +509,9 @@ export function createOnboarding(env) {
     if (s.integrations.services.some((service) => !isConnected(service.id))) html += c.info('amber', '', t('ob.integrations.needConnect'))
     const p = s.integrations.packages
     html += c.section(t('ob.integrations.section.packages'))
-    html += c.segments('packageSource', t('ob.integrations.packageSource'), ['gallery', 'npm', 'git', 'local'].map((v) => ({ value: v, label: t(`ob.integrations.source.${v}`) })), p.source, t('ob.integrations.packageSource.desc'))
-    if (p.source !== 'gallery') html += c.textField('packagePath', t('ob.integrations.packagePath'), p.path, { mono: true, indent: true, placeholder: t('ob.integrations.packagePath.placeholder') })
-    html += s.subagents.planExecute ? c.info('green', t('ob.integrations.auto.title'), t('ob.integrations.auto.desc')) : c.info('neutral', '', t('ob.integrations.auto.none'))
-    return html + c.toggle('trust', t('ob.integrations.trust'), t('ob.integrations.trust.desc'), p.thirdPartyTrusted)
+    // Only a local folder is built (npm, git and a gallery are not): the field is it, and it is used when it names one.
+    html += c.textField('packagePath', t('ob.integrations.packagePath'), p.source === 'local' || p.source === 'path' ? p.path : '', { mono: true, placeholder: t('ob.integrations.packagePath.placeholder'), description: t('ob.integrations.packagePath.desc') })
+    return html + (s.subagents.planExecute ? c.info('green', t('ob.integrations.auto.title'), t('ob.integrations.auto.desc')) : c.info('neutral', '', t('ob.integrations.auto.none')))
   }
 
   function sandboxStep() {
@@ -567,7 +569,7 @@ export function createOnboarding(env) {
         : t('ob.val.quotaNone'),
       auth: t(m?.auth === 'oauth' ? 'ob.val.authOauth' : 'ob.val.authKey'),
       assistant: t('ob.val.assistant', { name: assistantName(), language, style: t(`ob.style.${s.assistant.style}`) }) + (s.assistant.userName.trim() ? t('ob.val.callsYou', { user: s.assistant.userName.trim() }) : ''),
-      router: s.router.enabled ? t('ob.val.routerOn') : t('ob.val.off'),
+      router: s.router.enabled && m?.jevIncluded ? t('ob.val.routerOn') : t('ob.val.off'),
       models: t('ob.val.models', { daily: modelLabel(s.models.daily), planning: modelLabel(s.models.planning), effort: t(`ob.level.${s.models.planningEffort}`) }),
       effort: s.effort.mode === 'auto' ? t('ob.val.effortAuto') : t(`ob.level.${s.effort.fixedLevel}`),
       compaction: t('ob.val.compaction', { n: s.compaction.percent }),
@@ -827,7 +829,6 @@ export function createOnboarding(env) {
         else if (name === 'freeModel') s.provider.quota.freeModel = value
         else if (name === 'countdown') s.provider.quota.countdownMinutes = Number(value)
         else if (name === 'onNoAnswer') s.provider.quota.onNoAnswer = value
-        else if (name === 'packageSource') s.integrations.packages.source = value
       })
     }
     render()
@@ -844,7 +845,6 @@ export function createOnboarding(env) {
       else if (name === 'payPerUse') s.models.allowPayPerUse = !s.models.allowPayPerUse
       else if (name === 'maxOnFree') s.effort.maxOnFree = !s.effort.maxOnFree
       else if (name === 'memory') s.memory.enabled = !s.memory.enabled
-      else if (name === 'trust') s.integrations.packages.thirdPartyTrusted = !s.integrations.packages.thirdPartyTrusted
       else if (name === 'askToLeave') s.sandbox.askToLeave = !s.sandbox.askToLeave
       else if (name === 'jevReview') s.sandbox.jevReview = !s.sandbox.jevReview
       else if (name === 'commit') s.git.commitWithoutAsking = !s.git.commitWithoutAsking
@@ -883,7 +883,7 @@ export function createOnboarding(env) {
       else if (field === 'languageOther') s.assistant.language = value
       else if (field === 'memoryProject') s.memory.project = value
       else if (field === 'projectsDir') s.sandbox.projectsDir = value
-      else if (field === 'packagePath') s.integrations.packages.path = value
+      else if (field === 'packagePath') s.integrations.packages = { ...s.integrations.packages, path: value, source: value.trim() ? 'local' : 'gallery' }
     })
   }
 

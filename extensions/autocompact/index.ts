@@ -3,7 +3,7 @@
 // start). `/autocompact <0-100>` changes the share and reloads Pi so it applies right away;
 // `/autocompact` alone shows it.
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
-import { compactPercent, DEFAULT_PERCENT, parsePercent, savePercent, syncSettings } from './autocompact.ts'
+import { compactPercent, DEFAULT_PERCENT, noteApplied, parsePercent, savePercent, syncSettings } from './autocompact.ts'
 
 export default function (pi: ExtensionAPI) {
   const models = (ctx: any) => {
@@ -16,7 +16,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on('session_start', (_event: any, ctx: any) => {
     try {
-      syncSettings(models(ctx), compactPercent())
+      const percent = compactPercent()
+      syncSettings(models(ctx), percent)
+      noteApplied(percent)
     } catch {
       // settings.json unreadable: leave it to Pi
     }
@@ -36,8 +38,9 @@ export default function (pi: ExtensionAPI) {
         return
       }
       try {
-        savePercent(percent)
         syncSettings(models(ctx), percent)
+        noteApplied(percent) // before the setting: Aria then sees the share already applied and does not restart Pi
+        savePercent(percent)
       } catch (e) {
         ctx.ui.notify(`Could not update settings.json: ${e instanceof Error ? e.message : String(e)}`, 'error')
         return

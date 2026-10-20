@@ -121,12 +121,11 @@ describe('when Continue is allowed', () => {
     expect(canContinue('auth', opencode, { signedIn: true })).toBe(true)
     expect(canContinue('auth', opencode, { signedIn: true, keyChecking: true })).toBe(false)
   })
-  test('the router needs the TypeSafe key unless Jev comes with the provider', () => {
+  test('the router never blocks, and without Jev in the provider it is saved off', () => {
     const api = setRouter(applyProvider(defaultSettings('en'), 'anthropic-api'), true)
-    expect(canContinue('router', api, { typesafeSaved: false })).toBe(false)
-    expect(canContinue('router', api, { typesafeSaved: true })).toBe(true)
-    expect(canContinue('router', setRouter(api, false), { typesafeSaved: false })).toBe(true)
-    expect(canContinue('router', opencode, { typesafeSaved: false })).toBe(true)
+    expect(canContinue('router', api, { typesafeSaved: false })).toBe(true)
+    expect(finish(api).router.enabled).toBe(false)
+    expect(finish(opencode).router.enabled).toBe(true)
   })
   test('every other step always continues', () => {
     expect(canContinue('models', opencode, {})).toBe(true)

@@ -13,6 +13,9 @@ export const DEFAULT_PERCENT = DEFAULTS.compaction.percent
 export const MIN_RESERVE = 16384
 export const PERCENT_FILE = join(agentDir(), 'autocompact.json')
 export const SETTINGS_FILE = join(agentDir(), 'settings.json')
+/** Under Aria: the share the reserves in settings.json were written for. Aria writes the reserves itself before a Pi
+ * start when its settings ask for another share (crates/aria-core/src/agent.rs), and leaves them when this matches. */
+export const APPLIED_FILE = join(agentDir(), '.compaction-percent')
 
 export interface ModelInfo {
   provider: string
@@ -84,4 +87,9 @@ export function syncSettings(models: ModelInfo[], percent: number, file = SETTIN
   if (JSON.stringify(next) === JSON.stringify(settings)) return false
   writeAtomic(file, out)
   return true
+}
+
+/** Notes the share settings.json now holds (only under Aria, which reads it). */
+export function noteApplied(percent: number, file = APPLIED_FILE): void {
+  if (hasAriaConfig()) writeAtomic(file, `${percent}\n`)
 }

@@ -70,6 +70,18 @@ fn blocks(template: &str, on: &dyn Fn(&str) -> bool) -> String {
     out
 }
 
+/// The conversation language as the persona names it: the setup's codes by name, anything else (typed by the user,
+/// such as "French") as it was written.
+fn language_name(language: &str) -> String {
+    match language.trim() {
+        "es" => "Spanish".into(),
+        "en" => "English".into(),
+        "pt" => "Portuguese".into(),
+        "" => "Spanish".into(),
+        other => other.to_string(),
+    }
+}
+
 pub fn render_system(template: &str, settings: &Settings) -> String {
     let assistant = &settings.assistant;
     let name = if assistant.name.trim().is_empty() { "Aria" } else { assistant.name.trim() };
@@ -91,7 +103,7 @@ pub fn render_system(template: &str, settings: &Settings) -> String {
     let project = if settings.memory.project.trim().is_empty() { "aria" } else { settings.memory.project.trim() };
     kept.replace("{{name}}", name)
         .replace("{{user_name}}", user)
-        .replace("{{language}}", if assistant.language == "en" { "English" } else { "Spanish" })
+        .replace("{{language}}", &language_name(&assistant.language))
         .replace("{{style}}", style_line(&assistant.style))
         .replace("{{git}}", &git_line(settings))
         .replace("{{memory_project}}", project)
@@ -211,6 +223,16 @@ mod tests {
         settings.subagents.plan_execute = false;
         let text = render_system(TEMPLATE, &settings);
         assert!(!text.contains("/plan <idea>"));
+    }
+
+    #[test]
+    fn every_language_is_named_as_chosen() {
+        for (code, name) in [("es", "Spanish"), ("en", "English"), ("pt", "Portuguese"), ("Français", "Français")] {
+            let mut settings = owners();
+            settings.assistant.language = code.into();
+            let text = render_system(TEMPLATE, &settings);
+            assert!(text.contains(&format!("in the user's language: {name} unless")), "{code}");
+        }
     }
 
     #[test]

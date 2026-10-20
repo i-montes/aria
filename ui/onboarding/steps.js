@@ -173,16 +173,14 @@ export function canContinue(step, settings, ui) {
   if (step === 'auth') return ui.signedIn === true && ui.keyChecking !== true
   // A service you turned on has to be connected; to skip one, turn it off.
   if (step === 'integrations') return settings.integrations.services.every((service) => ui.servicesConnected?.includes(service.id))
-  if (step === 'router') {
-    const module = providerModule(settings.provider.id)
-    return !(settings.router.enabled && !module?.jevIncluded && !ui.typesafeSaved)
-  }
   return true
 }
 
-/** The settings to save when the setup is done. Without a mode, the saved one stays (editing). */
+/** The settings to save when the setup is done. Without a mode, the saved one stays (editing). Without Jev in the
+ * provider the router is off (its TypeSafe backend is not built), whatever an earlier version saved. */
 export function finish(settings, mode) {
   const next = clone(settings)
+  if (!providerModule(next.provider.id)?.jevIncluded && next.router.enabled) next.router = { ...next.router, enabled: false }
   next.setup = { completed: true, mode: mode ?? settings.setup.mode ?? 'full' }
   return next
 }

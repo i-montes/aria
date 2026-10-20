@@ -721,6 +721,12 @@ impl Chat {
         self.emit(DockMessage::ChatEvent { event: json!({"type": "engine_exited", "code": code}) });
     }
 
+    /// The folder this chat's running Pi works in (None when no Pi runs).
+    fn workdir(&self) -> Option<PathBuf> {
+        let inner = self.inner.lock().unwrap();
+        inner.engine.as_ref().and(inner.workdir.clone())
+    }
+
     /// Restart for a changed credential or package: at once when idle, when the current run settles otherwise.
     pub fn restart_when_idle(&self) {
         let running = {
@@ -847,9 +853,10 @@ impl Sessions {
     }
 
     /// `settings.json` changed. The agent directory is prepared again at once (`aria.json`, which the extensions read on
-    /// every use, so `/effort`, compaction, the quota and the sandbox apply without a restart). Only when something Pi
-    /// reads at start changed (the persona, the experts, its settings, `mcp.json`, the shim) do the Pis restart, each
-    /// when its run settles: a restart loses plan mode, the sandbox's session grants and the quota switch.
+    /// every use, so `/effort`, the quota and the sandbox apply without a restart). Only when something Pi reads at start
+    /// changed (the persona, the experts, its settings with the compaction reserves, `mcp.json`, the shim, the working
+    /// folder) do the Pis restart, each when its run settles: a restart loses plan mode, the sandbox's session grants and
+    /// the quota switch.
     pub fn settings_changed(&self) {
         let paths = &self.ctx.paths;
         let Ok(settings) = settings::load(paths) else { return }; // a broken file: the next start says so
@@ -861,7 +868,13 @@ impl Sessions {
             let _ = pi::write_shim(paths, &install, settings.as_ref().is_some_and(|s| s.subagents.save_sessions));
         }
         if agent::start_fingerprint(paths) != before {
-            self.restart_all();
+            return self.restart_all();
+        }
+        // The folder a Pi works in is fixed when it starts: one working in another folder than the settings' starts again.
+        let wanted = agent::workdir(settings.as_ref());
+        let chats: Vec<Chat> = self.chats.lock().unwrap().values().cloned().collect();
+        for chat in chats.into_iter().filter(|chat| chat.workdir().is_some_and(|dir| dir != wanted)) {
+            chat.restart_when_idle();
         }
     }
 
@@ -1617,6 +1630,21 @@ mod tests {
         wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         let mut settings = Settings::defaults("es");
         settings.subagents.experts.iter_mut().for_each(|e| e.enabled = e.name != "security");
+        settings::save(&s.h.paths, &settings).unwrap();
+        s.sessions.settings_changed();
+        wait_session(&s, "a restart", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "stopped"));
+    }
+
+    #[test]
+    fn a_new_projects_folder_restarts_pi_so_it_works_there() {
+        let s = sessions_harness();
+        settings::save(&s.h.paths, &Settings::defaults("es")).unwrap();
+        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        let mut settings = Settings::defaults("es");
+        let elsewhere = s.h._dir.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        settings.sandbox.projects_dir = elsewhere.display().to_string();
         settings::save(&s.h.paths, &settings).unwrap();
         s.sessions.settings_changed();
         wait_session(&s, "a restart", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "stopped"));

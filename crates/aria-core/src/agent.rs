@@ -304,7 +304,7 @@ pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::
         };
         *packages = with_package_filters(packages.take(), &skills);
     }
-    // A folder of Pi packages the setup names (integrations.packages, source "path") is listed once.
+    // A folder of Pi packages the setup names (integrations.packages, source "local") is listed once.
     if let Some(local) = settings.and_then(|s| local_packages(&s.integrations.packages)) {
         let list = original.as_object_mut().map(|o| o.entry("packages").or_insert_with(|| json!([])));
         if let Some(Value::Array(list)) = list {
@@ -313,7 +313,18 @@ pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::
             }
         }
     }
+    // The compaction share becomes per-model reserves Pi reads when it starts. The autocompact extension writes them too
+    // (at a session start and for `/autocompact`) and notes the share it applied; Aria writes them only when the
+    // settings ask for another share, so a change from the settings screen reaches the next Pi start.
+    let compaction = settings.map(|s| s.compaction.percent).filter(|percent| applied_compaction(&agent) != Some(*percent));
+    let compaction = compaction.and_then(|percent| context_windows(&agent).map(|models| (percent, models)));
+    if let Some((percent, models)) = &compaction {
+        original = with_compaction(original, models, *percent);
+    }
     write_json_atomic(&settings_path, &merge_preserving(original, ours), 0o600)?;
+    if let Some((percent, _)) = compaction {
+        std::fs::write(agent.join(COMPACTION_APPLIED), format!("{percent}\n"))?;
+    }
 
     // The extensions' settings (extensions/lib/config.ts); before the setup they keep the values in their code.
     let config_path = agent.join("aria.json");
@@ -350,11 +361,65 @@ pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::
 /// The local package folder of the setup (`~` expanded), when it names one.
 fn local_packages(packages: &crate::settings::Packages) -> Option<String> {
     let path = packages.path.trim();
-    if packages.source != "path" || path.is_empty() {
+    // "path" is what earlier versions wrote for a local folder.
+    if !matches!(packages.source.as_str(), "local" | "path") || path.is_empty() {
         return None;
     }
     let home = std::env::var("HOME").unwrap_or_default();
     Some(path.strip_prefix("~/").map(|rest| format!("{home}/{rest}")).unwrap_or_else(|| path.to_string()))
+}
+
+/// The share of the context window the compaction reserves were last written for (extensions/autocompact writes it too).
+const COMPACTION_APPLIED: &str = ".compaction-percent";
+/// Pi's own smallest reserve (extensions/autocompact/autocompact.ts, MIN_RESERVE).
+const MIN_RESERVE: u64 = 16384;
+
+fn applied_compaction(agent: &Path) -> Option<u8> {
+    std::fs::read_to_string(agent.join(COMPACTION_APPLIED)).ok()?.trim().parse().ok()
+}
+
+/// `provider/id` and context window of every model Pi knows (its `models-store.json`), or None without one.
+fn context_windows(agent: &Path) -> Option<Vec<(String, u64)>> {
+    let store = read_json(&agent.join("models-store.json")).ok().flatten()?;
+    let mut models = Vec::new();
+    for (provider, entry) in store.as_object()? {
+        for model in entry["models"].as_array().into_iter().flatten() {
+            if let (Some(id), Some(window)) = (model["id"].as_str(), model["contextWindow"].as_u64().filter(|w| *w > 0)) {
+                models.push((format!("{}/{id}", model["provider"].as_str().unwrap_or(provider)), window));
+            }
+        }
+    }
+    Some(models)
+}
+
+/// Pi's settings with the compaction of `percent`, as extensions/autocompact/autocompact.ts `applyPercent` writes it:
+/// 0 turns it off; otherwise each model reserves what is left of its window past the share (never under Pi's minimum).
+fn with_compaction(mut settings: Value, models: &[(String, u64)], percent: u8) -> Value {
+    let Some(object) = settings.as_object_mut() else { return settings };
+    let compaction = object.entry("compaction").or_insert_with(|| json!({}));
+    if !compaction.is_object() {
+        *compaction = json!({});
+    }
+    let compaction = compaction.as_object_mut().expect("an object");
+    if percent == 0 {
+        compaction.insert("enabled".into(), json!(false));
+        return settings;
+    }
+    compaction.remove("enabled");
+    let overrides = compaction.entry("modelOverrides").or_insert_with(|| json!({}));
+    if !overrides.is_object() {
+        *overrides = json!({});
+    }
+    let overrides = overrides.as_object_mut().expect("an object");
+    for (key, window) in models {
+        let reserve = MIN_RESERVE.max(window - window * u64::from(percent) / 100);
+        let entry = overrides.entry(key.clone()).or_insert_with(|| json!({}));
+        if !entry.is_object() {
+            *entry = json!({});
+        }
+        entry["reserveTokens"] = json!(reserve);
+    }
+    settings
 }
 
 /// A fingerprint of what Pi reads only when it starts: the persona, the experts, Pi's `settings.json`, `mcp.json` and
@@ -627,6 +692,50 @@ mod tests {
         settings
     }
 
+    /// Pi's model store with two models (windows of 200k and 1M tokens).
+    fn store_models(paths: &AriaPaths) {
+        std::fs::create_dir_all(paths.agent()).unwrap();
+        let store = json!({
+            "opencode-go": {"models": [{"id": "glm-5.3", "provider": "opencode-go", "contextWindow": 200000}]},
+            "anthropic": {"models": [{"id": "claude-fable-5-1", "contextWindow": 1000000}, {"id": "no-window"}]},
+        });
+        std::fs::write(paths.agent().join("models-store.json"), store.to_string()).unwrap();
+    }
+
+    fn pi_settings(paths: &AriaPaths) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(paths.agent().join("settings.json")).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_new_compaction_share_is_written_as_pis_reserves_before_it_starts() {
+        let (_dir, paths) = paths();
+        store_models(&paths);
+        let mut settings = owners_settings();
+        settings.compaction.percent = 70;
+        prepare(&paths, Some(&settings)).unwrap();
+        let overrides = &pi_settings(&paths)["compaction"]["modelOverrides"];
+        assert_eq!(overrides["opencode-go/glm-5.3"]["reserveTokens"], 60000);
+        assert_eq!(overrides["anthropic/claude-fable-5-1"]["reserveTokens"], 300000);
+        assert!(overrides.get("anthropic/no-window").is_none());
+        assert_eq!(std::fs::read_to_string(paths.agent().join(COMPACTION_APPLIED)).unwrap().trim(), "70");
+
+        settings.compaction.percent = 0;
+        prepare(&paths, Some(&settings)).unwrap();
+        assert_eq!(pi_settings(&paths)["compaction"]["enabled"], false);
+    }
+
+    #[test]
+    fn a_share_already_applied_leaves_pis_reserves_alone() {
+        // `/autocompact` (or a session start) wrote the reserves and noted the share: Aria does not write them again,
+        // so the running Pis need no restart.
+        let (_dir, paths) = paths();
+        store_models(&paths);
+        std::fs::write(paths.agent().join("settings.json"), r#"{"compaction":{"modelOverrides":{"x/y":{"reserveTokens":5}}}}"#).unwrap();
+        std::fs::write(paths.agent().join(COMPACTION_APPLIED), "40\n").unwrap();
+        prepare(&paths, Some(&owners_settings())).unwrap();
+        assert_eq!(pi_settings(&paths)["compaction"]["modelOverrides"], json!({"x/y": {"reserveTokens": 5}}));
+    }
+
     #[test]
     fn memory_on_gives_arias_pi_its_engram_server() {
         let (_dir, paths) = paths();
@@ -639,7 +748,7 @@ mod tests {
     fn a_local_package_folder_from_the_settings_is_listed_once() {
         let (_dir, paths) = paths();
         let mut settings = owners_settings();
-        settings.integrations.packages.source = "path".into();
+        settings.integrations.packages.source = "local".into();
         settings.integrations.packages.path = "/srv/pi-packages/meeting".into();
         prepare(&paths, Some(&settings)).unwrap();
         prepare(&paths, Some(&settings)).unwrap();

@@ -34,11 +34,16 @@ entry) and a change applies when each session's run settles. Left:
 
 - A release must publish `pi-version`, `pi-packages` and `engram-version` next to the binary: the `curl | sh` install
   reads them from there. There is no release workflow in the repo yet.
-- The TypeSafe router backend is not built: with it chosen, the router stays off.
-- `integrations.packages.thirdPartyTrusted` and the "gallery" source do nothing yet (only a local folder is listed).
+- The TypeSafe router backend is not built: without OpenCode Go (whose account includes Jev) the router is off, and
+  the setup and the settings say so instead of offering it.
+- Pi packages come only from a local folder (`integrations.packages.path`); npm, git, a gallery and trusting
+  third-party packages are not built, and the setup no longer offers them (`thirdPartyTrusted` is kept in the file).
 - A settings change restarts the running Pis only when it touches what Pi reads at start (persona, experts, its
-  settings, `mcp.json`, the shim). A new compaction percent from the settings screen therefore applies at the next start;
-  `/autocompact` in a session applies it at once, as before.
+  settings with the compaction reserves, `mcp.json`, the shim, the working folder), each when its run settles. A new
+  compaction percent from the settings screen is written as Pi's reserves before that restart; `/autocompact` in a
+  session applies it at once and needs no restart.
+- The settings' list of turned-on services (`integrations.services`) only drives the setup's screens: turning a
+  service off does not remove its entry from `mcp.json`.
 - The settings screen shows an outside change (`/effort`, `/autocompact`) at once, unless it has changes of the
   reader's own that are not saved yet: those stay on screen, and saving them writes them over the outside change.
 
