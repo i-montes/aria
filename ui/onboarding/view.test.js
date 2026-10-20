@@ -11,7 +11,7 @@ globalThis.HTMLInputElement = class {}
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-function harness() {
+function harness(extra = {}) {
   const listeners = {}
   const root = {
     innerHTML: '',
@@ -30,19 +30,26 @@ function harness() {
     setLanguage: () => {},
     browserLanguage: () => 'en',
     request: (message, onProgress) => new Promise((resolve) => pending.push({ message, onProgress, resolve })),
+    ...extra,
   }
   const ob = createOnboarding(env)
   const click = (action, field, value) => {
     const el = { dataset: { action, field, value }, disabled: false }
     el.closest = () => null
-    listeners.click({ target: { closest: () => el } })
+    listeners.click({ target: { closest: (selector) => (selector === '[data-action]' ? el : null) } })
   }
   const type = (field, value) => {
     const input = Object.assign(new HTMLInputElement(), { dataset: { action: 'input', field }, value })
     listeners.input({ target: input })
   }
   const lastRequest = () => pending.at(-1)
-  return { ob, click, type, pending, sent, lastRequest, root }
+  /** A click on an element that carries `data-chat` (the chat's model picker rows) instead of `data-action`. */
+  const clickChat = (chat, index) => {
+    const el = { dataset: { chat, index: String(index) } }
+    listeners.click({ target: { closest: (selector) => (selector === `[data-chat="${chat}"]` ? el : null) } })
+  }
+  const search = (value) => listeners.input({ target: { value, dataset: { chatField: 'model-search' } } })
+  return { ob, click, clickChat, search, type, pending, sent, lastRequest, root }
 }
 
 const oauthOk = { type: 'oauthResult', ok: true, error: null }
@@ -608,5 +615,61 @@ describe('the settings screen', () => {
     h.click('toggle', 'memory') // a change of the reader's own
     h.ob.refreshSettings(completed, ['opencode-go:api_key'])
     expect(h.ob.snapshot().dirty).toBe(true)
+  })
+})
+
+describe('the model fields list what Pi offers for the connected provider', () => {
+  const piModels = [
+    { provider: 'opencode-go', id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
+    { provider: 'opencode-go', id: 'minimax-m3', name: 'MiniMax M3' },
+    { provider: 'opencode', id: 'claude-opus-5-5', name: 'Claude Opus 5.5 (Zen)' },
+    { provider: 'anthropic', id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' },
+  ]
+  const openModels = (settings = completed) => {
+    let answer
+    const h = harness({ listModels: () => new Promise((resolve) => (answer = resolve)) })
+    h.ob.start(settings, ['opencode-go:api_key'])
+    h.click('settings-open', undefined, 'models')
+    return { ...h, answer: async (list = piModels) => { answer(list); await flush() } }
+  }
+
+  test('the picker shows the provider\'s models from Pi, not the catalog, and picking one sets the field', async () => {
+    const h = openModels()
+    await h.answer()
+    h.click('model-open', 'daily')
+    expect(h.root.innerHTML).toContain('MiniMax M3')
+    expect(h.root.innerHTML).not.toContain('Claude Sonnet 5.5') // another provider
+    expect(h.root.innerHTML).not.toContain('(Zen)') // pay-per-use is not allowed
+    h.search('minimax')
+    h.clickChat('pick', 0)
+    expect(h.ob.snapshot().dirty).toBe(true)
+    h.click('settings-save')
+    expect(h.lastRequest().message.settings.models.daily).toBe('opencode-go/minimax-m3')
+  })
+
+  test('with pay-per-use allowed, OpenCode Zen\'s models are offered too', async () => {
+    const settings = structuredClone(completed)
+    settings.models.allowPayPerUse = true
+    const h = openModels(settings)
+    await h.answer()
+    h.click('model-open', 'planning')
+    expect(h.root.innerHTML).toContain('(Zen)')
+  })
+
+  test('while Pi has not answered (or has nothing for the provider), the provider\'s catalog is offered', async () => {
+    const h = openModels()
+    h.click('model-open', 'daily')
+    expect(h.root.innerHTML).toContain('GLM 5.3')
+    await h.answer([])
+    expect(h.root.innerHTML).toContain('GLM 5.3')
+  })
+
+  test('another control closes the picker', async () => {
+    const h = openModels()
+    await h.answer()
+    h.click('model-open', 'daily')
+    expect(h.root.innerHTML).toContain('data-model-picker')
+    h.click('pick', 'planningEffort', 'low')
+    expect(h.root.innerHTML).not.toContain('data-model-picker')
   })
 })

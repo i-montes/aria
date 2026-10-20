@@ -139,6 +139,8 @@ const onboarding = createOnboarding({
   post,
   browserLanguage: () => normalizeLanguage(navigator.language),
   hotkey: () => state.hotkey,
+  // The settings' model fields list what Pi really offers (the chat's own `listModels`).
+  listModels: () => chat.listModels(),
   // "Start using Aria" / "Close" on the last screen: on to the chat.
   onDone: () => {
     setMode('chat')

@@ -138,3 +138,10 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .settings-bar.leaving { border-color: var(--accent-border); }
 .settings-bar .state { flex: 1; min-width: 0; line-height: 1.4; }
 .settings-bar .primary, .settings-bar .secondary { padding: 8px 14px; font-size: 13px; }
+
+/* A model field: the model in use, as an option card; pressed, the chat's model picker opens under it. */
+.model-field { align-items: center; }
+.model-field .opt-text { flex: 1; min-width: 0; }
+.model-field .opt-desc.mono { font-family: "Geist Mono", ui-monospace, monospace; overflow-wrap: anywhere; }
+.model-field-caret { flex: none; color: var(--muted); font-size: 12px; }
+.model-field-picker .p-models-panel { box-shadow: none; }

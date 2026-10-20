@@ -3,6 +3,7 @@
 // delegated listener, and talks to the dock through `env.request`. Widgets live in components.js.
 import * as c from './components.js'
 import { renderPanelHead } from '../chat/parts/panelhead.js'
+import { orderedModels, renderModelPicker } from '../chat/parts/models.js'
 import {
   applyProvider, canContinue, credentialFor, defaultSettings, finish, isSignedIn, languageChoice, nextStep,
   previousStep, PROVIDERS, providerModule, setLanguageChoice, setRouter, skip, stepIds,
@@ -26,8 +27,11 @@ const SETTINGS_SECTIONS = [
   { id: 'agents', steps: ['agents'] },
 ]
 const SAVED_FLASH_MS = 2500
+/** The provider Pi files each setup provider's models under. */
+const PI_PROVIDER = { 'opencode-go': 'opencode-go', 'anthropic-api': 'anthropic', 'anthropic-oauth': 'claude-bridge' }
 
-/** `env`: { root, t, request, post, setLanguage, browserLanguage, hotkey?, onDone? }. `onDone` runs when the user
+/** `env`: { root, t, request, post, setLanguage, browserLanguage, hotkey?, onDone?, listModels? }. `listModels` returns
+ * the models Pi can use; the settings' model fields list them (without it, the provider's catalog in steps.js). `onDone` runs when the user
  * presses the button of the "set up" screen or leaves the settings (the dock goes to the chat); without it the dock
  * closes. */
 export function createOnboarding(env) {
@@ -39,6 +43,8 @@ export function createOnboarding(env) {
     saved: null, // settings: the settings as on disk (JSON), to tell what changed
     leaving: false, // settings: Back was pressed with changes not saved
     flash: false, // settings: "Saved" shows for a moment after a save
+    models: null, // settings: what Pi can use (env.listModels), or null before it answers
+    picker: null, // the open model field: { field: 'daily' | 'planning', query, active }
     mode: 'quick', // quick | full
     step: null,
     editing: false,
@@ -135,6 +141,7 @@ export function createOnboarding(env) {
     lastView = view
     ;(target ?? root.querySelector('[data-nav]'))?.focus({ preventScroll: true })
     if (panel) panel.scrollTop = scrollTop
+    if (state.picker) focusModelSearch()
   }
 
   function welcomeHtml() {
@@ -315,13 +322,99 @@ export function createOnboarding(env) {
   const i18nHas = (key) => t(key) !== key
 
   function modelsStep() {
-    const list = module().models.map((m) => ({ value: m.id, label: m.label }))
     let html =
-      c.section(t('ob.models.section.daily')) + c.choice('daily', '', list, state.settings.models.daily) +
-      c.section(t('ob.models.section.planning')) + c.choice('planning', '', list, state.settings.models.planning) +
+      c.section(t('ob.models.section.daily')) + modelField('daily') +
+      c.section(t('ob.models.section.planning')) + modelField('planning') +
       c.segments('planningEffort', t('ob.models.planningEffort'), LEVELS.map((v) => ({ value: v, label: t(`ob.level.${v}`) })), state.settings.models.planningEffort)
     if (module().quota) html += c.toggle('payPerUse', t('ob.models.payPerUse'), t('ob.models.payPerUse.desc'), state.settings.models.allowPayPerUse)
     return html
+  }
+
+  // ---- model fields ---------------------------------------------------------------------------
+
+  const refOf = (m) => `${m.provider}/${m.id}`
+
+  /** The models a field offers: Pi's list for the chosen provider (and OpenCode Zen when pay-per-use is allowed), or
+   * the provider's catalog while Pi has not answered (or during the first setup, before Pi runs). */
+  function providerModels() {
+    const s = state.settings
+    const own = PI_PROVIDER[s.provider.id]
+    const fromPi = (state.models ?? []).filter((m) => m.provider === own || (own === 'opencode-go' && s.models.allowPayPerUse && m.provider === 'opencode'))
+    if (fromPi.length) return fromPi
+    return (module()?.models ?? []).map((m) => {
+      const [provider, ...id] = m.id.split('/')
+      return { provider, id: id.join('/'), name: m.label }
+    })
+  }
+
+  const findModel = (ref) => providerModels().find((m) => refOf(m) === ref) ?? (state.models ?? []).find((m) => refOf(m) === ref)
+
+  /** The field shows the model in use; pressing it opens the chat's model picker under it, with its search. */
+  function modelField(field) {
+    const ref = state.settings.models[field] ?? ''
+    const model = findModel(ref)
+    const open = state.picker?.field === field
+    let html = `
+      <button type="button" class="opt model-field${open ? ' selected' : ''}" data-nav data-action="model-open" data-field="${c.esc(field)}" data-key="model-open:${c.esc(field)}" aria-expanded="${open}">
+        <span class="opt-text"><span class="opt-label">${c.esc(model?.name || ref.split('/').pop() || '—')}</span><span class="opt-desc mono">${c.esc(ref)}</span></span>
+        <span class="model-field-caret" aria-hidden="true">${open ? '▴' : '▾'}</span>
+      </button>`
+    if (open) html += `<div class="model-field-picker" data-model-picker>${modelPickerHtml()}</div>`
+    return html
+  }
+
+  const modelPickerHtml = () =>
+    renderModelPicker({ models: providerModels(), current: state.settings.models[state.picker.field] ?? '', query: state.picker.query, active: state.picker.active, open: true }, {}, t)
+
+  /** Redraws only the open picker (typing in its search must not lose the caret), and keeps its marked row in view. */
+  function redrawPicker() {
+    const box = root.querySelector('[data-model-picker]')
+    if (!box) return render()
+    box.innerHTML = modelPickerHtml()
+    focusModelSearch()
+    box.querySelector('.p-models-row.on')?.scrollIntoView?.({ block: 'nearest' })
+  }
+
+  function focusModelSearch() {
+    const input = root.querySelector('[data-chat-field="model-search"]')
+    if (!input) return
+    input.focus({ preventScroll: true })
+    input.setSelectionRange?.(input.value.length, input.value.length)
+  }
+
+  function toggleModelPicker(field) {
+    if (state.picker?.field === field) return closeModelPicker()
+    const at = orderedModels(providerModels(), '').findIndex(({ model }) => refOf(model) === state.settings.models[field])
+    state.picker = { field, query: '', active: Math.max(0, at) }
+    render()
+    root.querySelector('[data-model-picker] .p-models-row.on')?.scrollIntoView?.({ block: 'nearest' })
+    if (state.models === null) void loadModels()
+  }
+
+  function closeModelPicker() {
+    if (!state.picker) return
+    focusAfterRender = `model-open:${state.picker.field}`
+    state.picker = null
+    render()
+  }
+
+  function pickModel(index) {
+    const entry = orderedModels(providerModels(), state.picker.query)[index]
+    if (!entry) return
+    const { field } = state.picker
+    update((s) => {
+      s.models[field] = refOf(entry.model)
+    })
+    closeModelPicker()
+  }
+
+  /** Asks Pi for its models, once per visit to the section (a provider connected meanwhile shows up). */
+  async function loadModels() {
+    if (!env.listModels || state.view !== 'settings') return
+    const models = await env.listModels().catch(() => [])
+    state.models = Array.isArray(models) ? models : []
+    if (state.view !== 'settings') return
+    state.picker ? redrawPicker() : render()
   }
 
   function effortStep() {
@@ -458,9 +551,7 @@ export function createOnboarding(env) {
     return html
   }
 
-  function modelLabel(id) {
-    return module()?.models.find((m) => m.id === id)?.label ?? '—'
-  }
+  const modelLabel = (ref) => findModel(ref)?.name || ref?.split('/').pop() || '—'
 
   /** One line per step saying what it is set to: the review list and the settings overview read it. */
   function summaryValues() {
@@ -579,6 +670,11 @@ export function createOnboarding(env) {
   function openSection(id) {
     state.section = id
     state.leaving = false
+    state.picker = null
+    if (id === 'models') {
+      state.models = null
+      void loadModels()
+    }
     render()
     // Opening the sign-in's section is what checks a credential already on disk.
     maybeCheckStoredCredential()
@@ -996,9 +1092,13 @@ export function createOnboarding(env) {
   // ---- events ---------------------------------------------------------------------------------
 
   root.addEventListener('click', (event) => {
+    const row = state.picker && event.target.closest('[data-chat="pick"]')
+    if (row) return pickModel(Number(row.dataset.index))
     const el = event.target.closest('[data-action]')
     if (!el || el.disabled) return
     const { action, field, value } = el.dataset
+    // Any other control closes an open model picker.
+    if (state.picker && action !== 'model-open') state.picker = null
     // WebKit does not focus a button on click; remember the widget so the redraw can focus it again.
     focusAfterRender = el.dataset.key ?? el.closest?.('[data-key]')?.dataset.key ?? ''
     if (action === 'choose') return value === 'skip' ? skipSetup() : startFlow(value)
@@ -1008,8 +1108,10 @@ export function createOnboarding(env) {
     if (action === 'edit') return go(value)
     if (action === 'close') return env.onDone ? env.onDone() : post({ type: 'closeRequest' })
     if (action === 'settings-open') return openSection(value)
+    if (action === 'model-open') return toggleModelPicker(field)
     if (action === 'settings-home') {
       state.section = null
+      state.picker = null
       state.leaving = false
       return render()
     }
@@ -1067,11 +1169,41 @@ export function createOnboarding(env) {
 
   root.addEventListener('input', (event) => {
     const el = event.target
+    if (state.picker && el.dataset?.chatField === 'model-search') {
+      state.picker = { ...state.picker, query: el.value, active: 0 }
+      return redrawPicker()
+    }
     if (!(el instanceof HTMLInputElement)) return
     const { action, field } = el.dataset
     if (action === 'input') typed(field, el.value)
     else if (action === 'slide') slid(field, el)
     else if (action === 'chip-draft') state.ui.drafts.extraWritable = el.value
+  })
+
+  // The model picker's search: the arrows move its mark, Enter picks, Esc closes the picker (not the dock).
+  root.addEventListener('keydown', (event) => {
+    if (!state.picker || event.target.dataset?.chatField !== 'model-search') return
+    const n = orderedModels(providerModels(), state.picker.query).length
+    const moves = { ArrowDown: 1, ArrowUp: -1 }
+    if (event.key in moves) {
+      state.picker = { ...state.picker, active: n ? (state.picker.active + moves[event.key] + n) % n : 0 }
+      redrawPicker()
+    } else if (event.key === 'Enter') pickModel(state.picker.active)
+    else if (event.key === 'Escape') closeModelPicker()
+    else return
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+  })
+
+  // The pointer only moves the mark (as in the chat's picker): a redraw would send the list back to the top.
+  root.addEventListener('mousemove', (event) => {
+    const li = state.picker && event.target.closest?.('[data-chat="picker-hover"]')
+    if (!li || state.picker.active === Number(li.dataset.index)) return
+    state.picker = { ...state.picker, active: Number(li.dataset.index) }
+    for (const item of root.querySelectorAll('[data-model-picker] li[data-chat="picker-hover"]')) {
+      item.querySelector('button')?.classList.toggle('on', Number(item.dataset.index) === state.picker.active)
+    }
   })
 
   // Enter in a key field saves it; in any other text field it moves on.

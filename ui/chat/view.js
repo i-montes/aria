@@ -1204,6 +1204,11 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       if (!saved?.sessions?.length) save()
       render()
     },
+    /** Every model the active session's Pi can use (Pi's own list), for the settings' model fields. */
+    async listModels() {
+      const reply = await ask({ type: 'listModels' })
+      return reply.models ?? []
+    },
     /** What the page knows beyond the chat: the assistant's name and the compaction threshold. */
     setSettings(next) {
       settings = next
