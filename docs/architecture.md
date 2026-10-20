@@ -65,7 +65,7 @@ On macOS the dock is an `NSPanel` (borderless, nonactivating, status level, all 
 - `app.js` — the bridge, the corner notice, the problem banner, keyboard navigation.
 - `onboarding/steps.js` — the onboarding as data and pure functions; **the working state is the settings object itself**.
 - `onboarding/components.js` — form widgets that return HTML (every dynamic value escaped).
-- `onboarding/view.js` — the screens and one delegated event handler.
+- `onboarding/view.js` — the screens and one delegated event handler: the first-run setup (welcome, steps, review) and, once it is done, the settings screen, which groups the same steps by topic (an overview of sections, one page per section, a bar to save or discard).
 - `i18n.js` and `i18n/*.json` — every visible string, English and Spanish (the chat's parts bring their own `TEXTS`, merged by `chat/texts.js`).
 - `chat/state.js` — one conversation as data: a pure reducer over Pi's events and the dock's messages.
 - `chat/sessions.js` — the tabs as data.

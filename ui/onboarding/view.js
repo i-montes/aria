@@ -2,6 +2,7 @@
 // the settings object (see steps.js); this file turns it into HTML, handles every interaction in one
 // delegated listener, and talks to the dock through `env.request`. Widgets live in components.js.
 import * as c from './components.js'
+import { renderPanelHead } from '../chat/parts/panelhead.js'
 import {
   applyProvider, canContinue, credentialFor, defaultSettings, finish, isSignedIn, languageChoice, nextStep,
   previousStep, PROVIDERS, providerModule, setLanguageChoice, setRouter, skip, stepIds,
@@ -12,14 +13,32 @@ const SKILLS = ['brainstorming', 'writing-plans', 'test-driven-development', 'sy
 const STYLES = ['very-short', 'brief', 'detailed', 'technical', 'teaching']
 const LEVELS = ['low', 'medium', 'high']
 const DEFAULT_TURN_LIMIT = 30
+/** The settings screen: the setup's steps grouped by topic, in the order of its overview. A step the provider does not
+ * have (the quota without OpenCode Go) is left out. */
+const SETTINGS_SECTIONS = [
+  { id: 'assistant', steps: ['assistant'] },
+  { id: 'provider', steps: ['provider', 'auth', 'quota'] },
+  { id: 'models', steps: ['models', 'effort'] },
+  { id: 'router', steps: ['router'] },
+  { id: 'context', steps: ['compaction', 'memory'] },
+  { id: 'integrations', steps: ['integrations'] },
+  { id: 'safety', steps: ['sandbox', 'git'] },
+  { id: 'agents', steps: ['agents'] },
+]
+const SAVED_FLASH_MS = 2500
 
 /** `env`: { root, t, request, post, setLanguage, browserLanguage, hotkey?, onDone? }. `onDone` runs when the user
- * presses the button of the "set up" screen (the dock goes to the chat); without it the dock closes. */
+ * presses the button of the "set up" screen or leaves the settings (the dock goes to the chat); without it the dock
+ * closes. */
 export function createOnboarding(env) {
   const { root, t, request, post } = env
   const hotkey = () => env.hotkey?.() ?? 'Super + A'
   const state = {
-    view: 'welcome', // welcome | step | done
+    view: 'welcome', // welcome | step | done | settings
+    section: null, // settings: the open section, or null for the overview
+    saved: null, // settings: the settings as on disk (JSON), to tell what changed
+    leaving: false, // settings: Back was pressed with changes not saved
+    flash: false, // settings: "Saved" shows for a moment after a save
     mode: 'quick', // quick | full
     step: null,
     editing: false,
@@ -48,7 +67,7 @@ export function createOnboarding(env) {
   }
 
   /** Where the reader is; a reply that arrives after they moved must not move them again. */
-  const here = () => `${state.view}:${state.step}`
+  const here = () => `${state.view}:${state.step}:${state.section}`
 
   const uiFlags = () => ({
     signedIn: state.ui.signedIn,
@@ -74,12 +93,16 @@ export function createOnboarding(env) {
     state.connected = new Set(connected)
     state.svc = freshServices()
     state.ui = freshUi()
+    state.leaving = false
     if (settings?.setup?.completed) {
+      // A finished setup opens as the settings screen, on its overview.
       state.settings = settings
+      state.saved = JSON.stringify(settings)
       state.editing = true
       state.mode = 'full'
-      state.view = 'step'
-      state.step = 'review'
+      state.view = 'settings'
+      state.section = null
+      state.step = null
     } else {
       state.settings = settings ?? defaultSettings(env.browserLanguage())
       state.editing = false
@@ -97,7 +120,7 @@ export function createOnboarding(env) {
   let focusAfterRender = ''
 
   function render() {
-    const view = `${state.view}:${state.step}`
+    const view = `${state.view}:${state.step}:${state.section}`
     const sameStep = view === lastView
     // WebKit does not focus a button when it is clicked, so the active element is not the checkbox that
     // was just pressed. The clicked widget's key is what brings the reader back to it after the redraw.
@@ -107,7 +130,7 @@ export function createOnboarding(env) {
     // to the top on every checkbox; keep the reader where they were instead.
     const panel = globalThis.document?.getElementById?.('content')
     const scrollTop = sameStep ? panel?.scrollTop ?? 0 : 0
-    root.innerHTML = state.view === 'welcome' ? welcomeHtml() : state.view === 'done' ? doneHtml() : stepHtml()
+    root.innerHTML = state.view === 'welcome' ? welcomeHtml() : state.view === 'done' ? doneHtml() : state.view === 'settings' ? settingsHtml() : stepHtml()
     const target = focused ? root.querySelector(`[data-key="${CSS.escape(focused)}"]`) : null
     lastView = view
     ;(target ?? root.querySelector('[data-nav]'))?.focus({ preventScroll: true })
@@ -146,13 +169,9 @@ export function createOnboarding(env) {
     const all = ids()
     const at = all.indexOf(state.step)
     const isReview = state.step === 'review'
-    const descKey = isReview ? `ob.review.desc.${state.editing ? 'edit' : state.mode}` : `ob.${state.step}.desc`
-    const nextLabel = state.saving
-      ? t('ob.saving')
-      : isReview
-        ? t(state.editing ? 'ob.save' : 'ob.start', { name: assistantName() })
-        : t('ob.continue')
-    const showDefaults = !state.editing && state.mode === 'full' && !isReview && at >= 2
+    const descKey = isReview ? `ob.review.desc.${state.mode}` : `ob.${state.step}.desc`
+    const nextLabel = state.saving ? t('ob.saving') : isReview ? t('ob.start', { name: assistantName() }) : t('ob.continue')
+    const showDefaults = state.mode === 'full' && !isReview && at >= 2
     return `
       <div class="top"><span>${c.esc(t('ob.step', { n: at + 1, total: all.length }))}</span><span>${c.esc(t(`ob.name.${state.step}`))}</span></div>
       <div class="bars">${all.map((_, i) => `<i class="${i < at ? 'done' : i === at ? 'now' : ''}"></i>`).join('')}</div>
@@ -443,42 +462,189 @@ export function createOnboarding(env) {
     return module()?.models.find((m) => m.id === id)?.label ?? '—'
   }
 
-  function reviewStep() {
+  /** One line per step saying what it is set to: the review list and the settings overview read it. */
+  function summaryValues() {
     const s = state.settings
     const m = module()
-    const quickFlow = !state.editing && state.mode === 'quick'
+    const q = s.provider.quota
     const language = languageChoice(s.assistant.language) === 'other' ? s.assistant.language : t(`ob.assistant.language.${s.assistant.language}`)
-    const rows = [
-      ['provider', (m?.label ?? '—') + (m?.quota ? t('ob.val.quotaMeter') : '')],
-      ['auth', t(m?.auth === 'oauth' ? 'ob.val.authOauth' : 'ob.val.authKey')],
-      ['assistant', t('ob.val.assistant', { name: assistantName(), language, style: t(`ob.style.${s.assistant.style}`) }) + (s.assistant.userName.trim() ? t('ob.val.callsYou', { user: s.assistant.userName.trim() }) : '')],
-    ]
-    if (!quickFlow) {
-      const q = s.provider.quota
-      const quota = q
+    const services = s.integrations.services.map((x) => t(`ob.integrations.${x.id}`))
+    const experts = s.subagents.experts.filter((e) => e.enabled).length
+    return {
+      provider: (m?.label ?? '—') + (m?.quota ? t('ob.val.quotaMeter') : ''),
+      quota: q
         ? t('ob.val.quota', { a: q.switchAt, b: q.planSwitchAt, ask: q.askFirst ? t('ob.val.quotaAsk', { n: q.countdownMinutes }) : t('ob.val.quotaNoAsk') })
-        : t('ob.val.quotaNone')
-      const effort = s.effort.mode === 'auto' ? t('ob.val.effortAuto') : t(`ob.level.${s.effort.fixedLevel}`)
-      const services = s.integrations.services.map((x) => t(`ob.integrations.${x.id}`))
-      const experts = s.subagents.experts.filter((e) => e.enabled).length
-      rows.splice(1, 0, ['quota', quota])
-      rows.push(
-        ['router', s.router.enabled ? t('ob.val.routerOn') : t('ob.val.off')],
-        ['models', t('ob.val.models', { daily: modelLabel(s.models.daily), planning: modelLabel(s.models.planning), effort: t(`ob.level.${s.models.planningEffort}`) })],
-        ['effort', effort],
-        ['compaction', t('ob.val.compaction', { n: s.compaction.percent })],
-        ['memory', s.memory.enabled ? t('ob.val.memoryOn', { project: s.memory.project }) : t('ob.val.off')],
-        ['integrations', services.length ? services.join(', ') : t('ob.val.integrationsNone')],
-        ['sandbox', t('ob.val.sandbox', { dir: s.sandbox.projectsDir, more: s.sandbox.extraWritable.length ? t('ob.val.sandboxMore', { n: s.sandbox.extraWritable.length }) : '', ask: t(s.sandbox.askToLeave ? 'ob.val.sandboxAsks' : 'ob.val.sandboxFree') })],
-        ['git', t('ob.val.git', { commit: t(s.git.commitWithoutAsking ? 'ob.val.commitAlone' : 'ob.val.commitAsks'), push: t(s.git.pushOrMergeWithoutAsking ? 'ob.val.pushAlone' : 'ob.val.pushAsks') })],
-        ['agents', t('ob.val.agents', { n: experts, plan: t(s.subagents.planExecute ? 'ob.val.planOn' : 'ob.val.planOff'), sessions: s.subagents.saveSessions ? t('ob.val.sessionsSaved') : '' })],
-      )
+        : t('ob.val.quotaNone'),
+      auth: t(m?.auth === 'oauth' ? 'ob.val.authOauth' : 'ob.val.authKey'),
+      assistant: t('ob.val.assistant', { name: assistantName(), language, style: t(`ob.style.${s.assistant.style}`) }) + (s.assistant.userName.trim() ? t('ob.val.callsYou', { user: s.assistant.userName.trim() }) : ''),
+      router: s.router.enabled ? t('ob.val.routerOn') : t('ob.val.off'),
+      models: t('ob.val.models', { daily: modelLabel(s.models.daily), planning: modelLabel(s.models.planning), effort: t(`ob.level.${s.models.planningEffort}`) }),
+      effort: s.effort.mode === 'auto' ? t('ob.val.effortAuto') : t(`ob.level.${s.effort.fixedLevel}`),
+      compaction: t('ob.val.compaction', { n: s.compaction.percent }),
+      memory: s.memory.enabled ? t('ob.val.memoryOn', { project: s.memory.project }) : t('ob.val.off'),
+      integrations: services.length ? services.join(', ') : t('ob.val.integrationsNone'),
+      sandbox: t('ob.val.sandbox', { dir: s.sandbox.projectsDir, more: s.sandbox.extraWritable.length ? t('ob.val.sandboxMore', { n: s.sandbox.extraWritable.length }) : '', ask: t(s.sandbox.askToLeave ? 'ob.val.sandboxAsks' : 'ob.val.sandboxFree') }),
+      git: t('ob.val.git', { commit: t(s.git.commitWithoutAsking ? 'ob.val.commitAlone' : 'ob.val.commitAsks'), push: t(s.git.pushOrMergeWithoutAsking ? 'ob.val.pushAlone' : 'ob.val.pushAsks') }),
+      agents: t('ob.val.agents', { n: experts, plan: t(s.subagents.planExecute ? 'ob.val.planOn' : 'ob.val.planOff'), sessions: s.subagents.saveSessions ? t('ob.val.sessionsSaved') : '' }),
     }
+  }
+
+  function reviewStep() {
+    const quickFlow = state.mode === 'quick'
+    const values = summaryValues()
+    const order = quickFlow
+      ? ['provider', 'auth', 'assistant']
+      : ['provider', 'quota', 'auth', 'assistant', 'router', 'models', 'effort', 'compaction', 'memory', 'integrations', 'sandbox', 'git', 'agents']
     const wanted = new Set(ids())
-    let html = c.summary(rows.map(([id, value]) => ({ id, label: t(`ob.row.${id}`), value, editLabel: wanted.has(id) ? t('ob.edit') : '' })).map((r) => (r.editLabel ? r : { ...r, editLabel: '' })))
+    let html = c.summary(order.map((id) => ({ id, label: t(`ob.row.${id}`), value: values[id], editLabel: wanted.has(id) ? t('ob.edit') : '' })))
     if (quickFlow) html += c.info('lavender', t('ob.review.defaultsNote.title'), t('ob.review.defaultsNote.desc'))
     if (state.error) html += c.info('amber', '', t(`ob.error.${state.error}`))
     return html
+  }
+
+  // ---- settings -------------------------------------------------------------------------------
+
+  /** The sections with only the steps this provider has. */
+  const settingsSections = () => {
+    const have = new Set(ids())
+    return SETTINGS_SECTIONS.map((section) => ({ ...section, steps: section.steps.filter((step) => have.has(step)) }))
+  }
+  const isDirty = () => state.view === 'settings' && JSON.stringify(state.settings) !== state.saved
+  /** The sections with something to finish before saving (a sign-in, a service turned on but not connected). */
+  const blockedSections = () => settingsSections().filter((section) => section.steps.some((step) => !canContinue(step, state.settings, uiFlags())))
+
+  function settingsHtml() {
+    return state.section ? settingsSectionHtml() : settingsOverviewHtml()
+  }
+
+  function settingsOverviewHtml() {
+    const values = summaryValues()
+    const blocked = new Set(blockedSections().map((section) => section.id))
+    const cards = settingsSections()
+      .map((section) => `
+        <button class="card settings-card" data-nav data-action="settings-open" data-value="${c.esc(section.id)}" data-key="settings-open:${c.esc(section.id)}">
+          <div class="row"><b>${c.esc(t(`settings.section.${section.id}`))}</b>${blocked.has(section.id) ? `<span class="meta warn">${c.esc(t('settings.attention'))}</span>` : ''}</div>
+          <div class="description">${c.esc(section.steps.map((step) => values[step]).join(' · '))}</div>
+        </button>`)
+      .join('')
+    return `
+      ${renderPanelHead({ back: { attrs: 'data-nav data-action="settings-exit" data-key="settings-exit"', label: t('settings.back') }, title: t('settings.title'), meta: '~/.aria/settings.json' })}
+      <p class="intro settings-intro">${c.esc(t('settings.desc'))}</p>
+      <div class="settings-cards">${cards}</div>
+      ${settingsBar()}`
+  }
+
+  function settingsSectionHtml() {
+    const section = settingsSections().find((s) => s.id === state.section)
+    const blocks = section.steps
+      .map((step) => `
+        <section class="settings-block">
+          <h3>${c.esc(t(`ob.${step}.title`))}</h3>
+          <p class="hint">${c.esc(t(`ob.${step}.desc`))}</p>
+          <div class="fields">${sectionsByStep[step]()}</div>
+        </section>`)
+      .join('')
+    return `
+      ${renderPanelHead({ back: { attrs: 'data-nav data-action="settings-home" data-key="settings-home"', label: t('settings.home') }, title: t(`settings.section.${section.id}`), meta: t('settings.title') })}
+      ${blocks}
+      ${settingsBar()}`
+  }
+
+  /** Save and Discard, shown while something changed (or right after a save, to say it was saved). */
+  function settingsBar() {
+    const dirty = isDirty()
+    if (!dirty && !state.flash && !state.error) return ''
+    const blocked = blockedSections()
+    const canSave = dirty && !blocked.length && !state.saving
+    const text = state.saving
+      ? t('settings.saving')
+      : state.error
+        ? t(`ob.error.${state.error}`)
+        : !dirty
+          ? t('settings.saved')
+          : blocked.length
+            ? t('settings.blocked', { sections: blocked.map((section) => t(`settings.section.${section.id}`)).join(', ') })
+            : state.leaving
+              ? t('settings.leave')
+              : t('settings.unsaved')
+    const tone = state.error || (dirty && blocked.length) ? 'error' : !dirty ? 'ok' : ''
+    return `
+      <div class="settings-bar${state.leaving ? ' leaving' : ''}" role="status">
+        <span class="state ${tone}">${c.esc(text)}</span>
+        ${dirty ? `<button type="button" class="secondary" data-nav data-action="settings-discard" data-key="settings-discard">${c.esc(t('settings.discard'))}</button>
+        <button type="button" class="primary" data-nav data-action="settings-save" data-key="settings-save" ${canSave ? '' : 'disabled'}>${c.esc(t('settings.save'))}</button>` : ''}
+      </div>`
+  }
+
+  function openSection(id) {
+    state.section = id
+    state.leaving = false
+    render()
+    // Opening the sign-in's section is what checks a credential already on disk.
+    maybeCheckStoredCredential()
+  }
+
+  function exitSettings() {
+    if (isDirty()) {
+      state.leaving = true
+      return render()
+    }
+    state.section = null
+    env.onDone ? env.onDone() : post({ type: 'closeRequest' })
+  }
+
+  function discardSettings() {
+    const before = state.settings.assistant.language
+    const leave = state.leaving
+    state.settings = JSON.parse(state.saved)
+    state.error = null
+    state.leaving = false
+    // The interface follows the language as it is picked; going back to the saved one takes it back too.
+    const language = state.settings.assistant.language
+    if (language !== before && languageChoice(language) !== 'other') env.setLanguage(language)
+    if (leave) return exitSettings()
+    render()
+  }
+
+  let flashTimer = null
+
+  async function saveSettings() {
+    if (!isDirty() || blockedSections().length || state.saving) return
+    const settings = finish(state.settings)
+    state.saving = true
+    state.error = null
+    render()
+    const reply = await request({ type: 'saveSettings', settings })
+    state.saving = false
+    if (reply.type !== 'saved') {
+      state.error = reply.code ?? 'generic'
+      return render()
+    }
+    state.saved = JSON.stringify(settings)
+    // What the user changed meanwhile stays theirs; only the setup flag comes from the save.
+    state.settings = { ...state.settings, setup: settings.setup }
+    if (state.leaving) {
+      state.leaving = false
+      return exitSettings()
+    }
+    state.flash = true
+    clearTimeout(flashTimer)
+    flashTimer = setTimeout(() => {
+      state.flash = false
+      if (state.view === 'settings') render()
+    }, SAVED_FLASH_MS)
+    render()
+  }
+
+  /** settings.json changed outside the page (/effort, /autocompact): the screen shows it, unless the user has changes
+   * of their own on it, which are not overwritten under their hands. */
+  function refreshSettings(settings, connected = []) {
+    if (state.view !== 'settings' || isDirty() || state.saving || !settings?.setup?.completed) return
+    state.settings = settings
+    state.saved = JSON.stringify(settings)
+    state.connected = new Set(connected)
+    state.ui.signedIn = isSignedIn(settings, connected)
+    render()
   }
 
   // ---- navigation -----------------------------------------------------------------------------
@@ -502,7 +668,7 @@ export function createOnboarding(env) {
     state.saving = true
     state.error = null
     render()
-    const reply = await request({ type: 'saveSettings', settings: finish(state.settings, state.editing ? undefined : state.mode) })
+    const reply = await request({ type: 'saveSettings', settings: finish(state.settings, state.mode) })
     state.saving = false
     if (reply.type === 'saved') {
       state.view = 'done'
@@ -520,8 +686,7 @@ export function createOnboarding(env) {
   function back() {
     const previous = previousStep(ids(), state.step)
     if (previous !== 'welcome') return go(previous)
-    // Before the first step: the welcome screen, or the summary when editing an existing setup.
-    if (state.editing) return go('review')
+    // Before the first step: the welcome screen.
     state.view = 'welcome'
     state.error = null
     render()
@@ -685,7 +850,8 @@ export function createOnboarding(env) {
   /** A credential that is already on disk is validated once, when the sign-in step opens. If it still
    * works the flow goes on by itself (quick or full) instead of asking for it again. */
   function maybeCheckStoredCredential() {
-    if (state.view !== 'step' || state.step !== 'auth') return
+    const onSignIn = (state.view === 'step' && state.step === 'auth') || (state.view === 'settings' && state.section === 'provider')
+    if (!onSignIn) return
     const m = module()
     if (!m || !state.connected.has(credentialFor(state.settings.provider.id))) return
     const slot = m.auth === 'key' ? state.ui.key : state.ui.oauth
@@ -841,6 +1007,15 @@ export function createOnboarding(env) {
     if (action === 'defaults') return go('review')
     if (action === 'edit') return go(value)
     if (action === 'close') return env.onDone ? env.onDone() : post({ type: 'closeRequest' })
+    if (action === 'settings-open') return openSection(value)
+    if (action === 'settings-home') {
+      state.section = null
+      state.leaving = false
+      return render()
+    }
+    if (action === 'settings-exit') return exitSettings()
+    if (action === 'settings-save') return saveSettings()
+    if (action === 'settings-discard') return discardSettings()
     if (action === 'pick') return pick(field, value)
     if (action === 'toggle') return toggleField(field)
     if (action === 'reveal') {
@@ -914,6 +1089,9 @@ export function createOnboarding(env) {
   const snapshot = () => ({
     view: state.view,
     step: state.step,
+    section: state.section,
+    dirty: isDirty(),
+    leaving: state.leaving,
     mode: state.mode,
     editing: state.editing,
     signedIn: state.ui.signedIn,
@@ -924,5 +1102,5 @@ export function createOnboarding(env) {
     key: state.ui.key.status,
   })
 
-  return { start, render, snapshot, onOpen }
+  return { start, render, snapshot, onOpen, refreshSettings }
 }

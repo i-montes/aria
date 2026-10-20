@@ -53,6 +53,7 @@
 //   data-chat="memory-undo"                                   undo the last forget (backend call)
 
 import { esc } from '../../onboarding/components.js'
+import { renderPanelHead } from './panelhead.js'
 
 export const TEXTS = {
   en: {
@@ -283,7 +284,6 @@ export function selectMemories(memories, ui) {
 // --- rendering -------------------------------------------------------------------------------
 
 const ICON = {
-  back: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>',
   search: '<svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8A8A94" stroke-width="2" stroke-linecap="round" style="flex: 0 0 15px"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>',
   clear: '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"></path></svg>',
   sort: '<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4"></path></svg>',
@@ -373,11 +373,7 @@ export function renderMemory(props, ui, t) {
     : ''
 
   return `<div class="p-memory">
-  <div class="p-memory-top">
-    <button type="button" class="p-memory-back" data-chat="memory-back" aria-label="${esc(t('chat.memory.back'))}">${ICON.back}</button>
-    <div class="p-memory-heading"><h2 class="p-memory-h">${esc(t('chat.memory.title'))}</h2><span class="p-memory-store">${esc(`engram · ${project}`)}</span></div>
-    <span class="p-memory-active">${esc(t('chat.memory.active', { n: sel.active.length }))}</span>
-  </div>
+  ${renderPanelHead({ back: { attrs: 'data-chat="memory-back"', label: t('chat.memory.back') }, title: t('chat.memory.title'), meta: `engram · ${project}`, aside: t('chat.memory.active', { n: sel.active.length }) })}
   <div class="p-memory-search">
     ${ICON.search}
     <label class="p-memory-sr" for="p-memory-search">${esc(t('chat.memory.search'))}</label>

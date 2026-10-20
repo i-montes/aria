@@ -39,8 +39,8 @@ entry) and a change applies when each session's run settles. Left:
 - A settings change restarts the running Pis only when it touches what Pi reads at start (persona, experts, its
   settings, `mcp.json`, the shim). A new compaction percent from the settings screen therefore applies at the next start;
   `/autocompact` in a session applies it at once, as before.
-- The settings screen refreshes after an outside change (`/effort`, `/autocompact`) only on its summary; a step being
-  edited keeps what is on screen, and saving it writes those values.
+- The settings screen shows an outside change (`/effort`, `/autocompact`) at once, unless it has changes of the
+  reader's own that are not saved yet: those stay on screen, and saving them writes them over the outside change.
 
 ## Parity (phase 2, part 2d — done)
 

@@ -54,16 +54,13 @@ const handlers = {
     if (message.hotkey) state.hotkey = message.hotkey
   },
   // settings.json changed outside the page (/effort or /autocompact in a session, an editor): read it again. An open
-  // settings screen is refreshed only on its summary, never under the reader's hands in the middle of a step.
+  // settings screen shows it unless the reader has changes of their own on it (onboarding.refreshSettings).
   settingsChanged: () =>
     booted.then(async () => {
       const reply = await request({ type: 'loadSettings' })
       if (!reply.settings) return
       chat.setSettings(reply.settings)
-      const at = onboarding.snapshot()
-      // Only the summary on screen is refreshed: not a step being edited, and not the "done" screen a save just showed
-      // (the dock's own save is a change too).
-      if (state.mode === 'setup' && at.editing && at.view === 'step' && at.step === 'review') onboarding.start(reply.settings, reply.connected)
+      if (state.mode === 'setup') onboarding.refreshSettings(reply.settings, reply.connected)
     }),
   // These need the catalogs, so they wait for the boot to finish.
   notice: () => booted.then(showNotice),
@@ -163,7 +160,7 @@ const chat = createChatView({
   t,
   send: post,
   request,
-  // The settings are the onboarding's review step, loaded fresh from disk.
+  // The settings screen, loaded fresh from disk.
   onSettings: async () => {
     const reply = await request({ type: 'loadSettings' })
     onboarding.start(reply.settings, reply.connected)

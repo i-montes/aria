@@ -123,21 +123,24 @@ describe('abandoning a sign-in', () => {
 })
 
 describe('reopening Aria', () => {
-  test('after setup is saved, opening the dock again shows the settings, not the finished screen', async () => {
+  test('after the setup is saved, opening the dock again shows the settings, not the finished screen', async () => {
     const h = harness()
-    h.ob.start(completed)
-    expect(h.ob.snapshot()).toMatchObject({ view: 'step', step: 'review', editing: true })
-    h.click('next') // "Save changes"
-    const save = h.lastRequest()
-    expect(save.message.type).toBe('saveSettings')
-    save.resolve({ type: 'saved' })
+    h.ob.start(null, ['opencode-go:api_key'])
+    h.click('choose', undefined, 'quick')
+    h.click('pick', 'provider', 'opencode-go')
+    h.click('next') // sign-in: the stored key is checked
+    h.lastRequest().resolve(keyOk)
+    await flush()
+    h.click('next') // assistant -> review
+    h.click('next') // "Start using Aria"
+    h.lastRequest().resolve({ type: 'saved' })
     await flush()
     expect(h.ob.snapshot().view).toBe('done')
     h.ob.onOpen()
     expect(h.lastRequest().message.type).toBe('loadSettings')
     h.lastRequest().resolve({ type: 'settings', settings: completed })
     await flush()
-    expect(h.ob.snapshot()).toMatchObject({ view: 'step', step: 'review', editing: true })
+    expect(h.ob.snapshot()).toMatchObject({ view: 'settings', section: null, editing: true })
   })
 
   test('opening the dock in the middle of a setup keeps the place', () => {
@@ -384,7 +387,7 @@ describe('a service that is connected shows no way to connect it again', () => {
   const open = (connected, ...services) => {
     const h = harness()
     h.ob.start(withServices(...services), ['opencode-go:api_key', ...connected])
-    h.click('edit', undefined, 'integrations')
+    h.click('settings-open', undefined, 'integrations')
     return h
   }
   const tavilyControls = ['data-field="tavilyKey"', 'save-tavilyKey']
@@ -433,7 +436,7 @@ describe('every control redraws the step from the settings (the components draw 
   const agentsStep = () => {
     const h = harness()
     h.ob.start(completed, ['opencode-go:api_key'])
-    h.click('edit', undefined, 'agents')
+    h.click('settings-open', undefined, 'agents')
     return h
   }
 
@@ -500,5 +503,110 @@ describe('a reply that arrives after the user moved on', () => {
     h.click('pick', 'provider', 'anthropic-oauth')
     h.click('next')
     expect(h.ob.snapshot()).toMatchObject({ step: 'auth', oauth: 'checking', canContinue: false })
+  })
+})
+
+describe('the settings screen', () => {
+  const settingsHarness = (connected = ['opencode-go:api_key'], settings = completed) => {
+    const h = harness()
+    h.ob.start(settings, connected)
+    return h
+  }
+
+  test('a finished setup opens on the overview, one card per section', () => {
+    const h = settingsHarness()
+    expect(h.ob.snapshot()).toMatchObject({ view: 'settings', section: null, dirty: false })
+    for (const id of ['assistant', 'provider', 'models', 'router', 'context', 'integrations', 'safety', 'agents']) {
+      expect(h.root.innerHTML).toContain(`data-action="settings-open" data-value="${id}"`)
+    }
+    expect(h.root.innerHTML).not.toContain('settings-save') // nothing changed, nothing to save
+  })
+
+  test('a section shows every step it groups, with the quota only for a provider that has one', () => {
+    const h = settingsHarness()
+    h.click('settings-open', undefined, 'provider')
+    expect(h.root.innerHTML).toContain('ob.provider.title')
+    expect(h.root.innerHTML).toContain('ob.auth.title')
+    expect(h.root.innerHTML).toContain('ob.quota.title')
+    const claude = { ...applyProvider(defaultSettings('en'), 'anthropic-api'), setup: { completed: true, mode: 'full' } }
+    const other = settingsHarness(['anthropic:api_key'], claude)
+    other.click('settings-open', undefined, 'provider')
+    expect(other.root.innerHTML).not.toContain('ob.quota.title')
+  })
+
+  test('a change shows the save bar; saving writes it and keeps the reader on the section', async () => {
+    const h = settingsHarness()
+    h.click('settings-open', undefined, 'safety')
+    h.click('toggle', 'commit')
+    expect(h.ob.snapshot().dirty).toBe(true)
+    expect(h.root.innerHTML).toContain('settings-save')
+    h.click('settings-save')
+    const save = h.lastRequest()
+    expect(save.message.type).toBe('saveSettings')
+    expect(save.message.settings.git.commitWithoutAsking).toBe(true)
+    expect(save.message.settings.setup).toEqual(completed.setup)
+    save.resolve({ type: 'saved' })
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ view: 'settings', section: 'safety', dirty: false })
+    expect(h.root.innerHTML).toContain('settings.saved')
+  })
+
+  test('discarding brings back what is on disk', () => {
+    const h = settingsHarness()
+    h.click('settings-open', undefined, 'safety')
+    h.click('toggle', 'commit')
+    h.click('settings-discard')
+    expect(h.ob.snapshot().dirty).toBe(false)
+    expect(h.pending).toHaveLength(0)
+  })
+
+  test('leaving with changes asks first; leaving without them goes back to the chat', async () => {
+    const h = settingsHarness()
+    h.click('settings-exit')
+    expect(h.sent).toContainEqual({ type: 'closeRequest' }) // no onDone in the harness: the dock closes
+    const g = settingsHarness()
+    g.click('settings-open', undefined, 'context')
+    g.click('toggle', 'memory')
+    g.click('settings-exit')
+    expect(g.ob.snapshot()).toMatchObject({ view: 'settings', leaving: true })
+    expect(g.sent).not.toContainEqual({ type: 'closeRequest' })
+    g.click('settings-save')
+    g.lastRequest().resolve({ type: 'saved' })
+    await flush()
+    expect(g.sent).toContainEqual({ type: 'closeRequest' })
+  })
+
+  test('a section with something to finish is marked and blocks the save', () => {
+    const settings = structuredClone(completed)
+    settings.integrations.services = [{ id: 'notion', name: 'notion', auth: 'oauth' }]
+    const h = settingsHarness(['opencode-go:api_key'], settings)
+    expect(h.root.innerHTML).toContain('settings.attention')
+    h.click('settings-open', undefined, 'safety')
+    h.click('toggle', 'commit')
+    expect(h.root.innerHTML).toContain('settings.blocked')
+    expect(h.root.innerHTML).toMatch(/data-action="settings-save"[^>]*disabled/)
+    h.click('settings-save')
+    expect(h.pending).toHaveLength(0)
+  })
+
+  test('opening the provider section checks the stored key, without moving anywhere', async () => {
+    const h = settingsHarness()
+    h.click('settings-open', undefined, 'provider')
+    expect(h.lastRequest().message).toMatchObject({ type: 'checkKey', provider: 'opencode-go' })
+    h.lastRequest().resolve(keyOk)
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ view: 'settings', section: 'provider', key: 'saved' })
+  })
+
+  test('an outside change refreshes the screen, but never over the reader\'s own changes', () => {
+    const outside = structuredClone(completed)
+    outside.compaction.percent = 90
+    const h = settingsHarness()
+    h.ob.refreshSettings(outside, ['opencode-go:api_key'])
+    expect(h.root.innerHTML).toContain('ob.val.compaction')
+    expect(h.ob.snapshot().dirty).toBe(false)
+    h.click('toggle', 'memory') // a change of the reader's own
+    h.ob.refreshSettings(completed, ['opencode-go:api_key'])
+    expect(h.ob.snapshot().dirty).toBe(true)
   })
 })

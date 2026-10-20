@@ -79,14 +79,21 @@ const script = `(async () => {
   window.aria.receive({ type: 'settingsChanged' }); await wait(80)
   check('the page reads the settings again when they change outside it', window.__sent.filter((m) => m.type === 'loadSettings').length === loadsBefore + 1)
 
-  // 0c. saving from the settings screen shows "done", and the dock's own change notice does not take it back
+  // 0c. the settings screen: the gear opens its overview (not the setup); a change shows the save bar, saving keeps the
+  // reader there, and the dock's own change notice does not take the screen away
   $('[data-chat="settings"]').click(); await wait(250)
-  $('#flow [data-action="next"]')?.click(); await wait(250)
-  const doneShown = () => !!$('#flow [data-action="close"]')
-  check('saving the settings shows the done screen', doneShown())
+  check('the gear opens the settings overview', !!$('#flow [data-action="settings-open"][data-value="agents"]') && !$('#flow [data-action="next"]'))
+  $('#flow [data-action="settings-open"][data-value="safety"]')?.click(); await wait(120)
+  $('#flow [data-action="toggle"][data-field="commit"]')?.click(); await wait(80)
+  check('a change shows the save bar', !!$('#flow [data-action="settings-save"]:not(:disabled)'))
+  $('#flow [data-action="settings-save"]')?.click(); await wait(250)
+  const savedShown = () => !!$('#flow .settings-bar .state.ok') && !!$('#flow [data-action="settings-home"]')
+  check('saving keeps the section and says it was saved', savedShown(), $('#flow').textContent.slice(0, 80))
   window.aria.receive({ type: 'settingsChanged' }); await wait(200)
-  check('the change notice that follows the save does not take the done screen away', doneShown(), $('#flow').textContent.slice(0, 80))
-  $('#flow [data-action="close"]')?.click(); await wait(150)
+  check('the change notice that follows the save keeps the section', !!$('#flow [data-action="settings-home"]'), $('#flow').textContent.slice(0, 80))
+  $('#flow [data-action="settings-home"]')?.click(); await wait(80)
+  $('#flow [data-action="settings-exit"]')?.click(); await wait(150)
+  check('leaving the settings goes back to the chat', document.body.classList.contains('mode-chat'))
 
   // 1. the textarea survives a run starting, text appearing and the model changing
   typeIn('half-typed')
@@ -342,9 +349,9 @@ const script = `(async () => {
   check('a tool call being written never shows its JSON', !$('#chat-list').textContent.includes('"command"'), $('#chat-list').textContent.slice(-120))
   on({ type: 'agent_settled', aborted: false })
 
-  // 9. the setup (settings): a control redraws the step through its components, keeping the scroll and the focus
+  // 9. the settings: a control redraws the section through its components, keeping the scroll and the focus
   $('[data-chat="settings"]').click(); await wait(200)
-  $('#flow [data-action="edit"][data-value="agents"]')?.click(); await wait(120)
+  $('#flow [data-action="settings-open"][data-value="agents"]')?.click(); await wait(120)
   const content = $('#content')
   content.scrollTop = content.scrollHeight
   const kept = content.scrollTop

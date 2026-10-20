@@ -19,7 +19,7 @@ const rewrite = (text: string) => text.replaceAll('aria://app/', '/')
 const sandbox = `<script>
 (() => {
   const params = new URLSearchParams(location.search)
-  const settings = params.has('first-run') ? null : ${JSON.stringify(golden)}
+  let settings = params.has('first-run') ? null : ${JSON.stringify(golden)}
   if (settings && params.get('lang')) settings.assistant.language = params.get('lang')
   window.__sent = []
   const COMMANDS = [
@@ -43,7 +43,8 @@ const sandbox = `<script>
       const r = (x) => window.aria.receive({ id: m.id, ...x })
       if (m.type === 'loadSettings') r({ type: 'settings', settings, exists: !!settings, problem: null, connected: ['opencode-go:api_key'] })
       else if (m.type === 'sessionsLoad') r({ type: 'sessions', sessions: [{ id: 's1', title: 'Fix the failing build' }], active: 's1' })
-      else if (m.type === 'saveSettings') r({ type: 'saved' })
+      else if (m.type === 'saveSettings') { settings = m.settings; r({ type: 'saved' }) }
+      else if (m.type === 'checkKey') r({ type: 'keyResult', ok: true, error: null })
       else if (m.type === 'saveKey') r({ type: 'keyResult', ok: m.key !== 'bad', error: m.key === 'bad' ? 'key-rejected' : null })
       else if (m.type === 'startOauth') { r({ type: 'oauthUrl', url: 'https://claude.ai/oauth/authorize?x=1' }); setTimeout(() => r({ type: 'oauthResult', ok: true, error: null }), 300) }
       else if (m.type === 'installClaudeBridge') setTimeout(() => (window.sim.installError ? r({ type: 'error', code: window.sim.installError }) : r({ type: 'saved' })), 300)
