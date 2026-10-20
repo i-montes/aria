@@ -18,6 +18,8 @@ export function createChat() {
   return {
     workdir: '', running: false, engine: 'idle', model: null, thinking: null, context: null, problem: null,
     messages: [], dialogs: [], queue: [], delivered: [], phase: 'working', startedAt: null, quota: [], giveBack: null, agents: [], turnFrom: 0,
+    // Until Pi sends the session's history (empty for a new one) the thread shows that it is loading, timed from here.
+    loaded: false, loadingSince: Date.now(),
   }
 }
 
@@ -289,6 +291,7 @@ function reduceEvent(state, event) {
       // goes in front, and so do notices that came first. While only a reply streams (no message of the owner on the
       // page), it is left alone.
       const past = fromHistory(event.messages)
+      state = { ...state, loaded: true }
       if (!state.messages.length) return withMessages(state, past)
       const first = state.messages.find((m) => m.kind === 'user')
       if (!first) return state.running || state.messages.some((m) => m.kind === 'assistant' && !m.done) ? state : withMessages(state, [...past, ...state.messages])
@@ -339,7 +342,7 @@ export function reduce(state, message) {
       return { ...state, quota: Array.isArray(message.windows) ? message.windows : state.quota }
     case 'chatEngine':
       return message.state === 'stopped' || message.state === 'exited'
-        ? { ...state, engine: message.state, running: false, startedAt: null }
+        ? { ...state, engine: message.state, running: false, startedAt: null, loaded: true }
         : { ...state, engine: message.state }
     case 'chatDialog': {
       const dialog = { id: message.id, method: message.method, request: message.request, card: checkedCard(message.request) }

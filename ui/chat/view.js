@@ -141,6 +141,13 @@ function keepingFocus(container, redraw) {
 /** The composer/question swap (chat.css): the rows fold in 380 ms; the design hands the keyboard back at 420 ms. */
 const SWAP_MS = 480
 
+/** The saved tabs to wake when the dock starts, so each one's conversation is there before the dock opens: the active
+ * tab first (its Pi is the one wanted soonest), then the others in their order. */
+export const preloadOrder = (tabs) => {
+  const ids = (tabs?.sessions ?? []).map((s) => s.id)
+  return ids.includes(tabs?.active) ? [tabs.active, ...ids.filter((id) => id !== tabs.active)] : ids
+}
+
 export function createChatView({ root, t, send, request, onSettings, makeId = () => crypto.randomUUID() }) {
   let tabs = createTabs(null, makeId)
   const chats = new Map() // session id -> its conversation (state.js)
@@ -1244,6 +1251,10 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       render()
     },
     mount,
+    /** Wakes every saved tab's Pi without showing anything: each one's history arrives in its own state. */
+    preload() {
+      for (const session of preloadOrder(tabs)) post({ type: 'chatLoad' }, session)
+    },
     show() {
       post({ type: 'chatLoad' })
       render()

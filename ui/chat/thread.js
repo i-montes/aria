@@ -68,6 +68,10 @@ export function renderThread(state, ui = {}, t) {
     .join('')
   const queued = state.queue.map((q, i) => `<div class="thread-item">${renderUser({ text: q.text, queued: true, id: String(i) }, {}, t)}</div>`).join('')
   const working = state.running ? `<div class="thread-item thread-working">${renderWorking({ phase: state.phase, startedAt: state.startedAt }, { now: ui.now ?? Date.now() }, t)}</div>` : ''
-  const empty = !state.messages.length && !state.running && !state.queue.length && !cards ? renderEmptyThread(t) : ''
-  return empty + entries + cards + working + queued
+  const blank = !state.messages.length && !state.running && !state.queue.length && !cards
+  // A session whose history has not arrived yet is loading, not new (unless its Pi cannot start: the problem shows).
+  const loading = blank && state.loaded === false && !state.problem
+  const empty = blank && !loading ? renderEmptyThread(t) : ''
+  const loader = loading ? `<div class="thread-item thread-working">${renderWorking({ label: t('chat.loading'), startedAt: state.loadingSince }, { now: ui.now ?? Date.now() }, t)}</div>` : ''
+  return empty + loader + entries + cards + working + queued
 }

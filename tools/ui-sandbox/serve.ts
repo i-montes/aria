@@ -55,6 +55,9 @@ const sandbox = `<script>
         else if (inner.type === 'setModel') { w({ type: 'saved' }); sim.sess(m.session, { type: 'chatState', workdir: '/home/ana/Projects/aria', running: false, model: inner.model, thinking: 'medium', context: 22, problem: null }) }
         else if (inner.type === 'chatLoad') { sim.sess(m.session, { type: 'chatQuota', windows: [{ id: '5h', label: '5h', percent: 42, resetsAt: new Date(Date.now() + 3 * 3600e3 + 20 * 60e3).toISOString() }, { id: 'week', label: 'Week', percent: 17, resetsAt: new Date(Date.now() + 5 * 86400e3).toISOString() }, { id: 'month', label: 'Month', percent: 83, resetsAt: null }, { id: 'fable', label: 'Fable', percent: 96, resetsAt: new Date(Date.now() + 2 * 86400e3).toISOString() }] }) }
         if (inner.type === 'chatLoad') sim.sess(m.session, { type: 'chatState', workdir: '/home/ana/Projects/aria', running: false, model: sim.model, thinking: 'medium', context: sim.context, problem: null })
+        // Like the dock: Pi answers with the session's history (empty here), which ends the page's loading state.
+        // ARIA_SANDBOX_HISTORY_DELAY=<ms> holds it back, to see the loading state.
+        if (inner.type === 'chatLoad') setTimeout(() => sim.sess(m.session, { type: 'chatEvent', event: { type: 'history', messages: [] } }), Number(process.env.ARIA_SANDBOX_HISTORY_DELAY ?? 0))
         else if (inner.type === 'chatSend' && inner.text === 'REFUSE') sim.sess(m.session, { type: 'chatEvent', event: { type: 'command_failed', command: 'prompt', error: 'Cannot submit a prompt while compaction is in progress', text: 'REFUSE' } })
         else if (inner.type === 'chatSend' && inner.behavior === 'followUp') { sim.queue.push(inner.text); sim.ev({ type: 'queue_update', steering: [], followUp: [...sim.queue] }, m.session) }
         else if (inner.type === 'chatClearQueue') { sim.queue = [...(inner.keep ?? [])]; sim.ev({ type: 'queue_update', steering: [], followUp: [...sim.queue] }, m.session) }

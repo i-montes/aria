@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { createChat } from './state.js'
 import { chatTexts } from './texts.js'
-import { insertFile, keepRenameField, pickerQuery, renderDialog, renderPath, renderProblem, renderUndo, shortPath } from './view.js'
+import { insertFile, keepRenameField, pickerQuery, renderDialog, renderPath, renderProblem, renderUndo, preloadOrder, shortPath } from './view.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const ev = (event) => ({ type: 'chatEvent', event })
@@ -138,4 +138,12 @@ describe('texts', () => {
     const texts = chatTexts()
     expect(Object.keys(texts.es).sort()).toEqual(Object.keys(texts.en).sort())
   })
+})
+
+describe('preloading the saved tabs', () => {
+  test('the active tab first, then the others in their order', () => {
+    const tabs = { sessions: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], active: 'b' }
+    expect(preloadOrder(tabs)).toEqual(['b', 'a', 'c'])
+  })
+  test('no tabs, nothing to load', () => expect(preloadOrder({ sessions: [], active: null })).toEqual([]))
 })

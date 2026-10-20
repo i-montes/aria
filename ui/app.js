@@ -225,6 +225,8 @@ async function boot() {
   chat.setSessions(await request({ type: 'sessionsLoad' }))
   onboarding.start(reply.settings, reply.connected)
   setMode(reply.settings?.setup?.completed ? 'chat' : 'setup')
+  // The dock starts with the session: every tab that was open loads its conversation now, not when the dock opens.
+  if (state.mode === 'chat') chat.preload()
   renderProblem()
   if (document.body.classList.contains('open')) {
     if (state.mode === 'chat') chat.show()

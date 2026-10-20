@@ -96,6 +96,10 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
   noted a "model change" before the history arrived and then dropped the history. Notices that come before the history
   now stay after it.
 - Updating Aria restarts the dock: a run in progress at that moment stops, though the chat and its context come back.
+- The dock wakes every saved tab's Pi when it starts (the active one first), so the conversations are there before it
+  opens; each open tab keeps a Pi and its MCP servers running. Until a tab's history arrives it shows "Loading the
+  conversation". Closing a tab stops its Pi and everything in that Pi's process group; a program that leaves the group
+  on purpose (`setsid`, a daemon) is not followed.
 
 ## Known limits of the page (from the review, deferred)
 

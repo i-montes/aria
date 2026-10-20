@@ -31,6 +31,7 @@ export const PARTS = [answers, assistant, commands, composer, connect, divider, 
 const OWN = {
   en: {
     'chat.empty.title': 'NEW SESSION',
+    'chat.loading': 'Loading the conversation',
     'chat.empty.text': 'Ask for something, or type / to see the commands.',
     'chat.stoppedByYou': 'stopped by you',
     'chat.compacted': 'context compacted',
@@ -54,6 +55,7 @@ const OWN = {
   },
   es: {
     'chat.empty.title': 'SESIÓN NUEVA',
+    'chat.loading': 'Cargando la conversación',
     'chat.empty.text': 'Pídele algo, o escribe / para ver los comandos.',
     'chat.stoppedByYou': 'detenido por ti',
     'chat.compacted': 'contexto compactado',

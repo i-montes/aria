@@ -11,10 +11,22 @@ const run = (state, ...messages) => messages.reduce(reduce, state)
 const dialog = (id, card, extra = {}) => ({ type: 'chatDialog', id, method: 'select', request: { title: JSON.stringify({ aria: 1, ...card }), options: ['x'], ...extra }, hidden: false })
 
 describe('the thread', () => {
-  test('an empty session shows the design\'s start hint', () => {
-    const html = renderThread(createChat(), {}, t)
+  test('an empty session shows the design\'s start hint once its history came back empty', () => {
+    const html = renderThread(run(createChat(), ev({ type: 'history', messages: [] })), {}, t)
     expect(html).toContain('NEW SESSION')
     expect(html).toContain('type /')
+  })
+
+  test('until its history arrives a session shows the working line, loading the conversation', () => {
+    const html = renderThread(createChat(), {}, t)
+    expect(html).toContain('Loading the conversation')
+    expect(html).toContain('thread-working')
+    expect(html).not.toContain('NEW SESSION')
+  })
+
+  test('a session whose Pi cannot start shows no loader', () => {
+    const state = run(createChat(), { type: 'chatState', workdir: '/w', running: false, model: null, problem: 'node-missing' })
+    expect(renderThread(state, {}, t)).not.toContain('Loading the conversation')
   })
 
   test('user and assistant text is escaped and the user message gets a DOM id for the index', () => {
@@ -42,7 +54,7 @@ describe('the thread', () => {
     const html = renderThread(state, { now: Date.now() }, t)
     expect(html).toContain('Reading files')
     expect(html).toContain('data-since=')
-    expect(renderThread(createChat(), {}, t)).not.toContain('p-working')
+    expect(renderThread(run(createChat(), ev({ type: 'history', messages: [] })), {}, t)).not.toContain('p-working')
   })
 
   test('queued messages show after the thread with a cancel', () => {
