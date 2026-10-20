@@ -40,8 +40,7 @@
 .p-cmd-kbd { padding: 1px 6px; border: 1px solid #34343B; border-radius: 5px; background: #1C1C21; color: #B4B4BC;
   font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 16px; }
 
-/* A row is /name and a one-line description; hovering (or focusing) it shows the whole description. */
+/* A row is /name and a one-line description, also on hover (the owner's choice); the whole text is its title. */
 .p-cmd-row { align-items: start; }
 .p-cmd-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
 .p-cmd-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
-.p-cmd-row:hover .p-cmd-desc, .p-cmd-row:focus-visible .p-cmd-desc { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }

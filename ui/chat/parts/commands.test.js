@@ -143,14 +143,14 @@ describe('renderCommandPicker', () => {
     expect(html).toContain('/</span>')
   })
 
-  test('the description is one line in the row, and the whole of it is in the tooltip and shown on hover', () => {
+  test('the description is one line in the row, also on hover, and the whole of it is in the tooltip', () => {
     const long = 'Plan with the planning model, then write the spec and split it into phases before building anything'
     const html = renderCommandPicker(picker({ items: [{ name: 'plan', description: long, source: 'extension' }] }), {}, t)
     expect(html).toContain(`title="${long}"`)
     expect(html).toContain('p-cmd-desc')
     const css = readFileSync(new URL('./commands.css', import.meta.url), 'utf8')
     expect(css).toMatch(/\.p-cmd-desc\s*\{[^}]*text-overflow:\s*ellipsis/)
-    expect(css).toMatch(/\.p-cmd-row:hover \.p-cmd-desc[^{]*\{[^}]*white-space:\s*normal/)
+    expect(css).not.toMatch(/\.p-cmd-row:(hover|focus-visible)[^{]*\.p-cmd-desc[^{]*\{[^}]*white-space:\s*normal/)
   })
 
   test('a description with markup in its tooltip is escaped', () => {
