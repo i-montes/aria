@@ -46,6 +46,7 @@ Check kinds:
 | 13 | Effort auto by default | test | `extensions/lib/config.test.ts::without aria.json every value is today` | pass 2026-10-19 |
 | 14 | `trust.json` trusts the project | n/a | Pi 1.3.0 asks for project trust only in interactive mode (`dist/core/trust-manager.js` is used by `modes/interactive` only); the dock runs Pi in RPC mode. | n/a |
 | 15 | Persona, word for word with the owner's settings | test | `crates/aria-core/src/persona.rs::the_owners_settings_render_his_system_md_word_for_word` | pass 2026-10-19 |
+| 15 | The date comes in a hidden `[now]` line, not from `date` | difference | The owner asked for it (2026-10-19): the `clock` extension sends the date and time with each message, and the persona (and its golden copy) says to use it. | difference |
 | 16 | Engram with `--project` and 7 direct tools | test | `crates/aria-core/src/mcp.rs::memory_on_writes_arias_engram_entry_with_the_project_and_its_own_database` | pass 2026-10-19 |
 | 16 | The owner's 53 memories | difference | Aria's Engram has its own database in `~/.aria/engram` (the owner's decision, 2026-10-19), so the memories in `~/.engram` are not in Aria's memory. | difference |
 | 17 | Tavily, with its key in `mcp.json` (mode 600) | test | `crates/aria-core/src/mcp.rs::tavily_is_written_in_pis_mcp_format_with_mode_600` | pass 2026-10-19 |

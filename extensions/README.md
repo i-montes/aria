@@ -13,6 +13,7 @@ every time a session starts; an extension the owner edited there is kept (see `c
 | `ask-user` | the `ask_user` tool: 1–4 questions with options |
 | `subagent-mode` | subagents (`pi --mode json` children) get a lean prompt (`SUBAGENT.md`) |
 | `subagent-watch` | children stream what they do to a socket so it can be watched |
+| `clock` | Aria's own: each user message gets a hidden `[now]` line with the local date, time, weekday and time zone |
 
 Tests: `bun test extensions`.
 

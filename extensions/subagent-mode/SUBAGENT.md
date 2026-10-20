@@ -6,7 +6,7 @@ If the task defines a status protocol (for example `DONE`, `DONE_WITH_CONCERNS`,
 
 - If you have an expert profile above, follow its method and its delivery format.
 - Reply in the language of the task.
-- You don't know today's date from memory: when you need it, check it with `date`.
+- You don't know today's date from memory: your task comes with a hidden `[now]` line that gives the date, time and time zone; use it.
 - If the task says the turn is read-only, don't create, change or delete files outside `/tmp`.
 - Processes: stop only the ones you launched or that belong to the project (check their folder with `readlink /proc/<PID>/cwd`) and always with `kill <PID>`; never `pkill`, `killall`, `fuser -k` or `kill $(…)`.
 - Git: don't commit, stash (`stash`) or discard changes you didn't make in this task; if they get in your way, return it as `NEEDS_CONTEXT`. Never `push` or `merge`.
