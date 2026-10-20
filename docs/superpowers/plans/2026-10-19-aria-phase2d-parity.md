@@ -174,12 +174,8 @@
   - Keep each file's cases and logic word for word, except for these changes:
     - The Pi runtime comes from `modelRuntime()`.
     - Experts are read from the repo's `agent-files/agents/` (`new URL('../../agent-files/agents', import.meta.url)`), not from `~/.pi/agent/agents`.
-    - Personal data is replaced with neutral equivalents that keep the case's meaning:
-      - `/home/ana/Projects/acme/checkout-widget` → `~/Projects/acme/checkout-widget`, written through `projectsDir()` where code builds a path;
-      - `checkout-api` → `checkout-api`;
-      - `~/Projects/acme` → `~/Projects/acme`;
-      - `elespectador.com` → `elespectador.com`;
-      - the Notion task "Rifatón" → "Rifatón".
+    - Personal data (the owner's project paths, his employer's site and a Notion task's name) is replaced with neutral
+      equivalents that keep each case's meaning; project paths are built through `projectsDir()`.
     - The bash classifier's `cwd` becomes `${projectsDir()}/acme/checkout-widget`.
   - In `accept.sh`:
     - `pi` is `"$ARIA_PI"`;
@@ -187,7 +183,7 @@
     - the escape file is `$HOME/aria-sbx-escape.txt`;
     - case 3 reads the key prefix from `"$ARIA_REAL_AUTH"` and asks the model to read `~/.aria/auth.json` (Aria's secrets file).
 - [ ] **Step 4: Run the unit test and the extension suite, then scan**
-  - Run: `bun test extensions && git diff --cached --stat && grep -rnE 'ana|/home/[a-z]+/|acme|silla' extensions/jev-router/eval.ts extensions/sandbox/review-eval.ts extensions/sandbox/accept.sh`
+  - Run: `bun test extensions && git diff --cached --stat && grep -rnE '<owner-user>|/home/[a-z]+/|<employer>' extensions/jev-router/eval.ts extensions/sandbox/review-eval.ts extensions/sandbox/accept.sh`
   - Expected: the suite passes and the grep prints nothing. `bun test` does not pick up `eval.ts` or `review-eval.ts`, because their names have no `.test.`.
 - [ ] **Step 5: Commit**
   - `feat(extensions): the owner's router and sandbox evals, run against Aria's pinned Pi through a scratch home`
@@ -333,5 +329,5 @@
   - Write the docs lines listed under **Files**.
   - Run `bun test tools/parity`. Expected: pass.
 - [ ] **Step 4: Scan and commit**
-  - Run: `git diff --cached | grep -nEi 'ana|/home/[a-z]+/|sk-[a-z0-9]{12,}'`. Expected: nothing.
+  - Run: `git diff --cached | grep -nEi '<owner-user>|/home/[a-z]+/|sk-[a-z0-9]{12,}'`. Expected: nothing.
   - Commit: `docs: phase 2d walked: parity matrix results, pending gaps, spec status`
