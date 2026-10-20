@@ -63,11 +63,11 @@ describe('renderComposer', () => {
     expect(renderComposer({ showHints: false }, {}, t)).not.toContain('p-composer-hints')
   })
 
-  test('only "enter queues your message" is left, and only while Aria works', () => {
+  test('idle: "/ for commands" and "alt+a subagents"; while Aria works only "enter queues your message" takes their place', () => {
     const idle = renderComposer({}, {}, t)
-    expect(idle).not.toContain('chat.composer.hint')
-    expect(idle).not.toContain('alt+a')
-    expect(idle).not.toContain('p-composer-kbd')
+    expect(idle).toContain('<kbd class="p-composer-kbd">/</kbd> chat.composer.hint.commands')
+    expect(idle).toContain('<span class="p-composer-key">alt+a</span> chat.composer.hint.agents')
+    expect(idle).not.toContain('chat.composer.hint.queue')
     const busy = renderComposer({ busy: true }, {}, t)
     expect(busy).toContain('<span class="p-composer-key">enter</span> chat.composer.hint.queue')
     expect(busy).not.toContain('chat.composer.hint.commands')

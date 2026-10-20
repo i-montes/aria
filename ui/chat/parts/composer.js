@@ -25,6 +25,8 @@ export const TEXTS = {
     'chat.composer.stop': 'Stop',
     'chat.composer.queue': 'Queue message',
     'chat.composer.queueTitle': 'Queue it for when Aria finishes',
+    'chat.composer.hint.commands': 'for commands',
+    'chat.composer.hint.agents': 'subagents',
     'chat.composer.hint.queue': 'queues your message',
   },
   es: {
@@ -35,6 +37,8 @@ export const TEXTS = {
     'chat.composer.stop': 'Detener',
     'chat.composer.queue': 'Poner el mensaje en cola',
     'chat.composer.queueTitle': 'Déjalo en cola para cuando Aria termine',
+    'chat.composer.hint.commands': 'para comandos',
+    'chat.composer.hint.agents': 'subagentes',
     'chat.composer.hint.queue': 'encola tu mensaje',
   },
 }
@@ -61,15 +65,22 @@ export function renderComposer({ busy = false, hasText = false, rows = 1, showHi
   const send = busy
     ? ''
     : `<button type="button" id="chat-send" class="p-composer-btn p-composer-send" data-chat="send" aria-label="${esc(t('chat.composer.send'))}">${ICON.send}</button>`
-  // Under the input: the model (opens the picker) and, while Aria works, that Enter queues the message.
+  // Under the input: the model (opens the picker), then the shortcuts; while Aria works, only that Enter queues the message
+  // (the line has room for one hint next to the model).
   const chip = model
     ? `<button type="button" class="p-composer-model" data-chat="open-models"${modelTitle ? ` title="${esc(modelTitle)}"` : ''}>${esc(model)}</button>`
     : ''
   const hints = !showHints
     ? ''
     : `<div class="p-composer-hints">${chip}
-${busy ? `
-      <span>${key('enter')} ${esc(t('chat.composer.hint.queue'))}</span>` : ''}
+${
+        busy
+          ? `
+      <span>${key('enter')} ${esc(t('chat.composer.hint.queue'))}</span>`
+          : `
+      <span><kbd class="p-composer-kbd">/</kbd> ${esc(t('chat.composer.hint.commands'))}</span>
+      <span>${key('alt+a')} ${esc(t('chat.composer.hint.agents'))}</span>`
+      }
     </div>`
   return `<div class="p-composer">
     <div class="p-composer-box">
