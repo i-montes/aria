@@ -736,7 +736,18 @@ impl Chat {
     }
 
     /// Pi stops (stdin closed, killed after three seconds), its dialogs and notification go away, and the page is told.
+    /// What Pi started keeps running: a restart must not stop the owner's dev server.
     pub fn shutdown(&self) {
+        self.stop(false);
+    }
+
+    /// The session is closed for good: Pi stops, and so does everything it started (MCP servers, subagents, a dev
+    /// server), so nothing of a closed tab keeps running.
+    pub fn close_for_good(&self) {
+        self.stop(true);
+    }
+
+    fn stop(&self, group: bool) {
         let (stale, engine) = {
             let mut inner = self.inner.lock().unwrap();
             inner.generation += 1; // whatever the old Pi still says is ignored
@@ -753,7 +764,7 @@ impl Chat {
         };
         self.close_stale(stale);
         if let Some(engine) = engine {
-            std::thread::spawn(move || engine.close(Duration::from_secs(3)));
+            std::thread::spawn(move || if group { engine.close_group(Duration::from_secs(3)) } else { engine.close(Duration::from_secs(3)) });
             self.emit(DockMessage::ChatEngine { state: "stopped".into() });
             self.emit(self.state_message(None));
         }
@@ -906,7 +917,7 @@ impl Sessions {
                 self.closed.lock().unwrap().insert(session.clone());
                 let chat = self.chats.lock().unwrap().remove(&session);
                 if let Some(chat) = chat {
-                    chat.shutdown();
+                    chat.close_for_good();
                     chat.forget_watch();
                 }
             }
@@ -1915,6 +1926,27 @@ mod tests {
             DockMessage::ChatAgents { agents } => assert_eq!(agents[0]["kind"], "active"),
             _ => unreachable!(),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn closing_a_session_stops_what_its_pi_started() {
+        let s = sessions_harness();
+        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        s.sessions.test_send_raw("aa", "background");
+        let pid: u32 = match wait_session(&s, "the background process", "aa", |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "background")) {
+            DockMessage::ChatEvent { event } => event["pid"].as_str().unwrap().parse().unwrap(),
+            _ => unreachable!(),
+        };
+        let alive = |pid: u32| std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| stat.rsplit(')').next().is_some_and(|rest| !rest.trim_start().starts_with('Z')));
+        assert!(alive(pid));
+        s.sessions.handle(PageMessage::SessionClose { session: "aa".into() });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while alive(pid) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(!alive(pid), "a process the closed session's Pi started is still running");
     }
 
     #[test]

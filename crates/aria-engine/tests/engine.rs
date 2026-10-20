@@ -145,3 +145,27 @@ fn an_unset_variable_does_not_reach_the_child() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Is that process still running (not gone, not a zombie waiting to be reaped)?
+fn alive(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| stat.rsplit(')').next().is_some_and(|rest| !rest.trim_start().starts_with('Z')))
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn closing_the_group_stops_what_the_child_started() {
+    // The child leaves a process in the background (an MCP server, a dev server) and keeps running itself.
+    let probe = r#"sleep 300 & printf '{"type":"probe","value":"%s"}\n' "$!"; while :; do sleep 1; done"#;
+    let (engine, events) = Engine::spawn(spec("/bin/sh", vec!["-c".into(), probe.into()])).expect("spawn the probe");
+    let pid: u32 = match next(&events) {
+        EngineEvent::Event(raw) => raw["value"].as_str().unwrap().parse().unwrap(),
+        other => panic!("{other:?}"),
+    };
+    assert!(alive(pid));
+    engine.close_group(Duration::from_millis(200));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while alive(pid) && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!alive(pid), "the background process outlived its session");
+}

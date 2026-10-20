@@ -72,6 +72,10 @@ impl Engine {
         for name in &spec.unset {
             command.env_remove(name);
         }
+        // Pi leads a process group of its own: what it starts (MCP servers, subagents, a dev server) joins it, so
+        // `close_group` can stop all of it.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
         for (key, value) in &spec.env {
             command.env(key, value);
         }
@@ -168,6 +172,25 @@ impl Engine {
             std::thread::sleep(Duration::from_millis(20));
         }
         let _ = self.child.lock().unwrap().kill();
+    }
+
+    /// `close`, then everything Pi started that is still in its process group: asked to stop, killed a second later.
+    /// For a session that is closed for good; a restart uses `close` and leaves the session's processes running.
+    pub fn close_group(&self, grace: Duration) {
+        let group = self.child.lock().unwrap().id() as i32;
+        self.close(grace);
+        #[cfg(unix)]
+        {
+            let signal = |signal: i32| unsafe { libc::killpg(group, signal) == 0 };
+            if !signal(libc::SIGTERM) {
+                return; // nobody is left in the group
+            }
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while Instant::now() < deadline && signal(0) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            signal(libc::SIGKILL);
+        }
     }
 
     /// `close` with the default three seconds.

@@ -51,6 +51,9 @@ while IFS= read -r line; do
       printf '{"type":"extension_ui_request","id":"c1","method":"select","title":"{\\"aria\\":1,\\"kind\\":\\"sandbox\\",\\"summary\\":\\"Wants to run rm -rf build\\"}","options":["Allow once","Block"]}\n' ;;
     args)
       printf '{"type":"args","args":"%s"}\n' "$ARIA_TEST_ARGS" ;;
+    background)
+      sleep 300 >/dev/null 2>&1 &
+      printf '{"type":"background","pid":"%s"}\n' "$!" ;;
     env_projects)
       printf '{"type":"env","projects":"%s"}\n' "$ARIA_PROJECTS_DIR" ;;
     env_settings)
