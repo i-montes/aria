@@ -12,7 +12,12 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 real="$tmp/real"
 mkdir -p "$real/pi/$version/node_modules/.bin" "$real/bin"
-printf '{"opencode-go":{"type":"api_key","key":"sk-fake-123456789"}}\n' > "$real/auth.json"
+printf '{"opencode-go":{"type":"api_key","key":"sk-fake-123456789"},"anthropic":{"type":"oauth","access":"a","refresh":"r","expires":1}}\n' > "$real/auth.json"
+printf '{"notion":{"tokens":{"refresh_token":"r"}}}\n' > "$real/mcp-auth.json"
+printf '{"mcpServers":{"notion":{"url":"https://mcp.notion.com/mcp"},"engram":{"command":"%s/bin/engram","args":["mcp"],"env":{"ENGRAM_DATA_DIR":"%s/engram"}}}}\n' "$real" "$real" > "$real/mcp.json"
+mkdir -p "$real/agent/npm/node_modules/pi-parallel-agents" "$real/agent/git/github.com/obra/superpowers"
+printf '{}\n' > "$real/agent/npm/node_modules/pi-parallel-agents/package.json"
+printf 'x\n' > "$real/agent/git/github.com/obra/superpowers/README.md"
 stub="$real/pi/$version/node_modules/.bin/pi"
 printf '#!/bin/sh\necho "agent=$PI_CODING_AGENT_DIR settings=$ARIA_SETTINGS"\n' > "$stub"
 chmod +x "$stub"
@@ -36,6 +41,15 @@ home=$(printf '%s\n' "$out" | sed -n 's/^home=//p')
 
 out=$(ANTHROPIC_API_KEY=z ARIA_REAL_HOME="$real" sh "$script" sh -c 'echo "key=${ANTHROPIC_API_KEY:-absent}"' 2>&1)
 printf '%s\n' "$out" | grep -qx 'key=absent' && pass "ANTHROPIC_* variables are dropped" || fail "ANTHROPIC_API_KEY reached the command: $out"
+
+out=$(ARIA_REAL_HOME="$real" sh "$script" sh -c 'cat "$ARIA_HOME/mcp.json"; echo; cat "$ARIA_HOME/auth.json"; echo; ls "$ARIA_HOME"; [ -f "$ARIA_HOME/agent/npm/node_modules/pi-parallel-agents/package.json" ] && [ ! -L "$ARIA_HOME/agent/npm" ] && echo packages-copied; [ -f "$ARIA_HOME/agent/git/github.com/obra/superpowers/README.md" ] && echo git-copied' 2>&1)
+printf '%s\n' "$out" | grep -q "$real/engram" && fail "the scratch Pi's Engram would write the real database: $out" || pass "the real Engram entry is not copied"
+printf '%s\n' "$out" | grep -q notion && pass "the other MCP servers are copied" || fail "notion is missing: $out"
+printf '%s\n' "$out" | grep -q oauth && fail "OAuth sign-ins are copied without asking: $out" || pass "only API keys are copied by default"
+printf '%s\n' "$out" | grep -qx mcp-auth.json && fail "mcp-auth.json is copied without asking" || pass "MCP sign-ins are not copied by default"
+printf '%s\n' "$out" | grep -qx packages-copied && printf '%s\n' "$out" | grep -qx git-copied && pass "Pi's packages are copied, not linked" || fail "Pi's packages are missing: $out"
+out=$(ARIA_PARITY_OAUTH=1 ARIA_REAL_HOME="$real" sh "$script" sh -c 'cat "$ARIA_HOME/auth.json"; ls "$ARIA_HOME"' 2>&1)
+printf '%s\n' "$out" | grep -q oauth && printf '%s\n' "$out" | grep -qx mcp-auth.json && pass "ARIA_PARITY_OAUTH=1 copies the sign-ins" || fail "the sign-ins were not copied on request: $out"
 
 [ "$(hash_real)" = "$before" ] && pass "the real home is unchanged" || fail "the real home changed"
 

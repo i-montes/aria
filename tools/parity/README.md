@@ -5,8 +5,11 @@ item, its check and its last result is `docs/parity.md`.
 
 - `scratch-home.sh <command>` runs a command in Pi's exact session environment (`pi::session_env`, without
   `ANTHROPIC_*`) for a scratch copy of `~/.aria`, in a fresh git repo, then deletes the copy. It only reads `~/.aria`:
-  the copy has its own agent directory, sessions and Engram data, so the installed dock and its memory are never
-  touched. Its test is `scratch-home.test.sh`.
+  the copy has its own agent directory, sessions and Engram data (Aria's Engram entry is not copied, since it names the
+  real database), and a copy of Pi's packages, so the installed dock and its memory are never touched. The copy lives
+  under `~/.cache` (a reflink copy on btrfs; a full copy of the packages elsewhere) and only API keys are copied:
+  `ARIA_PARITY_OAUTH=1` also copies the sign-ins (Claude Max, Notion), for the checks that need them. Its test is
+  `scratch-home.test.sh`.
 - `matrix.ts` and `matrix.test.ts` keep `docs/parity.md` honest: every setup item has a row, and every file and test a
   row names exists (`bun test tools/parity`).
 - `suites.sh` runs every offline suite, one crate at a time.
