@@ -503,7 +503,7 @@ impl Chat {
             if !self.is_current(engine) {
                 return;
             }
-            self.emit(DockMessage::ChatEvent { event: json!({"type": "history", "messages": response.data["messages"]}) });
+            self.emit(DockMessage::ChatEvent { event: for_page(json!({"type": "history", "messages": response.data["messages"]})) });
         }
         self.refresh_context(engine);
         // Not forced: a run that already settled may have asked a moment ago.
@@ -610,7 +610,7 @@ impl Chat {
                                 self.close_dialog(&id);
                             }
                             if restart {
-                                self.emit(DockMessage::ChatEvent { event: raw.clone() });
+                                self.emit(DockMessage::ChatEvent { event: for_page(raw.clone()) });
                                 self.shutdown();
                                 continue;
                             }
@@ -622,7 +622,7 @@ impl Chat {
                         }
                         _ => {}
                     }
-                    self.emit(DockMessage::ChatEvent { event: raw });
+                    self.emit(DockMessage::ChatEvent { event: for_page(raw) });
                 }
                 EngineEvent::UiRequest { id, method, raw } if is_dialog(&method) => self.open_dialog(id, method, raw),
                 EngineEvent::UiRequest { raw, .. } => {
@@ -931,6 +931,25 @@ impl Sessions {
 
 /// Pi's folder: the configured one, created when missing. `None` when it cannot be made: never another folder in its
 /// place (the sandbox lets Pi write in it).
+/// A Pi event as the page gets it: images keep their type and kind but lose their data. The page never shows them, and
+/// a session's screenshots can make its history tens of megabytes, which the dock's web view does not survive.
+fn for_page(mut event: Value) -> Value {
+    fn strip(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                if map.get("type").and_then(Value::as_str) == Some("image") {
+                    map.remove("data");
+                }
+                map.values_mut().for_each(strip);
+            }
+            Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    strip(&mut event);
+    event
+}
+
 fn working_folder(settings: Option<&Settings>) -> Option<PathBuf> {
     let folder = agent::workdir(settings);
     std::fs::create_dir_all(&folder).ok().map(|_| folder)
@@ -1096,6 +1115,22 @@ mod tests {
         wait_for(&h, "second settle", |m| event_of(m, "agent_settled"));
         let starts = drain(&h).iter().filter(|m| matches!(m, DockMessage::ChatEngine { state } if state == "starting")).count();
         assert_eq!(starts, 1, "Pi was started more than once");
+    }
+
+    #[test]
+    fn images_never_reach_the_page() {
+        let image = json!({"type": "image", "data": "A".repeat(1000), "mimeType": "image/png"});
+        let history = json!({"type": "history", "messages": [
+            {"role": "user", "content": "look"},
+            {"role": "toolResult", "content": [{"type": "text", "text": "a screenshot"}, image.clone()]},
+        ]});
+        let page = for_page(history);
+        assert_eq!(page["messages"][1]["content"][0]["text"], "a screenshot");
+        assert_eq!(page["messages"][1]["content"][1], json!({"type": "image", "mimeType": "image/png"}));
+        let live = for_page(json!({"type": "tool_execution_end", "result": {"content": [image]}}));
+        assert_eq!(live["result"]["content"][0], json!({"type": "image", "mimeType": "image/png"}));
+        let text = json!({"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "data"}});
+        assert_eq!(for_page(text.clone()), text);
     }
 
     #[test]

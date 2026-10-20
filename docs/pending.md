@@ -90,6 +90,10 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
 - Question card: the sliding animation between questions and the "Answers sent" / "Open questions" states were not ported (the card is removed when answered).
 - Message index: chips grow with the pointer but do not fade by distance (the owner's solid-fill rule).
 
+- A session's images (screenshots the model read) are not sent to the page, which never shows them: a session full of
+  them made its history tens of megabytes and the tab came back empty after a restart.
+- Updating Aria restarts the dock: a run in progress at that moment stops, though the chat and its context come back.
+
 ## Known limits of the page (from the review, deferred)
 
 - The thread is redrawn on every streamed fragment, so text cannot be selected or copied while a run streams; the other regions only redraw when they change.
