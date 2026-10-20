@@ -257,3 +257,24 @@ describe.skipIf(!existsSync('/usr/bin/bwrap'))('a credential linked into the pro
     expect(out).not.toContain('DOT-SECRET-9')
   })
 })
+
+// Aria in a home of its own (ARIA_HOME elsewhere, as in the parity checks): its credentials are found from the
+// environment Aria gives Pi, not only under ~/.aria.
+describe('an Aria home outside ~/.aria', () => {
+  const saved = { agent: process.env.PI_CODING_AGENT_DIR, settings: process.env.ARIA_SETTINGS }
+  afterAll(() => {
+    for (const [key, value] of [['PI_CODING_AGENT_DIR', saved.agent], ['ARIA_SETTINGS', saved.settings]] as const) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  })
+  test('its credentials and its agent dir links are secrets', () => {
+    process.env.PI_CODING_AGENT_DIR = '/srv/aria-copy/agent'
+    process.env.ARIA_SETTINGS = '/srv/aria-copy/settings.json'
+    for (const file of ['auth.json', 'mcp.json', 'mcp-auth.json']) {
+      expect(isSecret(`/srv/aria-copy/${file}`, '/srv/app', home)).toBe(true)
+      expect(isSecret(`/srv/aria-copy/agent/${file}`, '/srv/app', home)).toBe(true)
+    }
+    expect(isSecret('/srv/aria-copy/settings.json', '/srv/app', home)).toBe(false)
+  })
+})

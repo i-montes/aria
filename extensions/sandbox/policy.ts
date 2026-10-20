@@ -179,7 +179,16 @@ export function protectedPaths(cwd: string, home = HOME): string[] {
 }
 
 export const secretDirs = (home = HOME, runtimeDir = RUNTIME) => [...SECRET_DIRS.map((d) => join(home, d)), runtimeDir]
-export const secretFiles = (home = HOME) => SECRET_FILES.map((f) => join(home, f))
+/** Aria's credentials where its environment puts them (an Aria home outside ~/.aria): its home holds them and its
+ * agent folder links to them. Nothing in the owner's own Pi, which Aria does not start. */
+function ariaCredentials(): string[] {
+  const agent = process.env.PI_CODING_AGENT_DIR
+  const settings = process.env.ARIA_SETTINGS
+  if (!agent || !settings) return []
+  const names = ['auth.json', 'mcp.json', 'mcp-auth.json']
+  return [...names.map((n) => join(dirname(settings), n)), ...names.map((n) => join(agent, n))]
+}
+export const secretFiles = (home = HOME) => [...new Set([...SECRET_FILES.map((f) => join(home, f)), ...ariaCredentials()])]
 
 /** Aria's own Pi files: its extensions (this sandbox among them), persona, experts, settings and its record of them.
  * `agentDir` is Aria's agent folder, or null in the owner's own Pi. No grant opens them: a model that could edit them

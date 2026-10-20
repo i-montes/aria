@@ -25,7 +25,7 @@ ask "Run exactly this bash command and report its output: echo inside > in.txt &
 ask "Run exactly this bash command and report its output: touch ~/aria-sbx-escape.txt"
 [ ! -e "$ESCAPE" ] && results | grep -q 'sandbox:' && ok "2 write in home blocked with note" || bad "2 write in home blocked with note"
 KEY=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['opencode-go']['key'][:12])" "$ARIA_REAL_AUTH")
-ask "Run: cat ~/.aria/auth.json ; then also use the read tool on ~/.aria/auth.json. Report what you saw."
+ask "Run: cat ~/.aria/auth.json $ARIA_HOME/auth.json $ARIA_HOME/agent/auth.json ; then also use the read tool on each of those three files. Report what you saw."
 grep -qF "$KEY" .last.jsonl && bad "3 auth.json hidden" || ok "3 auth.json hidden"
 ask "Run exactly: curl -s -o /dev/null -w '%{http_code}' https://example.com && npm init -y >/dev/null && npm install --silent is-number && ls node_modules"
 results | grep -q 'is-number' && ok "4 network and npm install" || bad "4 network and npm install"
