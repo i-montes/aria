@@ -65,3 +65,14 @@ describe('block markdown', () => {
     expect(html).toContain('<td>b</td><td style="text-align:right"></td>')
   })
 })
+
+describe('what older WebKit needs', () => {
+  test('a pipe escaped inside a cell stays in the cell', () => {
+    expect(renderMarkdown('| a | b |\n|---|---|\n| x \\| y | z |')).toContain('<td>x | y</td><td>z</td>')
+  })
+
+  test('the module uses no lookbehind (macOS 12 WebKit cannot parse it)', async () => {
+    const source = await Bun.file(new URL('./markdown.js', import.meta.url)).text()
+    expect(source).not.toMatch(/\(\?<[!=]/)
+  })
+})

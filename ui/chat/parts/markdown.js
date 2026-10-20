@@ -54,13 +54,17 @@ function inline(text, options, keep) {
     .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>')
 }
 
-const cells = (line) =>
-  line
-    .trim()
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split(/(?<!\\)\|/)
-    .map((cell) => cell.trim().replace(/\\\|/g, '|'))
+/** A table row's cells; `\|` is a pipe inside a cell. (No lookbehind: macOS 12's WebKit does not have it.) */
+function cells(line) {
+  const row = line.trim().replace(/^\|/, '').replace(/\|$/, '')
+  const out = ['']
+  for (let i = 0; i < row.length; i++) {
+    if (row[i] === '\\' && row[i + 1] === '|') out[out.length - 1] += row[++i]
+    else if (row[i] === '|') out.push('')
+    else out[out.length - 1] += row[i]
+  }
+  return out.map((cell) => cell.trim())
+}
 
 const startsBlock = (line, next) =>
   FENCE.test(line) || HEADING.test(line) || RULE.test(line) || QUOTE.test(line) || ITEM.test(line) || (line.includes('|') && TABLE_SEPARATOR.test(next ?? '') && (next ?? '').includes('-'))
