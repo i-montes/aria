@@ -11,4 +11,7 @@ directory (`~/.aria/agent/`) every time a session starts, filled in from Aria's 
 - `agents/*.md` — the experts subagents can be (frontend, backend, security, reviewer, researcher), word for word. A
   disabled expert is not written; "read-only" sets the `tools: read, bash, codemode` line of its front matter.
 
+- `skills/install-from-link/SKILL.md` — Aria's own skill: how to read a link the user pastes and install what it
+  points to (a skill, an MCP server or a Pi package) with the `install` extension's tool.
+
 A file the owner edited in `~/.aria/agent/` is kept (Aria records the hash of what it wrote in `.aria-files`).

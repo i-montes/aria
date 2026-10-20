@@ -587,6 +587,16 @@ mod tests {
     }
 
     #[test]
+    fn the_install_skill_and_extension_are_written_into_pis_folders() {
+        let (_dir, paths) = paths();
+        prepare(&paths, None).unwrap();
+        let skill = paths.agent().join("skills/install-from-link/SKILL.md");
+        assert_eq!(std::fs::read_to_string(skill).unwrap(), include_str!("../../../agent-files/skills/install-from-link/SKILL.md"));
+        assert!(paths.agent().join("extensions/install/index.ts").exists());
+        assert!(!paths.agent().join("extensions/install/install.test.ts").exists());
+    }
+
+    #[test]
     fn a_file_nobody_edited_follows_a_new_version_of_aria() {
         let (_dir, paths) = paths();
         std::fs::create_dir_all(paths.agent().join("agents")).unwrap();
