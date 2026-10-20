@@ -71,3 +71,13 @@ describe('texts', () => {
     for (const key of Object.keys(TEXTS.en)) expect(key.startsWith('chat.user.')).toBe(true)
   })
 })
+
+describe('markdown in the user\'s message', () => {
+  test('a message is markdown with its mentions as chips; a slash command is shown as typed', () => {
+    const html = renderUser({ text: 'fix **this** in @src/a.rs\n- one' }, {}, (key) => key)
+    expect(html).toContain('<strong>this</strong>')
+    expect(html).toContain('<span class="p-user-chip">@src/a.rs</span>')
+    expect(html).toContain('<ul class="p-md-list"><li>one</li></ul>')
+    expect(renderUser({ text: '/plan **x**', command: true }, {}, (key) => key)).toContain('**x**')
+  })
+})

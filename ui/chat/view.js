@@ -1090,6 +1090,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     }
     const { chat: action, id, session, index, choice } = el.dataset
     switch (action) {
+      case 'open-link':
+        event.preventDefault() // a link opens in the browser, never inside the dock
+        return send({ type: 'openUrl', url: el.dataset.url })
       case 'send': return submit()
       case 'stop': return stop()
       case 'settings': return onSettings?.()

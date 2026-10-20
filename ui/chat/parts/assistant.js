@@ -2,12 +2,13 @@
 // diff group of design/components/aria-on-the-desktop.dc.html).
 //
 // Props: { text, detail?, source? }
-//   text    the answer; `code` spans and fenced ```diff blocks are rendered, the rest is text
+//   text    the answer, in markdown (markdown.js); a fenced ```diff block is drawn as the design's diff group
 //   detail  a second, muted paragraph (same rendering)
 //   source  where the answer came from ("source · engram")
 // ui: unused. t(key) translates.
-// Emits: nothing.
+// Emits: data-chat="open-link" on the answer's links (markdown.js).
 import { esc } from '../../onboarding/components.js'
+import { renderMarkdown } from './markdown.js'
 
 /** Escape, then turn `code` spans into <code>. An unclosed backtick stays text. */
 export const renderInline = (text) =>
@@ -33,32 +34,6 @@ export const parseDiff = (source) => {
   })
 }
 
-/** Splits a message into { type: 'text', text } and { type: 'diff', lines } blocks, in order. An unterminated diff (a streaming message) runs to the end. */
-export const parseBlocks = (source) => {
-  const blocks = []
-  let text = []
-  let diff = null
-  const flushText = () => {
-    const joined = text.join('\n').replace(/^\n+|\n+$/g, '')
-    if (joined.trim()) blocks.push({ type: 'text', text: joined })
-    text = []
-  }
-  for (const line of String(source ?? '').replace(/\r/g, '').split('\n')) {
-    if (diff) {
-      if (/^```\s*$/.test(line)) {
-        blocks.push({ type: 'diff', lines: parseDiff(diff.join('\n')) })
-        diff = null
-      } else diff.push(line)
-    } else if (/^```diff\s*$/.test(line)) {
-      flushText()
-      diff = []
-    } else text.push(line)
-  }
-  if (diff) blocks.push({ type: 'diff', lines: parseDiff(diff.join('\n')) })
-  else flushText()
-  return blocks
-}
-
 const MARK = { add: '+', del: '-', ctx: ' ', meta: '' }
 
 const renderDiff = (lines, t) =>
@@ -66,13 +41,13 @@ const renderDiff = (lines, t) =>
     .map((l) => `<div class="p-assistant-line is-${l.kind}"><span class="p-assistant-mark">${MARK[l.kind]}</span><span class="p-assistant-code-text">${esc(l.text)}</span></div>`)
     .join('')}</div>`
 
-const renderBlocks = (source, cls, t) =>
-  parseBlocks(source)
-    .map((b) => (b.type === 'diff' ? renderDiff(b.lines, t) : `<p class="${cls}">${renderInline(b.text)}</p>`))
-    .join('')
+const renderBlocks = (source, cls, t) => {
+  const html = renderMarkdown(source, { code: (lang, text) => (lang === 'diff' ? renderDiff(parseDiff(text), t) : null) })
+  return html ? `<div class="p-md ${cls}">${html}</div>` : ''
+}
 
 export const renderAssistant = ({ text, detail, source }, ui, t) => {
-  const main = renderBlocks(text, 'p-assistant-text', t) || '<p class="p-assistant-text"></p>'
+  const main = renderBlocks(text, 'p-assistant-text', t) || '<div class="p-md p-assistant-text"></div>'
   const more = detail ? renderBlocks(detail, 'p-assistant-detail', t) : ''
   const from = source ? `<p class="p-assistant-source">${esc(t('chat.assistant.source'))} · ${esc(source)}</p>` : ''
   return `<div class="p-assistant"><div class="p-assistant-card">${main}${more}${from}</div></div>`
