@@ -28,3 +28,36 @@ export function patchHtml(container, html) {
 
 const same = (a, b) =>
   a.nodeType === b.nodeType && (a.nodeType === Node.ELEMENT_NODE ? a.outerHTML === b.outerHTML : a.nodeValue === b.nodeValue)
+
+/** The markup each container was last patched with, one string per child element. */
+const lastItems = new WeakMap()
+
+const element = (html) => {
+  const fresh = document.createElement('template')
+  fresh.innerHTML = html
+  return fresh.content.firstElementChild
+}
+
+/** Like `patchHtml`, for markup already split into one string per child element (thread.js `threadItems`): an item
+ * whose string did not change is not parsed or compared at all, so a streamed word costs the same in a long
+ * conversation as in a short one. A child someone else added or removed makes it rebuild them all. Returns whether
+ * anything changed. */
+export function patchItems(container, items, make = element) {
+  const children = container.children
+  const before = lastItems.get(container)
+  const prev = before && before.length === children.length ? before : null
+  let changed = false
+  items.forEach((html, i) => {
+    if (prev && prev[i] === html && children[i]) return
+    const node = make(html)
+    if (children[i]) container.replaceChild(node, children[i])
+    else container.appendChild(node)
+    changed = true
+  })
+  while (children.length > items.length) {
+    container.removeChild(children[children.length - 1])
+    changed = true
+  }
+  lastItems.set(container, items)
+  return changed
+}

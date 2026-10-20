@@ -34,44 +34,57 @@ export const isLive = (state, index) => state.running && index >= (state.turnFro
 /** Open while live unless closed by hand; folded afterwards unless opened by hand. */
 export const groupOpen = (state, index, opened, closed) => (isLive(state, index) ? !closed.has(index) : opened.has(index))
 
-export function renderThread(state, ui = {}, t) {
-  const opened = ui.expanded ?? new Set()
-  const closed = ui.collapsed ?? new Set()
-  const toolUi = (index) => ({ open: groupOpen(state, index, opened, closed), openRows: ui.openRows ?? new Set(), moreOpen: ui.moreOpen ?? new Set() })
-  const entries = state.messages
-    .map((entry, index) => {
-      switch (entry.kind) {
-        case 'user':
-          return `<div class="thread-item" id="${messageDomId(index)}">${renderUser({ text: entry.text }, {}, t)}</div>`
-        case 'assistant':
-          return entry.text ? `<div class="thread-item">${renderAssistant({ text: entry.text }, {}, t)}</div>` : ''
-        case 'tools':
-          return `<div class="thread-item">${renderTools({ index, calls: entry.calls, live: isLive(state, index) }, toolUi(index), t)}</div>`
-        case 'jev':
-          return `<div class="thread-item">${renderJev({ mode: entry.mode, action: entry.action }, {}, t)}</div>`
-        case 'note':
-          return `<div class="thread-item">${renderNote({ label: entry.label, text: entry.key ? t(entry.key) : entry.text }, {}, t)}</div>`
-        case 'divider':
-          return `<div class="thread-item">${renderDivider({ text: t(entry.key, entry.vars) }, {}, t)}</div>`
-        case 'answers':
-          return `<div class="thread-item">${renderAnswers({ answers: entry.answers }, {}, t)}</div>`
-        case 'notice':
-          return `<div class="notice tone-${esc(entry.tone)}">${esc(entry.key ? t(entry.key, entry.vars) : entry.text)}</div>`
-        default:
-          return ''
-      }
-    })
-    .join('')
-  const cards = state.dialogs
-    .filter((d) => d.card && INLINE_CARDS.includes(d.card.kind))
-    .map((d) => `<div class="thread-item">${renderCard(d, t)}</div>`)
-    .join('')
-  const queued = state.queue.map((q, i) => `<div class="thread-item">${renderUser({ text: q.text, queued: true, id: String(i) }, {}, t)}</div>`).join('')
+/** An entry's markup, kept per entry object: the reducer never changes an entry in place (a streamed word makes a new
+ * one), so an entry whose object and `key` (what else its markup depends on) are the same renders the same. Without
+ * it, every streamed word rebuilt the whole conversation. */
+const rendered = new WeakMap()
+function cached(entry, key, t, render) {
+  const hit = rendered.get(entry)
+  if (hit && hit.key === key && hit.t === t) return hit.html
+  const html = render()
+  rendered.set(entry, { key, t, html })
+  return html
+}
+
+function renderEntry(state, entry, index, ui, t) {
+  switch (entry.kind) {
+    case 'user':
+      return cached(entry, String(index), t, () => `<div class="thread-item" id="${messageDomId(index)}">${renderUser({ text: entry.text }, {}, t)}</div>`)
+    case 'assistant':
+      return entry.text ? cached(entry, '', t, () => `<div class="thread-item">${renderAssistant({ text: entry.text }, {}, t)}</div>`) : ''
+    case 'tools': {
+      const live = isLive(state, index)
+      const toolUi = { open: groupOpen(state, index, ui.expanded ?? new Set(), ui.collapsed ?? new Set()), openRows: ui.openRows ?? new Set(), moreOpen: ui.moreOpen ?? new Set() }
+      const key = JSON.stringify([index, live, toolUi.open, [...toolUi.openRows], [...toolUi.moreOpen]])
+      return cached(entry, key, t, () => `<div class="thread-item">${renderTools({ index, calls: entry.calls, live }, toolUi, t)}</div>`)
+    }
+    case 'jev':
+      return `<div class="thread-item">${renderJev({ mode: entry.mode, action: entry.action }, {}, t)}</div>`
+    case 'note':
+      return `<div class="thread-item">${renderNote({ label: entry.label, text: entry.key ? t(entry.key) : entry.text }, {}, t)}</div>`
+    case 'divider':
+      return `<div class="thread-item">${renderDivider({ text: t(entry.key, entry.vars) }, {}, t)}</div>`
+    case 'answers':
+      return `<div class="thread-item">${renderAnswers({ answers: entry.answers }, {}, t)}</div>`
+    case 'notice':
+      return `<div class="notice tone-${esc(entry.tone)}">${esc(entry.key ? t(entry.key, entry.vars) : entry.text)}</div>`
+    default:
+      return ''
+  }
+}
+
+/** The thread as one markup string per top-level element (see patch.js `patchItems`). */
+export function threadItems(state, ui = {}, t) {
+  const entries = state.messages.map((entry, index) => renderEntry(state, entry, index, ui, t))
+  const cards = state.dialogs.filter((d) => d.card && INLINE_CARDS.includes(d.card.kind)).map((d) => `<div class="thread-item">${renderCard(d, t)}</div>`)
+  const queued = state.queue.map((q, i) => `<div class="thread-item">${renderUser({ text: q.text, queued: true, id: String(i) }, {}, t)}</div>`)
   const working = state.running ? `<div class="thread-item thread-working">${renderWorking({ phase: state.phase, startedAt: state.startedAt }, { now: ui.now ?? Date.now() }, t)}</div>` : ''
-  const blank = !state.messages.length && !state.running && !state.queue.length && !cards
+  const blank = !state.messages.length && !state.running && !state.queue.length && !cards.length
   // A session whose history has not arrived yet is loading, not new (unless its Pi cannot start: the problem shows).
   const loading = blank && state.loaded === false && !state.problem
   const empty = blank && !loading ? renderEmptyThread(t) : ''
   const loader = loading ? `<div class="thread-item thread-working">${renderWorking({ label: t('chat.loading'), startedAt: state.loadingSince }, { now: ui.now ?? Date.now() }, t)}</div>` : ''
-  return empty + loader + entries + cards + working + queued
+  return [empty, loader, ...entries, ...cards, working, ...queued].filter(Boolean)
 }
+
+export const renderThread = (state, ui = {}, t) => threadItems(state, ui, t).join('')

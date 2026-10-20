@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import { chatTexts } from './texts.js'
 import { addQueued, addUser, answerDialog, createChat, reduce } from './state.js'
-import { renderThread } from './thread.js'
+import { renderThread, threadItems } from './thread.js'
 
 const texts = chatTexts().en
 const t = (key, vars) => (texts[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => vars?.[name] ?? '')
@@ -123,5 +123,38 @@ describe("the turn's group opens while Aria works and folds when it answers", ()
   test('an earlier turn is not live', () => {
     const state = { ...working, turnFrom: 1, messages: [group, { kind: 'user', text: 'again' }] }
     expect(isOpen(renderThread(state, {}, t))).toBe(false)
+  })
+})
+
+describe('the thread as items', () => {
+  const streaming = () =>
+    run(createChat(), ev({ type: 'history', messages: [] }), { type: 'chatState', workdir: '/w', running: true }, ev({ type: 'message_start', message: { role: 'assistant', content: [] } }), ev({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Hola' } }))
+
+  test('one string per element, and joined they are the thread', () => {
+    const state = run(addUser(createChat(), 'hi'), ev({ type: 'history', messages: [] }))
+    const items = threadItems(state, {}, t)
+    expect(items.every((item) => item.startsWith('<') && item.length > 0)).toBe(true)
+    expect(items.join('')).toBe(renderThread(state, {}, t))
+  })
+
+  test('an entry that did not change is not rendered again (entries are never changed in place)', () => {
+    const state = run(addUser(createChat(), 'first question'), ev({ type: 'history', messages: [] }))
+    threadItems(state, {}, t)
+    state.messages[0].text = 'changed in place'
+    expect(threadItems(state, {}, t).join('')).toContain('first question')
+  })
+
+  test('a streamed word renders only the entry it changed', () => {
+    const before = streaming()
+    const after = reduce(before, ev({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: ' mundo' } }))
+    expect(after.messages.at(-1)).not.toBe(before.messages.at(-1))
+    expect(threadItems(after, {}, t).join('')).toContain('Hola mundo')
+  })
+
+  test('a tool group renders again when it opens or closes', () => {
+    const state = run(createChat(), ev({ type: 'history', messages: [] }), ev({ type: 'tool_execution_start', toolCallId: 'a', toolName: 'bash', args: { command: 'ls' } }))
+    const closed = threadItems(state, {}, t).join('')
+    const open = threadItems(state, { expanded: new Set([0]) }, t).join('')
+    expect(open).not.toBe(closed)
   })
 })

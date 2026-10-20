@@ -2,7 +2,7 @@
 // cards, panels) and wires them to the bridge, plus the few pure helpers it keeps (tested without a
 // browser). Conversations live in `state.js`, the tabs in `sessions.js`, the HTML of each element in
 // `parts/` and `thread.js`. Everything dynamic is escaped with `esc`.
-import { patchHtml } from './patch.js'
+import { patchHtml, patchItems } from './patch.js'
 import { esc } from '../onboarding/components.js'
 import { renderAgentSession } from './parts/session.js'
 import { renderCommandPicker, filterCommands, stepActive, clampActive } from './parts/commands.js'
@@ -22,7 +22,7 @@ import {
   MAX_SESSIONS, addSession, applyStatus, closeSession, createTabs, renameSession, selectSession, setTitleIfEmpty, toSaved, undoClose,
 } from './sessions.js'
 import { addNote, addQueued, addUser, answerDialog, tookBack, answersForCard, clearQueue, createChat, reduce } from './state.js'
-import { renderThread, groupOpen } from './thread.js'
+import { threadItems, groupOpen } from './thread.js'
 
 /** `/home/ana/Projects` -> `~/Projects` (Linux and Mac homes); anything else stays as it is. */
 export const shortPath = (path) => String(path ?? '').replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, '~')
@@ -274,7 +274,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const ex = expanded()
     const connectHtml = ui.connect ? `<div class="thread-item" id="chat-connect">${renderConnect(ui.connect, {}, t)}</div>` : ''
     keepingFocus(list, () => {
-      patchHtml(list, renderThread(state, { expanded: ex.open, collapsed: ex.closed, openRows: ex.rows, moreOpen: ex.more, now: Date.now() }, t) + connectHtml)
+      const items = threadItems(state, { expanded: ex.open, collapsed: ex.closed, openRows: ex.rows, moreOpen: ex.more, now: Date.now() }, t)
+      patchItems(list, connectHtml ? [...items, connectHtml] : items)
     })
     if (nearBottom || (ui.connect && ui.connect.justOpened)) list.scrollTop = list.scrollHeight
     if (ui.connect) ui.connect.justOpened = false
@@ -426,7 +427,21 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       : ''
   }
 
+  /** Pi streams many events a second (one per word); they are drawn once per frame instead of once each. */
+  let frame = 0
+  function renderSoon() {
+    if (frame) return
+    frame = requestAnimationFrame(() => {
+      frame = 0
+      render()
+    })
+  }
+
   function render() {
+    if (frame) {
+      cancelAnimationFrame(frame)
+      frame = 0
+    }
     if (!$('chat-body')) return
     if (!keepRenameField(ui, !!root.querySelector('[data-chat-rename]'))) drawHeader()
     $('chat-undo').innerHTML = renderUndo(tabs, t)
@@ -1268,7 +1283,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
         drawToast()
         return
       }
-      render()
+      renderSoon()
     },
     mount,
     /** Wakes every saved tab's Pi without showing anything: each one's history arrives in its own state. */
