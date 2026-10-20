@@ -51,7 +51,7 @@ suite passes, the sandbox acceptance is 7/7, Jev's review eval 10/10 and the smo
   `reviewer` and `frontend` (0.48 against 0.52) and flips between runs; the experts are the owner's, word for word.
 - The manual rows wait for the owner: Claude Max in the dock, Notion and Tavily, a subagent's `## Learnings`, the
   `ask_user` answer lifting read-only mode, and the `PI_*` switches through the dock's environment.
-- Aria's memory starts empty: its Engram database is its own (the owner's decision), so the memories in `~/.engram`
+- Aria's memory starts with a single memory of its own (Aria saves it so Engram knows the project): its Engram database is its own (the owner's decision), so the memories in `~/.engram`
   are not in it. Importing them would be a new feature.
 - Parity is accepted by the owner using Aria for real work, not by the matrix.
 

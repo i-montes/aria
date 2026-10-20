@@ -43,11 +43,11 @@ The model lives in `crates/aria-core/src/settings.rs`; the defaults are the owne
 | `provider.id` | `opencode-go`, `anthropic-api` or `anthropic-oauth` | phase 1 |
 | `provider.quota` | `switchAt` / `planSwitchAt` (% of quota), `freeModel`, `askFirst`, `countdownMinutes`, `onNoAnswer` (`switch` or `stay`). `null` for providers without a readable quota or free tier | phase 2 |
 | `router.enabled`, `router.backend` | Jev classifies each message; backend `opencode` (through the provider) or `typesafe` (direct, needs a TypeSafe key) | phase 2 |
-| `assistant.*` | Your name, the assistant's name, conversation language (`es`, `en`, `pt` or free text), answer style (`very-short`, `brief`, `detailed`, `technical`, `teaching`) | phase 1 (UI language), phase 2 |
+| `assistant.*` | Your name, the assistant's name (`Aria`; the setup and the settings screen do not offer to change it), conversation language (`es`, `en`, `pt` or free text), answer style (`very-short`, `brief`, `detailed`, `technical`, `teaching`) | phase 1 (UI language), phase 2 |
 | `models.*` | Daily and planning model, planning effort, whether pay-per-use models are allowed | phase 2 |
 | `effort.*` | `auto` (by route) or `fixed` at `fixedLevel` (`off` … `max`); `maxOnFree` runs free models at their top level | phase 2 |
 | `compaction.percent` | Compact the context at this % of the window (0 turns it off) | phase 2 |
-| `memory.*` | Engram on/off and its project name | phase 2 |
+| `memory.*` | Engram on/off and its project name; before each Pi start, a project with no memory gets a first one, so Engram knows it | phase 2 |
 | `integrations.services` | MCP services you turned on: `{ id, name, auth }`; for now `notion` (`oauth`) and `tavily` (`key`). They are connected during setup; their credentials live in `~/.aria/mcp.json` and `mcp-auth.json`, never here | phase 1 (connected), phase 2 (used) |
 | `integrations.packages` | Where extra Pi packages come from, and whether third-party ones are trusted | phase 2 |
 | `sandbox.*` | Projects folder, extra writable folders, ask before leaving the sandbox, let Jev review commands | phase 2 |

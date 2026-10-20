@@ -313,7 +313,6 @@ export function createOnboarding(env) {
     const a = state.settings.assistant
     let html = c.textField('userName', t('ob.assistant.userName'), a.userName, { placeholder: t('ob.assistant.userName.placeholder'), description: t('ob.assistant.userName.desc') })
     if (state.mode === 'quick' && !state.editing) return html // quick setup asks only your name
-    html += c.textField('assistantName', t('ob.assistant.name'), a.name, { placeholder: t('ob.assistant.name.placeholder'), description: t('ob.assistant.name.desc') })
     const choice = languageChoice(a.language)
     html += c.segments('language', t('ob.assistant.language'), ['es', 'en', 'pt', 'other'].map((v) => ({ value: v, label: t(`ob.assistant.language.${v}`) })), choice)
     if (choice === 'other') html += c.textField('languageOther', t('ob.assistant.languageOther'), a.language, { placeholder: t('ob.assistant.languageOther.placeholder'), indent: true })
@@ -881,7 +880,6 @@ export function createOnboarding(env) {
     }
     update((s) => {
       if (field === 'userName') s.assistant.userName = value
-      else if (field === 'assistantName') s.assistant.name = value
       else if (field === 'languageOther') s.assistant.language = value
       else if (field === 'memoryProject') s.memory.project = value
       else if (field === 'projectsDir') s.sandbox.projectsDir = value

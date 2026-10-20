@@ -94,12 +94,17 @@ fn is_arias_engram(paths: &AriaPaths, entry: &Value) -> bool {
         && entry["env"]["ENGRAM_DATA_DIR"].as_str() == Some(&paths.root.join("engram").display().to_string())
 }
 
+/// The Engram project of the settings: `aria` when none is set.
+fn memory_project(memory: &crate::settings::Memory) -> &str {
+    if memory.project.trim().is_empty() { "aria" } else { memory.project.trim() }
+}
+
 /// Memory on: Aria's Engram entry, with the settings' project. Memory off: Aria's entry goes. An `engram` entry Aria
 /// did not write is never changed, and the file is only written when something changes.
 pub fn sync_memory(paths: &AriaPaths, memory: &crate::settings::Memory) -> Result<(), McpError> {
     let file = read_object(&paths.mcp())?;
     let current = file.get("mcpServers").and_then(|s| s.get("engram")).cloned();
-    let project = if memory.project.trim().is_empty() { "aria" } else { memory.project.trim() };
+    let project = memory_project(memory);
     let wanted = aria_engram(paths, project);
     match (&current, memory.enabled) {
         (Some(entry), _) if !is_arias_engram(paths, entry) => Ok(()),
@@ -115,6 +120,48 @@ pub fn sync_memory(paths: &AriaPaths, memory: &crate::settings::Memory) -> Resul
             servers.remove("engram");
         }),
     }
+}
+
+const FIRST_MEMORY_TITLE: &str = "Aria's memory";
+const FIRST_MEMORY_TEXT: &str =
+    "This project holds what Aria remembers between conversations: decisions, preferences and problems already solved.";
+
+/// Memory on: the settings' Engram project holds at least one memory. Engram only knows a project once something is
+/// saved in it, and until then every lookup the model makes fails with `unknown_project`; so a project with no memory
+/// (the first start, or a database emptied by hand) gets a first one. Returns whether it saved one. Nothing happens
+/// without Aria's own `engram` binary.
+pub fn seed_memory(paths: &AriaPaths, memory: &crate::settings::Memory) -> std::io::Result<bool> {
+    let engram = paths.bin().join("engram");
+    if !memory.enabled || !engram.exists() {
+        return Ok(false);
+    }
+    let project = memory_project(memory);
+    let run = |args: &[&str]| {
+        let output = std::process::Command::new(&engram)
+            .args(args)
+            .env("ENGRAM_DATA_DIR", paths.root.join("engram"))
+            .env("ENGRAM_NO_UPDATE_CHECK", "1")
+            .stdin(std::process::Stdio::null())
+            .output()?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        } else {
+            Err(std::io::Error::other(format!("engram {}: {}", args[0], String::from_utf8_lossy(&output.stderr).trim())))
+        }
+    };
+    if has_memories(&run(&["projects", "list"])?, project) {
+        return Ok(false);
+    }
+    run(&["save", FIRST_MEMORY_TITLE, FIRST_MEMORY_TEXT, "--project", project, "--type", "manual"])?;
+    Ok(true)
+}
+
+/// Does `engram projects list` show `project` with at least one memory? Its rows read `  <name>  <n> obs  …`.
+fn has_memories(listing: &str, project: &str) -> bool {
+    listing.lines().any(|line| {
+        let mut words = line.split_whitespace();
+        words.next() == Some(project) && words.next().and_then(|n| n.parse::<u64>().ok()).is_some_and(|n| n > 0)
+    })
 }
 
 /// Saves a server's OAuth record under Pi's key, keeping the other servers' records.
@@ -195,6 +242,58 @@ mod tests {
         std::fs::write(paths.mcp(), "{ nope").unwrap();
         assert!(set_tavily_key(&paths, "k").is_err());
         assert_eq!(std::fs::read_to_string(paths.mcp()).unwrap(), "{ nope");
+    }
+
+    #[test]
+    fn a_project_counts_as_having_memory_only_with_one_saved() {
+        let listing = "Projects (2):\n  aria                1 obs     1 session      0 prompts\n  casa                0 obs     0 session      0 prompts\n";
+        assert!(has_memories(listing, "aria"));
+        assert!(!has_memories(listing, "casa"));
+        assert!(!has_memories("No projects found.\n", "aria"));
+        assert!(!has_memories(listing, "ari"));
+    }
+
+    /// A stand-in `engram` in Aria's bin folder: `projects list` prints the file `listing`, `save` appends its
+    /// arguments and data dir to `saved`.
+    fn fake_engram(paths: &AriaPaths, listing: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(paths.bin()).unwrap();
+        let log = paths.root.join("saved");
+        std::fs::write(paths.root.join("listing"), listing).unwrap();
+        let script = format!(
+            "#!/bin/sh\ncase \"$1\" in\n  projects) cat '{}' ;;\n  save) echo \"$ENGRAM_DATA_DIR|$ENGRAM_NO_UPDATE_CHECK|$*\" >> '{}' ;;\nesac\n",
+            paths.root.join("listing").display(),
+            log.display()
+        );
+        let bin = paths.bin().join("engram");
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        log
+    }
+
+    #[test]
+    fn a_project_without_memory_gets_a_first_one_in_arias_database() {
+        let (_dir, paths) = paths();
+        let log = fake_engram(&paths, "No projects found.\n");
+        assert!(seed_memory(&paths, &memory(true, "")).unwrap());
+        let saved = std::fs::read_to_string(&log).unwrap();
+        assert!(saved.starts_with(&format!("{}|1|save Aria's memory ", paths.root.join("engram").display())), "{saved}");
+        assert!(saved.contains("--project aria --type manual"), "{saved}");
+    }
+
+    #[test]
+    fn a_project_with_memory_or_memory_off_saves_nothing() {
+        let (_dir, paths) = paths();
+        let log = fake_engram(&paths, "  casa   3 obs   1 session   0 prompts\n");
+        assert!(!seed_memory(&paths, &memory(true, "casa")).unwrap());
+        assert!(!seed_memory(&paths, &memory(false, "nueva")).unwrap());
+        assert!(!log.exists());
+    }
+
+    #[test]
+    fn without_arias_engram_nothing_runs() {
+        let (_dir, paths) = paths();
+        assert!(!seed_memory(&paths, &memory(true, "aria")).unwrap());
     }
 
     #[test]

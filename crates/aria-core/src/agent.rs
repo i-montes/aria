@@ -273,6 +273,9 @@ pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::
     if let Some(settings) = settings {
         // An mcp.json that does not parse is left as it is (mcp.rs never replaces one) and the chat still starts.
         let _ = crate::mcp::sync_memory(paths, &settings.memory);
+        // A memory project Engram does not know yet makes every lookup fail; it gets a first memory. A failure here
+        // leaves the chat to start anyway.
+        let _ = crate::mcp::seed_memory(paths, &settings.memory);
     }
 
     for (source, name) in [(paths.auth(), "auth.json"), (paths.mcp(), "mcp.json"), (paths.mcp_auth(), "mcp-auth.json")] {
