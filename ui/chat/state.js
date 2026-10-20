@@ -286,11 +286,12 @@ function reduceEvent(state, event) {
     }
     case 'history': {
       // The conversation so far. It can arrive after the owner already typed (a cold start): what Pi had before that
-      // goes in front. While only a reply streams (no message of the owner on the page), it is left alone.
+      // goes in front, and so do notices that came first. While only a reply streams (no message of the owner on the
+      // page), it is left alone.
       const past = fromHistory(event.messages)
       if (!state.messages.length) return withMessages(state, past)
       const first = state.messages.find((m) => m.kind === 'user')
-      if (!first) return state
+      if (!first) return state.running || state.messages.some((m) => m.kind === 'assistant' && !m.done) ? state : withMessages(state, [...past, ...state.messages])
       const at = past.findLastIndex((m) => m.kind === 'user' && m.text === first.text)
       return withMessages(state, [...(at >= 0 ? past.slice(0, at) : past), ...state.messages])
     }
@@ -326,8 +327,9 @@ export function reduce(state, message) {
         context: message.context ?? null,
         problem: message.problem ?? null,
       }
-      // The model changing under a conversation leaves a note (the first report is not a change).
-      return state.model && next.model && state.model !== next.model
+      // The model changing under a conversation leaves a note (the first report is not a change, and neither is Pi
+      // resuming a session on another model than the settings' daily one, before anything is on the page).
+      return state.messages.length && state.model && next.model && state.model !== next.model
         ? push(next, { kind: 'note', label: 'model', text: modelShort(next.model) })
         : next
     }

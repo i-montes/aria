@@ -91,7 +91,10 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
 - Message index: chips grow with the pointer but do not fade by distance (the owner's solid-fill rule).
 
 - A session's images (screenshots the model read) are not sent to the page, which never shows them: a session full of
-  them made its history tens of megabytes and the tab came back empty after a restart.
+  them made its history tens of megabytes.
+- A tab used to come back empty after a restart when its session ran on another model than the daily one: the page
+  noted a "model change" before the history arrived and then dropped the history. Notices that come before the history
+  now stay after it.
 - Updating Aria restarts the dock: a run in progress at that moment stops, though the chat and its context come back.
 
 ## Known limits of the page (from the review, deferred)

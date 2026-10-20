@@ -187,6 +187,19 @@ describe('history', () => {
     expect(state.messages).toHaveLength(1)
   })
 
+  test('a resumed session on another model than the daily one keeps its history (no note before it)', () => {
+    const guess = { type: 'chatState', workdir: '/w', running: false, model: 'opencode-go/deepseek-v4.1-flash' }
+    const real = { ...guess, model: 'opencode-go/mimo-v2.6-pro' }
+    const state = run(createChat(), guess, real, ev({ type: 'history', messages: history }))
+    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'tools', 'assistant', 'user'])
+  })
+
+  test('a notice that arrives before the history stays after it', () => {
+    const notice = ev({ type: 'ui_notice', request: { method: 'notify', message: 'careful', notifyType: 'warning' } })
+    const state = run(createChat(), notice, ev({ type: 'history', messages: history }))
+    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'tools', 'assistant', 'user', 'notice'])
+  })
+
   test('a failed tool result marks the call as an error', () => {
     const failed = [history[1], { ...history[2], isError: true }]
     expect(reduce(createChat(), ev({ type: 'history', messages: failed })).messages[0].calls.find((c) => !c.think).status).toBe('error')
@@ -295,8 +308,9 @@ describe('phase, elapsed time and the notes around a run', () => {
     expect(state.messages.at(-1)).toMatchObject({ kind: 'note', label: 'aria', key: 'chat.stoppedByYou' })
   })
 
-  test('a model change leaves a note', () => {
-    const state = run(createChat(), { type: 'chatState', workdir: '/w', running: false, model: 'a/one', thinking: null, context: null, problem: null }, { type: 'chatState', workdir: '/w', running: false, model: 'a/two', thinking: null, context: null, problem: null })
+  test('a model change under a conversation leaves a note', () => {
+    const one = run(createChat(), { type: 'chatState', workdir: '/w', running: false, model: 'a/one', thinking: null, context: null, problem: null })
+    const state = run(addUser(one, 'hi'), { type: 'chatState', workdir: '/w', running: false, model: 'a/two', thinking: null, context: null, problem: null })
     expect(state.messages.at(-1)).toMatchObject({ kind: 'note', label: 'model', text: 'two' })
   })
 
