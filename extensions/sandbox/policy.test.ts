@@ -234,3 +234,26 @@ describe.skipIf(!existsSync('/usr/bin/bwrap'))('a credential that is a symlink',
     expect(out).not.toContain('SECRET-123')
   })
 })
+
+// A credential linked into the project being worked on (dotfiles): the project's protected .pi folder is bound
+// read-only after the writable roots, and must not bring the hidden file back.
+describe.skipIf(!existsSync('/usr/bin/bwrap'))('a credential linked into the project', () => {
+  const fake = realpathSync(mkdtempSync('/tmp/sbx-dot-home-'))
+  const dotfiles = join(fake, 'dotfiles')
+  mkdirSync(join(dotfiles, '.git'), { recursive: true })
+  mkdirSync(join(dotfiles, '.pi', 'agent'), { recursive: true })
+  writeFileSync(join(dotfiles, '.pi', 'agent', 'auth.json'), 'DOT-SECRET-9')
+  mkdirSync(join(fake, '.pi', 'agent'), { recursive: true })
+  symlinkSync(join(dotfiles, '.pi', 'agent', 'auth.json'), join(fake, '.pi', 'agent', 'auth.json'))
+  afterAll(() => rmSync(fake, { recursive: true, force: true }))
+  test('stays hidden', () => {
+    let out = ''
+    try {
+      out = execFileSync('bash', ['-c', wrapCommand(`cat ${fake}/.pi/agent/auth.json; echo done`, dotfiles, { home: fake, runtimeDir: '/nonexistent' })], { stdio: 'pipe' }).toString()
+    } catch (error: any) {
+      out = `${error.stdout ?? ''}${error.stderr ?? ''}`
+    }
+    expect(out).toContain('done')
+    expect(out).not.toContain('DOT-SECRET-9')
+  })
+})

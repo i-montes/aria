@@ -265,9 +265,11 @@ export function bwrapArgs(
   const exists = opts.exists ?? existsSync
   const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc']
   for (const root of writableRoots(cwd, home, exists)) args.push('--bind', root, root)
+  for (const path of protectedPaths(cwd, home).filter(exists)) args.push('--ro-bind', path, path)
+  // The masks go last: a later bind of a folder that holds a secret (the project's .pi, when a credential links into
+  // the project) would bring it back.
   for (const dir of mountPoints([...secretDirs(home, opts.runtimeDir ?? RUNTIME), ...HOST_DIRS]).filter(exists)) args.push('--tmpfs', dir)
   for (const file of mountPoints([...secretFiles(home), ...HOST_FILES]).filter(exists)) args.push('--ro-bind', '/dev/null', file)
-  for (const path of protectedPaths(cwd, home).filter(exists)) args.push('--ro-bind', path, path)
   args.push('--unsetenv', 'DISPLAY', '--chdir', resolve(cwd))
   return args
 }
