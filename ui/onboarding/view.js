@@ -65,6 +65,12 @@ export function createOnboarding(env) {
     servers: [], // every server in Aria's mcp.json but engram (the dock's `servers`; an older dock sends none)
     svc: freshServices(), // Notion and Tavily do not depend on the provider, so they live apart from `ui`
     ui: freshUi(),
+    found: freshFound(), // the MCP servers other apps have (the dock's `mcpFound`), and what is picked to import
+  }
+
+  /** `status`: idle | scanning | ready | error. Replaced on every scan, so a reply to an older one is ignored. */
+  function freshFound(result = null) {
+    return { status: 'idle', servers: [], picked: [], importing: false, error: null, result }
   }
 
   function freshServices() {
@@ -112,6 +118,7 @@ export function createOnboarding(env) {
     state.servers = Array.isArray(servers) ? servers : []
     state.svc = freshServices()
     state.ui = freshUi()
+    state.found = freshFound()
     state.leaving = false
     if (settings?.setup?.completed) {
       // A finished setup opens as the settings screen, on its overview.
@@ -523,6 +530,7 @@ export function createOnboarding(env) {
     }
     if (s.integrations.services.some((service) => !isConnected(service.id))) html += c.info('amber', '', t('ob.integrations.needConnect'))
     html += accessRows()
+    html += foundBlock()
     const p = s.integrations.packages
     html += c.section(t('ob.integrations.section.packages'))
     // Only a local folder is built (npm, git and a gallery are not): the field is it, and it is used when it names one.
@@ -543,6 +551,43 @@ export function createOnboarding(env) {
       c.info('neutral', '', t('ob.integrations.access.desc')) +
       servers.map((server) => c.segments(`access:${server}`, displayName(server), options, ACCESS_LEVELS.includes(access[server]) ? access[server] : 'ask')).join('')
     )
+  }
+
+  /** "Your other MCP servers": what Claude Code, Claude Desktop, Cursor and VS Code have, to copy into Aria's mcp.json.
+   * It never blocks Continue: importing is a choice, not a step to finish. */
+  function foundBlock() {
+    const f = state.found
+    let html = c.section(t('ob.integrations.found.section'))
+    if (f.status === 'idle' || f.status === 'scanning') return html + c.info('neutral', '', t('ob.integrations.found.scanning'))
+    if (f.status === 'error') return html + c.info('amber', '', t(`ob.error.${f.error}`))
+    const result = f.result ? c.info('green', '', t('ob.integrations.found.imported', { n: f.result.length, names: f.result.join(', ') })) : ''
+    if (!f.servers.length) return html + (result || c.info('neutral', '', t('ob.integrations.found.none')))
+    const importable = f.servers.filter((server) => server.importable)
+    html += c.info('neutral', '', t('ob.integrations.found.desc'))
+    if (importable.length) {
+      html += c.checks('mcpImport', '', importable.map((server) => ({ id: server.id, label: foundName(server), description: foundDetails(server), on: f.picked.includes(server.id) })))
+    }
+    for (const server of f.servers.filter((server) => !server.importable)) html += c.info('neutral', foundName(server), foundDetails(server))
+    if (importable.length) {
+      const stateText = f.importing ? t('ob.integrations.found.importing') : f.error ? t(`ob.error.${f.error}`) : ''
+      html += c.actionButton('mcp-import', t('ob.integrations.found.import'), stateText, { disabled: f.importing || !f.picked.length, tone: f.error ? 'error' : '' })
+    }
+    return html + result
+  }
+
+  /** The name, and the one Aria gives it when Pi would refuse it ("my docs → my-docs"). */
+  const foundName = (server) => (server.importAs && server.importAs !== server.name ? `${server.name} → ${server.importAs}` : String(server.name))
+
+  /** Where it came from, what it runs, the secrets it uses (names only), and whether it is off in that app. */
+  function foundDetails(server) {
+    const secrets = Array.isArray(server.secrets) ? server.secrets.map(String) : []
+    const names = secrets.filter((secret) => !secret.startsWith('input:'))
+    const parts = [t(`ob.integrations.found.source.${server.source}`), server.target]
+    if (names.length) parts.push(t('ob.integrations.found.uses', { names: names.join(', ') }))
+    for (const secret of secrets.filter((secret) => secret.startsWith('input:'))) parts.push(t('ob.integrations.found.input', { id: secret.slice(6) }))
+    if (server.disabled) parts.push(t('ob.integrations.found.disabled'))
+    if (!server.importable) parts.push(t('ob.integrations.found.sse'))
+    return parts.filter(Boolean).join(' · ')
   }
 
   function sandboxStep() {
@@ -710,6 +755,7 @@ export function createOnboarding(env) {
     render()
     // Opening the sign-in's section is what checks a credential already on disk.
     maybeCheckStoredCredential()
+    if (id === 'integrations') void scanFound()
   }
 
   function exitSettings() {
@@ -785,6 +831,7 @@ export function createOnboarding(env) {
     render()
     // Drawing has no side effects; entering the sign-in step is what checks a credential already on disk.
     maybeCheckStoredCredential()
+    if (step === 'integrations') void scanFound()
   }
 
   function startFlow(mode) {
@@ -1118,6 +1165,58 @@ export function createOnboarding(env) {
     render()
   }
 
+  /** Asks the dock what MCP servers the other apps have. `result` (the names just imported) stays on the new list. */
+  async function scanFound(result = null) {
+    const f = freshFound(result)
+    f.status = 'scanning'
+    state.found = f
+    render()
+    const reply = await request({ type: 'mcpScan' })
+    if (state.found !== f) return
+    if (reply.type === 'mcpFound') {
+      f.status = 'ready'
+      f.servers = Array.isArray(reply.servers) ? reply.servers.filter((server) => server && typeof server.id === 'string') : []
+    } else {
+      f.status = 'error'
+      f.error = reply.code ?? 'generic'
+    }
+    render()
+  }
+
+  function pickFound(id) {
+    const f = state.found
+    if (f.importing || !f.servers.some((server) => server.id === id && server.importable)) return
+    f.picked = f.picked.includes(id) ? f.picked.filter((x) => x !== id) : [...f.picked, id]
+    render()
+  }
+
+  /** Copies the picked servers into Aria's mcp.json (the dock restarts Pi itself), then reads the servers again for the
+   * access rows and scans again, so what was imported is not offered twice. */
+  async function importFound() {
+    const f = state.found
+    if (f.importing || !f.picked.length) return
+    f.importing = true
+    f.error = null
+    f.result = null
+    render()
+    const ids = [...f.picked]
+    const reply = await request({ type: 'mcpImport', ids })
+    f.importing = false
+    if (reply.type !== 'saved') {
+      f.error = reply.code ?? 'generic'
+      if (state.found === f) render()
+      return
+    }
+    const before = new Set(state.servers)
+    const loaded = await request({ type: 'loadSettings' })
+    if (Array.isArray(loaded.servers)) state.servers = loaded.servers
+    for (const id of loaded.connected ?? []) state.connected.add(id)
+    // The names they got in Aria (a taken one gets -2…); an older dock that sends no servers: the names asked for.
+    const added = state.servers.filter((server) => !before.has(server))
+    const asked = ids.map((id) => f.servers.find((server) => server.id === id)?.importAs ?? id.slice(id.indexOf(':') + 1))
+    await scanFound(added.length ? added : asked)
+  }
+
   /** The dock was opened again: after a finished setup, show the settings (fresh from disk) so they
    * can be changed; in the middle of a setup, keep the place. */
   async function onOpen() {
@@ -1190,6 +1289,8 @@ export function createOnboarding(env) {
       update((s) => s.sandbox.extraWritable.splice(Number(value), 1))
       return render()
     }
+    if (action === 'mcp-import') return importFound()
+    if (action === 'check' && field === 'mcpImport') return pickFound(value)
     if (action === 'check') {
       update((s) => {
         const list = s.subagents.autoSkills

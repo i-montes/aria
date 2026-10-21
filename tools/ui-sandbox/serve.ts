@@ -22,6 +22,13 @@ const sandbox = `<script>
   let settings = params.has('first-run') ? null : ${JSON.stringify(golden)}
   if (settings && params.get('lang')) settings.assistant.language = params.get('lang')
   window.__sent = []
+  // Aria's mcp.json, and what the other apps have (an import adds to the first, and a scan hides what is there).
+  const SERVERS = ['notion', 'tavily', 'rea']
+  const FOUND = [
+    { id: 'claude-code:files', name: 'files', importAs: 'files', source: 'claude-code', kind: 'stdio', target: 'npx', secrets: [], importable: true, disabled: false },
+    { id: 'cursor:docs', name: 'my docs', importAs: 'my-docs', source: 'cursor', kind: 'http', target: 'docs.example.com', secrets: ['X-Api-Key'], importable: true, disabled: true },
+    { id: 'cursor:feed', name: 'feed', importAs: 'feed', source: 'cursor', kind: 'sse', target: 'feed.example.com', secrets: [], importable: false, disabled: false },
+  ]
   const COMMANDS = [
     { name: 'effort', description: 'Set the effort level', source: 'extension' },
     { name: 'autocompact', description: 'Set the compaction threshold', source: 'extension' },
@@ -41,7 +48,9 @@ const sandbox = `<script>
     window.__sent.push(m)
     setTimeout(() => {
       const r = (x) => window.aria.receive({ id: m.id, ...x })
-      if (m.type === 'loadSettings') r({ type: 'settings', settings, exists: !!settings, problem: null, connected: ['opencode-go:api_key', 'mcp:notion'], servers: ['notion', 'tavily', 'rea'] })
+      if (m.type === 'loadSettings') r({ type: 'settings', settings, exists: !!settings, problem: null, connected: ['opencode-go:api_key', 'mcp:notion'], servers: [...SERVERS] })
+      else if (m.type === 'mcpScan') r({ type: 'mcpFound', servers: FOUND.filter((f) => !SERVERS.includes(f.importAs)) })
+      else if (m.type === 'mcpImport') { const picked = FOUND.filter((f) => m.ids.includes(f.id) && f.importable); if (!picked.length) r({ type: 'error', code: 'nothing-to-import' }); else { SERVERS.push(...picked.map((f) => f.importAs)); r({ type: 'saved' }) } }
       else if (m.type === 'sessionsLoad') r({ type: 'sessions', sessions: [{ id: 's1', title: 'Fix the failing build' }], active: 's1' })
       else if (m.type === 'saveSettings') { settings = m.settings; r({ type: 'saved' }) }
       else if (m.type === 'checkKey') r({ type: 'keyResult', ok: true, error: null })

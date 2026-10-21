@@ -751,3 +751,99 @@ describe('the access level of each connector', () => {
     expect(h.ob.snapshot().dirty).toBe(false)
   })
 })
+
+describe('the MCP servers the person already has', () => {
+  const found = [
+    { id: 'claude-code:files', name: 'files', importAs: 'files', source: 'claude-code', kind: 'stdio', target: 'npx', secrets: [], importable: true, disabled: false },
+    { id: 'cursor:docs', name: 'my docs', importAs: 'my-docs', source: 'cursor', kind: 'http', target: 'docs.example.com', secrets: ['X-Api-Key'], importable: true, disabled: true },
+    { id: 'vscode:tracker', name: 'tracker', importAs: 'tracker', source: 'vscode', kind: 'stdio', target: 'node', secrets: ['TRACKER_TOKEN', 'input:tracker-token'], importable: true, disabled: false },
+    { id: 'cursor:feed', name: 'feed', importAs: 'feed', source: 'cursor', kind: 'sse', target: 'feed.example.com', secrets: [], importable: false, disabled: false },
+  ]
+  // The texts with their placeholders, so the names that fill them can be seen.
+  const t = (key, vars) => (vars ? `${key}${JSON.stringify(vars)}` : key)
+  const scanOf = (h) => h.pending.find((p) => p.message.type === 'mcpScan' && !p.answered)
+  const answer = async (p, reply) => {
+    p.answered = true
+    p.resolve(reply)
+    await flush()
+  }
+  const inSettings = async (servers = found) => {
+    const h = harness({ t })
+    h.ob.start(completed, ['opencode-go:api_key'], ['notion'])
+    h.click('settings-open', undefined, 'integrations')
+    await answer(scanOf(h), { type: 'mcpFound', id: 1, servers })
+    return h
+  }
+
+  test('found servers are listed with source and target', async () => {
+    const h = await inSettings()
+    const html = h.root.innerHTML
+    expect(html).toContain('ob.integrations.found.section')
+    expect(html).toContain('data-field="mcpImport" data-value="claude-code:files"')
+    expect(html).toContain('ob.integrations.found.source.claude-code')
+    expect(html).toContain('npx')
+    expect(html).toContain('my docs → my-docs') // the name Aria gives it, only when it differs
+    expect(html).not.toContain('files → files')
+    expect(html).toContain('ob.integrations.found.disabled')
+    // SSE is listed, but has no checkbox
+    expect(html).toContain('feed')
+    expect(html).toContain('ob.integrations.found.sse')
+    expect(html).not.toContain('data-value="cursor:feed"')
+    // the onboarding step scans too, and the scan never blocks Continue
+    const s = harness({ t })
+    s.ob.start(null)
+    s.click('choose', undefined, 'full')
+    s.click('edit', undefined, 'integrations')
+    expect(scanOf(s)).toBeTruthy()
+    expect(s.ob.snapshot().canContinue).toBe(true)
+  })
+
+  test('secrets show only their names', async () => {
+    const h = await inSettings()
+    const html = h.root.innerHTML
+    expect(html).toContain('ob.integrations.found.uses{&quot;names&quot;:&quot;X-Api-Key&quot;}')
+    expect(html).toContain('ob.integrations.found.uses{&quot;names&quot;:&quot;TRACKER_TOKEN&quot;}')
+    expect(html).toContain('ob.integrations.found.input{&quot;id&quot;:&quot;tracker-token&quot;}')
+    expect(html).not.toContain('input:tracker-token&quot;')
+  })
+
+  test('import sends the checked ids', async () => {
+    const h = await inSettings()
+    expect(h.root.innerHTML).toMatch(/data-action="mcp-import"[^>]*disabled/) // nothing checked yet
+    h.click('check', 'mcpImport', 'claude-code:files')
+    h.click('check', 'mcpImport', 'cursor:docs')
+    h.click('check', 'mcpImport', 'cursor:docs') // unchecked again
+    h.click('check', 'mcpImport', 'vscode:tracker')
+    h.click('check', 'mcpImport', 'cursor:feed') // not importable: ignored
+    expect(h.root.innerHTML).not.toMatch(/data-action="mcp-import"[^>]*disabled/)
+    expect(h.ob.snapshot().dirty).toBe(false) // picking is not a change to the settings
+    h.click('mcp-import')
+    const sent = h.lastRequest()
+    expect(sent.message).toEqual({ type: 'mcpImport', ids: ['claude-code:files', 'vscode:tracker'] })
+    await answer(sent, { type: 'error', code: 'mcp-write-failed' })
+    expect(h.root.innerHTML).toContain('ob.error.mcp-write-failed')
+  })
+
+  test('nothing found says so', async () => {
+    const h = await inSettings([])
+    expect(h.root.innerHTML).toContain('ob.integrations.found.none')
+    expect(h.root.innerHTML).not.toContain('data-action="mcp-import"')
+  })
+
+  test('already imported servers are not offered again after a refresh', async () => {
+    const h = await inSettings()
+    h.click('check', 'mcpImport', 'claude-code:files')
+    h.click('mcp-import')
+    await answer(h.lastRequest(), { type: 'saved', id: 2 })
+    const load = h.lastRequest()
+    expect(load.message.type).toBe('loadSettings')
+    await answer(load, { type: 'settings', settings: completed, connected: ['opencode-go:api_key'], servers: ['notion', 'files'] })
+    // the access rows show the new server, at Ask
+    expect(h.root.innerHTML).toContain('data-field="access:files" data-value="ask"')
+    await answer(scanOf(h), { type: 'mcpFound', id: 3, servers: found.slice(1) })
+    const html = h.root.innerHTML
+    expect(html).not.toContain('data-value="claude-code:files"')
+    expect(html).toContain('ob.integrations.found.imported{&quot;n&quot;:1,&quot;names&quot;:&quot;files&quot;}')
+    expect(h.ob.snapshot().dirty).toBe(false)
+  })
+})

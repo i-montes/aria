@@ -166,6 +166,18 @@ const script = `(async () => {
   accessSeg('allow')?.click(); await wait(80)
   $('#flow [data-action="settings-save"]')?.click(); await wait(250)
   check('choosing a level saves it', window.__sent.filter((m) => m.type === 'saveSettings').at(-1)?.settings?.integrations?.access?.notion === 'allow' && accessSeg('allow')?.classList.contains('selected'), JSON.stringify(window.__sent.filter((m) => m.type === 'saveSettings').at(-1)?.settings?.integrations?.access))
+  // the MCP servers the other apps have: listed with where they came from, SSE without a checkbox; importing one
+  // adds its access row and takes it off the list
+  {
+    const box = (id) => $('#flow [data-action="check"][data-field="mcpImport"][data-value="' + id + '"]')
+    const importButton = () => $('#flow [data-action="mcp-import"]')
+    check('the found servers are listed, SSE without a checkbox, Import closed until one is checked', box('claude-code:files') && box('cursor:docs') && !box('cursor:feed') && $('#flow').textContent.includes('Not supported (SSE)') && $('#flow').textContent.includes('my docs → my-docs') && importButton()?.disabled, $('#flow').textContent.slice(-600))
+    box('claude-code:files')?.click(); await wait(80)
+    check('checking a server opens Import and is not a change to save', importButton() && !importButton().disabled && !$('#flow [data-action="settings-save"]'))
+    importButton()?.click(); await wait(300)
+    const sentImport = window.__sent.filter((m) => m.type === 'mcpImport').at(-1)
+    check('importing a found server', JSON.stringify(sentImport?.ids) === '["claude-code:files"]' && !box('claude-code:files') && box('cursor:docs') && $('#flow').textContent.includes('Imported 1: files') && !!$('#flow [data-field="access:files"][data-value="ask"].selected'), $('#flow').textContent.slice(-400))
+  }
   $('#flow [data-action="settings-home"]')?.click(); await wait(80)
   $('#flow [data-action="settings-exit"]')?.click(); await wait(150)
   check('leaving the settings goes back to the chat', document.body.classList.contains('mode-chat'))

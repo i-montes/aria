@@ -382,5 +382,22 @@
   "settings.saved": "Saved",
   "ob.integrations.packagePath.desc": "Optional. Extensions, skills, prompt templates and themes in this folder are loaded too.",
   "ob.router.unavailable.title": "Jev comes with OpenCode Go",
-  "ob.router.unavailable.desc": "With this provider Aria works without a router for now: no automatic route or effort, no read-only turns, no command review and no expert assignment."
+  "ob.router.unavailable.desc": "With this provider Aria works without a router for now: no automatic route or effort, no read-only turns, no command review and no expert assignment.",
+  "ob.integrations.found.section": "YOUR OTHER MCP SERVERS",
+  "ob.integrations.found.desc": "Found in your other apps. Importing copies the ones you check into ~/.aria/mcp.json; nothing changes in those apps.",
+  "ob.integrations.found.scanning": "Looking for MCP servers in Claude Code, Claude Desktop, Cursor and VS Code…",
+  "ob.integrations.found.none": "No other MCP servers found in Claude Code, Claude Desktop, Cursor or VS Code.",
+  "ob.integrations.found.source.claude-code": "Claude Code",
+  "ob.integrations.found.source.claude-desktop": "Claude Desktop",
+  "ob.integrations.found.source.cursor": "Cursor",
+  "ob.integrations.found.source.vscode": "VS Code",
+  "ob.integrations.found.uses": "uses {names}",
+  "ob.integrations.found.input": "asks for {id} in VS Code — set it after importing",
+  "ob.integrations.found.disabled": "disabled there",
+  "ob.integrations.found.sse": "Not supported (SSE)",
+  "ob.integrations.found.import": "Import",
+  "ob.integrations.found.importing": "Importing…",
+  "ob.integrations.found.imported": "Imported {n}: {names}",
+  "ob.error.mcp-write-failed": "Aria could not write ~/.aria/mcp.json.",
+  "ob.error.nothing-to-import": "None of the checked servers can be imported any more."
 }
