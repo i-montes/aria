@@ -83,6 +83,8 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
   - A missing page file is served as an empty 200 (`dock/mac.rs`, logged as "missing page asset"); GTK answers
     NotFound.
   - The `aria-mac` hotkey test checks its own constants; the screen tests check the geometry only.
+  - The installer gives up waiting for the old agent after 5 s, and `bootstrap` then fails after the binary was
+    replaced.
 - The chosen shortcut on macOS (2026-10-21): `aria-mac` registers the `shortcut` setting with Carbon, falls back to
   `Option + Space`, `Control + Option + Space`, `Command + Option + Space` when `RegisterEventHotKey` refuses one, and
   registers again (new first, then the old one unregistered) when the setting changes. The key codes and the order are
@@ -92,8 +94,6 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
   (input sources), a combination another app holds (another hotkey app, or a second Aria-like registration), a change
   in the settings (the new one works at once, the old one no longer opens the dock), every candidate taken (the banner,
   "None available", a retry once one is freed), and a letter on a non-US layout (Carbon codes are key positions).
-  - The installer gives up waiting for the old agent after 5 s, and `bootstrap` then fails after the binary was
-    replaced.
 - `crates/aria/src/dock/mac.rs` repeats the page queue, the open/close generations and the notice timing of `dock/gtk.rs`; they can be shared now that the Mac build is at hand.
 - The owner's `sandbox` extension uses `bwrap` (Linux). On macOS there is no box yet: every command asks first with the permission card (`extensions/sandbox/route.ts`). A Seatbelt (`sandbox-exec`) profile with the same limits is the macOS sandbox still to design; some of its tests assume Linux paths.
 - No `.app` bundle, signing or notarization, so the standard "open at login" UI and notification actions wait.
@@ -178,6 +178,22 @@ paperclip, drop and paste; `~/.aria/attachments/`). Left:
   the model as an image does not go again as one; the file stays on disk and its line names it.
 - Two queued messages with the same text and different files can swap their chips until Pi's next queue update puts
   each one right.
+
+## The turn watchdog, MCP import and the shortcut
+
+The dock stops a run that has gone silent (`models.turnTimeoutMinutes`), Settings → Integrations and the setup import
+the MCP servers other apps have, and the shortcut is chosen in the settings (the macOS side is above). Left:
+
+- No MCP reconnect in Aria: Pi has no way for Aria to ask it to reconnect a server, so a connector that failed to
+  start waits for its next use (or a Pi restart). Retrying with backoff stays Pi's.
+- A tool that never reports its end keeps the watchdog paused for the rest of that run (a running tool pauses it on
+  purpose, so a long silent build is not cut); the watchdog only covers the model being silent.
+- An imported server whose env var is empty in the other app reaches Pi without that variable.
+- The test `an_import_that_cannot_write_says_so` fails when the tests run as root (a read-only folder does not stop
+  root).
+- In the import list, the checks are lost when the setup goes Back and returns to Integrations.
+- On Hyprland, a combination already bound (or Aria's own) never reaches the page, so the Shortcut row cannot record
+  it by pressing it; it can be typed in the field under the row.
 
 ## Known limits of the page (from the review, deferred)
 

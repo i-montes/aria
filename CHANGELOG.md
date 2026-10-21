@@ -105,3 +105,15 @@ Notes: the desktop notification for a prompt that nobody can see is sent with `o
 | File | What | Backup | Revert |
 |---|---|---|---|
 | `~/.aria/attachments/` | every file attached in the chat, saved by the dock as `<session>/<yyyy-mm-dd>/<n>-<safe name>` (folders mode 0700, files 0600) so the model can read it; nothing removes them (new) | none, new | `rm -r ~/.aria/attachments` (messages that named a file there can no longer be read again) |
+
+## 2026-10-21 — turn watchdog, MCP import, the shortcut
+
+The watchdog only aborts a run through Pi; nothing on disk. The import reads other apps' MCP files (`~/.claude.json`,
+Claude Desktop's and VS Code's under the config directory or `~/Library/Application Support/`, `~/.cursor/mcp.json`)
+and never writes them.
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| `~/.aria/mcp.json` | the servers the person picks in "Your other MCP servers" are added as entries (under a name Pi accepts, `-2`, `-3`… when taken), only on the person's click; every other entry and key stays, mode 0600 | none; the entries are new and the rest of the file is kept | remove the imported entries from `mcpServers` (the next Pi start drops them) |
+| Hyprland / Carbon (runtime only, nothing on disk) | the bind is now the `shortcut` setting, or the first free fallback (`SUPER + SHIFT + A`, `SUPER + ALT + A`; macOS `Control + Option + Space`, `Command + Option + Space`) when it is taken | not applicable | set `shortcut` back to `""`, or stop the dock; on Hyprland `hyprctl eval 'hl.unbind("<the shortcut>")'` |
+| `rustup` target `aarch64-apple-darwin` and mise's `zig@0.14.1` (developer machines that run `sh tools/check-macos.sh`) | the Rust standard library for the Mac target and zig as its C compiler, installed on first use | none, new | `rustup target remove aarch64-apple-darwin`; `mise uninstall zig@0.14.1` |
