@@ -1142,7 +1142,7 @@ impl Launcher for SessionLauncher {
 }
 
 /// Whether `run_dir` is inside `hidden`, the folder the sandbox hides from boxed commands.
-fn hidden_from_the_box(run_dir: &Path, hidden: Option<&Path>) -> bool {
+fn hidden_from_the_box(run_dir: &std::path::Path, hidden: Option<&std::path::Path>) -> bool {
     hidden.is_some_and(|hidden| hidden.is_absolute() && run_dir.starts_with(hidden))
 }
 
@@ -3104,10 +3104,16 @@ mod tests {
         assert_eq!(path, "", "Pi gets no ARIA_JOBS_SOCK, so its tools say they need the dock");
         assert!(!h.run_dir.join("jobs-s2.sock").exists());
 
-        assert!(hidden_from_the_box(Path::new("/run/user/1000/aria"), Some(Path::new("/run/user/1000"))));
-        assert!(!hidden_from_the_box(Path::new("/tmp/aria"), Some(Path::new("/run/user/1000"))));
-        assert!(!hidden_from_the_box(Path::new("/tmp/aria"), None));
-        assert!(!hidden_from_the_box(Path::new("aria"), Some(Path::new(""))), "a relative folder hides nothing");
+        assert!(hidden_from_the_box(
+            std::path::Path::new("/run/user/1000/aria"),
+            Some(std::path::Path::new("/run/user/1000"))
+        ));
+        assert!(!hidden_from_the_box(std::path::Path::new("/tmp/aria"), Some(std::path::Path::new("/run/user/1000"))));
+        assert!(!hidden_from_the_box(std::path::Path::new("/tmp/aria"), None));
+        assert!(
+            !hidden_from_the_box(std::path::Path::new("aria"), Some(std::path::Path::new(""))),
+            "a relative folder hides nothing"
+        );
     }
 
     #[test]
