@@ -4,6 +4,7 @@
 //! restart into the new binary as soon as it is hidden and no session has a run going; it fails when no dock answers,
 //! and the installer then restarts the service itself.
 
+mod attachments;
 mod chat;
 mod control;
 mod dock;

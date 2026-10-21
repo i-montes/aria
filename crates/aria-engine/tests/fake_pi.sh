@@ -12,6 +12,11 @@ while IFS= read -r line; do
         printf '{"type":"response","id":"%s","command":"prompt","success":false,"error":"Cannot submit a prompt while compaction is in progress"}\n' "$id"
         continue
       fi
+      # A prompt with attachments says what it carried: how many images, and its message (with the attachment lines).
+      case "$line" in *attached*)
+        images=$(printf '%s' "$line" | grep -o '"type":"image"' | wc -l | tr -d ' ')
+        printf '{"type":"prompt_seen","images":%s,"message":"%s"}\n' "$images" "$(field message "$line")" ;;
+      esac
       behavior=$(field streamingBehavior "$line")
       [ -n "$behavior" ] && printf '{"type":"queued_as","behavior":"%s","message":"%s"}\n' "$behavior" "$(field message "$line")"
       printf '{"type":"response","id":"%s","command":"prompt","success":true,"data":{"disposition":"started"}}\n' "$id"
@@ -29,7 +34,7 @@ while IFS= read -r line; do
     get_commands)
       printf '{"type":"response","id":"%s","command":"get_commands","success":true,"data":{"commands":[{"name":"effort","description":"Set effort","source":"extension"}]}}\n' "$id" ;;
     get_available_models)
-      printf '{"type":"response","id":"%s","command":"get_available_models","success":true,"data":{"models":[{"provider":"opencode-go","id":"glm-5.3","name":"GLM 5.3"}]}}\n' "$id" ;;
+      printf '{"type":"response","id":"%s","command":"get_available_models","success":true,"data":{"models":[{"provider":"opencode-go","id":"glm-5.3","name":"GLM 5.3","input":["text"]},{"provider":"opencode-go","id":"kimi-k3","name":"Kimi K3","input":["text","image"]}]}}\n' "$id" ;;
     get_messages)
       printf '{"type":"response","id":"%s","command":"get_messages","success":true,"data":{"messages":[{"role":"user","content":"earlier"}]}}\n' "$id" ;;
     get_session_stats)

@@ -37,9 +37,15 @@ pub enum PageMessage {
     StartMcpOAuth { id: u64, service: String },
     #[serde(rename = "openUrl")]
     OpenUrl { url: String },
-    /// A chat message. `behavior` is `steer` or `followUp` when a run is already going.
+    /// A chat message. `behavior` is `steer` or `followUp` when a run is already going. `attachments` are the files the
+    /// person attached, read by the page as base64; the dock saves them and tells Pi where they are.
     #[serde(rename = "chatSend")]
-    ChatSend { text: String, behavior: Option<String> },
+    ChatSend {
+        text: String,
+        behavior: Option<String>,
+        #[serde(default)]
+        attachments: Vec<Attachment>,
+    },
     #[serde(rename = "chatAbort")]
     ChatAbort,
     /// The dock opened: tell the page where Aria works and how it is doing.
@@ -104,6 +110,15 @@ pub enum PageMessage {
     /// Hide a finished job from the background list.
     #[serde(rename = "jobDismiss")]
     JobDismiss { job: String },
+}
+
+/// A file attached to a chat message: its name as the person had it, its media type and its bytes in base64.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Attachment {
+    pub name: String,
+    #[serde(default)]
+    pub mime: String,
+    pub data: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -250,14 +265,32 @@ mod tests {
     }
 
     #[test]
+    fn chat_send_without_attachments_still_parses() {
+        assert_eq!(
+            page(r#"{"type":"chatSend","text":"hi"}"#),
+            PageMessage::ChatSend { text: "hi".into(), behavior: None, attachments: vec![] }
+        );
+        assert_eq!(
+            page(
+                r#"{"type":"chatSend","text":"look","attachments":[{"name":"a.png","mime":"image/png","data":"AAAA"}]}"#
+            ),
+            PageMessage::ChatSend {
+                text: "look".into(),
+                behavior: None,
+                attachments: vec![Attachment { name: "a.png".into(), mime: "image/png".into(), data: "AAAA".into() }]
+            }
+        );
+    }
+
+    #[test]
     fn chat_page_messages_parse() {
         assert_eq!(
             page(r#"{"type":"chatSend","text":"hi","behavior":"steer"}"#),
-            PageMessage::ChatSend { text: "hi".into(), behavior: Some("steer".into()) }
+            PageMessage::ChatSend { text: "hi".into(), behavior: Some("steer".into()), attachments: vec![] }
         );
         assert_eq!(
             page(r#"{"type":"chatSend","text":"hi"}"#),
-            PageMessage::ChatSend { text: "hi".into(), behavior: None }
+            PageMessage::ChatSend { text: "hi".into(), behavior: None, attachments: vec![] }
         );
         assert_eq!(page(r#"{"type":"chatAbort"}"#), PageMessage::ChatAbort);
         assert_eq!(page(r#"{"type":"chatLoad"}"#), PageMessage::ChatLoad);
@@ -311,7 +344,7 @@ mod tests {
             page(r#"{"type":"session","session":"a1","message":{"type":"chatSend","text":"hi"}}"#),
             PageMessage::Session {
                 session: "a1".into(),
-                message: Box::new(PageMessage::ChatSend { text: "hi".into(), behavior: None })
+                message: Box::new(PageMessage::ChatSend { text: "hi".into(), behavior: None, attachments: vec![] })
             }
         );
         assert_eq!(page(r#"{"type":"sessionsLoad","id":3}"#), PageMessage::SessionsLoad { id: 3 });

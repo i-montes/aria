@@ -5,7 +5,7 @@
 use crate::jobs::{Job, JobState, Jobs};
 use crate::jobs_socket::{self, AgentLaunch, JobsSocket, Launcher};
 use aria_core::agent;
-use aria_core::bridge::{DockMessage, PageMessage};
+use aria_core::bridge::{Attachment, DockMessage, PageMessage};
 use aria_core::files;
 use aria_core::paths::AriaPaths;
 use aria_core::pi::{self, PiError};
@@ -193,6 +193,8 @@ struct Inner {
     restart_pending: bool,
     /// Prompts sent and not yet accepted, by command id, so a refusal can name its text.
     pending_prompts: HashMap<String, String>,
+    /// Which models can be sent images (`input` includes `image` in `get_available_models`), by `provider/id`.
+    sees_images: HashMap<String, bool>,
     /// The arguments the running Pi was started with (tests read them).
     spawn_args: Vec<String>,
     /// The folder the running Pi was started in (what the header must show, whatever the settings say now).
@@ -281,7 +283,9 @@ impl Chat {
     pub fn handle(&self, message: PageMessage) {
         match message {
             PageMessage::ChatLoad => self.load(),
-            PageMessage::ChatSend { text, behavior } => self.send_prompt(&text, behavior.as_deref()),
+            PageMessage::ChatSend { text, behavior, attachments } => {
+                self.send_prompt(&text, behavior.as_deref(), &attachments)
+            }
             PageMessage::ChatClearQueue { steer, keep } => {
                 if let Some(engine) = self.current_engine() {
                     // Pi can only empty its queue; the messages that stay are queued again, each where it was (Pi takes
@@ -458,23 +462,63 @@ impl Chat {
         }
     }
 
-    fn send_prompt(&self, text: &str, behavior: Option<&str>) {
+    /// Sends a message. Its attachments are saved first (a message that cannot be saved is refused, and its text goes back
+    /// to the composer, as Pi's own refusals do); images go to Pi as images only when the session's model can see them.
+    fn send_prompt(&self, text: &str, behavior: Option<&str>, attachments: &[Attachment]) {
         let engine = match self.ensure_engine() {
             Ok(engine) => engine,
             Err(code) => return self.emit(self.state_message(Some(code))),
         };
-        let mut fields = json!({"message": text});
+        let refuse = |error: &str| {
+            self.emit(DockMessage::ChatEvent {
+                event: json!({"type": "command_failed", "command": "prompt", "error": error, "text": text}),
+            })
+        };
+        let saved = match crate::attachments::save(
+            &self.ctx.paths.attachments(),
+            &self.session,
+            &crate::attachments::today(),
+            attachments,
+        ) {
+            Ok(saved) => saved,
+            Err(error) => return refuse(&error),
+        };
+        let images_ok = saved.iter().any(|one| one.image.is_some()) && self.model_sees_images(&engine);
+        let (message, images) = crate::attachments::message(text, &saved, images_ok);
+        let mut fields = json!({"message": message});
+        if !images.is_empty() {
+            fields["images"] = json!(images);
+        }
         if let Some(behavior) = behavior {
             fields["streamingBehavior"] = json!(behavior);
         }
         match engine.send("prompt", fields) {
             Ok(id) => {
+                // The page's own text: what its thread and queue show, and what a refusal gives back.
                 self.inner.lock().unwrap().pending_prompts.insert(id, text.to_string());
             }
-            Err(_) => self.emit(DockMessage::ChatEvent {
-                event: json!({"type": "command_failed", "command": "prompt", "error": "Pi is no longer running", "text": text}),
-            }),
+            Err(_) => refuse("Pi is no longer running"),
         }
+    }
+
+    /// Can the session's model be sent images? Read from `get_available_models` once and kept per model; a model Pi does
+    /// not list, or a list Pi does not give, is a model that cannot.
+    fn model_sees_images(&self, engine: &Engine) -> bool {
+        let model = self.inner.lock().unwrap().model.clone().or_else(|| self.settings().and_then(|s| s.models.daily));
+        let Some(model) = model else { return false };
+        if let Some(&known) = self.inner.lock().unwrap().sees_images.get(&model) {
+            return known;
+        }
+        let Ok(response) = engine.request("get_available_models", json!({}), REQUEST_TIMEOUT) else { return false };
+        let Some(models) = response.data["models"].as_array().filter(|_| response.success) else { return false };
+        let mut inner = self.inner.lock().unwrap();
+        for listed in models {
+            if let (Some(provider), Some(id)) = (listed["provider"].as_str(), listed["id"].as_str()) {
+                let image = listed["input"].as_array().is_some_and(|input| input.iter().any(|kind| kind == "image"));
+                inner.sees_images.insert(format!("{provider}/{id}"), image);
+            }
+        }
+        *inner.sees_images.entry(model).or_insert(false)
     }
 
     /// The running Pi, starting one when there is none. `Err` is a UI problem key.
@@ -1431,7 +1475,7 @@ mod tests {
     }
 
     fn send(h: &Harness, text: &str) {
-        h.chat.handle(PageMessage::ChatSend { text: text.into(), behavior: None });
+        h.chat.handle(PageMessage::ChatSend { text: text.into(), behavior: None, attachments: vec![] });
     }
 
     #[test]
@@ -1534,7 +1578,7 @@ mod tests {
         wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         h.visible.store(false, Ordering::SeqCst);
         // `ask` is the fake Pi's test-only command that opens a select dialog (u1)
-        h.chat.handle(PageMessage::ChatSend { text: "/ask".into(), behavior: None });
+        h.chat.handle(PageMessage::ChatSend { text: "/ask".into(), behavior: None, attachments: vec![] });
         wait_for(&h, "no dialog for plain prompts", |m| event_of(m, "agent_settled"));
         h.chat.test_send_raw("ask");
         let dialog = wait_for(&h, "the dialog", |m| matches!(m, DockMessage::ChatDialog { .. }));
@@ -1710,7 +1754,7 @@ mod tests {
             }),
             "s1".into(),
         );
-        chat.handle(PageMessage::ChatSend { text: "hi".into(), behavior: None });
+        chat.handle(PageMessage::ChatSend { text: "hi".into(), behavior: None, attachments: vec![] });
         let message = messages.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(
             matches!(message, DockMessage::ChatState { problem: Some(ref p), .. } if p == "node-missing"),
@@ -1779,7 +1823,10 @@ mod tests {
     fn reload_restarts_only_its_own_pi() {
         let s = sessions_harness();
         for id in ["aa", "bb"] {
-            s.sessions.handle(in_session(id, PageMessage::ChatSend { text: "x".into(), behavior: None }));
+            s.sessions.handle(in_session(
+                id,
+                PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] },
+            ));
             wait_session(&s, "settled", id, settled);
         }
         s.sessions.handle(in_session("aa", PageMessage::EnginesRestart));
@@ -1817,7 +1864,9 @@ mod tests {
         let h = harness();
         let (a, b) = (h.chat.clone(), h.chat.clone());
         let t1 = std::thread::spawn(move || a.handle(PageMessage::ListCommands { id: 1 }));
-        let t2 = std::thread::spawn(move || b.handle(PageMessage::ChatSend { text: "hi".into(), behavior: None }));
+        let t2 = std::thread::spawn(move || {
+            b.handle(PageMessage::ChatSend { text: "hi".into(), behavior: None, attachments: vec![] })
+        });
         t1.join().unwrap();
         t2.join().unwrap();
         wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
@@ -1954,8 +2003,14 @@ mod tests {
     #[test]
     fn two_sessions_run_their_own_pi_at_once() {
         let s = sessions_harness();
-        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "one".into(), behavior: None }));
-        s.sessions.handle(in_session("bb", PageMessage::ChatSend { text: "two".into(), behavior: None }));
+        s.sessions.handle(in_session(
+            "aa",
+            PageMessage::ChatSend { text: "one".into(), behavior: None, attachments: vec![] },
+        ));
+        s.sessions.handle(in_session(
+            "bb",
+            PageMessage::ChatSend { text: "two".into(), behavior: None, attachments: vec![] },
+        ));
         wait_session(&s, "the first reply", "aa", settled);
         wait_session(&s, "the second reply", "bb", settled);
     }
@@ -1971,7 +2026,10 @@ mod tests {
     #[test]
     fn a_session_message_for_an_unknown_id_creates_it_and_a_bad_id_is_ignored() {
         let s = sessions_harness();
-        s.sessions.handle(in_session("../evil", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        s.sessions.handle(in_session(
+            "../evil",
+            PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] },
+        ));
         s.sessions.handle(in_session("fresh-1", PageMessage::ChatLoad));
         wait_session(&s, "its state", "fresh-1", |m| matches!(m, DockMessage::ChatState { .. }));
         assert!(!s.h.paths.agent().join("sessions").join("../evil").exists());
@@ -1982,7 +2040,10 @@ mod tests {
         let s = sessions_harness();
         s.h.visible.store(false, Ordering::SeqCst);
         for id in ["aa", "bb"] {
-            s.sessions.handle(in_session(id, PageMessage::ChatSend { text: "x".into(), behavior: None }));
+            s.sessions.handle(in_session(
+                id,
+                PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] },
+            ));
             wait_session(&s, "ready", id, |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         }
         s.sessions.test_send_raw("aa", "ask");
@@ -2012,7 +2073,8 @@ mod tests {
     fn closing_a_session_stops_its_pi_and_closes_its_dialogs() {
         let s = sessions_harness();
         s.h.visible.store(false, Ordering::SeqCst);
-        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        s.sessions
+            .handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] }));
         wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         s.sessions.test_send_raw("aa", "ask");
         wait_session(&s, "the dialog", "aa", |m| matches!(m, DockMessage::ChatDialog { .. }));
@@ -2037,7 +2099,10 @@ mod tests {
     fn restarting_the_engines_stops_every_pi_and_the_next_use_starts_a_fresh_one() {
         let s = sessions_harness();
         for id in ["aa", "bb"] {
-            s.sessions.handle(in_session(id, PageMessage::ChatSend { text: "x".into(), behavior: None }));
+            s.sessions.handle(in_session(
+                id,
+                PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] },
+            ));
             wait_session(&s, "ready", id, |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         }
         s.h.visible.store(false, Ordering::SeqCst);
@@ -2059,7 +2124,8 @@ mod tests {
     #[test]
     fn a_settings_change_waits_for_the_run_then_restarts_pi() {
         let s = sessions_harness();
-        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        s.sessions
+            .handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] }));
         wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         // the first message's own run (start and settle) must not be mistaken for the one below
         wait_session(
@@ -2100,7 +2166,8 @@ mod tests {
     fn an_update_waits_while_a_run_goes_and_then_stops_every_pi() {
         let s = sessions_harness();
         assert!(!s.sessions.busy(), "no session has run yet");
-        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        s.sessions
+            .handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] }));
         wait_session(&s, "the first run settled", "aa", settled);
         std::thread::sleep(Duration::from_millis(100));
         while s.messages.try_recv().is_ok() {}
@@ -2128,7 +2195,8 @@ mod tests {
     fn a_change_the_extensions_read_live_keeps_every_pi_and_its_session_state() {
         let s = sessions_harness();
         settings::save(&s.h.paths, &Settings::defaults("es")).unwrap();
-        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        s.sessions
+            .handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] }));
         wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         let mut settings = Settings::defaults("es");
         settings.effort.mode = "fixed".into();
@@ -2146,7 +2214,8 @@ mod tests {
     fn a_change_pi_reads_only_at_start_restarts_it() {
         let s = sessions_harness();
         settings::save(&s.h.paths, &Settings::defaults("es")).unwrap();
-        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        s.sessions
+            .handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] }));
         wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         let mut settings = Settings::defaults("es");
         settings.subagents.experts.iter_mut().for_each(|e| e.enabled = e.name != "security");
@@ -2159,7 +2228,8 @@ mod tests {
     fn a_new_projects_folder_restarts_pi_so_it_works_there() {
         let s = sessions_harness();
         settings::save(&s.h.paths, &Settings::defaults("es")).unwrap();
-        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        s.sessions
+            .handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] }));
         wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         let mut settings = Settings::defaults("es");
         let elsewhere = s.h._dir.path().join("elsewhere");
@@ -2204,7 +2274,10 @@ mod tests {
     fn a_hidden_dock_notifies_for_dialogs_in_every_session() {
         let s = sessions_harness();
         for id in ["aa", "bb"] {
-            s.sessions.handle(in_session(id, PageMessage::ChatSend { text: "x".into(), behavior: None }));
+            s.sessions.handle(in_session(
+                id,
+                PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] },
+            ));
             wait_session(&s, "ready", id, |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
             s.sessions.test_send_raw(id, "ask");
             wait_session(&s, "its dialog", id, |m| matches!(m, DockMessage::ChatDialog { .. }));
@@ -2433,6 +2506,63 @@ mod tests {
         }
     }
 
+    fn with_image(text: &str) -> PageMessage {
+        use base64::Engine as _;
+        let data = base64::engine::general_purpose::STANDARD.encode(b"PNGDATA");
+        let attachments =
+            vec![aria_core::bridge::Attachment { name: "shot.png".into(), mime: "image/png".into(), data }];
+        PageMessage::ChatSend { text: text.into(), behavior: None, attachments }
+    }
+
+    fn prompt_seen(h: &Harness) -> (u64, String) {
+        match wait_for(h, "the prompt with attachments", |m| event_of(m, "prompt_seen")) {
+            DockMessage::ChatEvent { event } => {
+                (event["images"].as_u64().unwrap(), event["message"].as_str().unwrap().replace("\\n", "\n"))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn the_prompt_carries_images_for_a_vision_model() {
+        let h = harness();
+        ready(&h);
+        // The session's model (the daily one) is not listed as seeing images: the image goes as a path.
+        h.chat.handle(with_image("look"));
+        let (images, message) = prompt_seen(&h);
+        assert_eq!(images, 0);
+        assert!(message.starts_with("look\n\n[attached: shot.png (image/png, 7 B) at "), "{message}");
+        let saved = h.paths.attachments().join("s1").join(crate::attachments::today()).join("1-shot.png");
+        assert!(message.contains(&saved.display().to_string()), "{message}");
+        assert_eq!(std::fs::read(&saved).unwrap(), b"PNGDATA");
+
+        h.chat.handle(PageMessage::SetModel { id: 2, model: "opencode-go/kimi-k3".into() });
+        wait_for(&h, "the model change", |m| matches!(m, DockMessage::Saved { id: 2 }));
+        h.chat.handle(with_image("again"));
+        let (images, message) = prompt_seen(&h);
+        assert_eq!(images, 1);
+        assert!(message.starts_with("again\n\n[attached image: shot.png at "), "{message}");
+        assert!(message.ends_with("2-shot.png]"), "{message}");
+    }
+
+    #[test]
+    fn a_failed_save_gives_the_text_back() {
+        let h = harness();
+        ready(&h);
+        std::fs::write(h.paths.attachments(), "not a folder").unwrap();
+        drain(&h); // the first run's events: only what this send causes counts below
+        h.chat.handle(with_image("look"));
+        match wait_for(&h, "the refusal", |m| event_of(m, "command_failed")) {
+            DockMessage::ChatEvent { event } => {
+                assert_eq!(event["command"], json!("prompt"));
+                assert_eq!(event["text"], json!("look"));
+                assert!(event["error"].is_string());
+            }
+            _ => unreachable!(),
+        }
+        assert!(!drain(&h).iter().any(|m| event_of(m, "prompt_seen") || event_of(m, "agent_start")));
+    }
+
     #[test]
     fn a_failed_command_nobody_waited_for_reaches_the_page() {
         let h = harness();
@@ -2536,7 +2666,8 @@ mod tests {
     #[test]
     fn closing_a_session_stops_what_its_pi_started() {
         let s = sessions_harness();
-        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        s.sessions
+            .handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] }));
         wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         s.sessions.test_send_raw("aa", "background");
         let pid: u32 = match wait_session(
@@ -2564,7 +2695,8 @@ mod tests {
     #[test]
     fn closing_the_tab_removes_its_socket() {
         let s = sessions_harness();
-        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        s.sessions
+            .handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] }));
         wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         let path = s.h.run_dir.join("watch-aa.sock");
         assert!(path.exists());
@@ -2639,7 +2771,7 @@ mod tests {
             }),
             "s2".into(),
         );
-        chat.handle(PageMessage::ChatSend { text: "hi".into(), behavior: None });
+        chat.handle(PageMessage::ChatSend { text: "hi".into(), behavior: None, attachments: vec![] });
         chat.test_send_raw("env_jobs");
         let path = loop {
             match messages.recv_timeout(Duration::from_secs(5)).expect("the env") {
@@ -2661,7 +2793,8 @@ mod tests {
     #[test]
     fn closing_a_tab_stops_its_jobs() {
         let s = sessions_harness();
-        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        s.sessions
+            .handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] }));
         wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         let socket = s.h.run_dir.join("jobs-aa.sock");
         assert!(socket.exists());
@@ -2686,7 +2819,8 @@ mod tests {
     #[test]
     fn background_jobs_keep_the_dock_busy() {
         let s = sessions_harness();
-        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        s.sessions
+            .handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] }));
         wait_session(&s, "settled", "aa", settled);
         assert!(!s.sessions.busy());
         let jobs = s.sessions.ctx.jobs.clone();

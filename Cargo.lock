@@ -10,6 +10,7 @@ dependencies = [
  "aria-engine",
  "aria-hyprland",
  "aria-mac",
+ "base64",
  "block2",
  "gdk",
  "gio",

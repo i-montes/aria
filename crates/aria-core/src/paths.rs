@@ -47,6 +47,12 @@ impl AriaPaths {
         self.root.join("jobs.json")
     }
 
+    /// The files attached to chat messages, `<session>/<yyyy-mm-dd>/<n>-<safe name>` inside (folders 0700, files 0600).
+    /// Pi reads them there; nothing in the box may write there.
+    pub fn attachments(&self) -> PathBuf {
+        self.root.join("attachments")
+    }
+
     /// Pi's agent directory (`PI_CODING_AGENT_DIR`): its own settings, links to our credentials, the
     /// persona, extensions and sessions. Aria owns and regenerates it.
     pub fn agent(&self) -> PathBuf {
@@ -96,6 +102,7 @@ mod tests {
         let paths = AriaPaths { root: PathBuf::from("/r") };
         assert_eq!(paths.agent(), PathBuf::from("/r/agent"));
         assert_eq!(paths.jobs(), PathBuf::from("/r/jobs.json"));
+        assert_eq!(paths.attachments(), PathBuf::from("/r/attachments"));
         assert_eq!(paths.bin(), PathBuf::from("/r/bin"));
         assert_eq!(paths.pi_root(), PathBuf::from("/r/pi"));
         assert_eq!(paths.pi_install("1.3.0"), PathBuf::from("/r/pi/1.3.0"));
