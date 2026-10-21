@@ -5,6 +5,12 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.3.0 — 2026-10-21
+
+### New
+
+- the next version is decided from the commits since the last tag (SemVer), and --next prints it
+
 ## 0.2.0 — 2026-10-21
 
 The first tagged version: everything since the project started.
