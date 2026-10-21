@@ -2,6 +2,7 @@
 // to the composition (the empty thread, results of cards, the header, the toast).
 import * as answers from './parts/answers.js'
 import * as assistant from './parts/assistant.js'
+import * as attachments from './parts/attachments.js'
 import * as background from './parts/background.js'
 import * as commands from './parts/commands.js'
 import * as composer from './parts/composer.js'
@@ -28,7 +29,7 @@ import * as tools from './parts/tools.js'
 import * as user from './parts/user.js'
 import * as working from './parts/working.js'
 
-export const PARTS = [answers, assistant, background, commands, composer, connect, divider, doc, files, index, jev, memory, models, note, permission, phases, pill, question, quota, quotabars, session, subagents, tabs, tasks, tools, user, working]
+export const PARTS = [answers, assistant, attachments, background, commands, composer, connect, divider, doc, files, index, jev, memory, models, note, permission, phases, pill, question, quota, quotabars, session, subagents, tabs, tasks, tools, user, working]
 
 const OWN = {
   en: {

@@ -490,6 +490,101 @@ const script = `(async () => {
   on({ type: 'agent_settled', aborted: false })
   document.body.classList.toggle('mode-chat', wasChat)
 
+  // 8e. attachments: the paperclip, the chips, sending them, a drop, a paste, the limits, a queued and a refused message
+  {
+    // Earlier checks leave another tab active: everything here goes to the tab on screen.
+    const here = $('#chat-header [aria-selected="true"]')?.dataset.session ?? 's1'
+    const onHere = (event) => sess({ type: 'chatEvent', event }, here)
+    const resetHere = async () => { window.sim.stopRun(here); window.sim.queue = []; window.sim.steering = []; onHere({ type: 'agent_settled', aborted: false }); onHere({ type: 'session_reset' }); typeIn(''); await wait(60) }
+    const wasChat = document.body.classList.contains('mode-chat')
+    document.body.classList.add('mode-chat') // focus needs the chat on screen
+    await resetHere()
+    const filesIn = (...files) => { const dt = new DataTransfer(); for (const f of files) dt.items.add(f); return dt }
+    const chips = () => [...document.querySelectorAll('#chat-composer .p-composer-files .p-pill-label')].map((e) => e.textContent)
+    const fileInput = $('#chat-file')
+    let chooser = 0
+    const stopChooser = (e) => { chooser++; e.preventDefault() }
+    fileInput.addEventListener('click', stopChooser)
+    $('#chat-composer [data-chat="attach"]').click()
+    fileInput.removeEventListener('click', stopChooser)
+    check('the paperclip opens the file chooser', chooser === 1, chooser)
+    const typedBefore = 'look at this'
+    typeIn(typedBefore)
+    fileInput.files = filesIn(new File(['hello world'], 'notes.txt', { type: 'text/plain' }), new File([new Uint8Array(2048)], 'shot.png', { type: 'image/png' })).files
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }))
+    await wait(80)
+    check('attach adds a chip', chips().join() === 'notes.txt,shot.png' && $('#chat-input').value === typedBefore, chips().join() + ' | ' + $('#chat-input').value)
+    check('the chips show the sizes', $('#chat-composer .p-composer-files')?.textContent.includes('2 KB'), $('#chat-composer .p-composer-files')?.textContent)
+    $('#chat-composer [data-chat="attach-remove"]').click(); await wait(40)
+    check('remove drops it', chips().join() === 'shot.png' && document.activeElement === $('#chat-input'), chips().join() + ' ' + document.activeElement?.outerHTML.slice(0, 80))
+    const before = sent().length
+    $('#chat-send').click(); await wait(80)
+    const out = sent().slice(before).filter((m) => m.type === 'chatSend')
+    const a = out[0]?.attachments ?? []
+    check('send carries the attachments', out.length === 1 && out[0].text === typedBefore && a.length === 1 && a[0].name === 'shot.png' && a[0].mime === 'image/png' && atob(a[0].data).length === 2048, JSON.stringify(out.map((m) => ({ ...m, attachments: (m.attachments ?? []).map((x) => x.name) }))))
+    const bubbles = [...document.querySelectorAll('#chat-list .p-user')]
+    check('the sent bubble shows the chip once, without the raw lines', bubbles.length === 1 && bubbles[0].textContent.includes('shot.png') && !$('#chat-list').textContent.includes('[attached'), bubbles.length + ' ' + $('#chat-list').textContent.slice(0, 160))
+    check('the composer is empty after sending', !$('#chat-composer .p-composer-files'), chips().join())
+    await resetHere()
+
+    // a drop on the chat view
+    const view = $('#view-chat')
+    const drag = filesIn(new File(['a,b'], 'data.csv', { type: 'text/csv' }))
+    $('#chat-list').dispatchEvent(new DragEvent('dragenter', { dataTransfer: drag, bubbles: true, cancelable: true }))
+    check('dragging files over the chat outlines it', view.classList.contains('is-dropping'))
+    $('#chat-list').dispatchEvent(new DragEvent('drop', { dataTransfer: drag, bubbles: true, cancelable: true }))
+    await wait(80)
+    check('a dropped file is attached', chips().join() === 'data.csv' && !view.classList.contains('is-dropping'), chips().join())
+
+    // a pasted image is attached; a pasted text is the browser's own paste
+    const pasted = new ClipboardEvent('paste', { clipboardData: filesIn(new File([new Uint8Array(10)], 'image.png', { type: 'image/png' })), bubbles: true, cancelable: true })
+    $('#chat-input').dispatchEvent(pasted); await wait(80)
+    check('a pasted image is attached', chips().join() === 'data.csv,image.png' && pasted.defaultPrevented, chips().join())
+    const textData = new DataTransfer(); textData.setData('text/plain', 'words')
+    const pastedText = new ClipboardEvent('paste', { clipboardData: textData, bubbles: true, cancelable: true })
+    $('#chat-input').dispatchEvent(pastedText)
+    check('a pasted text is left to the browser', !pastedText.defaultPrevented)
+
+    // the limits: too many files are refused with a note before they are read
+    fileInput.files = filesIn(...Array.from({ length: 9 }, (_, i) => new File(['x'], 'f' + i + '.txt', { type: 'text/plain' }))).files
+    fileInput.dispatchEvent(new Event('change', { bubbles: true })); await wait(80)
+    check('more than ten files are refused with a note', chips().length === 2 && /10/.test([...document.querySelectorAll('#chat-list .notice')].at(-1)?.textContent ?? ''), chips().length + ' ' + $('#chat-list').textContent.slice(-120))
+    // (one file over 20 MB is left out alone: attachments.test.js, without building such a file here)
+    const bigDrop = filesIn(new File(['y'], 'ok.txt', { type: 'text/plain' }))
+    $('#chat-list').dispatchEvent(new DragEvent('drop', { dataTransfer: bigDrop, bubbles: true, cancelable: true })); await wait(80)
+    check('a file within the limits still joins', chips().join() === 'data.csv,image.png,ok.txt', chips().join())
+
+    // a queued message keeps its files (Pi's queue holds the lines), and so does a cancel that re-queues the rest
+    window.sim.queue = []; window.sim.steering = []
+    onHere({ type: 'agent_start' }); await settle()
+    typeIn('queued one')
+    key($('#chat-input'), 'Enter', { altKey: true }); await wait(80)
+    const queued = $('#chat-list .p-user.is-queued')
+    check('a queued message keeps its attachments as chips', queued?.textContent.includes('data.csv') && queued.textContent.includes('ok.txt') && !queued.textContent.includes('[attached'), queued?.textContent)
+    typeIn('second')
+    key($('#chat-input'), 'Enter', { altKey: true }); await wait(80)
+    $('#chat-list .p-user.is-queued [data-chat="cancel-queued"][data-id="1"]').click(); await wait(80)
+    const clear = sent().filter((m) => m.type === 'chatClearQueue').at(-1)
+    check('cancelling another queued message sends this one back with its lines', clear?.keep?.length === 1 && clear.keep[0].startsWith('queued one\\n\\n[attached: data.csv'), JSON.stringify(clear))
+    check('after the cancel the queued message still shows its chips', $('#chat-list .p-user.is-queued')?.textContent.includes('data.csv'), $('#chat-list .p-user.is-queued')?.textContent)
+    await resetHere()
+
+    // a refused message gives its text and its files back to the composer
+    fileInput.files = filesIn(new File(['z'], 'back.txt', { type: 'text/plain' })).files
+    fileInput.dispatchEvent(new Event('change', { bubbles: true })); await wait(80)
+    typeIn('REFUSE')
+    $('#chat-send')?.click(); await wait(120)
+    check('a refused message gives its text and its files back', $('#chat-input').value === 'REFUSE' && chips().join() === 'back.txt' && !$('#chat-list .p-user'), $('#chat-input').value + ' | ' + chips().join())
+    $('#chat-composer [data-chat="attach-remove"]')?.click(); await wait(40)
+
+    // history replays the lines as chips
+    onHere({ type: 'history', messages: [{ role: 'user', content: [{ type: 'text', text: 'Why?\\n\\n[attached: build.log (text/plain, 12 KB) at /x/1-build.log]\\n[attached image: screenshot.png at /x/2-screenshot.png]' }] }] }); await wait(80)
+    const old = $('#chat-list .p-user')
+    check('a message from history shows its files as chips', old?.textContent.includes('build.log') && old.textContent.includes('screenshot.png') && !$('#chat-list').textContent.includes('[attached'), old?.textContent)
+    await resetHere()
+    document.body.classList.toggle('mode-chat', wasChat)
+  }
+
   // 9. the settings: a control redraws the section through its components, keeping the scroll and the focus
   $('[data-chat="settings"]').click(); await wait(200)
   $('#flow [data-action="settings-open"][data-value="agents"]')?.click(); await wait(120)
@@ -509,8 +604,8 @@ const script = `(async () => {
 })()`
 const reply = await send('Runtime.evaluate', { expression: script, awaitPromise: true, returnByValue: true })
 chrome.kill()
-if (!reply?.result?.value) {
-  console.error('the checks did not run:', JSON.stringify(reply).slice(0, 600))
+if (!Array.isArray(reply?.result?.value)) {
+  console.error('the checks did not run:', JSON.stringify(reply.exceptionDetails ?? reply).slice(0, 600))
   process.exit(1)
 }
 let failed = 0

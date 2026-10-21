@@ -7,6 +7,7 @@ import { esc } from '../onboarding/components.js'
 import { renderAgentSession } from './parts/session.js'
 import { hasLiveWork, isFailed, renderJobRows, renderStrip, resultAgent } from './parts/background.js'
 import { renderCommandPicker, filterCommands, stepActive, clampActive, toInvocation, withSkillNames } from './parts/commands.js'
+import { admit } from './parts/attachments.js'
 import { renderComposer } from './parts/composer.js'
 import { PROVIDERS, renderConnect } from './parts/connect.js'
 import { renderFilePicker, filterFiles } from './parts/files.js'
@@ -22,7 +23,7 @@ import { formatElapsed } from './parts/working.js'
 import {
   MAX_SESSIONS, addSession, applyStatus, closeSession, createTabs, renameSession, selectSession, setTitleIfEmpty, toSaved, undoClose,
 } from './sessions.js'
-import { addNote, addQueued, addUser, answerDialog, tookBack, answersForCard, clearQueue, createChat, reduce } from './state.js'
+import { addNote, addNotice, addQueued, addUser, answerDialog, tookBack, answersForCard, clearQueue, createChat, reduce } from './state.js'
 import { threadItems, groupOpen } from './thread.js'
 
 /** `/home/ana/Projects` -> `~/Projects` (Linux and Mac homes); anything else stays as it is. */
@@ -158,6 +159,14 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   let tabs = createTabs(null, makeId)
   const chats = new Map() // session id -> its conversation (state.js)
   const drafts = new Map() // session id -> what was typed and not sent
+  // Attachments, per session: the files going with the next message ([{ id, name, mime, size, data }], data in
+  // base64), the files being read (counted against the limits until they are in), and the last messages sent with
+  // files, so a message the dock or Pi refuses gets its files back in the composer along with its text.
+  const attached = new Map()
+  const reading = new Map()
+  const sentWith = new Map() // session id -> [{ text, files }], the last few
+  let attachSeq = 0
+  let dragDepth = 0
   const expandedOf = new Map() // session id -> { open, rows, more }: which tool groups and rows are open
   const wizards = new Map() // dialog id -> the question card's wizard state
   const commandsBy = new Map() // session id -> the slash commands its Pi offers
@@ -207,6 +216,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   const $ = (id) => root.querySelector(`#${id}`)
   const assistantName = () => (settings?.assistant?.name || '').trim() || 'Aria'
   const activeTab = () => tabs.sessions.find((s) => s.id === tabs.active)
+  const filesOf = (session = tabs.active) => attached.get(session) ?? []
 
   /** Builds the chat's HTML. Called once the texts are loaded (and again when the language changes). */
   function mount() {
@@ -411,15 +421,17 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const el = $('chat-composer')
     const value = input ? input.value : (drafts.get(tabs.active) ?? '')
     const model = current().model
+    const files = filesOf()
     const props = {
       busy: current().running,
-      hasText: value.trim().length > 0,
+      hasText: value.trim().length > 0 || files.length > 0, // files alone can be sent (or queued)
       rows: Math.min(6, Math.max(1, value.split('\n').length)),
       showHints: true,
       agents: hasParallelAgents(current().agents, data.jobs.filter((j) => j.session === tabs.active)),
       background: hasLiveWork(data.jobs, tabs.active), // live work only: a finished job alone keeps the old hint
       model: modelLabel(model) || undefined,
       modelTitle: model ?? undefined,
+      attachments: files.map(({ id, name, mime, size }) => ({ id, name, mime, size })),
     }
     const key = JSON.stringify(props)
     if (input && key === composerKey) return
@@ -439,6 +451,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       else if (old) old.remove()
       else if (fresh) el.querySelector('.p-composer')?.appendChild(fresh)
     }
+    // The chips above the box (the box itself, with the textarea and the file input, stays).
+    const oldFiles = el.querySelector('.p-composer-files')
+    const freshFiles = next.querySelector('.p-composer-files')
+    if (oldFiles && freshFiles) oldFiles.replaceWith(freshFiles)
+    else if (oldFiles) oldFiles.remove()
+    else if (freshFiles) el.querySelector('.p-composer')?.prepend(freshFiles)
     input.rows = props.rows
     input.placeholder = next.querySelector('textarea')?.placeholder ?? ''
   }
@@ -657,6 +675,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     send({ type: 'sessionClose', session: id })
     chats.delete(id)
     drafts.delete(id)
+    attached.delete(id)
+    reading.delete(id)
+    sentWith.delete(id)
     expandedOf.delete(id)
   }
 
@@ -712,7 +733,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   function submit(atEnd = false) {
     const steer = !atEnd
     const text = input.value.trim()
-    if (!text) return
+    const files = filesOf()
+    if (!text && !files.length) return
     if (/^\/memory(\s|$)/.test(text)) {
       clearDraft()
       return openView('memory')
@@ -737,15 +759,23 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const name = text.startsWith('/') ? text.slice(1).split(/\s/)[0] : null
     const command = name !== null ? commandsBy.get(session)?.find((c) => c.name === name) : null
     const immediate = name !== null && (!command || command.source === 'extension' || command.source === 'aria')
+    // The files go with the message (the dock saves them and adds their lines); the bubble shows them at once.
+    const sentText = toInvocation(text, commandsBy.get(session) ?? [])
+    const carry = files.length ? { attachments: files.map(({ name, mime, data }) => ({ name, mime, data })) } : {}
+    const shown = files.map(({ name, mime, size }) => ({ name, mime, size }))
     if (chat.running && !immediate) {
-      post({ type: 'chatSend', text: toInvocation(text, commandsBy.get(session) ?? []), behavior: steer ? 'steer' : 'followUp' }, session)
-      chats.set(session, addQueued(chat, text, steer))
+      post({ type: 'chatSend', text: sentText, behavior: steer ? 'steer' : 'followUp', ...carry }, session)
+      chats.set(session, addQueued(chat, text, steer, shown))
     } else {
-      post({ type: 'chatSend', text: toInvocation(text, commandsBy.get(session) ?? []), behavior: null }, session)
-      chats.set(session, addUser(chat, text))
+      post({ type: 'chatSend', text: sentText, behavior: null, ...carry }, session)
+      chats.set(session, addUser(chat, text, shown))
+    }
+    if (files.length) {
+      sentWith.set(session, [...(sentWith.get(session) ?? []), { text: sentText, files }].slice(-5))
+      attached.delete(session)
     }
     const before = tabs
-    tabs = setTitleIfEmpty(tabs, session, text)
+    tabs = setTitleIfEmpty(tabs, session, text || files.map((f) => f.name).join(', '))
     if (tabs !== before) save()
     clearDraft()
     render()
@@ -756,6 +786,61 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
 
   function stop() {
     post({ type: 'chatAbort' })
+  }
+
+  // ---- attachments -----------------------------------------------------------------------------
+
+  const readBase64 = (file) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const url = String(reader.result ?? '')
+        resolve(url.slice(url.indexOf(',') + 1))
+      }
+      reader.onerror = () => reject(reader.error)
+      reader.readAsDataURL(file)
+    })
+
+  /** Files from the paperclip, a drop or a paste join the active session's composer. The limits are checked on their
+   * sizes before anything is read; a file that cannot be read is left out with a note. */
+  async function addFiles(list) {
+    const session = tabs.active
+    const files = [...(list ?? [])].filter((f) => f && typeof f.size === 'number')
+    if (!files.length) return
+    const inFlight = reading.get(session) ?? []
+    const { take, notes } = admit([...filesOf(session), ...inFlight], files)
+    for (const note of notes) chats.set(session, addNotice(chatOf(session), 'warn', note.key, note.vars))
+    if (notes.length) renderSoon()
+    if (!take.length) return
+    reading.set(session, [...inFlight, ...take])
+    const read = await Promise.all(take.map((file) => readBase64(file).then((data) => ({ file, data }), () => ({ file, data: null }))))
+    if (!reading.has(session)) return // the tab was closed meanwhile
+    reading.set(session, (reading.get(session) ?? []).filter((f) => !take.includes(f)))
+    const ok = []
+    for (const { file, data } of read) {
+      if (data === null) chats.set(session, addNotice(chatOf(session), 'warn', 'chat.attach.unreadable', { name: file.name }))
+      else ok.push({ id: `f${++attachSeq}`, name: file.name || 'file', mime: file.type || 'application/octet-stream', size: file.size, data })
+    }
+    if (ok.length) attached.set(session, [...filesOf(session), ...ok])
+    if (session === tabs.active) {
+      drawComposer()
+      renderSoon()
+    }
+  }
+
+  function removeFile(id) {
+    attached.set(tabs.active, filesOf().filter((f) => f.id !== id))
+    drawComposer()
+    input?.focus()
+  }
+
+  /** A refused message's files come back to the composer with its text (when the composer has none of its own). */
+  function giveFilesBack(session, text) {
+    const list = sentWith.get(session) ?? []
+    const at = list.findLastIndex((m) => m.text === text)
+    if (at < 0) return
+    sentWith.set(session, list.filter((_, i) => i !== at))
+    if (!filesOf(session).length) attached.set(session, list[at].files)
   }
 
   /** Pi's own commands, which its RPC does not take as typed text: each runs through its RPC command (or here, for
@@ -1281,6 +1366,48 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     }
   })
 
+  // Files: the paperclip's chooser, a drop anywhere on the chat view, a paste of files (an image) in the input. A
+  // paste of anything else is the browser's own.
+  root.addEventListener('change', (event) => {
+    if (event.target?.id !== 'chat-file') return
+    addFiles(event.target.files)
+    event.target.value = '' // the same file can be chosen again
+  })
+  root.addEventListener('paste', (event) => {
+    if (event.target !== input) return
+    const files = [...(event.clipboardData?.items ?? [])].filter((item) => item.kind === 'file').map((item) => item.getAsFile()).filter(Boolean)
+    if (!files.length) return
+    event.preventDefault()
+    addFiles(files)
+  })
+  const dropTarget = (event) =>
+    ui.view === 'chat' && [...(event.dataTransfer?.types ?? [])].includes('Files') && event.target?.closest?.('#view-chat') ? $('view-chat') : null
+  root.addEventListener('dragenter', (event) => {
+    const view = dropTarget(event)
+    if (!view) return
+    event.preventDefault()
+    dragDepth++
+    view.classList.add('is-dropping')
+  })
+  root.addEventListener('dragover', (event) => {
+    if (!dropTarget(event)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+  })
+  root.addEventListener('dragleave', (event) => {
+    if (!dragDepth) return
+    dragDepth--
+    if (!dragDepth) $('view-chat')?.classList.remove('is-dropping')
+  })
+  root.addEventListener('drop', (event) => {
+    const view = dropTarget(event)
+    dragDepth = 0
+    $('view-chat')?.classList.remove('is-dropping')
+    if (!view) return
+    event.preventDefault()
+    addFiles(event.dataTransfer.files)
+  })
+
   root.addEventListener('keydown', (event) => {
     const field = event.target?.dataset?.chatRename !== undefined ? event.target : null
     if (field) {
@@ -1348,6 +1475,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
         return send({ type: 'openUrl', url: el.dataset.url })
       case 'send': return submit()
       case 'stop': return stop()
+      case 'attach': return $('chat-file')?.click()
+      case 'attach-remove': return removeFile(id)
       case 'settings': return onSettings?.()
       case 'close-dock': return send({ type: 'closeRequest' })
       case 'open-models':
@@ -1368,7 +1497,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
         // Pi can only empty its queue: the other queued messages go back in, in order.
         const at = Number(id)
         const rest = current().queue.filter((_, i) => i !== at)
-        post({ type: 'chatClearQueue', steer: rest.filter((q) => q.steer).map((q) => q.text), keep: rest.filter((q) => !q.steer).map((q) => q.text) })
+        // A message with files goes back as Pi had it, its attachment lines included (`raw`): the files stay named.
+        const again = (q) => q.raw ?? q.text
+        post({ type: 'chatClearQueue', steer: rest.filter((q) => q.steer).map(again), keep: rest.filter((q) => !q.steer).map(again) })
         chats.set(tabs.active, clearQueue(current(), at))
         return render()
       }
@@ -1526,6 +1657,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       // A refused message goes back to the composer (when it is empty), so nothing looks sent that was not.
       const giveBack = chatOf(session).giveBack
       if (giveBack !== null && giveBack !== undefined) {
+        giveFilesBack(session, giveBack)
+        if (session === tabs.active) composerKey = ''
         if (session === tabs.active && input && !input.value) {
           input.value = giveBack
           composerKey = ''

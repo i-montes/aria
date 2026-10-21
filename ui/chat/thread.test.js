@@ -165,3 +165,15 @@ describe('the thread as items', () => {
     expect(open).not.toBe(closed)
   })
 })
+
+describe('attachments in the thread', () => {
+  test('a sent and a queued message show their files as chips', () => {
+    const files = [{ name: 'notes.txt', mime: 'text/plain', size: 2048 }]
+    const state = addQueued(addUser(run(createChat(), ev({ type: 'history', messages: [] })), 'look', files), 'then this', false, [{ name: 'b.pdf', size: 10 }])
+    const html = renderThread(state, {}, t)
+    expect(html).toContain('notes.txt')
+    expect(html).toContain('2 KB')
+    expect(html).toContain('b.pdf')
+    expect(html).not.toContain('attach-remove')
+  })
+})

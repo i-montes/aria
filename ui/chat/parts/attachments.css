@@ -1,0 +1,10 @@
+/* Attachment chips (attachments.js): pills (pill.css) in a wrapping row, with a remove button in the composer.
+   Owner's rule: solid fills that never change; only borders (and the remove button's colour) react. */
+.p-attach { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; max-width: 100%; }
+.p-attach .p-pill { max-width: 100%; cursor: default; }
+.p-attach .p-pill-main { cursor: default; max-width: 240px; }
+.p-attach > .p-pill:not(.has-extra) { max-width: 260px; }
+.p-attach-remove { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 22px; height: 22px; margin: 0; padding: 0; border: 1px solid transparent; border-radius: 999px;
+  background: var(--surface, #16161a); color: #9A9AA3; cursor: pointer; }
+.p-attach-remove:hover { color: #F4F4F5; border-color: var(--accent-border, #B9A8FF); }
+.p-attach-remove:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 1px; }

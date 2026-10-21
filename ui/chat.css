@@ -122,3 +122,6 @@ body.open.mode-chat .chat { animation: enter 300ms var(--content) both; }
 .chat-header .icon-btn { flex: 0 0 44px; width: 44px; height: 44px; background: transparent; border: 1px solid transparent; border-radius: 10px; color: #A1A1AA; }
 .chat-header .icon-btn:hover, .chat-header .icon-btn:focus-visible { border-color: var(--accent-border); color: #F4F4F5; }
 .chat-header .icon-btn:disabled { color: #4A4A52; border-color: transparent; }
+
+/* Files dragged over the chat view: a subtle accent border (solid fills stay; only borders take the accent). */
+.chat-view-chat.is-dropping { outline: 1px solid var(--accent-border); outline-offset: -1px; border-radius: 12px; }

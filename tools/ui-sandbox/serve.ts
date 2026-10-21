@@ -64,8 +64,9 @@ const sandbox = `<script>
         // ARIA_SANDBOX_HISTORY_DELAY=<ms> holds it back, to see the loading state.
         if (inner.type === 'chatLoad') setTimeout(() => sim.sess(m.session, { type: 'chatEvent', event: { type: 'history', messages: [] } }), Number(process.env.ARIA_SANDBOX_HISTORY_DELAY ?? 0))
         else if (inner.type === 'chatSend' && inner.text === 'REFUSE') sim.sess(m.session, { type: 'chatEvent', event: { type: 'command_failed', command: 'prompt', error: 'Cannot submit a prompt while compaction is in progress', text: 'REFUSE' } })
-        else if (inner.type === 'chatSend' && inner.behavior === 'followUp') { sim.queue.push(inner.text); sim.ev({ type: 'queue_update', steering: [...sim.steering], followUp: [...sim.queue] }, m.session) }
-        else if (inner.type === 'chatSend' && inner.behavior === 'steer') { sim.steering.push(inner.text); sim.ev({ type: 'queue_update', steering: [...sim.steering], followUp: [...sim.queue] }, m.session) }
+        else if (inner.type === 'chatSend' && inner.behavior === 'followUp') { sim.queue.push(sim.withLines(inner, m.session)); sim.ev({ type: 'queue_update', steering: [...sim.steering], followUp: [...sim.queue] }, m.session) }
+        else if (inner.type === 'chatSend' && inner.behavior === 'steer') { sim.steering.push(sim.withLines(inner, m.session)); sim.ev({ type: 'queue_update', steering: [...sim.steering], followUp: [...sim.queue] }, m.session) }
+        else if (inner.type === 'chatSend' && inner.attachments?.length) { sim.ev({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: sim.withLines(inner, m.session) }] } }, m.session); sim.reply(m.session, inner.text) }
         else if (inner.type === 'chatClearQueue') { sim.steering = [...(inner.steer ?? [])]; sim.queue = [...(inner.keep ?? [])]; sim.ev({ type: 'queue_update', steering: [...sim.steering], followUp: [...sim.queue] }, m.session) }
         else if (inner.type === 'chatSend') sim.reply(m.session, inner.text)
         else if (inner.type === 'chatAbort') { sim.stopRun(m.session) }
@@ -78,6 +79,18 @@ const sandbox = `<script>
     model: 'opencode-go/deepseek-v4.1-flash', context: 18, n: 0, timer: null, active: 's1', queue: [], steering: [],
     jobs: [], // the background work the dock would hold; jobStop moves a job to Finished
     job: (x) => ({ number: 1, session: sim.active, kind: 'process', command: null, task: null, folder: '~/Projects/aria', state: 'running', startedAt: Date.now() - 12 * 60000, endedAt: null, url: null, exit: null, isolation: null, worktree: null, writes: false, result: null, conflict: false, dismissed: false, ...x }),
+    files: 0,
+    // Like the dock (crates/aria/src/attachments.rs): the text, a blank line, one line per saved file.
+    withLines(inner, session) {
+      const list = inner.attachments ?? []
+      if (!list.length) return inner.text
+      const size = (b64) => { const n = Math.floor(b64.length * 3 / 4); return n < 1024 ? n + ' B' : n < 1048576 ? Math.floor((n + 512) / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB' }
+      const lines = list.map((a) => {
+        const path = '/home/ana/.aria/attachments/' + session + '/2026-10-21/' + ++sim.files + '-' + a.name.replace(/[^A-Za-z0-9._-]+/g, '_')
+        return a.mime.startsWith('image/') ? '[attached image: ' + a.name + ' at ' + path + ']' : '[attached: ' + a.name + ' (' + a.mime + ', ' + size(a.data) + ') at ' + path + ']'
+      })
+      return (inner.text ? inner.text + '\\n\\n' : '') + lines.join('\\n')
+    },
     sess: (session, message) => window.aria.receive({ type: 'session', session, message }),
     ev: (event, session) => sim.sess(session ?? sim.active, { type: 'chatEvent', event }),
     state: (extra = {}, session) => sim.sess(session ?? sim.active, { type: 'chatState', workdir: '/home/ana/Projects/aria', running: false, model: sim.model, thinking: 'medium', context: sim.context, problem: null, ...extra }),
@@ -123,6 +136,7 @@ const sandbox = `<script>
     'Background work': () => { const job = sim.job; sim.jobs = [job({ id: 'j1', title: 'bun dev', command: 'bun dev', url: 'http://localhost:3000' }), job({ id: 'j2', number: 2, kind: 'agent', title: 'tests', task: 'Fix the checkout tests', writes: true, isolation: 'worktree' }), job({ id: 'j3', number: 3, kind: 'agent', state: 'queued', startedAt: null, title: 'docs', task: 'Update the README', writes: true })]; window.aria.receive({ type: 'jobs', jobs: sim.jobs }) },
     'Background work (Alt A)': () => { const now = Date.now(); const job = sim.job; window.aria.chat.setAgents([{ id: 'a1', role: 'tests', task: 'Fix the checkout tests', status: 'writing', kind: 'active', steps: [{ kind: 'tool', tool: 'read', target: 'src/checkout.test.ts' }] }, { id: 'a2', role: 'security', task: 'Review the sandbox policy', status: 'done', kind: 'done' }]); sim.jobs = [job({ id: 'j1', title: 'bun dev', command: 'bun dev', url: 'http://localhost:3000' }), job({ id: 'j2', number: 2, kind: 'agent', title: 'tests', task: 'Fix the checkout tests', writes: true, isolation: 'worktree' }), job({ id: 'j5', number: 5, session: 's2', title: 'tail -f log', command: 'tail -f log' }), job({ id: 'j3', number: 3, state: 'exited', exit: 1, endedAt: now - 60000, title: 'bun test' }), job({ id: 'j4', number: 4, kind: 'agent', state: 'done', endedAt: now - 120000, title: 'research', task: 'Compare the routers', result: 'The **first** router wins.\\n\\n## Learnings\\n- keep it small', worktree: '~/Projects/.aria-worktrees/aria-j4', conflict: true })]; window.aria.receive({ type: 'jobs', jobs: sim.jobs }); window.aria.chat.toggleAgents() },
     'Other tab needs you': () => { sim.sess('s2', { type: 'chatDialog', id: 'x' + ++sim.n, method: 'select', request: { title: card({ kind: 'sandbox', summary: 'Wants to leave the sandbox', detail: 'ls /etc' }), options: ['allow', 'always', 'deny'] }, hidden: false }) },
+    'Attachments in history': () => sim.ev({ type: 'history', messages: [{ role: 'user', content: [{ type: 'text', text: 'Why does the build fail?\\n\\n[attached: build.log (text/plain, 12 KB) at /home/ana/.aria/attachments/s1/2026-10-21/1-build.log]\\n[attached image: screenshot.png at /home/ana/.aria/attachments/s1/2026-10-21/2-screenshot.png]' }] }, { role: 'assistant', content: [{ type: 'text', text: 'The log says RELEASE is missing.' }] }] }),
     'Many messages': () => { for (let i = 0; i < 8; i++) { sim.sess(sim.active, { type: 'chatEvent', event: { type: 'message_start', message: { role: 'user', content: 'x' } } }); sim.say('Answer number ' + (i + 1) + ' with enough text to take some room in the thread.\\n\\nA second paragraph.') } },
   }
   const nav = document.createElement('nav')

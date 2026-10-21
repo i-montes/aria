@@ -88,3 +88,32 @@ describe('markdown in the user\'s message', () => {
     expect(renderUser({ text: '/plan **x**', command: true }, {}, (key) => key)).toContain('**x**')
   })
 })
+
+describe('attachments in the bubble', () => {
+  const raw = 'look\n\n[attached: notes.txt (text/plain, 12 KB) at /x/1-notes.txt]\n[attached image: shot.png at /x/2-shot.png]'
+  test('attached lines become chips', () => {
+    const html = renderUser({ text: raw }, {}, t)
+    expect(html).toContain('p-attach')
+    expect(html).toContain('notes.txt')
+    expect(html).toContain('12 KB')
+    expect(html).toContain('shot.png')
+    expect(html).toContain('title="/x/2-shot.png"')
+    expect(html).not.toContain('attach-remove')
+  })
+  test('the raw lines are not shown', () => {
+    const html = renderUser({ text: raw }, {}, t)
+    expect(html).not.toContain('[attached')
+    expect(html).not.toContain('/x/1-notes.txt]')
+    expect(html).toContain('>look</p>')
+  })
+  test('files given with the message are drawn the same; only files leaves no empty bubble', () => {
+    const html = renderUser({ text: '', files: [{ name: 'a.pdf', size: '3 KB' }] }, {}, t)
+    expect(html).toContain('a.pdf')
+    expect(html).not.toContain('p-user-bubble')
+  })
+  test('a queued message keeps its chips', () => {
+    const html = renderUser({ text: raw, queued: true, id: '0' }, {}, t)
+    expect(html).toContain('notes.txt')
+    expect(html).toContain('chat.user.queued')
+  })
+})

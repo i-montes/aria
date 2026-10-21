@@ -1,10 +1,11 @@
 // The chat as plain data and a pure reducer: dock messages (and the Pi session events inside
 // `chatEvent`) go in, a conversation to draw comes out. Nothing here touches the DOM.
 //
+import { splitAttached } from './parts/attachments.js'
 import { parseCardTitle } from './parts/cards.js'
 
 // Entries of `messages`:
-//   { kind: 'user', text }
+//   { kind: 'user', text, files? }   files: what it carries (attachments.js); `text` never holds the dock's lines
 //   { kind: 'assistant', text, thinking, done, texts, thoughts }   (texts/thoughts: streamed blocks by index)
 //   { kind: 'tools', calls: [{ id, name, args, status: 'running'|'done'|'error', summary, result }] }
 //   { kind: 'notice', tone: 'info'|'warn'|'error', key?, vars?, text? }
@@ -12,7 +13,12 @@ import { parseCardTitle } from './parts/cards.js'
 //   { kind: 'divider', key, vars? }                 a separator (the context was compacted)
 //   { kind: 'jev', mode, action }                   the router's route line before an answer
 //   { kind: 'answers', answers: [{ header, selected, talk }] }   what you answered to a question card
-// `queue` holds messages waiting behind the run; `phase` names what the run is doing now.
+// `queue` holds messages waiting behind the run ({ text, steer?, files?, raw? }); `phase` names what the run is doing now.
+//
+// Attachments: the dock adds a line per file to the message it gives Pi (`[attached: …]`), so Pi's echo, its queue and
+// the history hold those lines while the page's own entry (drawn before the dock answers) does not. Every entry keeps
+// the text without the lines and the files apart, and messages are matched by that text. A queue entry from Pi also
+// keeps `raw`, the text with the lines, which is what goes back to Pi when the queue is rebuilt (cancelling one).
 
 export function createChat() {
   return {
@@ -46,6 +52,18 @@ const joined = (blocks) =>
     .join('')
 
 const notice = (tone, extra) => ({ kind: 'notice', tone, ...extra })
+
+/** A user entry from a text that may end with the dock's attachment lines. */
+function userEntry(raw) {
+  const { text, files } = splitAttached(raw)
+  return files.length ? { kind: 'user', text, files } : { kind: 'user', text }
+}
+
+/** A queue entry from Pi's text. */
+function queueEntry(raw, steer) {
+  const { text, files } = splitAttached(raw)
+  return { text, ...(steer ? { steer } : {}), ...(files.length ? { raw, files } : {}) }
+}
 
 /** What the run is doing, from the tool that just started (a code the working indicator has a text for). */
 export function phaseFor(name = '') {
@@ -197,7 +215,7 @@ function fromHistory(messages) {
   const calls = new Map()
   for (const message of messages ?? []) {
     if (message.role === 'user') {
-      entries.push({ kind: 'user', text: textOf(message.content) })
+      entries.push(userEntry(textOf(message.content)))
     } else if (message.role === 'assistant') {
       const text = textOf(message.content)
       const thinking = thinkingOf(message.content)
@@ -245,11 +263,12 @@ function reduceEvent(state, event) {
       if (event.message?.role === 'user') {
         // A message that waited in the queue is now being answered: it moves into the thread. Pi takes it out of
         // the queue (a `queue_update`) just BEFORE announcing it, so `delivered` remembers what left the queue.
-        const text = textOf(event.message.content)
+        const entry = userEntry(textOf(event.message.content))
+        const text = entry.text
         const waiting = state.queue.findIndex((q) => q.text === text)
-        if (waiting >= 0) return push({ ...state, queue: state.queue.filter((_, i) => i !== waiting) }, { kind: 'user', text })
+        if (waiting >= 0) return push({ ...state, queue: state.queue.filter((_, i) => i !== waiting) }, entry)
         const left = state.delivered.indexOf(text)
-        if (left >= 0) return push({ ...state, delivered: state.delivered.filter((_, i) => i !== left) }, { kind: 'user', text })
+        if (left >= 0) return push({ ...state, delivered: state.delivered.filter((_, i) => i !== left) }, entry)
         return state // the echo of a message the page already showed
       }
       if (event.message?.role === 'custom') {
@@ -258,7 +277,7 @@ function reduceEvent(state, event) {
       }
       return state
     case 'queue_update': {
-      const queue = [...(event.steering ?? []).map((text) => ({ text, steer: true })), ...(event.followUp ?? []).map((text) => ({ text }))]
+      const queue = [...(event.steering ?? []).map((text) => queueEntry(text, true)), ...(event.followUp ?? []).map((text) => queueEntry(text))]
       // What was queued and no longer is has been taken by the run (or cancelled by us, which `clearQueue` handles first).
       const remaining = [...queue]
       const gone = []
@@ -393,11 +412,15 @@ export function reduce(state, message) {
   }
 }
 
-export const addUser = (state, text) => push(state, { kind: 'user', text })
+const withFiles = (entry, files) => (files?.length ? { ...entry, files } : entry)
+/** `files`: what the message carries ([{ name, mime, size }]), drawn as chips before the dock has answered. */
+export const addUser = (state, text, files) => push(state, withFiles({ kind: 'user', text }, files))
+/** A notice from the page itself (an attachment refused). */
+export const addNotice = (state, tone, key, vars) => push(state, notice(tone, vars ? { key, vars } : { key }))
 /** A one-line fact in the thread that did not come from Pi (a provider was connected). */
 export const addNote = (state, label, text) => push(state, { kind: 'note', label, text })
 /** `steer`: the message goes in at the next gap between the run's steps (Pi's steering), not when the run ends. */
-export const addQueued = (state, text, steer = false) => ({ ...state, queue: [...state.queue, steer ? { text, steer } : { text }] })
+export const addQueued = (state, text, steer = false, files) => ({ ...state, queue: [...state.queue, withFiles(steer ? { text, steer } : { text }, files)] })
 /** The composer took back a refused message's text. */
 export const tookBack = (state) => ({ ...state, giveBack: null })
 export const clearQueue = (state, at) => ({ ...state, queue: at === undefined ? [] : state.queue.filter((_, i) => i !== at) })

@@ -1,6 +1,6 @@
 // Run: bun test ui
 import { describe, expect, test } from 'bun:test'
-import { addQueued, addUser, answerDialog, answersForCard, clearQueue, createChat, reduce, toolSummary } from './state.js'
+import { addNotice, addQueued, addUser, answerDialog, answersForCard, clearQueue, createChat, reduce, toolSummary } from './state.js'
 
 const ev = (event) => ({ type: 'chatEvent', event })
 const run = (state, ...messages) => messages.reduce(reduce, state)
@@ -636,5 +636,44 @@ describe('background work in the thread', () => {
     expect(noteOf({ role: 'custom', customType: 'other', content: 'x', display: true, details: { job: job() } })).toEqual([])
     const past = reduce(createChat(), ev({ type: 'history', messages: [custom({ job: job() }, { display: false }), { role: 'custom', customType: 'other', display: true }] })).messages
     expect(past).toEqual([])
+  })
+})
+
+describe('attachments', () => {
+  const files = [{ name: 'notes.txt', mime: 'text/plain', size: 2048 }]
+  const lines = '\n\n[attached: notes.txt (text/plain, 2 KB) at /x/1-notes.txt]'
+  test('a sent message shows its files at once, and Pi\'s echo with the lines is not a second bubble', () => {
+    let state = addUser(createChat(), 'look', files)
+    expect(state.messages).toEqual([{ kind: 'user', text: 'look', files }])
+    state = run(state, ev({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: 'look' + lines }, { type: 'image', data: 'x' }] } }))
+    expect(state.messages.length).toBe(1)
+  })
+  test('a_queued_message_keeps_its_attachments', () => {
+    let state = addQueued(run(createChat(), ev({ type: 'agent_start' })), 'look', false, files)
+    expect(state.queue).toEqual([{ text: 'look', files }])
+    // Pi's queue holds the text the dock built, lines and all: the entry keeps them to give back on a re-queue
+    state = run(state, ev({ type: 'queue_update', steering: [], followUp: ['look' + lines] }))
+    expect(state.queue).toEqual([{ text: 'look', raw: 'look' + lines, files: [{ name: 'notes.txt', mime: 'text/plain', size: '2 KB', path: '/x/1-notes.txt', image: false }] }])
+    state = run(state, ev({ type: 'queue_update', steering: [], followUp: [] }), ev({ type: 'message_start', message: { role: 'user', content: 'look' + lines } }))
+    expect(state.queue).toEqual([])
+    expect(state.messages).toEqual([{ kind: 'user', text: 'look', files: [{ name: 'notes.txt', mime: 'text/plain', size: '2 KB', path: '/x/1-notes.txt', image: false }] }])
+  })
+  test('a steering message keeps them too', () => {
+    const state = run(addQueued(createChat(), 'now', true, files), ev({ type: 'queue_update', steering: ['now' + lines], followUp: [] }))
+    expect(state.queue[0].steer).toBe(true)
+    expect(state.queue[0].files[0].name).toBe('notes.txt')
+  })
+  test('history replays the lines as files', () => {
+    const state = reduce(createChat(), ev({ type: 'history', messages: [{ role: 'user', content: [{ type: 'text', text: 'see' + lines }] }] }))
+    expect(state.messages).toEqual([{ kind: 'user', text: 'see', files: [{ name: 'notes.txt', mime: 'text/plain', size: '2 KB', path: '/x/1-notes.txt', image: false }] }])
+  })
+  test('a refused message with files leaves the thread and its text goes back', () => {
+    const state = run(addUser(createChat(), 'look', files), ev({ type: 'command_failed', command: 'prompt', error: 'disk full', text: 'look' }))
+    expect(state.messages.filter((m) => m.kind === 'user')).toEqual([])
+    expect(state.giveBack).toBe('look')
+  })
+  test('a note from the page goes into the thread', () => {
+    const state = addNotice(createChat(), 'warn', 'chat.attach.tooMany', { max: 10 })
+    expect(state.messages).toEqual([{ kind: 'notice', tone: 'warn', key: 'chat.attach.tooMany', vars: { max: 10 } }])
   })
 })

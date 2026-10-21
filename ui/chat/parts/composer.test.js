@@ -121,6 +121,23 @@ describe('renderComposer', () => {
     expect(html).not.toContain('shift+enter')
   })
 
+  test('the paperclip and the chips', () => {
+    const idle = renderComposer({}, {}, t)
+    expect(idle).toContain('data-chat="attach"')
+    expect(idle).toContain('aria-label="chat.composer.attach"')
+    expect(idle).toMatch(/<input type="file" id="chat-file" multiple hidden/)
+    expect(idle).not.toContain('p-composer-files')
+    const html = renderComposer({ attachments: [{ id: 'a1', name: 'notes.txt', mime: 'text/plain', size: 2048 }] }, {}, t)
+    expect(html).toContain('p-composer-files')
+    expect(html).toContain('notes.txt')
+    expect(html).toContain('data-chat="attach-remove" data-id="a1"')
+    // the chips sit above the input, the paperclip inside the box
+    expect(html.indexOf('p-composer-files')).toBeLessThan(html.indexOf('chat-input'))
+    expect(html.indexOf('p-composer-box')).toBeLessThan(html.indexOf('data-chat="attach"'))
+    const bad = renderComposer({ attachments: [{ id: '"><script>', name: '<script>x</script>', size: 1 }] }, {}, t)
+    expect(bad).not.toContain('<script>')
+  })
+
   test('the buttons are labelled', () => {
     expect(renderComposer({}, {}, t)).toContain('aria-label="chat.composer.send"')
     const busy = renderComposer({ busy: true, hasText: true }, {}, t)

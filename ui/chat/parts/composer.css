@@ -40,3 +40,9 @@
 .p-composer-hints { flex-wrap: nowrap; gap: 10px; overflow: hidden; }
 .p-composer-hints > span { white-space: nowrap; }
 .p-composer-model { flex: 0 1 auto; max-width: 180px; }
+
+/* Attachments: the paperclip at the box's start (solid like the box; only its border reacts) and the chips above it. */
+.p-composer-box { padding-left: 6px; }
+.p-composer-attach { background: var(--surface, #16161a); color: #B4B4BC; }
+.p-composer-attach:hover { border-color: var(--accent-border, #B9A8FF); color: #F4F4F5; }
+.p-composer-files { padding: 0 2px; }
