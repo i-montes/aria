@@ -5,6 +5,18 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.5.0 — 2026-10-21
+
+### New
+
+- verify-in-browser, checking a page in a headless browser in one sandboxed call before saying it works
+- the installer brings the pinned agent-browser and its browser, for the agents' browser check
+
+### Fixed
+
+- the browser check sets a 2-minute idle timeout and quotes each batch step for the shell, so a cut-off check stops by itself and evals keep their strings
+- the browser test finds a leftover by its AGENT_BROWSER_SESSION environment, and closes from the host only after a failed run
+
 ## 0.4.0 — 2026-10-21
 
 ### New
