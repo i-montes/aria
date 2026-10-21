@@ -92,17 +92,17 @@ function streamUpdate(state, update) {
 
 // ---- the turn's group (design: tool-chips): one accordion per answer ---------------------------
 //
-// Everything Aria does before it answers (its reasoning, the text it writes between tools, every tool call) goes
-// into ONE `tools` entry per turn, in order; the answer comes after it. A thinking or text step is a call with
-// `think: true` and its `text`.
+// What Aria does on the way (its reasoning, every tool call) goes into a `tools` entry, in order; a reasoning step is a
+// call with `think: true` and its `text`. What it writes is said to the reader as a message, also between tools: the
+// tools after it start a new group below it, so a question asked on the way is not folded away.
 
 let stepSeq = 0
 
-/** This turn's group: the last `tools` entry after the last user message (and after `from`, where the run started), or
- * -1. */
+/** The group steps go into: the last `tools` entry after the last user message and the last thing Aria said (and after
+ * `from`, where the run started), or -1. */
 function turnGroup(messages, from = 0) {
   for (let i = messages.length - 1; i >= from; i--) {
-    if (messages[i].kind === 'user') return -1
+    if (messages[i].kind === 'user' || (messages[i].kind === 'assistant' && messages[i].text)) return -1
     if (messages[i].kind === 'tools') return i
   }
   return -1
@@ -130,9 +130,7 @@ function endAssistant(state, message) {
   const thinking = thinkingOf(message.content)
   const current = lastStreamingAssistant(state)
   const rest = current ? state.messages.slice(0, -1) : state.messages
-  // A step on the way (it calls tools): its reasoning and its text are steps of the group, not a message.
-  if (hasToolCalls(message.content)) return withMessages(state, addSteps(rest, thinkSteps(thinking, text), state.turnFrom))
-  // The answer: its reasoning closes the group, its text is the message.
+  // Its reasoning is a step of the group; its text is a message, whether it answers or comes between tools.
   const grouped = addSteps(rest, thinkSteps(thinking), state.turnFrom)
   if (!text) return withMessages(state, grouped)
   const base = current ?? { kind: 'assistant', texts: {}, thoughts: {} }
@@ -184,7 +182,9 @@ function fromHistory(messages) {
           calls.set(block.id, call)
           return call
         })
-        entries = addSteps(entries, [...thinkSteps(thinking, text), ...made])
+        entries = addSteps(entries, thinkSteps(thinking))
+        if (text) entries.push({ kind: 'assistant', text, thinking: '', done: true, texts: { 0: text }, thoughts: {} })
+        entries = addSteps(entries, made)
       } else {
         entries = addSteps(entries, thinkSteps(thinking))
         if (text) entries.push({ kind: 'assistant', text, thinking: '', done: true, texts: { 0: text }, thoughts: {} })

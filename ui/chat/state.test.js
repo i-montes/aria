@@ -166,13 +166,14 @@ describe('history', () => {
 
   test('past messages become entries in order', () => {
     const state = reduce(createChat(), ev({ type: 'history', messages: history }))
-    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'tools', 'assistant', 'user'])
+    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'tools', 'assistant', 'tools', 'assistant', 'user'])
     expect(state.messages[0].text).toBe('list files')
-    // the reasoning and the text written before the tool are steps of the turn's group (design: tool-chips)
-    expect(state.messages[1].calls.map((c) => (c.think ? c.text : c.id))).toEqual(['ok', 'Sure.', 't1'])
-    expect(state.messages[1].calls[2]).toMatchObject({ id: 't1', status: 'done', summary: 'ls', result: 'a b' })
-    expect(state.messages[2]).toMatchObject({ kind: 'assistant', text: 'There they are.', done: true })
-    expect(state.messages[3].text).toBe('thanks')
+    // the reasoning is a step of the group; the text written before the tool is said to the reader, and splits the group
+    expect(state.messages[1].calls.map((c) => (c.think ? c.text : c.id))).toEqual(['ok'])
+    expect(state.messages[2]).toMatchObject({ kind: 'assistant', text: 'Sure.', done: true })
+    expect(state.messages[3].calls[0]).toMatchObject({ id: 't1', status: 'done', summary: 'ls', result: 'a b' })
+    expect(state.messages[4]).toMatchObject({ kind: 'assistant', text: 'There they are.', done: true })
+    expect(state.messages[5].text).toBe('thanks')
   })
 
   test('history never replaces a conversation already on the page: it goes in front of it', () => {
@@ -191,18 +192,19 @@ describe('history', () => {
     const guess = { type: 'chatState', workdir: '/w', running: false, model: 'opencode-go/deepseek-v4.1-flash' }
     const real = { ...guess, model: 'opencode-go/mimo-v2.6-pro' }
     const state = run(createChat(), guess, real, ev({ type: 'history', messages: history }))
-    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'tools', 'assistant', 'user'])
+    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'tools', 'assistant', 'tools', 'assistant', 'user'])
   })
 
   test('a notice that arrives before the history stays after it', () => {
     const notice = ev({ type: 'ui_notice', request: { method: 'notify', message: 'careful', notifyType: 'warning' } })
     const state = run(createChat(), notice, ev({ type: 'history', messages: history }))
-    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'tools', 'assistant', 'user', 'notice'])
+    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'tools', 'assistant', 'tools', 'assistant', 'user', 'notice'])
   })
 
   test('a failed tool result marks the call as an error', () => {
     const failed = [history[1], { ...history[2], isError: true }]
-    expect(reduce(createChat(), ev({ type: 'history', messages: failed })).messages[0].calls.find((c) => !c.think).status).toBe('error')
+    const calls = reduce(createChat(), ev({ type: 'history', messages: failed })).messages.flatMap((m) => m.calls ?? [])
+    expect(calls.find((c) => !c.think).status).toBe('error')
   })
 })
 
@@ -571,7 +573,7 @@ describe('one accordion per answer (design: tool-chips)', () => {
     expect(turn().messages.at(-1)).toMatchObject({ kind: 'assistant', text: 'Fixed.' })
   })
 
-  test('text written between tools is a step of the group, not a message', () => {
+  test('text written between tools is a message, and the tools after it start a new group', () => {
     const state = run(
       createChat(),
       ev({ type: 'agent_start' }),
@@ -580,8 +582,9 @@ describe('one accordion per answer (design: tool-chips)', () => {
       ev({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Let me look.' }, { type: 'toolCall', id: 't1', name: 'read', arguments: {} }] } }),
       toolStart('t1', 'read'),
     )
-    expect(state.messages.map((m) => m.kind)).toEqual(['tools'])
-    expect(state.messages[0].calls[0]).toMatchObject({ think: true, text: 'Let me look.' })
+    expect(state.messages.map((m) => m.kind)).toEqual(['assistant', 'tools'])
+    expect(state.messages[0]).toMatchObject({ kind: 'assistant', text: 'Let me look.', done: true })
+    expect(state.messages[1].calls[0]).toMatchObject({ id: 't1', name: 'read' })
   })
 
   test('the next question starts a new group', () => {
