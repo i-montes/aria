@@ -228,18 +228,20 @@ impl Backend for MacBackend {
     }
 }
 
-/// The Secret Service (gnome-keyring on Omarchy) through `secret-tool`, which reads a stored secret from stdin.
+/// The Secret Service (gnome-keyring on Omarchy) through `secret-tool`, which reads a stored secret from stdin. It cuts a
+/// secret at 8192 bytes and still exits 0 (only a word on stderr says so, checked 2026-10-21), so values go in pieces as
+/// on macOS, and a store that says anything on stderr failed.
 #[derive(Debug)]
 pub struct LinuxBackend {
     pub program: PathBuf,
     pub service: String,
 }
 
-impl Backend for LinuxBackend {
-    fn get(&self, account: &str) -> Result<Option<String>, KeyringError> {
+impl Raw for LinuxBackend {
+    fn raw_get(&self, account: &str) -> Result<Option<String>, KeyringError> {
         let output = run(&self.program, &["lookup", "service", &self.service, "account", account], None)?;
         if output.status.success() {
-            return decode(&String::from_utf8_lossy(&output.stdout)).map(Some);
+            return Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_string()));
         }
         // `lookup` exits 1 for "not there" without a word; anything on stderr is the Secret Service failing.
         if output.status.code() == Some(1) && output.stderr.is_empty() {
@@ -248,22 +250,34 @@ impl Backend for LinuxBackend {
         Err(failed("secret-tool", &output))
     }
 
-    fn set(&self, account: &str, value: &str) -> Result<(), KeyringError> {
+    fn raw_set(&self, account: &str, text: &str) -> Result<(), KeyringError> {
         let label = format!("Aria: {account}");
         let args = ["store", "--label", &label, "service", &self.service, "account", account];
-        let output = run(&self.program, &args, Some(&encode(value)))?;
-        if !output.status.success() {
+        let output = run(&self.program, &args, Some(text))?;
+        if !output.status.success() || !output.stderr.is_empty() {
             return Err(failed("secret-tool", &output));
         }
         Ok(())
     }
 
-    fn delete(&self, account: &str) -> Result<(), KeyringError> {
+    fn raw_delete(&self, account: &str) -> Result<(), KeyringError> {
         let output = run(&self.program, &["clear", "service", &self.service, "account", account], None)?;
         if output.status.success() || (output.status.code() == Some(1) && output.stderr.is_empty()) {
             return Ok(());
         }
         Err(failed("secret-tool", &output))
+    }
+}
+
+impl Backend for LinuxBackend {
+    fn get(&self, account: &str) -> Result<Option<String>, KeyringError> {
+        chunked_get(self, account)
+    }
+    fn set(&self, account: &str, value: &str) -> Result<(), KeyringError> {
+        chunked_set(self, account, value)
+    }
+    fn delete(&self, account: &str) -> Result<(), KeyringError> {
+        chunked_delete(self, account)
     }
 }
 
@@ -443,7 +457,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let keyring = LinuxBackend { program: fake(dir.path(), "exit 0"), service: "aria".into() };
         keyring.set("key:x", "s3cr3t").unwrap();
-        assert_eq!(log(dir.path(), "argv.log").trim(), "store --label Aria: key:x service aria account key:x");
+        let argv = log(dir.path(), "argv.log");
+        assert_eq!(
+            argv.lines().last(),
+            Some("store --label Aria: key:x service aria account key:x"),
+            "the write is a store (a read comes first, for old pieces)"
+        );
         assert_eq!(log(dir.path(), "stdin.log"), b64("s3cr3t"));
 
         let found = LinuxBackend { program: fake(dir.path(), &format!("printf {}", b64("v"))), service: "aria".into() };
@@ -453,6 +472,43 @@ mod tests {
         let broken =
             LinuxBackend { program: fake(dir.path(), "echo 'no Secret Service' >&2; exit 1"), service: "aria".into() };
         assert!(matches!(broken.get("key:x"), Err(KeyringError::Failed(_))));
+    }
+
+    #[test]
+    fn linux_store_that_cuts_the_secret_is_a_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "case \"$1\" in store) echo 'secret-tool: password is too long' >&2 ;; *) exit 1 ;; esac";
+        let keyring = LinuxBackend { program: fake(dir.path(), body), service: "aria".into() };
+        assert!(matches!(keyring.set("key:x", "v"), Err(KeyringError::Failed(_))));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "uses the real Secret Service (its own service, cleared at the end)"]
+    fn linux_live_round_trip() {
+        let Ok(program) = which("secret-tool") else { panic!("secret-tool is not installed") };
+        let keyring = LinuxBackend { program, service: format!("aria-test-{}", std::process::id()) };
+        assert_eq!(keyring.get("key:live").unwrap(), None);
+        keyring.set("key:live", "a b'c\"d\n{\"json\":1}").unwrap();
+        assert_eq!(keyring.get("key:live").unwrap().as_deref(), Some("a b'c\"d\n{\"json\":1}"));
+        keyring.set("key:live", "second").unwrap();
+        assert_eq!(keyring.get("key:live").unwrap().as_deref(), Some("second"));
+        // Longer than the 8192 bytes secret-tool keeps: in pieces, read back whole, every piece removed.
+        let big: String = (0..20_000).map(|i| char::from(b'!' + (i % 90) as u8)).collect();
+        keyring.set("key:live", &big).unwrap();
+        assert_eq!(keyring.get("key:live").unwrap().as_deref(), Some(big.as_str()));
+        keyring.delete("key:live").unwrap();
+        assert_eq!(keyring.raw_get("key:live#0").unwrap(), None);
+        keyring.delete("key:live").unwrap();
+        assert_eq!(keyring.get("key:live").unwrap(), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn which(name: &str) -> Result<PathBuf, ()> {
+        std::env::split_paths(&std::env::var_os("PATH").ok_or(())?)
+            .map(|d| d.join(name))
+            .find(|p| p.is_file())
+            .ok_or(())
     }
 
     #[cfg(target_os = "macos")]

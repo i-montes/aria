@@ -681,13 +681,19 @@ const script = `(async () => {
     document.body.classList.toggle('mode-chat', wasChat)
   }
 
-  // 8d. Cmd+Q asks first: one press shows the question and sends nothing, a second one inside two seconds quits
+  // 8d. Cmd+Q asks first: one press shows the question and sends nothing, a second one inside two seconds quits. Off a
+  // Mac the same keys are Super+Q, the compositor's: the page leaves them alone.
   window.__sent.length = 0
   const cmdQ = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'q', metaKey: true, bubbles: true, cancelable: true }))
-  cmdQ(); await wait(60)
-  check('one Cmd+Q only asks', $('#quit-hint').classList.contains('is-on') && $('#quit-hint').textContent.includes('⌘Q') && !window.__sent.some((m) => m.type === 'quitRequest'), $('#quit-hint').textContent)
-  cmdQ(); await wait(60)
-  check('a second Cmd+Q quits', window.__sent.some((m) => m.type === 'quitRequest') && !$('#quit-hint').classList.contains('is-on'))
+  if (/Mac/.test(navigator.userAgent)) {
+    cmdQ(); await wait(60)
+    check('one Cmd+Q only asks', $('#quit-hint').classList.contains('is-on') && $('#quit-hint').textContent.includes('⌘Q') && !window.__sent.some((m) => m.type === 'quitRequest'), $('#quit-hint').textContent)
+    cmdQ(); await wait(60)
+    check('a second Cmd+Q quits', window.__sent.some((m) => m.type === 'quitRequest') && !$('#quit-hint').classList.contains('is-on'))
+  } else {
+    cmdQ(); await wait(60); cmdQ(); await wait(60)
+    check('Super+Q off a Mac is left alone', !$('#quit-hint').classList.contains('is-on') && !window.__sent.some((m) => m.type === 'quitRequest'))
+  }
 
   // 9. the settings: a control redraws the section through its components, keeping the scroll and the focus
   $('[data-chat="settings"]').click(); await wait(200)
