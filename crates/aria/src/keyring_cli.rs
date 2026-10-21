@@ -8,7 +8,8 @@ use aria_core::settings::{self, Settings};
 use aria_core::vault::{self, Migrated, Sync, Vault, SEALED};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// The vault the dock holds while it runs, and what it last sealed.
 pub struct Open {
@@ -91,6 +92,59 @@ pub fn open_with(
             note(&format!("THE KEYRING COULD NOT BE READ: Aria starts without its credentials ({error})"));
             (sealed, None)
         }
+    }
+}
+
+/// How long the sync waits before its next try, after `failures` failures in a row: every second while the keyring
+/// answers; then 30 s and 5 min, so a locked keyring (which may ask to be unlocked) is not asked every second.
+pub fn sync_delay(failures: u32) -> Duration {
+    match failures {
+        0 => Duration::from_secs(1),
+        1 => Duration::from_secs(30),
+        _ => Duration::from_secs(300),
+    }
+}
+
+/// The vault the dock holds, shared by its sync thread and its quit and update paths; None once closed.
+pub type Shared = Arc<Mutex<Option<Open>>>;
+
+/// Seals what Pi changes, off the UI thread (a keyring call can wait on an unlock prompt). It stops once the vault is
+/// closed. A failure is logged once until it changes.
+pub fn spawn_sync(shared: Shared) {
+    std::thread::spawn(move || {
+        let mut failures = 0;
+        let mut last: Option<String> = None;
+        loop {
+            std::thread::sleep(sync_delay(failures));
+            let mut guard = shared.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(open) = guard.as_mut() else { return };
+            let problem = open.vault.sync(&mut open.state).first().map(ToString::to_string);
+            drop(guard);
+            if problem.is_some() && problem != last {
+                note(&format!("the keyring could not take a change: {}", problem.as_deref().unwrap_or_default()));
+            }
+            failures = if problem.is_some() { failures + 1 } else { 0 };
+            last = problem;
+        }
+    });
+}
+
+/// The dock's last word to the keyring: changes sealed, live copies removed, the sync thread stopped.
+pub fn close(shared: &Shared) {
+    let mut guard = shared.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(open) = guard.as_mut() {
+        for error in open.vault.close(&mut open.state) {
+            note(&format!("the keyring could not take the last change; its live copy is kept: {error}"));
+        }
+    }
+    *guard = None;
+}
+
+/// Before an update's re-exec: everything sealed, the live copies left for the new process.
+pub fn sync_now(shared: &Shared) {
+    let mut guard = shared.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(open) = guard.as_mut() {
+        open.vault.sync(&mut open.state);
     }
 }
 
@@ -337,6 +391,14 @@ mod tests {
         let (paths, open_vault) = open(home(dir.path()), &settings(true), Ok(Arc::new(Refusing)), dir.path());
         assert!(paths.vault.is_none() && open_vault.is_none());
         assert!(dir.path().join("home/auth.json").exists());
+    }
+
+    #[test]
+    fn a_failing_keyring_is_tried_less_and_less_often() {
+        assert_eq!(sync_delay(0), Duration::from_secs(1));
+        assert_eq!(sync_delay(1), Duration::from_secs(30));
+        assert_eq!(sync_delay(2), Duration::from_secs(300));
+        assert_eq!(sync_delay(40), Duration::from_secs(300));
     }
 
     #[test]
