@@ -122,10 +122,7 @@ impl Backend for MacBackend {
     fn set(&self, account: &str, value: &str) -> Result<(), KeyringError> {
         let (service, quoted) = self.quoted(account)?;
         let label = format!("\"{}:{account}\"", self.service);
-        let line = format!(
-            "add-generic-password -U -s {service} -a {quoted} -l {label} -w {}\n",
-            encode(value)
-        );
+        let line = format!("add-generic-password -U -s {service} -a {quoted} -l {label} -w {}\n", encode(value));
         let output = run(&self.program, &["-i"], Some(&line))?;
         if !output.status.success() || !output.stderr.is_empty() {
             return Err(failed("security", &output));
