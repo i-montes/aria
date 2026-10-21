@@ -174,7 +174,11 @@ impl Watch {
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let name = t["name"].as_str().or_else(|| t["agent"].as_str()).map(str::to_string).unwrap_or_else(|| format!("task {}", i + 1));
+                let name = t["name"]
+                    .as_str()
+                    .or_else(|| t["agent"].as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("task {}", i + 1));
                 let shown = match t["agent"].as_str() {
                     Some(agent) if agent != name => format!("{name} ({agent})"),
                     _ => name,
@@ -225,7 +229,15 @@ fn serve(stream: UnixStream, state: Arc<Mutex<State>>) {
         let mut s = state.lock().unwrap();
         s.next_id += 1;
         let id = s.next_id;
-        s.agents.push(Agent { id, name: format!("#{id}"), task: String::new(), status: Status::Running, steps: Vec::new(), started_ms: now_ms(), doing: "starting" });
+        s.agents.push(Agent {
+            id,
+            name: format!("#{id}"),
+            task: String::new(),
+            status: Status::Running,
+            steps: Vec::new(),
+            started_ms: now_ms(),
+            doing: "starting",
+        });
         if s.agents.len() > MAX_AGENTS {
             let extra = s.agents.len() - MAX_AGENTS;
             s.agents.drain(0..extra);
@@ -252,7 +264,11 @@ fn serve(stream: UnixStream, state: Arc<Mutex<State>>) {
         let line = String::from_utf8_lossy(&bytes);
         let Ok(message) = serde_json::from_str::<Value>(line.trim_end()) else { continue };
         let mut s = state.lock().unwrap();
-        let named = if message["t"] == "prompt" { Some(name_for(&mut s.pending, message["text"].as_str().unwrap_or_default())) } else { None };
+        let named = if message["t"] == "prompt" {
+            Some(name_for(&mut s.pending, message["text"].as_str().unwrap_or_default()))
+        } else {
+            None
+        };
         let Some(agent) = s.agents.iter_mut().find(|a| a.id == id) else { break };
         if let Some((name, task)) = named {
             agent.name = name;
@@ -301,7 +317,9 @@ fn apply(agent: &mut Agent, m: &Value) {
             agent.doing = doing_for(name);
             push_step(agent, json!({"kind": "tool", "tool": name, "target": one_line(text("args"))}));
         }
-        Some("result") if m["error"] == json!(true) => push_step(agent, json!({"kind": "note", "label": "error", "text": clip(text("text"), 600)})),
+        Some("result") if m["error"] == json!(true) => {
+            push_step(agent, json!({"kind": "note", "label": "error", "text": clip(text("text"), 600)}))
+        }
         Some("end") => agent.status = Status::Done,
         _ => {}
     }
@@ -309,7 +327,10 @@ fn apply(agent: &mut Agent, m: &Value) {
 
 /// Names a child from its prompt: the pending `parallel` task whose text it contains, or the line after "Task:".
 fn name_for(pending: &mut VecDeque<(String, String)>, prompt: &str) -> (String, String) {
-    if let Some(at) = pending.iter().position(|(_, task)| !task.is_empty() && prompt.contains(&task.chars().take(160).collect::<String>())) {
+    if let Some(at) = pending
+        .iter()
+        .position(|(_, task)| !task.is_empty() && prompt.contains(&task.chars().take(160).collect::<String>()))
+    {
         return pending.remove(at).unwrap();
     }
     let after = prompt.split_once("Task:").map(|(_, rest)| rest).unwrap_or(prompt);
@@ -327,9 +348,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let changes = Arc::new(AtomicUsize::new(0));
         let counter = changes.clone();
-        let w = Watch::bind(&dir.path().join("w.sock"), Arc::new(move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-        }))
+        let w = Watch::bind(
+            &dir.path().join("w.sock"),
+            Arc::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }),
+        )
         .unwrap();
         (dir, w, changes)
     }
@@ -414,7 +438,11 @@ mod tests {
         );
         let agents = eventually(&w, "steps", |a| a[0]["steps"].as_array().is_some_and(|s| s.len() >= 3));
         let steps = agents[0]["steps"].as_array().unwrap();
-        assert_eq!(steps[0], json!({"kind": "msg", "text": "Looking."}), "the prompt is not a step: the task is in the header");
+        assert_eq!(
+            steps[0],
+            json!({"kind": "msg", "text": "Looking."}),
+            "the prompt is not a step: the task is in the header"
+        );
         assert_eq!(steps[1], json!({"kind": "tool", "tool": "read", "target": "src/main.rs"}));
         assert_eq!(steps[2], json!({"kind": "note", "label": "error", "text": "boom"}));
         assert_eq!(steps.last().unwrap()["kind"], "live", "a running agent shows what it is doing now");
@@ -456,7 +484,9 @@ mod tests {
         let (_d, w, _) = watch();
         drop(child(&w, &[json!({"t": "prompt", "text": "Task: a"}), json!({"t": "text", "delta": "partial"})]));
         drop(child(&w, &[]));
-        let agents = eventually(&w, "two closed", |a| a.as_array().is_some_and(|l| l.len() == 2 && l.iter().all(|x| x["kind"] == "done")));
+        let agents = eventually(&w, "two closed", |a| {
+            a.as_array().is_some_and(|l| l.len() == 2 && l.iter().all(|x| x["kind"] == "done"))
+        });
         assert_eq!(agents[0]["status"], "done");
         assert_eq!(agents[1]["status"], "failed");
     }
@@ -477,7 +507,9 @@ mod tests {
         c.write_all(&vec![b'x'; 200 * 1024]).unwrap();
         writeln!(c).unwrap();
         writeln!(c, "{}", json!({"t": "tool", "name": "ls", "args": "."})).unwrap();
-        eventually(&w, "the line after the long one", |a| a[0]["steps"].as_array().is_some_and(|s| s.iter().any(|x| x["tool"] == "ls")));
+        eventually(&w, "the line after the long one", |a| {
+            a[0]["steps"].as_array().is_some_and(|s| s.iter().any(|x| x["tool"] == "ls"))
+        });
     }
 
     #[test]
@@ -491,6 +523,8 @@ mod tests {
         writeln!(bad, "not json").unwrap();
         writeln!(bad, "{}", json!({"t": "tool", "name": "bash", "args": "ls"})).unwrap();
         eventually(&w, "twenty", |a| a.as_array().is_some_and(|l| l.len() == 20));
-        eventually(&w, "the good line after the garbage", |a| a.as_array().unwrap().iter().any(|x| x["status"] == "running"));
+        eventually(&w, "the good line after the garbage", |a| {
+            a.as_array().unwrap().iter().any(|x| x["status"] == "running")
+        });
     }
 }

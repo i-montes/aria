@@ -40,7 +40,13 @@ pub fn fake(protected: bool, register_status: u16) -> Fake {
     Fake { base, seen }
 }
 
-fn serve_one(mut stream: std::net::TcpStream, log: &Mutex<Vec<Req>>, base: &str, protected: bool, register_status: u16) {
+fn serve_one(
+    mut stream: std::net::TcpStream,
+    log: &Mutex<Vec<Req>>,
+    base: &str,
+    protected: bool,
+    register_status: u16,
+) {
     let mut data = Vec::new();
     let mut buffer = [0u8; 4096];
     let (head_end, length) = loop {
@@ -51,7 +57,11 @@ fn serve_one(mut stream: std::net::TcpStream, log: &Mutex<Vec<Req>>, base: &str,
         data.extend_from_slice(&buffer[..n]);
         if let Some(at) = data.windows(4).position(|w| w == b"\r\n\r\n") {
             let head = String::from_utf8_lossy(&data[..at]).to_lowercase();
-            let length = head.lines().find_map(|l| l.strip_prefix("content-length:")).and_then(|v| v.trim().parse().ok()).unwrap_or(0usize);
+            let length = head
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0usize);
             break (at + 4, length);
         }
     };
@@ -64,7 +74,10 @@ fn serve_one(mut stream: std::net::TcpStream, log: &Mutex<Vec<Req>>, base: &str,
     }
     let text = String::from_utf8_lossy(&data).into_owned();
     let first = text.lines().next().unwrap_or("");
-    let (method, path) = (first.split_whitespace().next().unwrap_or("").to_string(), first.split_whitespace().nth(1).unwrap_or("").to_string());
+    let (method, path) = (
+        first.split_whitespace().next().unwrap_or("").to_string(),
+        first.split_whitespace().nth(1).unwrap_or("").to_string(),
+    );
     let body = text[head_end.min(text.len())..].to_string();
     log.lock().unwrap().push(Req { method: method.clone(), path: path.clone(), body: body.clone() });
     let json_response = |status: u16, value: serde_json::Value| (status, vec![], value.to_string());
@@ -102,7 +115,10 @@ fn serve_one(mut stream: std::net::TcpStream, log: &Mutex<Vec<Req>>, base: &str,
         ("POST", "/token") => json_response(200, json!({"access_token": "at", "refresh_token": "rt", "token_type": "bearer", "expires_in": 3600, "scope": "default"})),
         _ => json_response(404, json!({})),
     };
-    let mut response = format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n", payload.len());
+    let mut response = format!(
+        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
+        payload.len()
+    );
     for h in headers {
         response.push_str(&h);
         response.push_str("\r\n");

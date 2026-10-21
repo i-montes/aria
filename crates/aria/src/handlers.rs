@@ -52,7 +52,12 @@ impl Ctx {
             validator: Arc::new(check_key),
             oauth_checker: Arc::new(aria_core::validate::check),
             opener: Arc::new(|url| {
-                let _ = Command::new(OPENER).arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+                let _ = Command::new(OPENER)
+                    .arg(url)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn();
             }),
             oauth_timeout: Duration::from_secs(300),
             notion_url: mcp::NOTION_URL.to_string(),
@@ -167,7 +172,13 @@ fn connected(ctx: &Ctx) -> Vec<String> {
 fn load_settings(id: u64, ctx: &Ctx) -> DockMessage {
     let connected = connected(ctx);
     match settings::load(&ctx.paths) {
-        Ok(Some(settings)) => DockMessage::Settings { id, settings: serde_json::to_value(settings).ok(), exists: true, problem: None, connected },
+        Ok(Some(settings)) => DockMessage::Settings {
+            id,
+            settings: serde_json::to_value(settings).ok(),
+            exists: true,
+            problem: None,
+            connected,
+        },
         Ok(None) => DockMessage::Settings { id, settings: None, exists: false, problem: None, connected },
         Err(error) => {
             let problem = match error {
@@ -309,7 +320,9 @@ fn check_stored_oauth(id: u64, ctx: &Ctx) -> DockMessage {
 /// 300 MB, once). Claude Code is checked first so nothing is downloaded for a provider that could not run.
 fn install_claude_bridge(id: u64, ctx: &Ctx) -> DockMessage {
     let error = |code: &str| DockMessage::Error { id, code: code.into() };
-    let Ok(install) = aria_core::pi::locate(&ctx.paths, aria_core::pi::pinned_version()) else { return error("pi-missing") };
+    let Ok(install) = aria_core::pi::locate(&ctx.paths, aria_core::pi::pinned_version()) else {
+        return error("pi-missing");
+    };
     if aria_core::pi::locate_tool(&ctx.paths, "claude", &ctx.path_var).is_none() {
         return error("claude-code-missing");
     }
@@ -340,7 +353,8 @@ fn oauth_error_key(error: &OAuthError) -> &'static str {
 /// Notion's sign-in: discover, register, open the browser, wait, then store the record in Pi's
 /// `mcp-auth.json` and list Notion in `mcp.json`. Nothing is written unless it all succeeds.
 fn notion_flow(id: u64, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
-    let result = |error: Option<&str>| DockMessage::OAuthResult { id, ok: error.is_none(), error: error.map(str::to_string) };
+    let result =
+        |error: Option<&str>| DockMessage::OAuthResult { id, ok: error.is_none(), error: error.map(str::to_string) };
     let sign_in = match oauth::mcp::start(&ctx.notion_url) {
         Ok(sign_in) => sign_in,
         Err(error) => return emit(result(Some(oauth_error_key(&error)))),
@@ -351,12 +365,14 @@ fn notion_flow(id: u64, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         Ok(record) => record,
         Err(error) => return emit(result(Some(oauth_error_key(&error)))),
     };
-    let stored = mcp::store_oauth_record(&ctx.paths, "notion", &ctx.notion_url, record).and_then(|()| mcp::add_notion_server(&ctx.paths));
+    let stored = mcp::store_oauth_record(&ctx.paths, "notion", &ctx.notion_url, record)
+        .and_then(|()| mcp::add_notion_server(&ctx.paths));
     emit(result(stored.err().map(|_| "mcp-file-broken")));
 }
 
 fn oauth_flow(id: u64, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
-    let result = |error: Option<&str>| DockMessage::OAuthResult { id, ok: error.is_none(), error: error.map(str::to_string) };
+    let result =
+        |error: Option<&str>| DockMessage::OAuthResult { id, ok: error.is_none(), error: error.map(str::to_string) };
     let sign_in = match oauth::anthropic::start() {
         Ok(sign_in) => sign_in,
         Err(error) => return emit(result(Some(oauth_error_key(&error)))),
@@ -446,7 +462,8 @@ mod tests {
             ran_in.lock().unwrap().push(command.clone());
             // what `pi install` leaves behind
             std::fs::create_dir_all(agent.join("npm/node_modules/pi-claude-agent-sdk")).unwrap();
-            std::fs::write(agent.join("settings.json"), format!(r#"{{"packages":["{CLAUDE_BRIDGE_PACKAGE}"]}}"#)).unwrap();
+            std::fs::write(agent.join("settings.json"), format!(r#"{{"packages":["{CLAUDE_BRIDGE_PACKAGE}"]}}"#))
+                .unwrap();
             true
         });
         ran
@@ -477,7 +494,10 @@ mod tests {
         let mut h = harness(KeyCheck::Valid);
         let ran = with_pi_and_claude(&mut h, false);
         h.ctx.path_var = "/nonexistent".into();
-        assert_eq!(run(&h, PageMessage::InstallClaudeBridge { id: 3 }), vec![DockMessage::Error { id: 3, code: "claude-code-missing".into() }]);
+        assert_eq!(
+            run(&h, PageMessage::InstallClaudeBridge { id: 3 }),
+            vec![DockMessage::Error { id: 3, code: "claude-code-missing".into() }]
+        );
         assert!(ran.lock().unwrap().is_empty());
     }
 
@@ -485,7 +505,10 @@ mod tests {
     fn without_the_pinned_pi_it_says_so() {
         let mut h = harness(KeyCheck::Valid);
         h.ctx.path_var = "/nonexistent".into();
-        assert_eq!(run(&h, PageMessage::InstallClaudeBridge { id: 4 }), vec![DockMessage::Error { id: 4, code: "pi-missing".into() }]);
+        assert_eq!(
+            run(&h, PageMessage::InstallClaudeBridge { id: 4 }),
+            vec![DockMessage::Error { id: 4, code: "pi-missing".into() }]
+        );
     }
 
     #[test]
@@ -493,7 +516,10 @@ mod tests {
         let mut h = harness(KeyCheck::Valid);
         with_pi_and_claude(&mut h, true);
         h.ctx.installer = Arc::new(|_| false);
-        assert_eq!(run(&h, PageMessage::InstallClaudeBridge { id: 6 }), vec![DockMessage::Error { id: 6, code: "claude-bridge-install-failed".into() }]);
+        assert_eq!(
+            run(&h, PageMessage::InstallClaudeBridge { id: 6 }),
+            vec![DockMessage::Error { id: 6, code: "claude-bridge-install-failed".into() }]
+        );
         assert!(!claude_bridge_installed(&h.ctx.paths));
     }
 
@@ -502,7 +528,10 @@ mod tests {
         let mut h = harness(KeyCheck::Valid);
         with_pi_and_claude(&mut h, true);
         h.ctx.installer = Arc::new(|_| true); // lies: installs nothing
-        assert_eq!(run(&h, PageMessage::InstallClaudeBridge { id: 7 }), vec![DockMessage::Error { id: 7, code: "claude-bridge-install-failed".into() }]);
+        assert_eq!(
+            run(&h, PageMessage::InstallClaudeBridge { id: 7 }),
+            vec![DockMessage::Error { id: 7, code: "claude-bridge-install-failed".into() }]
+        );
     }
 
     #[test]
@@ -520,7 +549,13 @@ mod tests {
         std::fs::write(h.ctx.paths.settings(), "{ nope").unwrap();
         assert_eq!(
             run(&h, PageMessage::LoadSettings { id: 1 }),
-            vec![DockMessage::Settings { id: 1, settings: None, exists: true, problem: Some("settings-invalid".into()), connected: vec![] }]
+            vec![DockMessage::Settings {
+                id: 1,
+                settings: None,
+                exists: true,
+                problem: Some("settings-invalid".into()),
+                connected: vec![]
+            }]
         );
     }
 
@@ -530,17 +565,27 @@ mod tests {
         let mut settings = aria_core::settings::Settings::defaults("es");
         settings.assistant.user_name = "Ivan".into();
         let value = serde_json::to_value(&settings).unwrap();
-        assert_eq!(run(&h, PageMessage::SaveSettings { id: 2, settings: value.clone() }), vec![DockMessage::Saved { id: 2 }]);
+        assert_eq!(
+            run(&h, PageMessage::SaveSettings { id: 2, settings: value.clone() }),
+            vec![DockMessage::Saved { id: 2 }]
+        );
         assert_eq!(
             run(&h, PageMessage::LoadSettings { id: 3 }),
-            vec![DockMessage::Settings { id: 3, settings: Some(value), exists: true, problem: None, connected: vec![] }]
+            vec![DockMessage::Settings {
+                id: 3,
+                settings: Some(value),
+                exists: true,
+                problem: None,
+                connected: vec![]
+            }]
         );
     }
 
     #[test]
     fn save_settings_with_the_wrong_shape_is_an_error_and_writes_nothing() {
         let h = harness(KeyCheck::Valid);
-        let replies = run(&h, PageMessage::SaveSettings { id: 4, settings: json!({"compaction": {"percent": "lots"}}) });
+        let replies =
+            run(&h, PageMessage::SaveSettings { id: 4, settings: json!({"compaction": {"percent": "lots"}}) });
         assert_eq!(replies, vec![DockMessage::Error { id: 4, code: "settings-invalid".into() }]);
         assert!(!h.ctx.paths.settings().exists());
     }
@@ -597,7 +642,10 @@ mod tests {
     fn unreachable_provider_writes_nothing() {
         let h = harness(KeyCheck::Unavailable("timed out".into()));
         let replies = run(&h, PageMessage::SaveKey { id: 8, provider: "typesafe".into(), key: "k".into() });
-        assert_eq!(replies, vec![DockMessage::KeyResult { id: 8, ok: false, error: Some("network-unavailable".into()) }]);
+        assert_eq!(
+            replies,
+            vec![DockMessage::KeyResult { id: 8, ok: false, error: Some("network-unavailable".into()) }]
+        );
         assert!(!h.ctx.paths.auth().exists());
     }
 
@@ -673,7 +721,10 @@ mod tests {
             .unwrap();
         let replies = run(&h, PageMessage::CheckKey { id: 8, provider: "anthropic-oauth".into() });
         assert_eq!(replies, vec![DockMessage::KeyResult { id: 8, ok: true, error: None }]);
-        assert_eq!(h.checked_oauth.lock().unwrap().as_slice(), ["https://api.anthropic.com/api/oauth/usage".to_string()]);
+        assert_eq!(
+            h.checked_oauth.lock().unwrap().as_slice(),
+            ["https://api.anthropic.com/api/oauth/usage".to_string()]
+        );
     }
 
     #[test]
@@ -737,7 +788,8 @@ mod tests {
         let replies = run(&h, PageMessage::SaveKey { id: 20, provider: "tavily".into(), key: " tvly-1 ".into() });
         assert_eq!(replies, vec![DockMessage::KeyResult { id: 20, ok: true, error: None }]);
         assert_eq!(h.seen_keys.lock().unwrap().as_slice(), [(KeyKind::Tavily, "tvly-1".to_string())]);
-        let mcp: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(h.ctx.paths.mcp()).unwrap()).unwrap();
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(h.ctx.paths.mcp()).unwrap()).unwrap();
         assert_eq!(mcp["mcpServers"]["tavily"]["headers"]["Authorization"], "Bearer tvly-1");
         assert!(!h.ctx.paths.auth().exists());
     }
@@ -769,7 +821,10 @@ mod tests {
             .unwrap();
         match &run(&h, PageMessage::LoadSettings { id: 3 })[0] {
             DockMessage::Settings { connected, .. } => {
-                let expected: Vec<String> = ["anthropic:oauth", "mcp:tavily", "opencode-go:api_key", "opencode:api_key"].map(String::from).to_vec();
+                let expected: Vec<String> =
+                    ["anthropic:oauth", "mcp:tavily", "opencode-go:api_key", "opencode:api_key"]
+                        .map(String::from)
+                        .to_vec();
                 assert_eq!(connected, &expected);
             }
             other => panic!("expected settings, got {other:?}"),
@@ -788,7 +843,8 @@ mod tests {
         handle(PageMessage::StartMcpOAuth { id: 30, service: "notion".into() }, &h.ctx, &|m| {
             if let DockMessage::OAuthUrl { url, .. } = &m {
                 // the user finishes in the browser: it comes back to the loopback address with the state
-                let q: std::collections::HashMap<String, String> = url::Url::parse(url).unwrap().query_pairs().into_owned().collect();
+                let q: std::collections::HashMap<String, String> =
+                    url::Url::parse(url).unwrap().query_pairs().into_owned().collect();
                 let (redirect, state) = (q["redirect_uri"].clone(), q["state"].clone());
                 *browser.lock().unwrap() = Some(std::thread::spawn(move || {
                     use std::io::{Read, Write};
@@ -807,10 +863,12 @@ mod tests {
         assert_eq!(replies[1], DockMessage::OAuthResult { id: 30, ok: true, error: None });
         assert_eq!(h.opened.lock().unwrap().len(), 1);
         // Pi's files: the record under Pi's key, and Notion listed as a server (no secret in mcp.json)
-        let auth: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(h.ctx.paths.mcp_auth()).unwrap()).unwrap();
+        let auth: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(h.ctx.paths.mcp_auth()).unwrap()).unwrap();
         let key = format!("mcp__notion|{}/mcp", server.base);
         assert_eq!(auth[&key]["tokens"]["access_token"], "at");
-        let mcp: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(h.ctx.paths.mcp()).unwrap()).unwrap();
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(h.ctx.paths.mcp()).unwrap()).unwrap();
         assert!(mcp["mcpServers"]["notion"]["url"].as_str().unwrap().ends_with("/mcp"));
         assert!(mcp["mcpServers"]["notion"].get("headers").is_none());
     }
@@ -819,7 +877,10 @@ mod tests {
     fn an_unreachable_notion_is_a_network_error_and_writes_nothing() {
         let h = harness(KeyCheck::Valid); // notion_url points at a closed port
         let replies = run(&h, PageMessage::StartMcpOAuth { id: 31, service: "notion".into() });
-        assert_eq!(replies, vec![DockMessage::OAuthResult { id: 31, ok: false, error: Some("network-unavailable".into()) }]);
+        assert_eq!(
+            replies,
+            vec![DockMessage::OAuthResult { id: 31, ok: false, error: Some("network-unavailable".into()) }]
+        );
         assert!(!h.ctx.paths.mcp_auth().exists());
         assert!(!h.ctx.paths.mcp().exists());
     }

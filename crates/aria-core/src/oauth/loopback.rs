@@ -22,7 +22,12 @@ pub fn parse_callback(request_target: &str, expected_state: &str) -> Result<Stri
 /// Waits (up to `timeout`) for the browser's request to `callback_path` on a non-blocking listener
 /// and returns its code. Other requests (a favicon, say) get a 404 and are ignored; a callback that is
 /// denied, has the wrong `state` or has no code is answered with a 400 and reported.
-pub fn wait_for_code(listener: &TcpListener, callback_path: &str, expected_state: &str, timeout: Duration) -> Result<String, OAuthError> {
+pub fn wait_for_code(
+    listener: &TcpListener,
+    callback_path: &str,
+    expected_state: &str,
+    timeout: Duration,
+) -> Result<String, OAuthError> {
     let deadline = Instant::now() + timeout;
     loop {
         match listener.accept() {

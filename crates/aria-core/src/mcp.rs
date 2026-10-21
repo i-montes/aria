@@ -29,7 +29,9 @@ fn read_object(path: &Path) -> Result<Map<String, Value>, McpError> {
     match read_json(path)? {
         None => Ok(Map::new()),
         Some(Value::Object(map)) => Ok(map),
-        Some(_) => Err(JsonFileError::Invalid { path: path.to_path_buf(), message: "expected a JSON object".into() }.into()),
+        Some(_) => {
+            Err(JsonFileError::Invalid { path: path.to_path_buf(), message: "expected a JSON object".into() }.into())
+        }
     }
 }
 
@@ -74,7 +76,8 @@ pub fn add_notion_server(paths: &AriaPaths) -> Result<(), McpError> {
 }
 
 /// The seven Engram tools the owner's persona calls directly (ARIA-SETUP item 16).
-const ENGRAM_DIRECT: [&str; 7] = ["mem_context", "mem_search", "mem_get_observation", "mem_save", "mem_update", "mem_judge", "mem_session_summary"];
+const ENGRAM_DIRECT: [&str; 7] =
+    ["mem_context", "mem_search", "mem_get_observation", "mem_save", "mem_update", "mem_judge", "mem_session_summary"];
 
 /// Aria's own Engram entry: the binary the installer puts in `~/.aria/bin` and a database of its own in
 /// `~/.aria/engram` (the owner's decision: Aria's memories do not mix with his terminal Pi's).
@@ -96,7 +99,11 @@ fn is_arias_engram(paths: &AriaPaths, entry: &Value) -> bool {
 
 /// The Engram project of the settings: `aria` when none is set.
 fn memory_project(memory: &crate::settings::Memory) -> &str {
-    if memory.project.trim().is_empty() { "aria" } else { memory.project.trim() }
+    if memory.project.trim().is_empty() {
+        "aria"
+    } else {
+        memory.project.trim()
+    }
 }
 
 /// Memory on: Aria's Engram entry, with the settings' project. Memory off: Aria's entry goes. An `engram` entry Aria
@@ -146,7 +153,11 @@ pub fn seed_memory(paths: &AriaPaths, memory: &crate::settings::Memory) -> std::
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         } else {
-            Err(std::io::Error::other(format!("engram {}: {}", args[0], String::from_utf8_lossy(&output.stderr).trim())))
+            Err(std::io::Error::other(format!(
+                "engram {}: {}",
+                args[0],
+                String::from_utf8_lossy(&output.stderr).trim()
+            )))
         }
     };
     if has_memories(&run(&["projects", "list"])?, project) {
@@ -277,7 +288,10 @@ mod tests {
         let log = fake_engram(&paths, "No projects found.\n");
         assert!(seed_memory(&paths, &memory(true, "")).unwrap());
         let saved = std::fs::read_to_string(&log).unwrap();
-        assert!(saved.starts_with(&format!("{}|1|save Aria's memory ", paths.root.join("engram").display())), "{saved}");
+        assert!(
+            saved.starts_with(&format!("{}|1|save Aria's memory ", paths.root.join("engram").display())),
+            "{saved}"
+        );
         assert!(saved.contains("--project aria --type manual"), "{saved}");
     }
 
@@ -325,8 +339,15 @@ mod tests {
     #[test]
     fn an_oauth_record_is_stored_under_pis_key_and_other_servers_stay() {
         let (_dir, paths) = paths();
-        std::fs::write(paths.mcp_auth(), r#"{"mcp__figma|https://mcp.figma.com/mcp":{"tokens":{"access_token":"f"}}}"#).unwrap();
-        store_oauth_record(&paths, "notion", NOTION_URL, json!({"serverUrl": NOTION_URL, "tokens": {"access_token": "a"}})).unwrap();
+        std::fs::write(paths.mcp_auth(), r#"{"mcp__figma|https://mcp.figma.com/mcp":{"tokens":{"access_token":"f"}}}"#)
+            .unwrap();
+        store_oauth_record(
+            &paths,
+            "notion",
+            NOTION_URL,
+            json!({"serverUrl": NOTION_URL, "tokens": {"access_token": "a"}}),
+        )
+        .unwrap();
         let file = read(&paths.mcp_auth());
         assert_eq!(std::fs::metadata(paths.mcp_auth()).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(file["mcp__notion|https://mcp.notion.com/mcp"]["tokens"]["access_token"], "a");

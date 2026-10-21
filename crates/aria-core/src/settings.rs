@@ -229,12 +229,22 @@ impl Default for Packages {
 }
 impl Default for SandboxSettings {
     fn default() -> Self {
-        SandboxSettings { projects_dir: "~/Projects".into(), extra_writable: Vec::new(), ask_to_leave: true, jev_review: true }
+        SandboxSettings {
+            projects_dir: "~/Projects".into(),
+            extra_writable: Vec::new(),
+            ask_to_leave: true,
+            jev_review: true,
+        }
     }
 }
 impl Default for Git {
     fn default() -> Self {
-        Git { commit_without_asking: false, push_or_merge_without_asking: false, ask_before_others_changes: true, unasked_as_proposals: true }
+        Git {
+            commit_without_asking: false,
+            push_or_merge_without_asking: false,
+            ask_before_others_changes: true,
+            unasked_as_proposals: true,
+        }
     }
 }
 impl Default for Subagents {
@@ -356,7 +366,8 @@ mod tests {
 
     #[test]
     fn defaults_match_the_golden_file_the_ui_is_tested_against() {
-        let golden: serde_json::Value = serde_json::from_str(include_str!("../tests/golden/settings-defaults-en.json")).unwrap();
+        let golden: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/golden/settings-defaults-en.json")).unwrap();
         assert_eq!(serde_json::to_value(Settings::defaults("en")).unwrap(), golden);
     }
 

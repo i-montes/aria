@@ -4,11 +4,24 @@ use serde_json::{json, Map, Value};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Incoming {
-    Response { id: Option<String>, command: String, success: bool, data: Value, error: Option<String> },
+    Response {
+        id: Option<String>,
+        command: String,
+        success: bool,
+        data: Value,
+        error: Option<String>,
+    },
     /// A dialog (`select`, `confirm`, `input`, `editor`) or a fire-and-forget request (`notify`, …).
-    UiRequest { id: String, method: String, raw: Value },
+    UiRequest {
+        id: String,
+        method: String,
+        raw: Value,
+    },
     /// Any session event (`agent_start`, `message_update`, …), verbatim.
-    Event { kind: String, raw: Value },
+    Event {
+        kind: String,
+        raw: Value,
+    },
     Unparsable(String),
 }
 
@@ -72,12 +85,24 @@ mod tests {
         let line = r#"{"id":"3","type":"response","command":"get_state","success":true,"data":{"isStreaming":false}}"#;
         assert_eq!(
             parse_line(line),
-            Incoming::Response { id: Some("3".into()), command: "get_state".into(), success: true, data: json!({"isStreaming": false}), error: None }
+            Incoming::Response {
+                id: Some("3".into()),
+                command: "get_state".into(),
+                success: true,
+                data: json!({"isStreaming": false}),
+                error: None
+            }
         );
         let failed = r#"{"type":"response","command":"parse","success":false,"error":"bad"}"#;
         assert_eq!(
             parse_line(failed),
-            Incoming::Response { id: None, command: "parse".into(), success: false, data: Value::Null, error: Some("bad".into()) }
+            Incoming::Response {
+                id: None,
+                command: "parse".into(),
+                success: false,
+                data: Value::Null,
+                error: Some("bad".into())
+            }
         );
     }
 
@@ -111,15 +136,24 @@ mod tests {
     #[test]
     fn command_merges_type_id_and_fields() {
         let line = command("prompt", "1", json!({"message": "hi"}));
-        assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), json!({"type": "prompt", "id": "1", "message": "hi"}));
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap(),
+            json!({"type": "prompt", "id": "1", "message": "hi"})
+        );
         assert!(!line.contains('\n'));
     }
 
     #[test]
     fn ui_response_shapes() {
         let value = |answer| serde_json::from_str::<Value>(&ui_response("u", &answer)).unwrap();
-        assert_eq!(value(UiAnswer::Value("Allow".into())), json!({"type": "extension_ui_response", "id": "u", "value": "Allow"}));
-        assert_eq!(value(UiAnswer::Confirmed(true)), json!({"type": "extension_ui_response", "id": "u", "confirmed": true}));
+        assert_eq!(
+            value(UiAnswer::Value("Allow".into())),
+            json!({"type": "extension_ui_response", "id": "u", "value": "Allow"})
+        );
+        assert_eq!(
+            value(UiAnswer::Confirmed(true)),
+            json!({"type": "extension_ui_response", "id": "u", "confirmed": true})
+        );
         assert_eq!(value(UiAnswer::Cancelled), json!({"type": "extension_ui_response", "id": "u", "cancelled": true}));
     }
 }

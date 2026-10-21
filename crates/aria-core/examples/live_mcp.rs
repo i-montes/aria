@@ -23,7 +23,14 @@ fn main() {
             let url = url::Url::parse(&sign_in.url).unwrap();
             let q: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
             println!("notion authorize: {}://{}{}", url.scheme(), url.host_str().unwrap(), url.path());
-            println!("  redirect_uri={} resource={} scope={:?} pkce={} state_len={}", q["redirect_uri"], q["resource"], q.get("scope"), q["code_challenge_method"], q["state"].len());
+            println!(
+                "  redirect_uri={} resource={} scope={:?} pkce={} state_len={}",
+                q["redirect_uri"],
+                q["resource"],
+                q.get("scope"),
+                q["code_challenge_method"],
+                q["state"].len()
+            );
         }
         Err(error) => println!("notion start failed: {error}"),
     }

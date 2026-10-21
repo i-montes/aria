@@ -104,13 +104,17 @@ mod tests {
     fn a_relative_extra_folder_is_dropped_and_tilde_is_expanded() {
         let mut settings = golden();
         settings.sandbox.extra_writable = vec!["~/notes".into(), "relative/dir".into(), "/srv/data".into()];
-        assert_eq!(extension_config_with_home(&settings, Path::new("/home/u"))["sandbox"]["extraWritable"], json!(["/home/u/notes", "/srv/data"]));
+        assert_eq!(
+            extension_config_with_home(&settings, Path::new("/home/u"))["sandbox"]["extraWritable"],
+            json!(["/home/u/notes", "/srv/data"])
+        );
     }
 
     #[test]
     fn the_config_never_holds_a_secret() {
         let mut settings = golden();
-        settings.integrations.services = vec![crate::settings::Service { id: "tavily".into(), name: "Tavily".into(), auth: "key".into() }];
+        settings.integrations.services =
+            vec![crate::settings::Service { id: "tavily".into(), name: "Tavily".into(), auth: "key".into() }];
         let text = extension_config_with_home(&settings, Path::new("/home/u")).to_string();
         assert!(!text.to_lowercase().contains("tavily") && !text.contains("key\":\""), "{text}");
     }

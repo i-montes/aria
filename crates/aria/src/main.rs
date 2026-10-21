@@ -74,7 +74,10 @@ fn run_dock() {
                 notifier: Arc::new(PlatformNotifier),
                 dock_visible: dock_visible.clone(),
                 chat_shown: Arc::new(AtomicBool::new(true)),
-                run_dir: control::control_socket_path().parent().map(std::path::Path::to_path_buf).unwrap_or_else(std::env::temp_dir),
+                run_dir: control::control_socket_path()
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_else(std::env::temp_dir),
                 path_var: std::env::var("PATH").unwrap_or_default(),
                 quota_fetcher: Arc::new(aria_core::quota::real_fetcher),
             },
@@ -94,21 +97,24 @@ fn run_dock() {
 
     let dock = {
         let reply_sender = reply_sender.clone();
-        Dock::new(dock_visible, Box::new(move |message, _dock| {
-            if handlers::is_chat(&message) {
-                let _ = chat_sender.send(message);
-                return;
-            }
-            let (ctx, sender) = (ctx.clone(), reply_sender.clone());
-            let emit = move |reply: DockMessage| {
-                let _ = sender.send(reply);
-            };
-            if handlers::is_blocking(&message) {
-                std::thread::spawn(move || handlers::handle(message, &ctx, &emit));
-            } else {
-                handlers::handle(message, &ctx, &emit);
-            }
-        }))
+        Dock::new(
+            dock_visible,
+            Box::new(move |message, _dock| {
+                if handlers::is_chat(&message) {
+                    let _ = chat_sender.send(message);
+                    return;
+                }
+                let (ctx, sender) = (ctx.clone(), reply_sender.clone());
+                let emit = move |reply: DockMessage| {
+                    let _ = sender.send(reply);
+                };
+                if handlers::is_blocking(&message) {
+                    std::thread::spawn(move || handlers::handle(message, &ctx, &emit));
+                } else {
+                    handlers::handle(message, &ctx, &emit);
+                }
+            }),
+        )
     };
     // The page needs the shortcut for its notice and its "you are set up" screen: Super + A on Omarchy,
     // Option + Space on macOS.

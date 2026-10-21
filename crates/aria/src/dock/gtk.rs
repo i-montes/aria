@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use webkit2gtk::{
-    SecurityManagerExt, SettingsExt, URISchemeRequest, URISchemeRequestExt, UserContentManager, UserContentManagerExt, WebContext,
-    WebContextExt, WebView, WebViewExt,
+    SecurityManagerExt, SettingsExt, URISchemeRequest, URISchemeRequestExt, UserContentManager, UserContentManagerExt,
+    WebContext, WebContextExt, WebView, WebViewExt,
 };
 
 /// The surface covers the design's 700 px veil; only the 470 px dock column takes input.
@@ -134,7 +134,13 @@ impl Dock {
     }
 
     fn deliver(&self, json: &str) {
-        self.webview.evaluate_javascript(&format!("window.aria.receive({json})"), None, None, None::<&gio::Cancellable>, |_| {});
+        self.webview.evaluate_javascript(
+            &format!("window.aria.receive({json})"),
+            None,
+            None,
+            None::<&gio::Cancellable>,
+            |_| {},
+        );
     }
 
     fn page_ready(self: &Rc<Self>) {
@@ -174,7 +180,10 @@ impl Dock {
         let weak: Weak<Dock> = Rc::downgrade(self);
         glib::timeout_add_local_once(Duration::from_millis(NOTICE_UNMAP_MS), move || {
             let Some(dock) = weak.upgrade() else { return };
-            if dock.notice_generation.get() == generation && dock.notice_visible.get() && dock.state.get() == State::Hidden {
+            if dock.notice_generation.get() == generation
+                && dock.notice_visible.get()
+                && dock.state.get() == State::Hidden
+            {
                 dock.notice_visible.set(false);
                 dock.click_through.set(false);
                 dock.window.hide();

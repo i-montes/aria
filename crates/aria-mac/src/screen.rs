@@ -44,10 +44,7 @@ pub fn focused_screen() -> Option<Screen> {
     let mtm = MainThreadMarker::new()?;
     let mouse = NSEvent::mouseLocation();
     let screens = NSScreen::screens(mtm);
-    let screen = screens
-        .iter()
-        .find(|screen| contains(screen.frame(), mouse))
-        .or_else(|| NSScreen::mainScreen(mtm))?;
+    let screen = screens.iter().find(|screen| contains(screen.frame(), mouse)).or_else(|| NSScreen::mainScreen(mtm))?;
     Some(Screen {
         name: screen.localizedName().to_string(),
         frame: rect(screen.frame()),
@@ -84,11 +81,7 @@ mod tests {
     fn a_screen_carries_both_its_frame_and_its_visible_area() {
         let frame = rect_at(0.0, 0.0, 1920.0, 1080.0);
         let visible = rect_at(0.0, 0.0, 1920.0, 1055.0);
-        let screen = Screen {
-            name: "Built-in".into(),
-            frame: rect(frame),
-            visible: rect(visible),
-        };
+        let screen = Screen { name: "Built-in".into(), frame: rect(frame), visible: rect(visible) };
         assert_eq!(screen.frame.width, 1920.0);
         assert_eq!(screen.visible.height, 1055.0);
         assert_eq!(screen.visible.ns_rect(), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1920.0, 1055.0)));

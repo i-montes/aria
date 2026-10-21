@@ -9,6 +9,8 @@ fn main() {
     println!("config kind: {:?}", aria_hyprland::detect_config());
     println!("register: {:?}", aria_hyprland::register_hotkey(exe));
     println!("focused monitor: {:?}", aria_hyprland::focused_monitor());
-    let _watcher = aria_hyprland::watch_events(move || println!("reloaded -> register: {:?}", aria_hyprland::register_hotkey(exe)));
+    let _watcher = aria_hyprland::watch_events(move || {
+        println!("reloaded -> register: {:?}", aria_hyprland::register_hotkey(exe))
+    });
     std::thread::sleep(Duration::from_secs(seconds));
 }

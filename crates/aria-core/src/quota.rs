@@ -33,7 +33,9 @@ pub fn source_for(model: &str, auth: &AuthStore, now_ms: i64) -> Option<Source> 
     let provider = model.split('/').next().unwrap_or_default();
     match provider {
         "opencode-go" => match auth.get("opencode-go").ok().flatten()? {
-            Credential::ApiKey { key } if !key.trim().is_empty() => Some(Source::OpenCodeGo { key: key.trim().to_string() }),
+            Credential::ApiKey { key } if !key.trim().is_empty() => {
+                Some(Source::OpenCodeGo { key: key.trim().to_string() })
+            }
             _ => None,
         },
         "anthropic" | "claude-bridge" => match auth.get("anthropic").ok().flatten()? {
@@ -55,7 +57,10 @@ pub fn request_for(source: &Source) -> ProbeRequest {
         Source::Claude { token } => ProbeRequest {
             method: "GET",
             url: "https://api.anthropic.com/api/oauth/usage".into(),
-            headers: vec![("authorization".into(), format!("Bearer {token}")), ("anthropic-beta".into(), "oauth-2025-04-20".into())],
+            headers: vec![
+                ("authorization".into(), format!("Bearer {token}")),
+                ("anthropic-beta".into(), "oauth-2025-04-20".into()),
+            ],
             body: None,
         },
     }
@@ -73,7 +78,12 @@ pub fn parse_go_usage(body: &Value) -> Option<Vec<Window>> {
     for (key, id, label) in [("rolling", "5h", "5h"), ("weekly", "week", "Week"), ("monthly", "month", "Month")] {
         let Some(window) = usage.get(key) else { continue };
         let Some(percent) = window.get("percent").and_then(Value::as_f64) else { return None };
-        windows.push(Window { id: id.into(), label: label.into(), percent, resets_at: window.get("resetsAt").and_then(Value::as_str).map(str::to_string) });
+        windows.push(Window {
+            id: id.into(),
+            label: label.into(),
+            percent,
+            resets_at: window.get("resetsAt").and_then(Value::as_str).map(str::to_string),
+        });
     }
     (!windows.is_empty()).then_some(windows)
 }
@@ -84,12 +94,18 @@ pub fn parse_claude_usage(body: &Value) -> Option<Vec<Window>> {
     let object = body.as_object()?;
     let read = |id: &str, label: &str, value: &Value| -> Option<Window> {
         let percent = value.get("utilization").and_then(Value::as_f64)?;
-        Some(Window { id: id.into(), label: label.into(), percent, resets_at: value.get("resets_at").and_then(Value::as_str).map(str::to_string) })
+        Some(Window {
+            id: id.into(),
+            label: label.into(),
+            percent,
+            resets_at: value.get("resets_at").and_then(Value::as_str).map(str::to_string),
+        })
     };
     let mut windows = Vec::new();
     windows.extend(object.get("five_hour").and_then(|v| read("5h", "5h", v)));
     windows.extend(object.get("seven_day").and_then(|v| read("week", "Week", v)));
-    let mut models: Vec<_> = object.iter().filter_map(|(key, value)| key.strip_prefix("seven_day_").map(|name| (name, value))).collect();
+    let mut models: Vec<_> =
+        object.iter().filter_map(|(key, value)| key.strip_prefix("seven_day_").map(|name| (name, value))).collect();
     models.sort_by_key(|(name, _)| *name);
     for (name, value) in models {
         if value.is_null() {
@@ -146,7 +162,10 @@ mod tests {
             "monthly": {"status": "ok", "percent": 6}
         }});
         let windows = parse_go_usage(&body).unwrap();
-        assert_eq!(windows.iter().map(|w| (w.id.as_str(), w.label.as_str(), w.percent)).collect::<Vec<_>>(), vec![("5h", "5h", 42.0), ("week", "Week", 17.5), ("month", "Month", 6.0)]);
+        assert_eq!(
+            windows.iter().map(|w| (w.id.as_str(), w.label.as_str(), w.percent)).collect::<Vec<_>>(),
+            vec![("5h", "5h", 42.0), ("week", "Week", 17.5), ("month", "Month", 6.0)]
+        );
         assert_eq!(windows[0].resets_at.as_deref(), Some("2026-10-19T03:00:00Z"));
         assert_eq!(windows[1].resets_at, None);
     }
@@ -169,12 +188,18 @@ mod tests {
             "seven_day_fable": {"utilization": 88.0, "resets_at": "2026-10-24T00:00:00Z"}
         });
         let windows = parse_claude_usage(&body).unwrap();
-        assert_eq!(windows.iter().map(|w| (w.id.as_str(), w.label.as_str(), w.percent)).collect::<Vec<_>>(), vec![("5h", "5h", 61.0), ("week", "Week", 23.0), ("fable", "Fable", 88.0)]);
+        assert_eq!(
+            windows.iter().map(|w| (w.id.as_str(), w.label.as_str(), w.percent)).collect::<Vec<_>>(),
+            vec![("5h", "5h", 61.0), ("week", "Week", 23.0), ("fable", "Fable", 88.0)]
+        );
     }
 
     #[test]
     fn claude_usage_without_per_model_windows_and_garbage() {
-        let windows = parse_claude_usage(&json!({"five_hour": {"utilization": 5}, "seven_day": {"utilization": 1}, "seven_day_opus": null})).unwrap();
+        let windows = parse_claude_usage(
+            &json!({"five_hour": {"utilization": 5}, "seven_day": {"utilization": 1}, "seven_day_opus": null}),
+        )
+        .unwrap();
         assert_eq!(windows.len(), 2);
         assert_eq!(parse_claude_usage(&json!({"five_hour": {"utilization": "x"}})), None);
         assert_eq!(parse_claude_usage(&json!([1])), None);
@@ -187,8 +212,14 @@ mod tests {
             "anthropic": {"type": "oauth", "access": "tok", "refresh": "r", "expires": 2_000}
         }));
         assert_eq!(source_for("opencode-go/glm-5.3", &auth, 1_000), Some(Source::OpenCodeGo { key: "go-key".into() }));
-        assert_eq!(source_for("anthropic/claude-sonnet-5-5", &auth, 1_000), Some(Source::Claude { token: "tok".into() }));
-        assert_eq!(source_for("claude-bridge/claude-opus-5-5", &auth, 1_000), Some(Source::Claude { token: "tok".into() }));
+        assert_eq!(
+            source_for("anthropic/claude-sonnet-5-5", &auth, 1_000),
+            Some(Source::Claude { token: "tok".into() })
+        );
+        assert_eq!(
+            source_for("claude-bridge/claude-opus-5-5", &auth, 1_000),
+            Some(Source::Claude { token: "tok".into() })
+        );
         assert_eq!(source_for("anthropic/claude-sonnet-5-5", &auth, 3_000), None, "an expired token is not used");
         assert_eq!(source_for("opencode/big-pickle", &auth, 1_000), None);
         assert_eq!(source_for("nonsense", &auth, 1_000), None);

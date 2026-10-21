@@ -74,10 +74,15 @@ impl AuthStore {
             None => serde_json::Map::new(),
             Some(Value::Object(map)) => map,
             Some(_) => {
-                return Err(JsonFileError::Invalid { path: self.path.clone(), message: "expected a JSON object".into() }.into());
+                return Err(JsonFileError::Invalid {
+                    path: self.path.clone(),
+                    message: "expected a JSON object".into(),
+                }
+                .into());
             }
         };
-        let value = serde_json::to_value(credential).map_err(|_| AuthError::BadCredential { provider: provider.into() })?;
+        let value =
+            serde_json::to_value(credential).map_err(|_| AuthError::BadCredential { provider: provider.into() })?;
         providers.insert(provider.to_string(), value);
         write_json_atomic(&self.path, &Value::Object(providers), 0o600)?;
         Ok(())
@@ -114,9 +119,7 @@ mod tests {
             r#"{"opencode":{"type":"api_key","key":"z"},"x":{"type":"api_key","key":"y","extra":1}}"#,
         )
         .unwrap();
-        store
-            .set("anthropic", &Credential::OAuth { access: "a".into(), refresh: "r".into(), expires: 5 })
-            .unwrap();
+        store.set("anthropic", &Credential::OAuth { access: "a".into(), refresh: "r".into(), expires: 5 }).unwrap();
         let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(store.path()).unwrap()).unwrap();
         assert_eq!(value["opencode"], json!({"type": "api_key", "key": "z"}));
         assert_eq!(value["x"], json!({"type": "api_key", "key": "y", "extra": 1}));
@@ -128,10 +131,12 @@ mod tests {
         let (_dir, store) = store();
         store.set("anthropic", &Credential::ApiKey { key: "old-key".into() }).unwrap();
         store.set("anthropic", &Credential::OAuth { access: "a".into(), refresh: "r".into(), expires: 7 }).unwrap();
-        let after_oauth: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(store.path()).unwrap()).unwrap();
+        let after_oauth: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(store.path()).unwrap()).unwrap();
         assert_eq!(after_oauth["anthropic"], json!({"type": "oauth", "access": "a", "refresh": "r", "expires": 7}));
         store.set("anthropic", &Credential::ApiKey { key: "new-key".into() }).unwrap();
-        let after_key: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(store.path()).unwrap()).unwrap();
+        let after_key: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(store.path()).unwrap()).unwrap();
         assert_eq!(after_key["anthropic"], json!({"type": "api_key", "key": "new-key"}));
     }
 

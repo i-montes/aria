@@ -67,8 +67,12 @@ pub struct Engine {
 impl Engine {
     pub fn spawn(spec: SpawnSpec) -> Result<(Engine, Receiver<EngineEvent>), EngineError> {
         let mut command = Command::new(&spec.program);
-        command.args(&spec.args).current_dir(&spec.cwd).stdin(Stdio::piped()).stdout(Stdio::piped())// Pi's diagnostics go nowhere unless ARIA_DEBUG_PI is set (then to the dock's own stderr).
-        .stderr(if std::env::var_os("ARIA_DEBUG_PI").is_some() { Stdio::inherit() } else { Stdio::null() });
+        command
+            .args(&spec.args)
+            .current_dir(&spec.cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped()) // Pi's diagnostics go nowhere unless ARIA_DEBUG_PI is set (then to the dock's own stderr).
+            .stderr(if std::env::var_os("ARIA_DEBUG_PI").is_some() { Stdio::inherit() } else { Stdio::null() });
         for name in &spec.unset {
             command.env_remove(name);
         }
@@ -127,7 +131,11 @@ impl Engine {
         }
         let mut guard = self.stdin.lock().unwrap();
         let stdin = guard.as_mut().ok_or(EngineError::Gone)?;
-        stdin.write_all(line.as_bytes()).and_then(|_| stdin.write_all(b"\n")).and_then(|_| stdin.flush()).map_err(|_| EngineError::Gone)
+        stdin
+            .write_all(line.as_bytes())
+            .and_then(|_| stdin.write_all(b"\n"))
+            .and_then(|_| stdin.flush())
+            .map_err(|_| EngineError::Gone)
     }
 
     /// Sends a command and returns its id; the response arrives as `EngineEvent::Response`.

@@ -111,7 +111,12 @@ pub enum Render {
     Remove,
 }
 
-pub fn install_embedded(agent: &Path, dir: &include_dir::Dir, prefix: &str, extra_replaceable: &[&str]) -> io::Result<Vec<String>> {
+pub fn install_embedded(
+    agent: &Path,
+    dir: &include_dir::Dir,
+    prefix: &str,
+    extra_replaceable: &[&str],
+) -> io::Result<Vec<String>> {
     install_rendered(agent, dir, prefix, extra_replaceable, &|_, bytes| Render::Write(bytes.to_vec()))
 }
 
@@ -203,7 +208,8 @@ fn collect<'a>(dir: &'a include_dir::Dir<'a>, out: &mut Vec<&'a include_dir::Fil
 
 /// Where Pi works: `sandbox.projectsDir` with `~` expanded, `~/Projects` when there are no settings.
 pub fn workdir(settings: Option<&Settings>) -> PathBuf {
-    let configured = settings.map(|s| s.sandbox.projects_dir.as_str()).filter(|dir| !dir.is_empty()).unwrap_or("~/Projects");
+    let configured =
+        settings.map(|s| s.sandbox.projects_dir.as_str()).filter(|dir| !dir.is_empty()).unwrap_or("~/Projects");
     let home = std::env::var("HOME").unwrap_or_default();
     match configured.strip_prefix('~') {
         Some(rest) => PathBuf::from(format!("{home}{rest}")),
@@ -278,7 +284,8 @@ pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::
         let _ = crate::mcp::seed_memory(paths, &settings.memory);
     }
 
-    for (source, name) in [(paths.auth(), "auth.json"), (paths.mcp(), "mcp.json"), (paths.mcp_auth(), "mcp-auth.json")] {
+    for (source, name) in [(paths.auth(), "auth.json"), (paths.mcp(), "mcp.json"), (paths.mcp_auth(), "mcp-auth.json")]
+    {
         let at = agent.join(name);
         if source.exists() {
             link(&source, &at)?;
@@ -316,7 +323,8 @@ pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::
     // The compaction share becomes per-model reserves Pi reads when it starts. The autocompact extension writes them too
     // (at a session start and for `/autocompact`) and notes the share it applied; Aria writes them only when the
     // settings ask for another share, so a change from the settings screen reaches the next Pi start.
-    let compaction = settings.map(|s| s.compaction.percent).filter(|percent| applied_compaction(&agent) != Some(*percent));
+    let compaction =
+        settings.map(|s| s.compaction.percent).filter(|percent| applied_compaction(&agent) != Some(*percent));
     let compaction = compaction.and_then(|percent| context_windows(&agent).map(|models| (percent, models)));
     if let Some((percent, models)) = &compaction {
         original = with_compaction(original, models, *percent);
@@ -341,18 +349,24 @@ pub fn prepare_reporting(paths: &AriaPaths, settings: Option<&Settings>) -> io::
     // Rendered from the settings (persona.rs): the owner's text, with what a setting varies filled in.
     let owners = Settings::defaults("es");
     let chosen = settings.unwrap_or(&owners);
-    kept.extend(install_rendered(&agent, &AGENT_FILES, "", &[&sha256_hex(PLACEHOLDER_SYSTEM.as_bytes())], &|rel, bytes| {
-        let text = String::from_utf8_lossy(bytes);
-        if rel == "SYSTEM.md" {
-            return Render::Write(crate::persona::render_system(&text, chosen).into_bytes());
-        }
-        let name = rel.strip_prefix("agents/").and_then(|n| n.strip_suffix(".md"));
-        match name.and_then(|n| chosen.subagents.experts.iter().find(|e| e.name == n)) {
-            Some(expert) if !expert.enabled => Render::Remove,
-            Some(expert) => Render::Write(crate::persona::render_expert(&text, expert).into_bytes()),
-            None => Render::Write(bytes.to_vec()),
-        }
-    })?);
+    kept.extend(install_rendered(
+        &agent,
+        &AGENT_FILES,
+        "",
+        &[&sha256_hex(PLACEHOLDER_SYSTEM.as_bytes())],
+        &|rel, bytes| {
+            let text = String::from_utf8_lossy(bytes);
+            if rel == "SYSTEM.md" {
+                return Render::Write(crate::persona::render_system(&text, chosen).into_bytes());
+            }
+            let name = rel.strip_prefix("agents/").and_then(|n| n.strip_suffix(".md"));
+            match name.and_then(|n| chosen.subagents.experts.iter().find(|e| e.name == n)) {
+                Some(expert) if !expert.enabled => Render::Remove,
+                Some(expert) => Render::Write(crate::persona::render_expert(&text, expert).into_bytes()),
+                None => Render::Write(bytes.to_vec()),
+            }
+        },
+    )?);
     // His extensions, adapted to run in Aria (see extensions/README.md); one he edited is kept.
     kept.extend(install_embedded(&agent, &EXTENSIONS, "extensions", &[])?);
     Ok(kept)
@@ -384,7 +398,8 @@ fn context_windows(agent: &Path) -> Option<Vec<(String, u64)>> {
     let mut models = Vec::new();
     for (provider, entry) in store.as_object()? {
         for model in entry["models"].as_array().into_iter().flatten() {
-            if let (Some(id), Some(window)) = (model["id"].as_str(), model["contextWindow"].as_u64().filter(|w| *w > 0)) {
+            if let (Some(id), Some(window)) = (model["id"].as_str(), model["contextWindow"].as_u64().filter(|w| *w > 0))
+            {
                 models.push((format!("{}/{id}", model["provider"].as_str().unwrap_or(provider)), window));
             }
         }
@@ -464,7 +479,11 @@ pub struct InstallCommand {
     pub cwd: PathBuf,
 }
 
-pub fn claude_bridge_install_command(paths: &AriaPaths, install: &crate::pi::PiInstall, path_var: &str) -> InstallCommand {
+pub fn claude_bridge_install_command(
+    paths: &AriaPaths,
+    install: &crate::pi::PiInstall,
+    path_var: &str,
+) -> InstallCommand {
     InstallCommand {
         program: install.binary.clone(),
         args: vec!["install".into(), CLAUDE_BRIDGE_PACKAGE.into()],
@@ -572,7 +591,10 @@ mod tests {
         std::fs::create_dir_all(paths.agent()).unwrap();
         std::fs::write(paths.agent().join("SYSTEM.md"), PLACEHOLDER_SYSTEM).unwrap();
         prepare(&paths, None).unwrap();
-        assert_eq!(std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap(), include_str!("../tests/golden/SYSTEM.owner.md"));
+        assert_eq!(
+            std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap(),
+            include_str!("../tests/golden/SYSTEM.owner.md")
+        );
     }
 
     #[test]
@@ -591,7 +613,10 @@ mod tests {
         let (_dir, paths) = paths();
         prepare(&paths, None).unwrap();
         let skill = paths.agent().join("skills/install-from-link/SKILL.md");
-        assert_eq!(std::fs::read_to_string(skill).unwrap(), include_str!("../../../agent-files/skills/install-from-link/SKILL.md"));
+        assert_eq!(
+            std::fs::read_to_string(skill).unwrap(),
+            include_str!("../../../agent-files/skills/install-from-link/SKILL.md")
+        );
         assert!(paths.agent().join("extensions/install/index.ts").exists());
         assert!(!paths.agent().join("extensions/install/install.test.ts").exists());
     }
@@ -604,7 +629,10 @@ mod tests {
         std::fs::write(paths.agent().join("agents/reviewer.md"), "old reviewer").unwrap();
         record_written(&paths.agent(), "agents/reviewer.md", b"old reviewer").unwrap();
         prepare(&paths, None).unwrap();
-        assert_eq!(std::fs::read_to_string(paths.agent().join("agents/reviewer.md")).unwrap(), include_str!("../../../agent-files/agents/reviewer.md"));
+        assert_eq!(
+            std::fs::read_to_string(paths.agent().join("agents/reviewer.md")).unwrap(),
+            include_str!("../../../agent-files/agents/reviewer.md")
+        );
     }
 
     #[test]
@@ -612,7 +640,9 @@ mod tests {
         let (_dir, paths) = paths();
         prepare(&paths, None).unwrap();
         let extensions = paths.agent().join("extensions");
-        for name in ["jev-router", "sandbox", "quota-fallback", "autocompact", "ask-user", "subagent-mode", "subagent-watch"] {
+        for name in
+            ["jev-router", "sandbox", "quota-fallback", "autocompact", "ask-user", "subagent-mode", "subagent-watch"]
+        {
             assert!(extensions.join(name).join("index.ts").is_file(), "{name}");
         }
         assert!(extensions.join("lib/agent-dir.ts").is_file(), "the shared helper");
@@ -633,7 +663,13 @@ mod tests {
 
     #[test]
     fn the_required_packages_come_from_the_repo_file_and_are_pinned() {
-        assert_eq!(required_packages(), vec!["npm:pi-parallel-agents@0.2.0", "git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3"]);
+        assert_eq!(
+            required_packages(),
+            vec![
+                "npm:pi-parallel-agents@0.2.0",
+                "git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3"
+            ]
+        );
         assert!(required_packages().iter().all(|p| p.contains('@')));
     }
 
@@ -654,7 +690,10 @@ mod tests {
         prepare(&paths, None).unwrap();
         let packages = read_json(&paths.agent().join("settings.json")).unwrap().unwrap()["packages"].clone();
         assert_eq!(packages[0], json!("npm:pi-parallel-agents@0.2.0"));
-        assert_eq!(packages[1], json!({"source": "git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3", "extensions": [], "skills": ["skills/systematic-debugging", "skills/verification-before-completion"]}));
+        assert_eq!(
+            packages[1],
+            json!({"source": "git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3", "extensions": [], "skills": ["skills/systematic-debugging", "skills/verification-before-completion"]})
+        );
         assert_eq!(packages[2], json!("npm:pi-claude-agent-sdk@0.9.2"));
         // and again: the object stays as it is
         prepare(&paths, None).unwrap();
@@ -686,7 +725,8 @@ mod tests {
     #[test]
     fn prepare_writes_aria_json_and_removes_it_without_settings() {
         let (_dir, paths) = paths();
-        let settings: Settings = serde_json::from_str(include_str!("../tests/golden/settings-provider-opencode-go.json")).unwrap();
+        let settings: Settings =
+            serde_json::from_str(include_str!("../tests/golden/settings-provider-opencode-go.json")).unwrap();
         prepare(&paths, Some(&settings)).unwrap();
         let file = paths.agent().join("aria.json");
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
@@ -697,7 +737,8 @@ mod tests {
     }
 
     fn owners_settings() -> Settings {
-        let mut settings: Settings = serde_json::from_str(include_str!("../tests/golden/settings-provider-opencode-go.json")).unwrap();
+        let mut settings: Settings =
+            serde_json::from_str(include_str!("../tests/golden/settings-provider-opencode-go.json")).unwrap();
         settings.assistant.language = "es".into();
         settings
     }
@@ -740,7 +781,11 @@ mod tests {
         // so the running Pis need no restart.
         let (_dir, paths) = paths();
         store_models(&paths);
-        std::fs::write(paths.agent().join("settings.json"), r#"{"compaction":{"modelOverrides":{"x/y":{"reserveTokens":5}}}}"#).unwrap();
+        std::fs::write(
+            paths.agent().join("settings.json"),
+            r#"{"compaction":{"modelOverrides":{"x/y":{"reserveTokens":5}}}}"#,
+        )
+        .unwrap();
         std::fs::write(paths.agent().join(COMPACTION_APPLIED), "40\n").unwrap();
         prepare(&paths, Some(&owners_settings())).unwrap();
         assert_eq!(pi_settings(&paths)["compaction"]["modelOverrides"], json!({"x/y": {"reserveTokens": 5}}));
@@ -750,7 +795,8 @@ mod tests {
     fn memory_on_gives_arias_pi_its_engram_server() {
         let (_dir, paths) = paths();
         prepare(&paths, Some(&owners_settings())).unwrap();
-        let mcp: Value = serde_json::from_str(&std::fs::read_to_string(paths.agent().join("mcp.json")).unwrap()).unwrap();
+        let mcp: Value =
+            serde_json::from_str(&std::fs::read_to_string(paths.agent().join("mcp.json")).unwrap()).unwrap();
         assert_eq!(mcp["mcpServers"]["engram"]["args"][2], "aria");
     }
 
@@ -762,8 +808,10 @@ mod tests {
         settings.integrations.packages.path = "/srv/pi-packages/meeting".into();
         prepare(&paths, Some(&settings)).unwrap();
         prepare(&paths, Some(&settings)).unwrap();
-        let pi: Value = serde_json::from_str(&std::fs::read_to_string(paths.agent().join("settings.json")).unwrap()).unwrap();
-        let listed = pi["packages"].as_array().unwrap().iter().filter(|p| p == &&json!("/srv/pi-packages/meeting")).count();
+        let pi: Value =
+            serde_json::from_str(&std::fs::read_to_string(paths.agent().join("settings.json")).unwrap()).unwrap();
+        let listed =
+            pi["packages"].as_array().unwrap().iter().filter(|p| p == &&json!("/srv/pi-packages/meeting")).count();
         assert_eq!(listed, 1);
     }
 
@@ -773,10 +821,17 @@ mod tests {
         let mut settings = owners_settings();
         prepare(&paths, Some(&settings)).unwrap();
         let system = std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap();
-        assert_eq!(system, include_str!("../tests/golden/SYSTEM.owner.md"), "the owner's settings give his own SYSTEM.md");
+        assert_eq!(
+            system,
+            include_str!("../tests/golden/SYSTEM.owner.md"),
+            "the owner's settings give his own SYSTEM.md"
+        );
         settings.assistant.name = "Nova".into();
         prepare(&paths, Some(&settings)).unwrap();
-        assert!(std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap().starts_with("# Nova"), "a change is written again");
+        assert!(
+            std::fs::read_to_string(paths.agent().join("SYSTEM.md")).unwrap().starts_with("# Nova"),
+            "a change is written again"
+        );
     }
 
     #[test]
@@ -800,7 +855,9 @@ mod tests {
         let mut settings = owners_settings();
         settings.subagents.experts.iter_mut().filter(|e| e.name == "frontend").for_each(|e| e.read_only = true);
         prepare(&paths, Some(&settings)).unwrap();
-        assert!(std::fs::read_to_string(paths.agent().join("agents/frontend.md")).unwrap().contains("tools: read, bash, codemode"));
+        assert!(std::fs::read_to_string(paths.agent().join("agents/frontend.md"))
+            .unwrap()
+            .contains("tools: read, bash, codemode"));
     }
 
     #[test]
@@ -870,7 +927,8 @@ mod tests {
         let (_dir, paths) = paths();
         assert!(!claude_bridge_installed(&paths));
         prepare(&paths, None).unwrap();
-        std::fs::write(paths.agent().join("settings.json"), format!(r#"{{"packages":["{CLAUDE_BRIDGE_PACKAGE}"]}}"#)).unwrap();
+        std::fs::write(paths.agent().join("settings.json"), format!(r#"{{"packages":["{CLAUDE_BRIDGE_PACKAGE}"]}}"#))
+            .unwrap();
         assert!(!claude_bridge_installed(&paths), "listed but not downloaded");
         std::fs::create_dir_all(paths.agent().join("npm/node_modules/pi-claude-agent-sdk")).unwrap();
         assert!(claude_bridge_installed(&paths));
@@ -881,7 +939,10 @@ mod tests {
     #[test]
     fn the_install_command_runs_the_pinned_pi_in_aria_s_agent_dir_with_the_shims_first() {
         let (_dir, paths) = paths();
-        let install = crate::pi::PiInstall { dir: paths.pi_install("1.3.0"), binary: paths.pi_install("1.3.0").join("node_modules/.bin/pi") };
+        let install = crate::pi::PiInstall {
+            dir: paths.pi_install("1.3.0"),
+            binary: paths.pi_install("1.3.0").join("node_modules/.bin/pi"),
+        };
         let command = claude_bridge_install_command(&paths, &install, "/usr/bin");
         assert_eq!(command.program, install.binary);
         assert_eq!(command.args, vec!["install".to_string(), CLAUDE_BRIDGE_PACKAGE.to_string()]);
@@ -895,7 +956,10 @@ mod tests {
     fn the_install_command_drops_anthropic_variables() {
         std::env::set_var("ANTHROPIC_ARIA_INSTALL_TEST", "x");
         let (_dir, paths) = paths();
-        let install = crate::pi::PiInstall { dir: paths.pi_install("1.3.0"), binary: paths.pi_install("1.3.0").join("node_modules/.bin/pi") };
+        let install = crate::pi::PiInstall {
+            dir: paths.pi_install("1.3.0"),
+            binary: paths.pi_install("1.3.0").join("node_modules/.bin/pi"),
+        };
         let command = claude_bridge_install_command(&paths, &install, "/usr/bin");
         assert!(command.unset.contains(&"ANTHROPIC_ARIA_INSTALL_TEST".to_string()), "{:?}", command.unset);
     }
@@ -904,7 +968,8 @@ mod tests {
     fn preparing_keeps_the_packages_pi_installed() {
         let (_dir, paths) = paths();
         prepare(&paths, None).unwrap();
-        std::fs::write(paths.agent().join("settings.json"), format!(r#"{{"packages":["{CLAUDE_BRIDGE_PACKAGE}"]}}"#)).unwrap();
+        std::fs::write(paths.agent().join("settings.json"), format!(r#"{{"packages":["{CLAUDE_BRIDGE_PACKAGE}"]}}"#))
+            .unwrap();
         prepare(&paths, Some(&settings_with_daily("opencode-go/glm-5.3"))).unwrap();
         let value = read_json(&paths.agent().join("settings.json")).unwrap().unwrap();
         assert_eq!(value["packages"], json!([CLAUDE_BRIDGE_PACKAGE]));
@@ -918,7 +983,10 @@ mod tests {
         std::fs::write(old.join("2026-10-18T00-00-00-000Z_tab-1.jsonl"), "{}").unwrap();
         prepare(&paths, None).unwrap();
         assert_eq!(sessions_dir(&paths), paths.agent().join("sessions").join("aria"));
-        assert!(sessions_dir(&paths).join("2026-10-18T00-00-00-000Z_tab-1.jsonl").exists(), "moved, so the tab keeps its history");
+        assert!(
+            sessions_dir(&paths).join("2026-10-18T00-00-00-000Z_tab-1.jsonl").exists(),
+            "moved, so the tab keeps its history"
+        );
         assert!(!old.join("2026-10-18T00-00-00-000Z_tab-1.jsonl").exists());
     }
 

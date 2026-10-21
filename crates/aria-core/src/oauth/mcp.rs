@@ -29,7 +29,13 @@ fn transport(error: ureq::Error) -> OAuthError {
 }
 
 fn get_json(url: &str) -> Result<Value, OAuthError> {
-    ureq::get(url).timeout(HTTP_TIMEOUT).set("Accept", "application/json").call().map_err(transport)?.into_json().map_err(|e| setup(e.to_string()))
+    ureq::get(url)
+        .timeout(HTTP_TIMEOUT)
+        .set("Accept", "application/json")
+        .call()
+        .map_err(transport)?
+        .into_json()
+        .map_err(|e| setup(e.to_string()))
 }
 
 /// The value of `name="..."` in a `WWW-Authenticate` header.
@@ -82,7 +88,8 @@ pub fn discover(server_url: &str) -> Result<Discovery, OAuthError> {
     let authorization_server = get_json(&format!("{authorization_server_url}/.well-known/oauth-authorization-server"))
         .or_else(|_| get_json(&format!("{authorization_server_url}/.well-known/openid-configuration")))?;
     let scope = quoted_param(&challenge, "scope").or_else(|| {
-        let scopes: Vec<&str> = resource_metadata["scopes_supported"].as_array()?.iter().filter_map(Value::as_str).collect();
+        let scopes: Vec<&str> =
+            resource_metadata["scopes_supported"].as_array()?.iter().filter_map(Value::as_str).collect();
         (!scopes.is_empty()).then(|| scopes.join(" "))
     });
     Ok(Discovery {
@@ -116,7 +123,8 @@ fn endpoint(metadata: &Value, key: &str) -> Result<String, OAuthError> {
 pub fn start(server_url: &str) -> Result<McpSignIn, OAuthError> {
     let discovery = discover(server_url)?;
     let metadata = &discovery.authorization_server;
-    let (authorize, register) = (endpoint(metadata, "authorization_endpoint")?, endpoint(metadata, "registration_endpoint")?);
+    let (authorize, register) =
+        (endpoint(metadata, "authorization_endpoint")?, endpoint(metadata, "registration_endpoint")?);
     endpoint(metadata, "token_endpoint")?;
     if let Some(methods) = metadata["code_challenge_methods_supported"].as_array() {
         if !methods.iter().any(|m| m == "S256") {
@@ -140,7 +148,8 @@ pub fn start(server_url: &str) -> Result<McpSignIn, OAuthError> {
         .map_err(transport)?
         .into_json()
         .map_err(|e| setup(e.to_string()))?;
-    let client_id = client_information["client_id"].as_str().ok_or_else(|| setup("the server registered no client"))?.to_string();
+    let client_id =
+        client_information["client_id"].as_str().ok_or_else(|| setup("the server registered no client"))?.to_string();
 
     let pkce = pkce();
     let mut random = [0u8; 16];
@@ -159,7 +168,16 @@ pub fn start(server_url: &str) -> Result<McpSignIn, OAuthError> {
         params.push(("scope", scope.clone()));
     }
     let url = url::Url::parse_with_params(&authorize, params).map_err(|e| setup(e.to_string()))?.into();
-    Ok(McpSignIn { url, server_url: server_url.to_string(), discovery, client_information, listener, pkce, state, redirect_uri })
+    Ok(McpSignIn {
+        url,
+        server_url: server_url.to_string(),
+        discovery,
+        client_information,
+        listener,
+        pkce,
+        state,
+        redirect_uri,
+    })
 }
 
 impl McpSignIn {
@@ -189,7 +207,10 @@ impl McpSignIn {
         if tokens["access_token"].as_str().is_none_or(str::is_empty) {
             return Err(OAuthError::BadToken("the response has no access_token".into()));
         }
-        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or_default();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or_default();
         let expires_in = tokens["expires_in"].as_i64().unwrap_or(3600);
         Ok(json!({
             "serverUrl": self.server_url,
@@ -266,7 +287,8 @@ mod tests {
         let sign_in = start(&format!("{}/mcp", server.base)).unwrap();
         assert!(sign_in.url.starts_with(&format!("{}/authorize?", server.base)));
         let q = query(&sign_in.url);
-        let registered: serde_json::Value = serde_json::from_str(&server.requests("POST", "/register")[0].body).unwrap();
+        let registered: serde_json::Value =
+            serde_json::from_str(&server.requests("POST", "/register")[0].body).unwrap();
         assert_eq!(q["response_type"], "code");
         assert_eq!(q["client_id"], "cid-123");
         assert_eq!(q["redirect_uri"], registered["redirect_uris"][0]);
@@ -288,7 +310,8 @@ mod tests {
         go.join().unwrap();
 
         let token_request = &server.requests("POST", "/token")[0].body;
-        let form: std::collections::HashMap<String, String> = url::form_urlencoded::parse(token_request.as_bytes()).into_owned().collect();
+        let form: std::collections::HashMap<String, String> =
+            url::form_urlencoded::parse(token_request.as_bytes()).into_owned().collect();
         assert_eq!(form["grant_type"], "authorization_code");
         assert_eq!(form["code"], "abc");
         assert_eq!(form["client_id"], "cid-123");

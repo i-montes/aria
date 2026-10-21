@@ -205,9 +205,18 @@ mod tests {
 
     #[test]
     fn settings_after_each_provider_match_the_golden_files() {
-        assert_eq!(after_provider("opencode-go"), golden(include_str!("../tests/golden/settings-provider-opencode-go.json")));
-        assert_eq!(after_provider("anthropic-api"), golden(include_str!("../tests/golden/settings-provider-anthropic-api.json")));
-        assert_eq!(after_provider("anthropic-oauth"), golden(include_str!("../tests/golden/settings-provider-anthropic-oauth.json")));
+        assert_eq!(
+            after_provider("opencode-go"),
+            golden(include_str!("../tests/golden/settings-provider-opencode-go.json"))
+        );
+        assert_eq!(
+            after_provider("anthropic-api"),
+            golden(include_str!("../tests/golden/settings-provider-anthropic-api.json"))
+        );
+        assert_eq!(
+            after_provider("anthropic-oauth"),
+            golden(include_str!("../tests/golden/settings-provider-anthropic-oauth.json"))
+        );
     }
 
     #[test]

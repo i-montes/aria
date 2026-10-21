@@ -100,10 +100,7 @@ mod tests {
 
     #[test]
     fn merge_keeps_unknown_keys() {
-        let merged = merge_preserving(
-            json!({"a": 1, "x": {"keep": true, "b": 1}}),
-            json!({"x": {"b": 2}}),
-        );
+        let merged = merge_preserving(json!({"a": 1, "x": {"keep": true, "b": 1}}), json!({"x": {"b": 2}}));
         assert_eq!(merged, json!({"a": 1, "x": {"keep": true, "b": 2}}));
     }
 }

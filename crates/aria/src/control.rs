@@ -49,7 +49,11 @@ pub fn bind_single_instance(path: &Path) -> Result<UnixListener, ControlError> {
         return Err(ControlError::AlreadyRunning);
     }
     if let Some(dir) = path.parent() {
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).map_err(|e| ControlError::Io(e.to_string()))?;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .map_err(|e| ControlError::Io(e.to_string()))?;
     }
     let _ = std::fs::remove_file(path);
     UnixListener::bind(path).map_err(|e| ControlError::Io(e.to_string()))

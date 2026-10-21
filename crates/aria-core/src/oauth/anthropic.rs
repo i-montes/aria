@@ -1,10 +1,10 @@
 //! Anthropic (Claude Pro/Max) sign-in: OAuth authorization code + PKCE with a localhost callback.
 //! The values are the ones Pi's own `/login` uses, which is what the Claude Max route runs on today.
 
-use super::OAuthError;
-use crate::auth::Credential;
 use super::loopback::wait_for_code;
 use super::pkce::{pkce, Pkce};
+use super::OAuthError;
+use crate::auth::Credential;
 use serde_json::{json, Value};
 use std::net::TcpListener;
 use std::time::Duration;
@@ -191,10 +191,16 @@ mod tests {
 
     #[test]
     fn credential_expiry() {
-        let cred = credential_from_token(&json!({"access_token": "a", "refresh_token": "r", "expires_in": 3600}), 1_000_000).unwrap();
+        let cred =
+            credential_from_token(&json!({"access_token": "a", "refresh_token": "r", "expires_in": 3600}), 1_000_000)
+                .unwrap();
         assert_eq!(
             cred,
-            crate::auth::Credential::OAuth { access: "a".into(), refresh: "r".into(), expires: 1_000_000 + 3_600_000 - 300_000 }
+            crate::auth::Credential::OAuth {
+                access: "a".into(),
+                refresh: "r".into(),
+                expires: 1_000_000 + 3_600_000 - 300_000
+            }
         );
         assert!(matches!(credential_from_token(&json!({"access_token": "a"}), 0), Err(OAuthError::BadToken(_))));
     }

@@ -45,7 +45,8 @@ fn the_pinned_pi_answers_a_prompt_through_the_engine() {
     let deadline = Instant::now() + Duration::from_secs(120);
     let mut text = String::new();
     loop {
-        let event = events.recv_timeout(deadline.saturating_duration_since(Instant::now())).expect("Pi settled within 120 s");
+        let event =
+            events.recv_timeout(deadline.saturating_duration_since(Instant::now())).expect("Pi settled within 120 s");
         match event {
             EngineEvent::Event(raw) if raw["type"] == "message_update" => {
                 if let Some(delta) = raw["assistantMessageEvent"]["delta"].as_str() {
@@ -70,7 +71,7 @@ fn the_pinned_pi_answers_a_prompt_through_the_engine() {
 #[test]
 #[ignore = "downloads the Claude provider"]
 fn the_claude_provider_installs_with_arias_command_and_its_models_show_up() {
-    use aria_core::agent::{claude_bridge_installed, claude_bridge_install_command};
+    use aria_core::agent::{claude_bridge_install_command, claude_bridge_installed};
     let real = AriaPaths::from_env();
     let dir = tempfile::tempdir().unwrap();
     let paths = AriaPaths { root: dir.path().to_path_buf() };
@@ -109,7 +110,12 @@ fn the_claude_provider_installs_with_arias_command_and_its_models_show_up() {
     };
     let (engine, _events) = Engine::spawn(spec).expect("start Pi");
     let models = engine.request("get_available_models", json!({}), Duration::from_secs(60)).expect("models");
-    let providers: Vec<String> = models.data["models"].as_array().unwrap().iter().map(|m| m["provider"].as_str().unwrap_or("").to_string()).collect();
+    let providers: Vec<String> = models.data["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["provider"].as_str().unwrap_or("").to_string())
+        .collect();
     assert!(providers.iter().any(|p| p == "claude-bridge"), "the Claude provider's models show up: {providers:?}");
     assert!(providers.iter().any(|p| p == "anthropic"), "and the API-key provider's too");
     engine.shutdown();

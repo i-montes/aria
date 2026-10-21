@@ -93,7 +93,8 @@ pub fn render_system(template: &str, settings: &Settings) -> String {
         "plan" => settings.subagents.plan_execute,
         _ => true,
     });
-    let experts: Vec<String> = settings.subagents.experts.iter().filter(|e| e.enabled).map(|e| e.name.clone()).collect();
+    let experts: Vec<String> =
+        settings.subagents.experts.iter().filter(|e| e.enabled).map(|e| e.name.clone()).collect();
     let skills = &settings.subagents.auto_skills;
     let auto_skills = match skills.len() {
         0 => String::new(),
@@ -142,7 +143,8 @@ mod tests {
     const OWNER: &str = include_str!("../tests/golden/SYSTEM.owner.md");
 
     fn owners() -> Settings {
-        let mut settings: Settings = serde_json::from_str(include_str!("../tests/golden/settings-provider-opencode-go.json")).unwrap();
+        let mut settings: Settings =
+            serde_json::from_str(include_str!("../tests/golden/settings-provider-opencode-go.json")).unwrap();
         settings.assistant.language = "es".into();
         settings
     }
@@ -175,7 +177,17 @@ mod tests {
             let mut settings = owners();
             settings.assistant.style = style.into();
             let text = render_system(TEMPLATE, &settings);
-            lines.insert(text.lines().find(|l| l.starts_with("- Keep") || l.starts_with("- Answer") || l.starts_with("- Be ") || l.starts_with("- Teach")).unwrap().to_string());
+            lines.insert(
+                text.lines()
+                    .find(|l| {
+                        l.starts_with("- Keep")
+                            || l.starts_with("- Answer")
+                            || l.starts_with("- Be ")
+                            || l.starts_with("- Teach")
+                    })
+                    .unwrap()
+                    .to_string(),
+            );
         }
         assert_eq!(lines.len(), 5);
     }
@@ -211,7 +223,11 @@ mod tests {
         settings.subagents.experts.retain(|e| e.name != "security");
         settings.subagents.experts.iter_mut().for_each(|e| e.enabled = e.name != "backend");
         let text = render_system(TEMPLATE, &settings);
-        assert!(text.contains("There are experts (frontend, reviewer, researcher)"), "{}", text.lines().find(|l| l.contains("There are experts")).unwrap_or(""));
+        assert!(
+            text.contains("There are experts (frontend, reviewer, researcher)"),
+            "{}",
+            text.lines().find(|l| l.contains("There are experts")).unwrap_or("")
+        );
     }
 
     #[test]

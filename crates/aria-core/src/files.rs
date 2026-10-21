@@ -36,7 +36,9 @@ fn parse_gitignore(base: &str, text: &str) -> Vec<Rule> {
 fn glob_match(pattern: &[u8], text: &[u8]) -> bool {
     match (pattern.first(), text.first()) {
         (None, None) => true,
-        (Some(b'*'), _) => glob_match(&pattern[1..], text) || (!text.is_empty() && text[0] != b'/' && glob_match(pattern, &text[1..])),
+        (Some(b'*'), _) => {
+            glob_match(&pattern[1..], text) || (!text.is_empty() && text[0] != b'/' && glob_match(pattern, &text[1..]))
+        }
         (Some(b'?'), Some(c)) if *c != b'/' => glob_match(&pattern[1..], &text[1..]),
         (Some(p), Some(c)) if p == c => glob_match(&pattern[1..], &text[1..]),
         _ => false,
@@ -128,8 +130,18 @@ mod tests {
 
     #[test]
     fn respects_gitignore_patterns() {
-        let dir = tree(&["keep.rs", "debug.log", "build/out.o", "src/x.log", "src/y.rs", "docs/a.md", "a/docs/b.md", "secret.txt"]);
-        std::fs::write(dir.path().join(".gitignore"), "# build output\n*.log\nbuild/\n/secret.txt\ndocs/a.md\n").unwrap();
+        let dir = tree(&[
+            "keep.rs",
+            "debug.log",
+            "build/out.o",
+            "src/x.log",
+            "src/y.rs",
+            "docs/a.md",
+            "a/docs/b.md",
+            "secret.txt",
+        ]);
+        std::fs::write(dir.path().join(".gitignore"), "# build output\n*.log\nbuild/\n/secret.txt\ndocs/a.md\n")
+            .unwrap();
         let files = list_files(dir.path(), "", 50);
         assert!(files.contains(&"keep.rs".to_string()));
         assert!(files.contains(&"src/y.rs".to_string()));

@@ -17,12 +17,12 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions, NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSPanel, NSRunningApplication,
-    NSStatusWindowLevel, NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
+    NSApplication, NSApplicationActivationOptions, NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSPanel,
+    NSRunningApplication, NSStatusWindowLevel, NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
 };
 use objc2_foundation::{
-    ns_string, MainThreadMarker, NSData, NSJSONSerialization, NSJSONWritingOptions, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSRect,
-    NSSize, NSString, NSTimer, NSURL, NSURLRequest, NSURLResponse,
+    ns_string, MainThreadMarker, NSData, NSJSONSerialization, NSJSONWritingOptions, NSNumber, NSObject,
+    NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer, NSURLRequest, NSURLResponse, NSURL,
 };
 use objc2_web_kit::{
     WKScriptMessage, WKScriptMessageHandler, WKURLSchemeHandler, WKURLSchemeTask, WKUserContentController, WKWebView,
@@ -84,7 +84,7 @@ impl Dock {
                 defer: false
             ]
         };
-    unsafe { panel.setReleasedWhenClosed(false) };
+        unsafe { panel.setReleasedWhenClosed(false) };
         panel.setOpaque(false);
         panel.setBackgroundColor(Some(&NSColor::clearColor()));
         panel.setHasShadow(false);
@@ -119,7 +119,9 @@ impl Dock {
                 &config,
             )
         };
-        webview.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable);
+        webview.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
         unsafe {
             webview.setUnderPageBackgroundColor(Some(&NSColor::clearColor()));
             // WKWebView paints its own white unless its (private, but long-standing) background is off.
@@ -216,7 +218,10 @@ impl Dock {
         let weak: Weak<Dock> = Rc::downgrade(self);
         after(Duration::from_millis(NOTICE_UNMAP_MS), move || {
             let Some(dock) = weak.upgrade() else { return };
-            if dock.notice_generation.get() == generation && dock.notice_visible.get() && dock.state.get() == State::Hidden {
+            if dock.notice_generation.get() == generation
+                && dock.notice_visible.get()
+                && dock.state.get() == State::Hidden
+            {
                 dock.notice_visible.set(false);
                 dock.panel.orderOut(None);
             }
@@ -261,7 +266,11 @@ impl Dock {
                     let weak: Weak<Dock> = Rc::downgrade(self);
                     after(Duration::from_millis(150), move || {
                         if let Some(dock) = weak.upgrade() {
-                            eprintln!("aria: after 150 ms active={} key={}", NSApplication::sharedApplication(dock.mtm).isActive(), dock.panel.isKeyWindow());
+                            eprintln!(
+                                "aria: after 150 ms active={} key={}",
+                                NSApplication::sharedApplication(dock.mtm).isActive(),
+                                dock.panel.isKeyWindow()
+                            );
                         }
                     });
                 }

@@ -2,9 +2,9 @@
 //! a `type` tag. The page sends `PageMessage`s; the dock answers with `DockMessage`s. Requests that
 //! expect an answer carry an `id` that the answer repeats.
 
-use serde::{Deserialize, Serialize};
 use crate::quota::Window as QuotaWindow;
 use crate::sessions::SessionEntry;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -119,7 +119,14 @@ pub enum DockMessage {
     Error { id: u64, code: String },
     /// Where Aria works and how the engine is; `problem` is a UI string key (`pi-missing`, `node-missing`).
     #[serde(rename = "chatState")]
-    ChatState { workdir: String, running: bool, model: Option<String>, thinking: Option<String>, context: Option<f64>, problem: Option<String> },
+    ChatState {
+        workdir: String,
+        running: bool,
+        model: Option<String>,
+        thinking: Option<String>,
+        context: Option<f64>,
+        problem: Option<String>,
+    },
     /// A Pi session event, verbatim.
     #[serde(rename = "chatEvent")]
     ChatEvent { event: Value },
@@ -209,7 +216,10 @@ mod tests {
             page(r#"{"type":"chatSend","text":"hi","behavior":"steer"}"#),
             PageMessage::ChatSend { text: "hi".into(), behavior: Some("steer".into()) }
         );
-        assert_eq!(page(r#"{"type":"chatSend","text":"hi"}"#), PageMessage::ChatSend { text: "hi".into(), behavior: None });
+        assert_eq!(
+            page(r#"{"type":"chatSend","text":"hi"}"#),
+            PageMessage::ChatSend { text: "hi".into(), behavior: None }
+        );
         assert_eq!(page(r#"{"type":"chatAbort"}"#), PageMessage::ChatAbort);
         assert_eq!(page(r#"{"type":"chatLoad"}"#), PageMessage::ChatLoad);
         assert_eq!(page(r#"{"type":"installClaudeBridge","id":12}"#), PageMessage::InstallClaudeBridge { id: 12 });
@@ -248,21 +258,37 @@ mod tests {
     fn session_messages_parse_and_serialize() {
         assert_eq!(
             page(r#"{"type":"session","session":"a1","message":{"type":"chatSend","text":"hi"}}"#),
-            PageMessage::Session { session: "a1".into(), message: Box::new(PageMessage::ChatSend { text: "hi".into(), behavior: None }) }
+            PageMessage::Session {
+                session: "a1".into(),
+                message: Box::new(PageMessage::ChatSend { text: "hi".into(), behavior: None })
+            }
         );
         assert_eq!(page(r#"{"type":"sessionsLoad","id":3}"#), PageMessage::SessionsLoad { id: 3 });
         assert_eq!(
             page(r#"{"type":"sessionsSave","sessions":[{"id":"a1","title":"Fix"}],"active":"a1"}"#),
-            PageMessage::SessionsSave { sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into() }], active: Some("a1".into()) }
+            PageMessage::SessionsSave {
+                sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into() }],
+                active: Some("a1".into())
+            }
         );
-        assert_eq!(page(r#"{"type":"sessionClose","session":"a1"}"#), PageMessage::SessionClose { session: "a1".into() });
+        assert_eq!(
+            page(r#"{"type":"sessionClose","session":"a1"}"#),
+            PageMessage::SessionClose { session: "a1".into() }
+        );
         let value = |m: DockMessage| serde_json::to_value(m).unwrap();
         assert_eq!(
-            value(DockMessage::Session { session: "a1".into(), message: Box::new(DockMessage::ChatEngine { state: "ready".into() }) }),
+            value(DockMessage::Session {
+                session: "a1".into(),
+                message: Box::new(DockMessage::ChatEngine { state: "ready".into() })
+            }),
             json!({"type": "session", "session": "a1", "message": {"type": "chatEngine", "state": "ready"}})
         );
         assert_eq!(
-            value(DockMessage::Sessions { id: 3, sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into() }], active: None }),
+            value(DockMessage::Sessions {
+                id: 3,
+                sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into() }],
+                active: None
+            }),
             json!({"type": "sessions", "id": 3, "sessions": [{"id": "a1", "title": "Fix"}], "active": null})
         );
     }
@@ -271,7 +297,14 @@ mod tests {
     fn chat_dock_messages_serialize() {
         let value = |m: DockMessage| serde_json::to_value(m).unwrap();
         assert_eq!(
-            value(DockMessage::ChatState { workdir: "/home/u/Projects".into(), running: false, model: Some("opencode-go/glm-5.3".into()), thinking: None, context: Some(30.0), problem: None }),
+            value(DockMessage::ChatState {
+                workdir: "/home/u/Projects".into(),
+                running: false,
+                model: Some("opencode-go/glm-5.3".into()),
+                thinking: None,
+                context: Some(30.0),
+                problem: None
+            }),
             json!({"type": "chatState", "workdir": "/home/u/Projects", "running": false, "model": "opencode-go/glm-5.3", "thinking": null, "context": 30.0, "problem": null})
         );
         assert_eq!(
@@ -279,20 +312,47 @@ mod tests {
             json!({"type": "chatEvent", "event": {"type": "agent_start"}})
         );
         assert_eq!(
-            value(DockMessage::ChatDialog { id: "u1".into(), method: "select".into(), request: json!({"title": "Allow?"}), hidden: true }),
+            value(DockMessage::ChatDialog {
+                id: "u1".into(),
+                method: "select".into(),
+                request: json!({"title": "Allow?"}),
+                hidden: true
+            }),
             json!({"type": "chatDialog", "id": "u1", "method": "select", "request": {"title": "Allow?"}, "hidden": true})
         );
         assert_eq!(
-            value(DockMessage::ChatQuota { windows: vec![QuotaWindow { id: "5h".into(), label: "5h".into(), percent: 42.0, resets_at: Some("2026-10-19T03:00:00Z".into()) }] }),
+            value(DockMessage::ChatQuota {
+                windows: vec![QuotaWindow {
+                    id: "5h".into(),
+                    label: "5h".into(),
+                    percent: 42.0,
+                    resets_at: Some("2026-10-19T03:00:00Z".into())
+                }]
+            }),
             json!({"type": "chatQuota", "windows": [{"id": "5h", "label": "5h", "percent": 42.0, "resetsAt": "2026-10-19T03:00:00Z"}]})
         );
         assert_eq!(value(DockMessage::ChatAgents { agents: json!([]) }), json!({"type": "chatAgents", "agents": []}));
         assert_eq!(value(DockMessage::SettingsChanged), json!({"type": "settingsChanged"}));
-        assert_eq!(value(DockMessage::ChatDialogClosed { id: "u1".into() }), json!({"type": "chatDialogClosed", "id": "u1"}));
-        assert_eq!(value(DockMessage::ChatEngine { state: "ready".into() }), json!({"type": "chatEngine", "state": "ready"}));
-        assert_eq!(value(DockMessage::Commands { id: 7, commands: json!([]) }), json!({"type": "commands", "id": 7, "commands": []}));
-        assert_eq!(value(DockMessage::Models { id: 8, models: json!([]) }), json!({"type": "models", "id": 8, "models": []}));
-        assert_eq!(value(DockMessage::Files { id: 10, files: vec!["a.rs".into()] }), json!({"type": "files", "id": 10, "files": ["a.rs"]}));
+        assert_eq!(
+            value(DockMessage::ChatDialogClosed { id: "u1".into() }),
+            json!({"type": "chatDialogClosed", "id": "u1"})
+        );
+        assert_eq!(
+            value(DockMessage::ChatEngine { state: "ready".into() }),
+            json!({"type": "chatEngine", "state": "ready"})
+        );
+        assert_eq!(
+            value(DockMessage::Commands { id: 7, commands: json!([]) }),
+            json!({"type": "commands", "id": 7, "commands": []})
+        );
+        assert_eq!(
+            value(DockMessage::Models { id: 8, models: json!([]) }),
+            json!({"type": "models", "id": 8, "models": []})
+        );
+        assert_eq!(
+            value(DockMessage::Files { id: 10, files: vec!["a.rs".into()] }),
+            json!({"type": "files", "id": 10, "files": ["a.rs"]})
+        );
     }
 
     #[test]
@@ -315,7 +375,13 @@ mod tests {
             json!({"type": "platform", "hotkey": "Option + Space"})
         );
         assert_eq!(
-            value(DockMessage::Settings { id: 1, settings: None, exists: false, problem: None, connected: vec!["mcp:tavily".into()] }),
+            value(DockMessage::Settings {
+                id: 1,
+                settings: None,
+                exists: false,
+                problem: None,
+                connected: vec!["mcp:tavily".into()]
+            }),
             json!({"type": "settings", "id": 1, "settings": null, "exists": false, "problem": null, "connected": ["mcp:tavily"]})
         );
         assert_eq!(value(DockMessage::Saved { id: 2 }), json!({"type": "saved", "id": 2}));
@@ -331,6 +397,9 @@ mod tests {
             value(DockMessage::Problem { code: "hyprland-classic-config".into() }),
             json!({"type": "problem", "code": "hyprland-classic-config"})
         );
-        assert_eq!(value(DockMessage::Error { id: 9, code: "unknown".into() }), json!({"type": "error", "id": 9, "code": "unknown"}));
+        assert_eq!(
+            value(DockMessage::Error { id: 9, code: "unknown".into() }),
+            json!({"type": "error", "id": 9, "code": "unknown"})
+        );
     }
 }

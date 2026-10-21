@@ -207,7 +207,11 @@ pub fn keep_registered_with(
 
 /// In the background: register the hotkey as soon as Hyprland can take it, then register it again
 /// after every config reload (a reload drops runtime binds).
-pub fn keep_hotkey_registered(exe: PathBuf, retry: Duration, on_state: impl Fn(Registration) + Send + 'static) -> JoinHandle<()> {
+pub fn keep_hotkey_registered(
+    exe: PathBuf,
+    retry: Duration,
+    on_state: impl Fn(Registration) + Send + 'static,
+) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let settled = keep_registered_with(detect_config, || register_hotkey(&exe), retry, on_state);
         if settled == Registration::Registered {
@@ -312,11 +316,18 @@ mod tests {
         let (seen, last) = states_until_settled(
             || {
                 attempts.set(attempts.get() + 1);
-                if attempts.get() <= 2 { Err(HyprError::NotRunning) } else { Ok(ConfigKind::Lua) }
+                if attempts.get() <= 2 {
+                    Err(HyprError::NotRunning)
+                } else {
+                    Ok(ConfigKind::Lua)
+                }
             },
             || Ok(()),
         );
-        assert_eq!(seen, vec![Registration::WaitingForHyprland, Registration::WaitingForHyprland, Registration::Registered]);
+        assert_eq!(
+            seen,
+            vec![Registration::WaitingForHyprland, Registration::WaitingForHyprland, Registration::Registered]
+        );
         assert_eq!(last, Registration::Registered);
     }
 
@@ -333,7 +344,8 @@ mod tests {
 
     #[test]
     fn a_classic_config_is_reported_and_not_retried() {
-        let (seen, last) = states_until_settled(|| Ok(ConfigKind::Classic), || panic!("must not register on a classic config"));
+        let (seen, last) =
+            states_until_settled(|| Ok(ConfigKind::Classic), || panic!("must not register on a classic config"));
         assert_eq!(seen, vec![Registration::ClassicConfig]);
         assert_eq!(last, Registration::ClassicConfig);
     }

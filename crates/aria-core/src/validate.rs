@@ -55,7 +55,10 @@ pub fn probe_for(kind: KeyKind, key: &str) -> ProbeRequest {
         KeyKind::TypeSafe => ProbeRequest {
             method: "POST",
             url: "https://api.typesafe.ai/v1/systemone".into(),
-            headers: vec![header("Authorization", format!("Bearer {key}")), header("Content-Type", "application/json".into())],
+            headers: vec![
+                header("Authorization", format!("Bearer {key}")),
+                header("Content-Type", "application/json".into()),
+            ],
             body: Some(json!({
                 "model": "jev-latest",
                 "state": "ping",

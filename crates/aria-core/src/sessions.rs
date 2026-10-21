@@ -25,7 +25,10 @@ pub struct SessionList {
 /// (Pi refuses anything else and exits).
 pub fn valid_id(id: &str) -> bool {
     let edge = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric());
-    id.len() <= 64 && edge(id.chars().next()) && edge(id.chars().last()) && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    id.len() <= 64
+        && edge(id.chars().next())
+        && edge(id.chars().last())
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 impl SessionList {
@@ -82,7 +85,8 @@ mod tests {
     #[test]
     fn a_list_round_trips() {
         let (_dir, paths) = paths();
-        let list = SessionList { sessions: vec![entry("a1", "Fix the build"), entry("b2", "")], active: Some("b2".into()) };
+        let list =
+            SessionList { sessions: vec![entry("a1", "Fix the build"), entry("b2", "")], active: Some("b2".into()) };
         save(&paths, &list).unwrap();
         assert_eq!(load(&paths), list);
     }
@@ -108,7 +112,14 @@ mod tests {
     #[test]
     fn bad_and_repeated_ids_are_dropped() {
         let list = SessionList {
-            sessions: vec![entry("ok-1", "a"), entry("../etc", "b"), entry("", "c"), entry("ok-1", "again"), entry(&"x".repeat(65), "d"), entry("with space", "e")],
+            sessions: vec![
+                entry("ok-1", "a"),
+                entry("../etc", "b"),
+                entry("", "c"),
+                entry("ok-1", "again"),
+                entry(&"x".repeat(65), "d"),
+                entry("with space", "e"),
+            ],
             active: Some("ok-1".into()),
         }
         .sanitized();

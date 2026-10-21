@@ -121,7 +121,8 @@ pub fn apple_script_string(text: &str) -> String {
 #[cfg(target_os = "macos")]
 impl Notifier for MacNotifier {
     fn send(&self, _key: &str, title: &str, body: &str) {
-        let script = format!("display notification {} with title {}", apple_script_string(body), apple_script_string(title));
+        let script =
+            format!("display notification {} with title {}", apple_script_string(body), apple_script_string(title));
         detached("osascript", &["-e".to_string(), script]);
     }
 
@@ -303,11 +304,14 @@ impl Chat {
         let slot: Arc<std::sync::OnceLock<std::sync::Weak<crate::watch::Watch>>> = Arc::new(std::sync::OnceLock::new());
         let (chat, seen) = (self.clone(), slot.clone());
         let watch = Arc::new(
-            crate::watch::Watch::bind(&path, Arc::new(move || {
-                if let Some(watch) = seen.get().and_then(std::sync::Weak::upgrade) {
-                    chat.emit(DockMessage::ChatAgents { agents: watch.agents() });
-                }
-            }))
+            crate::watch::Watch::bind(
+                &path,
+                Arc::new(move || {
+                    if let Some(watch) = seen.get().and_then(std::sync::Weak::upgrade) {
+                        chat.emit(DockMessage::ChatAgents { agents: watch.agents() });
+                    }
+                }),
+            )
             .ok()?,
         );
         let _ = slot.set(Arc::downgrade(&watch));
@@ -327,7 +331,10 @@ impl Chat {
             notice(format!("Aria kept your edited {} in ~/.aria/agent: its own updates to them are not applied. To get Aria's version back, delete the file and its line in ~/.aria/agent/.aria-files.", kept.join(", ")));
         }
         if !agent::packages_installed(&self.ctx.paths) {
-            notice("Some packages the extensions use are missing (subagents, skills). Run the Aria installer again.".into());
+            notice(
+                "Some packages the extensions use are missing (subagents, skills). Run the Aria installer again."
+                    .into(),
+            );
         }
     }
 
@@ -353,7 +360,8 @@ impl Chat {
             // Showing a session wakes its Pi: that is what brings the conversation (and its model) back.
             let _ = self.ensure_engine();
         }
-        let open: Vec<(String, Value)> = self.inner.lock().unwrap().dialogs.iter().map(|(id, raw)| (id.clone(), raw.clone())).collect();
+        let open: Vec<(String, Value)> =
+            self.inner.lock().unwrap().dialogs.iter().map(|(id, raw)| (id.clone(), raw.clone())).collect();
         for (id, raw) in open {
             let method = raw["method"].as_str().unwrap_or_default().to_string();
             self.emit(DockMessage::ChatDialog { id, method, request: raw, hidden: false });
@@ -396,13 +404,16 @@ impl Chat {
         // the one the owner set up (other persona, no memory, other models), without a word.
         let settings = match settings::load(&self.ctx.paths) {
             Ok(settings) => settings,
-            Err(settings::SettingsError::File(aria_core::json_file::JsonFileError::Io { .. })) => return Err("settings-unreadable"),
+            Err(settings::SettingsError::File(aria_core::json_file::JsonFileError::Io { .. })) => {
+                return Err("settings-unreadable")
+            }
             Err(_) => return Err("settings-invalid"),
         };
-        let kept = agent::prepare_reporting(&self.ctx.paths, settings.as_ref()).map_err(|error| match error.kind() {
-            std::io::ErrorKind::InvalidData => "pi-settings-invalid",
-            _ => "agent-dir-unwritable",
-        })?;
+        let kept =
+            agent::prepare_reporting(&self.ctx.paths, settings.as_ref()).map_err(|error| match error.kind() {
+                std::io::ErrorKind::InvalidData => "pi-settings-invalid",
+                _ => "agent-dir-unwritable",
+            })?;
         let save_sessions = settings.as_ref().is_some_and(|s| s.subagents.save_sessions);
         pi::write_shim(&self.ctx.paths, &install, save_sessions).map_err(|_| "agent-dir-unwritable")?;
         let workdir = working_folder(settings.as_ref()).ok_or("workdir-unavailable")?;
@@ -476,12 +487,17 @@ impl Chat {
             inner.model.clone().or_else(|| self.settings().and_then(|s| s.models.daily))
         };
         let Some(model) = model else { return };
-        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-        let source = aria_core::quota::source_for(&model, &aria_core::auth::AuthStore::new(self.ctx.paths.auth()), now_ms);
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let source =
+            aria_core::quota::source_for(&model, &aria_core::auth::AuthStore::new(self.ctx.paths.auth()), now_ms);
         self.inner.lock().unwrap().quota_at = Some(std::time::Instant::now());
         let chat = self.clone();
         std::thread::spawn(move || {
-            let windows = source.and_then(|s| aria_core::quota::fetch(&s, &*chat.ctx.quota_fetcher)).unwrap_or_default();
+            let windows =
+                source.and_then(|s| aria_core::quota::fetch(&s, &*chat.ctx.quota_fetcher)).unwrap_or_default();
             chat.store_quota_for(&model, windows);
         });
     }
@@ -503,7 +519,9 @@ impl Chat {
             if !self.is_current(engine) {
                 return;
             }
-            self.emit(DockMessage::ChatEvent { event: for_page(json!({"type": "history", "messages": response.data["messages"]})) });
+            self.emit(DockMessage::ChatEvent {
+                event: for_page(json!({"type": "history", "messages": response.data["messages"]})),
+            });
         }
         self.refresh_context(engine);
         // Not forced: a run that already settled may have asked a moment ago.
@@ -632,7 +650,9 @@ impl Chat {
                     // A refused prompt names its text, so the page can take it back out of the thread or the queue.
                     let text = id.and_then(|id| self.inner.lock().unwrap().pending_prompts.remove(&id));
                     if !success {
-                        self.emit(DockMessage::ChatEvent { event: json!({"type": "command_failed", "command": command, "error": error, "text": text}) });
+                        self.emit(DockMessage::ChatEvent {
+                            event: json!({"type": "command_failed", "command": command, "error": error, "text": text}),
+                        });
                     }
                 }
                 EngineEvent::Exited { code } => {
@@ -770,7 +790,13 @@ impl Chat {
         };
         self.close_stale(stale);
         if let Some(engine) = engine {
-            std::thread::spawn(move || if group { engine.close_group(Duration::from_secs(3)) } else { engine.close(Duration::from_secs(3)) });
+            std::thread::spawn(move || {
+                if group {
+                    engine.close_group(Duration::from_secs(3))
+                } else {
+                    engine.close(Duration::from_secs(3))
+                }
+            });
             self.emit(DockMessage::ChatEngine { state: "stopped".into() });
             self.emit(self.state_message(None));
         }
@@ -882,7 +908,12 @@ impl Sessions {
     pub fn new(ctx: ChatCtx, emit: Emit) -> Sessions {
         let notifier: Arc<dyn Notifier> = Arc::new(CountingNotifier::new(ctx.notifier.clone()));
         let ctx = Arc::new(ChatCtx { notifier, ..ctx });
-        Sessions { ctx, emit, chats: Arc::new(Mutex::new(HashMap::new())), closed: Arc::new(Mutex::new(HashSet::new())) }
+        Sessions {
+            ctx,
+            emit,
+            chats: Arc::new(Mutex::new(HashMap::new())),
+            closed: Arc::new(Mutex::new(HashSet::new())),
+        }
     }
 
     fn chat(&self, session: &str) -> Option<Chat> {
@@ -894,7 +925,9 @@ impl Sessions {
         let chat = chats.entry(session.to_string()).or_insert_with(|| {
             let emit = self.emit.clone();
             let tag = session.to_string();
-            let tagged: Emit = Arc::new(move |message| emit(DockMessage::Session { session: tag.clone(), message: Box::new(message) }));
+            let tagged: Emit = Arc::new(move |message| {
+                emit(DockMessage::Session { session: tag.clone(), message: Box::new(message) })
+            });
             Chat::new(self.ctx.clone(), tagged, session.to_string())
         });
         Some(chat.clone())
@@ -1064,12 +1097,35 @@ mod tests {
         let counter = quota_calls.clone();
         let quota_fetcher: Arc<aria_core::quota::Fetcher> = Arc::new(move |_| {
             counter.fetch_add(1, Ordering::SeqCst);
-            Some(json!({"usage": {"rolling": {"status": "ok", "percent": 42}, "weekly": {"status": "ok", "percent": 17}, "monthly": {"status": "ok", "percent": 6}}}))
+            Some(
+                json!({"usage": {"rolling": {"status": "ok", "percent": 42}, "weekly": {"status": "ok", "percent": 17}, "monthly": {"status": "ok", "percent": 6}}}),
+            )
         });
         let chat_shown = Arc::new(AtomicBool::new(true));
         let run_dir = dir.path().join("run");
-        let ctx = ChatCtx { paths: paths.clone(), notifier: notifier.clone(), dock_visible: visible.clone(), chat_shown: chat_shown.clone(), run_dir: run_dir.clone(), path_var: "/usr/bin:/bin".into(), quota_fetcher };
-        Harness { _turn: turn, quota_calls, chat_shown, run_dir, backlog: Mutex::new(Vec::new()), _dir: dir, paths, chat: Chat::new(Arc::new(ctx), emit, "s1".into()), messages, notifier, visible, workdir }
+        let ctx = ChatCtx {
+            paths: paths.clone(),
+            notifier: notifier.clone(),
+            dock_visible: visible.clone(),
+            chat_shown: chat_shown.clone(),
+            run_dir: run_dir.clone(),
+            path_var: "/usr/bin:/bin".into(),
+            quota_fetcher,
+        };
+        Harness {
+            _turn: turn,
+            quota_calls,
+            chat_shown,
+            run_dir,
+            backlog: Mutex::new(Vec::new()),
+            _dir: dir,
+            paths,
+            chat: Chat::new(Arc::new(ctx), emit, "s1".into()),
+            messages,
+            notifier,
+            visible,
+            workdir,
+        }
     }
 
     fn harness() -> Harness {
@@ -1137,7 +1193,8 @@ mod tests {
         wait_for(&h, "first settle", |m| event_of(m, "agent_settled"));
         send(&h, "two");
         wait_for(&h, "second settle", |m| event_of(m, "agent_settled"));
-        let starts = drain(&h).iter().filter(|m| matches!(m, DockMessage::ChatEngine { state } if state == "starting")).count();
+        let starts =
+            drain(&h).iter().filter(|m| matches!(m, DockMessage::ChatEngine { state } if state == "starting")).count();
         assert_eq!(starts, 1, "Pi was started more than once");
     }
 
@@ -1173,14 +1230,20 @@ mod tests {
         // Showing a session wakes its Pi, so the conversation it had comes back without a first message.
         wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         let history = wait_for(&h, "history", |m| event_of(m, "history"));
-        assert!(matches!(history, DockMessage::ChatEvent { ref event } if event["messages"][0]["content"] == json!("earlier")));
+        assert!(
+            matches!(history, DockMessage::ChatEvent { ref event } if event["messages"][0]["content"] == json!("earlier"))
+        );
     }
 
     #[test]
     fn chat_load_with_a_missing_pi_only_reports_the_problem() {
         let h = harness_with(false);
         h.chat.handle(PageMessage::ChatLoad);
-        wait_for(&h, "the problem", |m| matches!(m, DockMessage::ChatState { problem: Some(p), .. } if p == "pi-missing"));
+        wait_for(
+            &h,
+            "the problem",
+            |m| matches!(m, DockMessage::ChatState { problem: Some(p), .. } if p == "pi-missing"),
+        );
         assert!(drain(&h).iter().all(|m| !matches!(m, DockMessage::ChatEngine { .. })));
     }
 
@@ -1188,8 +1251,11 @@ mod tests {
     fn the_engine_reports_its_model_and_thinking_level_once_ready() {
         let h = harness();
         send(&h, "hello");
-        let state = wait_for(&h, "state from get_state", |m| matches!(m, DockMessage::ChatState { thinking: Some(_), .. }));
-        assert!(matches!(state, DockMessage::ChatState { thinking: Some(t), model: Some(m), .. } if t == "medium" && m == "opencode-go/deepseek-v4.1-flash"));
+        let state =
+            wait_for(&h, "state from get_state", |m| matches!(m, DockMessage::ChatState { thinking: Some(_), .. }));
+        assert!(
+            matches!(state, DockMessage::ChatState { thinking: Some(t), model: Some(m), .. } if t == "medium" && m == "opencode-go/deepseek-v4.1-flash")
+        );
     }
 
     #[test]
@@ -1205,7 +1271,12 @@ mod tests {
         let dialog = wait_for(&h, "the dialog", |m| matches!(m, DockMessage::ChatDialog { .. }));
         assert!(matches!(dialog, DockMessage::ChatDialog { ref id, hidden: true, .. } if id == "u1"));
         assert_eq!(h.notifier.log(), vec!["send:Aria needs an answer:Allow?"]);
-        h.chat.handle(PageMessage::UiAnswer { id: "u1".into(), value: Some("Allow".into()), confirmed: None, cancelled: None });
+        h.chat.handle(PageMessage::UiAnswer {
+            id: "u1".into(),
+            value: Some("Allow".into()),
+            confirmed: None,
+            cancelled: None,
+        });
         wait_for(&h, "closed", |m| matches!(m, DockMessage::ChatDialogClosed { id } if id == "u1"));
         wait_for(&h, "the answer reaching Pi", |m| event_of(m, "answered"));
         assert_eq!(h.notifier.log(), vec!["send:Aria needs an answer:Allow?", "dismiss"]);
@@ -1231,7 +1302,11 @@ mod tests {
         h.chat.test_send_raw("ask");
         wait_for(&h, "the dialog", |m| matches!(m, DockMessage::ChatDialog { .. }));
         h.chat.handle(PageMessage::ChatLoad);
-        wait_for(&h, "the replayed dialog", |m| matches!(m, DockMessage::ChatDialog { id, hidden: false, .. } if id == "u1"));
+        wait_for(
+            &h,
+            "the replayed dialog",
+            |m| matches!(m, DockMessage::ChatDialog { id, hidden: false, .. } if id == "u1"),
+        );
     }
 
     #[test]
@@ -1250,7 +1325,11 @@ mod tests {
     fn a_tab_is_told_once_when_the_packages_are_missing() {
         let h = harness();
         send(&h, "x");
-        wait_for(&h, "the notice", |m| matches!(m, DockMessage::ChatEvent { event } if event["request"]["message"].as_str().is_some_and(|t| t.contains("packages"))));
+        wait_for(
+            &h,
+            "the notice",
+            |m| matches!(m, DockMessage::ChatEvent { event } if event["request"]["message"].as_str().is_some_and(|t| t.contains("packages"))),
+        );
         h.chat.restart_when_idle();
         send(&h, "y");
         wait_for(&h, "ready again", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
@@ -1264,7 +1343,11 @@ mod tests {
         send(&h, "x");
         wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         h.chat.test_send_raw("notify");
-        let notice = wait_for(&h, "the notice", |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "ui_notice" && event["request"]["message"] == "careful"));
+        let notice = wait_for(
+            &h,
+            "the notice",
+            |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "ui_notice" && event["request"]["message"] == "careful"),
+        );
         match notice {
             DockMessage::ChatEvent { event } => assert_eq!(event["request"]["message"], json!("careful")),
             _ => unreachable!(),
@@ -1293,10 +1376,20 @@ mod tests {
     #[test]
     fn ui_answer_for_an_unknown_id_is_ignored() {
         let h = harness();
-        h.chat.handle(PageMessage::UiAnswer { id: "ghost".into(), value: Some("x".into()), confirmed: None, cancelled: None });
+        h.chat.handle(PageMessage::UiAnswer {
+            id: "ghost".into(),
+            value: Some("x".into()),
+            confirmed: None,
+            cancelled: None,
+        });
         send(&h, "x");
         wait_for(&h, "the chat still works", |m| event_of(m, "agent_settled"));
-        h.chat.handle(PageMessage::UiAnswer { id: "ghost".into(), value: None, confirmed: None, cancelled: Some(true) });
+        h.chat.handle(PageMessage::UiAnswer {
+            id: "ghost".into(),
+            value: None,
+            confirmed: None,
+            cancelled: Some(true),
+        });
         assert!(h.notifier.log().is_empty());
     }
 
@@ -1316,7 +1409,11 @@ mod tests {
             _ => unreachable!(),
         }
         h.chat.handle(PageMessage::ChatLoad);
-        wait_for(&h, "the problem again on load", |m| matches!(m, DockMessage::ChatState { problem: Some(p), .. } if p == "pi-missing"));
+        wait_for(
+            &h,
+            "the problem again on load",
+            |m| matches!(m, DockMessage::ChatState { problem: Some(p), .. } if p == "pi-missing"),
+        );
     }
 
     #[test]
@@ -1324,13 +1421,30 @@ mod tests {
         let h = harness();
         std::fs::remove_file(h.paths.bin().join("node")).unwrap();
         // /usr/bin:/bin may hold a real node on this machine; point the chat at an empty PATH instead.
-        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), chat_shown: Arc::new(AtomicBool::new(true)), run_dir: h.run_dir.clone(), path_var: "/nonexistent".into(), quota_fetcher: Arc::new(|_| None) };
+        let ctx = ChatCtx {
+            paths: h.paths.clone(),
+            notifier: h.notifier.clone(),
+            dock_visible: h.visible.clone(),
+            chat_shown: Arc::new(AtomicBool::new(true)),
+            run_dir: h.run_dir.clone(),
+            path_var: "/nonexistent".into(),
+            quota_fetcher: Arc::new(|_| None),
+        };
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);
-        let chat = Chat::new(Arc::new(ctx), Arc::new(move |m| { let _ = sender.lock().unwrap().send(m); }), "s1".into());
+        let chat = Chat::new(
+            Arc::new(ctx),
+            Arc::new(move |m| {
+                let _ = sender.lock().unwrap().send(m);
+            }),
+            "s1".into(),
+        );
         chat.handle(PageMessage::ChatSend { text: "hi".into(), behavior: None });
         let message = messages.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(matches!(message, DockMessage::ChatState { problem: Some(ref p), .. } if p == "node-missing"), "{message:?}");
+        assert!(
+            matches!(message, DockMessage::ChatState { problem: Some(ref p), .. } if p == "node-missing"),
+            "{message:?}"
+        );
     }
 
     #[test]
@@ -1374,7 +1488,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn two_threads_asking_at_once_start_one_pi() {
         let h = harness();
@@ -1385,14 +1498,18 @@ mod tests {
         t2.join().unwrap();
         wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
         wait_for(&h, "commands", |m| matches!(m, DockMessage::Commands { id: 1, .. }));
-        let starts = drain(&h).iter().filter(|m| matches!(m, DockMessage::ChatEngine { state } if state == "starting")).count();
+        let starts =
+            drain(&h).iter().filter(|m| matches!(m, DockMessage::ChatEngine { state } if state == "starting")).count();
         assert_eq!(starts, 1, "two threads must share one Pi");
     }
 
     #[test]
     fn get_state_never_overrides_what_the_events_say_about_running() {
         let mut inner = Inner { running: true, ..Inner::default() };
-        apply_state(&mut inner, &json!({"isStreaming": false, "thinkingLevel": "high", "model": {"provider": "p", "id": "m"}}));
+        apply_state(
+            &mut inner,
+            &json!({"isStreaming": false, "thinkingLevel": "high", "model": {"provider": "p", "id": "m"}}),
+        );
         assert!(inner.running, "a late get_state reply must not stop a run the events started");
         assert_eq!(inner.thinking.as_deref(), Some("high"));
         assert_eq!(inner.model.as_deref(), Some("p/m"));
@@ -1410,7 +1527,12 @@ mod tests {
         h.chat.dock_visibility_changed();
         h.chat.dock_visibility_changed();
         assert_eq!(h.notifier.log(), vec!["send:Aria needs an answer:Allow?"]);
-        h.chat.handle(PageMessage::UiAnswer { id: "u1".into(), value: Some("Allow".into()), confirmed: None, cancelled: None });
+        h.chat.handle(PageMessage::UiAnswer {
+            id: "u1".into(),
+            value: Some("Allow".into()),
+            confirmed: None,
+            cancelled: None,
+        });
         assert_eq!(h.notifier.log().last().map(String::as_str), Some("dismiss"));
     }
 
@@ -1429,7 +1551,10 @@ mod tests {
         assert_eq!(h.notifier.log().last().map(String::as_str), Some("dismiss"));
         h.chat.handle(PageMessage::ChatLoad);
         std::thread::sleep(Duration::from_millis(100));
-        assert!(!drain(&h).iter().any(|m| matches!(m, DockMessage::ChatDialog { .. })), "a dead Pi's dialog was replayed");
+        assert!(
+            !drain(&h).iter().any(|m| matches!(m, DockMessage::ChatDialog { .. })),
+            "a dead Pi's dialog was replayed"
+        );
     }
 
     #[test]
@@ -1447,7 +1572,6 @@ mod tests {
         }
     }
 
-
     // ---- sessions: one Pi per tab -------------------------------------------------------------
 
     struct SessionsHarness {
@@ -1463,7 +1587,15 @@ mod tests {
         let emit: Emit = Arc::new(move |m| {
             let _ = sender.lock().unwrap().send(m);
         });
-        let ctx = ChatCtx { paths: h.paths.clone(), notifier: h.notifier.clone(), dock_visible: h.visible.clone(), chat_shown: Arc::new(AtomicBool::new(true)), run_dir: h.run_dir.clone(), path_var: "/usr/bin:/bin".into(), quota_fetcher: Arc::new(|_| None) };
+        let ctx = ChatCtx {
+            paths: h.paths.clone(),
+            notifier: h.notifier.clone(),
+            dock_visible: h.visible.clone(),
+            chat_shown: Arc::new(AtomicBool::new(true)),
+            run_dir: h.run_dir.clone(),
+            path_var: "/usr/bin:/bin".into(),
+            quota_fetcher: Arc::new(|_| None),
+        };
         let sessions = Sessions::new(ctx, emit);
         SessionsHarness { h, sessions, messages }
     }
@@ -1472,10 +1604,17 @@ mod tests {
         PageMessage::Session { session: session.into(), message: Box::new(message) }
     }
 
-    fn wait_session(s: &SessionsHarness, what: &str, session: &str, found: impl Fn(&DockMessage) -> bool) -> DockMessage {
+    fn wait_session(
+        s: &SessionsHarness,
+        what: &str,
+        session: &str,
+        found: impl Fn(&DockMessage) -> bool,
+    ) -> DockMessage {
         loop {
             match s.messages.recv_timeout(Duration::from_secs(5)) {
-                Ok(DockMessage::Session { session: got, message }) if got == session && found(&message) => return *message,
+                Ok(DockMessage::Session { session: got, message }) if got == session && found(&message) => {
+                    return *message
+                }
                 Ok(_) => {}
                 Err(_) => panic!("timed out waiting for {what} in session {session}"),
             }
@@ -1525,10 +1664,20 @@ mod tests {
         s.sessions.test_send_raw("bb", "ask");
         wait_session(&s, "bb's dialog", "bb", |m| matches!(m, DockMessage::ChatDialog { .. }));
         assert_eq!(s.h.notifier.log().len(), 2);
-        s.sessions.handle(in_session("aa", PageMessage::UiAnswer { id: "u1".into(), value: Some("Allow".into()), confirmed: None, cancelled: None }));
+        s.sessions.handle(in_session(
+            "aa",
+            PageMessage::UiAnswer { id: "u1".into(), value: Some("Allow".into()), confirmed: None, cancelled: None },
+        ));
         wait_session(&s, "aa's dialog closing", "aa", |m| matches!(m, DockMessage::ChatDialogClosed { .. }));
-        assert!(!s.h.notifier.log().contains(&"dismiss".to_string()), "bb still waits for an answer: {:?}", s.h.notifier.log());
-        s.sessions.handle(in_session("bb", PageMessage::UiAnswer { id: "u1".into(), value: Some("Allow".into()), confirmed: None, cancelled: None }));
+        assert!(
+            !s.h.notifier.log().contains(&"dismiss".to_string()),
+            "bb still waits for an answer: {:?}",
+            s.h.notifier.log()
+        );
+        s.sessions.handle(in_session(
+            "bb",
+            PageMessage::UiAnswer { id: "u1".into(), value: Some("Allow".into()), confirmed: None, cancelled: None },
+        ));
         wait_session(&s, "bb's dialog closing", "bb", |m| matches!(m, DockMessage::ChatDialogClosed { .. }));
         assert_eq!(s.h.notifier.log().last().map(String::as_str), Some("dismiss"));
     }
@@ -1542,7 +1691,12 @@ mod tests {
         s.sessions.test_send_raw("aa", "ask");
         wait_session(&s, "the dialog", "aa", |m| matches!(m, DockMessage::ChatDialog { .. }));
         s.sessions.handle(PageMessage::SessionClose { session: "aa".into() });
-        wait_session(&s, "the dialog closing", "aa", |m| matches!(m, DockMessage::ChatDialogClosed { id } if id == "u1"));
+        wait_session(
+            &s,
+            "the dialog closing",
+            "aa",
+            |m| matches!(m, DockMessage::ChatDialogClosed { id } if id == "u1"),
+        );
         assert_eq!(s.h.notifier.log().last().map(String::as_str), Some("dismiss"));
         // the same id opened again starts a fresh Pi
         // a late message for the closed tab (a picker reply, a model change) does not bring its Pi back
@@ -1567,7 +1721,12 @@ mod tests {
         wait_session(&s, "the dialog closing", "aa", |m| matches!(m, DockMessage::ChatDialogClosed { .. }));
         // showing a session again wakes a new Pi, which sees the changed credentials
         s.sessions.handle(in_session("bb", PageMessage::ChatLoad));
-        wait_session(&s, "a new start", "bb", |m| matches!(m, DockMessage::ChatEngine { state } if state == "starting"));
+        wait_session(
+            &s,
+            "a new start",
+            "bb",
+            |m| matches!(m, DockMessage::ChatEngine { state } if state == "starting"),
+        );
         wait_session(&s, "ready again", "bb", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
     }
 
@@ -1577,11 +1736,21 @@ mod tests {
         s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
         wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         // the first message's own run (start and settle) must not be mistaken for the one below
-        wait_session(&s, "the first run settled", "aa", |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "agent_settled"));
+        wait_session(
+            &s,
+            "the first run settled",
+            "aa",
+            |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "agent_settled"),
+        );
         std::thread::sleep(Duration::from_millis(100));
         while s.messages.try_recv().is_ok() {}
         s.sessions.test_send_raw("aa", "start"); // a run that has not settled
-        wait_session(&s, "the run", "aa", |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "agent_start"));
+        wait_session(
+            &s,
+            "the run",
+            "aa",
+            |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "agent_start"),
+        );
         let mut settings = Settings::defaults("es");
         settings.assistant.name = "Nova".into(); // the persona changes: Pi reads it only at start
         settings::save(&s.h.paths, &settings).unwrap();
@@ -1593,7 +1762,12 @@ mod tests {
         }
         assert!(!cut, "the run is not cut");
         s.sessions.test_send_raw("aa", "settle");
-        wait_session(&s, "stopped once the run settled", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "stopped"));
+        wait_session(
+            &s,
+            "stopped once the run settled",
+            "aa",
+            |m| matches!(m, DockMessage::ChatEngine { state } if state == "stopped"),
+        );
     }
 
     fn stopped_within(s: &SessionsHarness, ms: u64) -> bool {
@@ -1618,7 +1792,8 @@ mod tests {
         settings::save(&s.h.paths, &settings).unwrap();
         s.sessions.settings_changed();
         assert!(!stopped_within(&s, 300), "plan mode, session grants and the quota switch survive an /effort");
-        let config: Value = serde_json::from_str(&std::fs::read_to_string(s.h.paths.agent().join("aria.json")).unwrap()).unwrap();
+        let config: Value =
+            serde_json::from_str(&std::fs::read_to_string(s.h.paths.agent().join("aria.json")).unwrap()).unwrap();
         assert_eq!(config["effort"]["fixedLevel"], "high", "the extensions read the change at once");
     }
 
@@ -1695,12 +1870,12 @@ mod tests {
         assert_eq!(s.h.notifier.log().len(), 2);
     }
 
-
     #[test]
     fn the_context_usage_is_reported_when_pi_is_ready_and_after_every_run() {
         let h = harness();
         send(&h, "hello");
-        let first = wait_for(&h, "a state with the context", |m| matches!(m, DockMessage::ChatState { context: Some(_), .. }));
+        let first =
+            wait_for(&h, "a state with the context", |m| matches!(m, DockMessage::ChatState { context: Some(_), .. }));
         assert!(matches!(first, DockMessage::ChatState { context: Some(c), .. } if (c - 30.0).abs() < f64::EPSILON));
         wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
         // the settle triggers a fresh reading
@@ -1735,7 +1910,10 @@ mod tests {
         send(&h, "hello");
         match wait_for(&h, "the quota", |m| matches!(m, DockMessage::ChatQuota { .. })) {
             DockMessage::ChatQuota { windows } => {
-                assert_eq!(windows.iter().map(|w| (w.id.as_str(), w.percent)).collect::<Vec<_>>(), vec![("5h", 42.0), ("week", 17.0), ("month", 6.0)]);
+                assert_eq!(
+                    windows.iter().map(|w| (w.id.as_str(), w.percent)).collect::<Vec<_>>(),
+                    vec![("5h", 42.0), ("week", 17.0), ("month", 6.0)]
+                );
             }
             _ => unreachable!(),
         }
@@ -1747,7 +1925,11 @@ mod tests {
         send(&h, "x");
         wait_for(&h, "the first quota", |m| matches!(m, DockMessage::ChatQuota { windows } if !windows.is_empty()));
         h.chat.handle(PageMessage::SetModel { id: 1, model: "anthropic/claude-sonnet-5-5".into() });
-        wait_for(&h, "an empty quota for the new model", |m| matches!(m, DockMessage::ChatQuota { windows } if windows.is_empty()));
+        wait_for(
+            &h,
+            "an empty quota for the new model",
+            |m| matches!(m, DockMessage::ChatQuota { windows } if windows.is_empty()),
+        );
     }
 
     #[test]
@@ -1824,11 +2006,25 @@ mod tests {
 
     #[test]
     fn the_notification_of_a_card_reads_its_summary_not_its_json() {
-        assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"sandbox\",\"summary\":\"Run rm -rf build\"}"})), "Run rm -rf build");
-        assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"write\",\"path\":\"~/notes.md\"}"})), "Aria wants to write ~/notes.md");
-        assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"sandbox\",\"detail\":\"curl -H token:abc\"}"})), "Aria wants to run a command outside the sandbox");
+        assert_eq!(
+            dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"sandbox\",\"summary\":\"Run rm -rf build\"}"})),
+            "Run rm -rf build"
+        );
+        assert_eq!(
+            dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"write\",\"path\":\"~/notes.md\"}"})),
+            "Aria wants to write ~/notes.md"
+        );
+        assert_eq!(
+            dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"sandbox\",\"detail\":\"curl -H token:abc\"}"})),
+            "Aria wants to run a command outside the sandbox"
+        );
         assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"quota\",\"percent\":98}"})), "Quota at 98%");
-        assert_eq!(dialog_body(&json!({"title": "{\"aria\":1,\"kind\":\"question\",\"questions\":[{\"question\":\"Which fallback?\"}]}"})), "Which fallback?");
+        assert_eq!(
+            dialog_body(
+                &json!({"title": "{\"aria\":1,\"kind\":\"question\",\"questions\":[{\"question\":\"Which fallback?\"}]}"})
+            ),
+            "Which fallback?"
+        );
         assert_eq!(dialog_body(&json!({"title": "Allow?"})), "Allow?");
         assert_eq!(dialog_body(&json!({"title": "{not json"})), "{not json");
         let h = harness();
@@ -1846,7 +2042,11 @@ mod tests {
         settings.sandbox.projects_dir = "/proc/aria-cannot-be-here".into();
         settings::save(&h.paths, &settings).unwrap();
         send(&h, "hi");
-        wait_for(&h, "the problem", |m| matches!(m, DockMessage::ChatState { problem: Some(p), .. } if p == "workdir-unavailable"));
+        wait_for(
+            &h,
+            "the problem",
+            |m| matches!(m, DockMessage::ChatState { problem: Some(p), .. } if p == "workdir-unavailable"),
+        );
     }
 
     #[test]
@@ -1930,7 +2130,9 @@ mod tests {
         ready(&h);
         h.chat.test_send_raw("env_settings");
         match wait_for(&h, "the env echo", |m| event_of(m, "env")) {
-            DockMessage::ChatEvent { event } => assert_eq!(event["settings"], json!(h.paths.settings().display().to_string())),
+            DockMessage::ChatEvent { event } => {
+                assert_eq!(event["settings"], json!(h.paths.settings().display().to_string()))
+            }
             _ => unreachable!(),
         }
     }
@@ -1950,7 +2152,11 @@ mod tests {
         wait_for(&h, "the parallel call", |m| event_of(m, "tool_execution_start"));
         let mut child = std::os::unix::net::UnixStream::connect(&path).unwrap();
         writeln!(child, "{}", json!({"t": "prompt", "text": "Task: Review the policy"})).unwrap();
-        match wait_for(&h, "the agents", |m| matches!(m, DockMessage::ChatAgents { agents } if agents[0]["role"] == "security")) {
+        match wait_for(
+            &h,
+            "the agents",
+            |m| matches!(m, DockMessage::ChatAgents { agents } if agents[0]["role"] == "security"),
+        ) {
             DockMessage::ChatAgents { agents } => assert_eq!(agents[0]["kind"], "active"),
             _ => unreachable!(),
         }
@@ -1963,11 +2169,19 @@ mod tests {
         s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
         wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         s.sessions.test_send_raw("aa", "background");
-        let pid: u32 = match wait_session(&s, "the background process", "aa", |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "background")) {
+        let pid: u32 = match wait_session(
+            &s,
+            "the background process",
+            "aa",
+            |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "background"),
+        ) {
             DockMessage::ChatEvent { event } => event["pid"].as_str().unwrap().parse().unwrap(),
             _ => unreachable!(),
         };
-        let alive = |pid: u32| std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| stat.rsplit(')').next().is_some_and(|rest| !rest.trim_start().starts_with('Z')));
+        let alive = |pid: u32| {
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .is_ok_and(|stat| stat.rsplit(')').next().is_some_and(|rest| !rest.trim_start().starts_with('Z')))
+        };
         assert!(alive(pid));
         s.sessions.handle(PageMessage::SessionClose { session: "aa".into() });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -1995,7 +2209,19 @@ mod tests {
         let args = notify_args(std::path::Path::new("/opt/aria"), "Aria needs an answer", "Allow?");
         assert_eq!(
             args,
-            ["--app-name", "aria", "-u", "critical", "-t", "0", "Aria needs an answer", "Allow?", "--exec", "/opt/aria", "show"]
+            [
+                "--app-name",
+                "aria",
+                "-u",
+                "critical",
+                "-t",
+                "0",
+                "Aria needs an answer",
+                "Allow?",
+                "--exec",
+                "/opt/aria",
+                "show"
+            ]
         );
     }
 

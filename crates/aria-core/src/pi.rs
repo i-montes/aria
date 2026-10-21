@@ -155,7 +155,10 @@ mod tests {
         let (_dir, paths) = paths();
         let env = session_env(&paths, "/usr/bin", Path::new("/work"));
         let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(keys, ["PI_CODING_AGENT_DIR", "PATH", "PI_SKIP_VERSION_CHECK", "ARIA_PROJECTS_DIR", "ARIA_SETTINGS"]);
+        assert_eq!(
+            keys,
+            ["PI_CODING_AGENT_DIR", "PATH", "PI_SKIP_VERSION_CHECK", "ARIA_PROJECTS_DIR", "ARIA_SETTINGS"]
+        );
         assert_eq!(env[3].1, "/work");
         assert_eq!(env[4].1, paths.settings().display().to_string());
     }
@@ -276,7 +279,10 @@ mod tests {
     #[test]
     fn the_shim_keeps_no_session_by_default() {
         let (_dir, paths) = paths();
-        assert_eq!(run_shim(&paths, false, &["--mode", "json", "-p", "--no-session", "Task: x y"]), "--mode|json|-p|--no-session|Task: x y|");
+        assert_eq!(
+            run_shim(&paths, false, &["--mode", "json", "-p", "--no-session", "Task: x y"]),
+            "--mode|json|-p|--no-session|Task: x y|"
+        );
     }
 
     #[test]

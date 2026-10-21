@@ -47,7 +47,12 @@ fn install_edit_menu(mtm: objc2_foundation::MainThreadMarker) {
     use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
     use objc2_foundation::{ns_string, NSString};
 
-    fn item(mtm: objc2_foundation::MainThreadMarker, title: &NSString, action: Sel, key: &NSString) -> Retained<NSMenuItem> {
+    fn item(
+        mtm: objc2_foundation::MainThreadMarker,
+        title: &NSString,
+        action: Sel,
+        key: &NSString,
+    ) -> Retained<NSMenuItem> {
         unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), title, Some(action), key) }
     }
 
