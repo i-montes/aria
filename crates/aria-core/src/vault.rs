@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 /// The files sealed whole: Pi rewrites them (token refreshes, sign-ins), so they cannot be commands.
 pub const SEALED: [&str; 2] = ["auth.json", "mcp-auth.json"];
+/// A sealed file with nothing in it yet.
+const EMPTY: &[u8] = b"{}";
 
 #[derive(Debug, thiserror::Error)]
 pub enum VaultError {
@@ -35,6 +37,14 @@ pub struct Migrated {
     pub keys: usize,
     pub mcp_values: usize,
     pub files: usize,
+}
+
+/// The plain copies of a sealed file to bring in, oldest first: the one in `root`, then a real file (not Aria's link) Pi
+/// wrote in the agent folder.
+fn plain_sources(root: &Path, name: &str) -> Vec<PathBuf> {
+    let in_agent = root.join("agent").join(name);
+    let real = |path: &Path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file());
+    [root.join(name), in_agent].into_iter().filter(|path| real(path)).collect()
 }
 
 /// An `env` value worth keeping out of the file: its name says it is a key, a token, a secret, a password or auth.
@@ -241,13 +251,19 @@ impl Vault {
             } else if let Some(value) = self.keyring.get(&account(name))? {
                 write_private(&live, value.as_bytes())?;
                 state.seen.insert(name, digest(value.as_bytes()));
+            } else {
+                // An empty one, so Pi's link always has a target: a sign-in never lands beside it in `~/.aria/agent`.
+                // Counted as seen: it reaches the keyring only once Pi writes something in it.
+                write_private(&live, EMPTY)?;
+                state.seen.insert(name, digest(EMPTY));
             }
         }
         Ok(state)
     }
 
-    /// Seals every live copy that changed since it was last sealed; one Pi removed (a sign-out) leaves the keyring too.
-    /// Returns what failed; a failed file is tried again on the next call.
+    /// Seals every live copy that changed since it was last sealed. One that vanished (a temporary-folder cleanup, an
+    /// `rm`) is written back from the keyring, never deleted from it: Pi signs out by rewriting the file. Returns what
+    /// failed; a failed file is tried again on the next call.
     pub fn sync(&self, state: &mut Sync) -> Vec<VaultError> {
         let mut errors = Vec::new();
         for name in SEALED {
@@ -259,10 +275,7 @@ impl Vault {
                     }
                     self.store(&account(name), &String::from_utf8_lossy(&bytes)).map(|()| Some(now))
                 }
-                Err(_) if state.seen.contains_key(name) => {
-                    self.keyring.delete(&account(name)).map(|()| None).map_err(VaultError::from)
-                }
-                Err(_) => continue,
+                Err(_) => self.restore(name),
             };
             match result {
                 Ok(Some(now)) => {
@@ -305,18 +318,56 @@ impl Vault {
         // nor a complete vault.
         let mut sealed = Vec::new();
         for name in SEALED {
-            let Ok(bytes) = std::fs::read(root.join(name)) else { continue };
-            let text = String::from_utf8_lossy(&bytes).into_owned();
+            let sources = plain_sources(root, name);
+            if sources.is_empty() {
+                continue;
+            }
+            let text = self.merged(name, &sources)?;
             self.store(&account(name), &text)?;
-            sealed.push((name, text));
+            sealed.push((name, text, sources));
         }
-        for (name, text) in sealed {
+        for (name, text, sources) in sealed {
             std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&self.live)?;
             write_private(&self.live.join(name), text.as_bytes())?;
-            std::fs::remove_file(root.join(name))?;
+            for source in sources {
+                std::fs::remove_file(source)?;
+            }
             migrated.files += 1;
         }
         Ok(migrated)
+    }
+
+    /// What a sealed file becomes when plain copies of it turn up (a fallback to plain files, a sign-in Pi wrote beside
+    /// its link): the sealed entries, with the plain ones over them, newest last. When one is not a JSON object they
+    /// cannot be merged: the sealed copy is kept aside as `file:<name>.prev` and the newest plain one is taken.
+    fn merged(&self, name: &str, sources: &[PathBuf]) -> Result<String, VaultError> {
+        let mut texts = Vec::new();
+        for source in sources {
+            texts.push(String::from_utf8_lossy(&std::fs::read(source)?).into_owned());
+        }
+        let Some(sealed) = self.keyring.get(&account(name))? else {
+            return Ok(texts.pop().expect("a source"));
+        };
+        let objects: Option<Vec<Map<String, Value>>> = std::iter::once(&sealed)
+            .chain(texts.iter())
+            .map(|text| match serde_json::from_str(text) {
+                Ok(Value::Object(map)) => Some(map),
+                _ => None,
+            })
+            .collect();
+        match objects {
+            Some(objects) => {
+                let mut all = Map::new();
+                for object in objects {
+                    all.extend(object);
+                }
+                Ok(serde_json::to_string_pretty(&Value::Object(all)).unwrap_or_default())
+            }
+            None => {
+                self.store(&format!("{}.prev", account(name)), &sealed)?;
+                Ok(texts.pop().expect("a source"))
+            }
+        }
     }
 
     /// Moves the secret-looking values of `root/mcp.json` into the keyring and leaves commands in their place: every
@@ -434,6 +485,21 @@ impl Vault {
             let _ = std::fs::remove_file(self.live.join(name));
         }
         Ok(())
+    }
+
+    /// Writes a vanished live copy again: the keyring's, or an empty one; both count as seen.
+    fn restore(&self, name: &'static str) -> Result<Option<[u8; 32]>, VaultError> {
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&self.live)?;
+        match self.keyring.get(&account(name))? {
+            Some(value) => {
+                write_private(&self.live.join(name), value.as_bytes())?;
+                Ok(Some(digest(value.as_bytes())))
+            }
+            None => {
+                write_private(&self.live.join(name), EMPTY)?;
+                Ok(Some(digest(EMPTY)))
+            }
+        }
     }
 
     /// A last sync, then the live copies go. Returns what could not be sealed (its live copy is then kept).
@@ -738,7 +804,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&live).unwrap(), "{\"a\":1}");
         assert_eq!(mode(&live), 0o600);
         assert_eq!(mode(&vault.live), 0o700);
-        assert!(!vault.live.join("auth.json").exists(), "nothing sealed, nothing written");
+        assert_eq!(std::fs::read_to_string(vault.live.join("auth.json")).unwrap(), "{}", "an empty one, for Pi's link");
     }
 
     #[test]
@@ -772,15 +838,77 @@ mod tests {
     }
 
     #[test]
-    fn a_live_file_pi_removed_is_removed_from_the_keyring() {
+    fn a_live_file_that_vanishes_is_written_back_never_deleted() {
         let dir = tempfile::tempdir().unwrap();
         let keyring = Arc::new(MemoryBackend::default());
         keyring.set("file:mcp-auth.json", "{\"a\":1}").unwrap();
         let vault = vault_in(dir.path(), keyring.clone());
         let mut state = vault.open().unwrap();
-        std::fs::remove_file(vault.live.join("mcp-auth.json")).unwrap();
+        std::fs::remove_file(vault.live.join("mcp-auth.json")).unwrap(); // a temp-folder cleanup, an rm
         assert!(vault.sync(&mut state).is_empty());
-        assert_eq!(keyring.get("file:mcp-auth.json").unwrap(), None);
+        assert_eq!(keyring.get("file:mcp-auth.json").unwrap().as_deref(), Some("{\"a\":1}"));
+        assert_eq!(std::fs::read_to_string(vault.live.join("mcp-auth.json")).unwrap(), "{\"a\":1}");
+    }
+
+    #[test]
+    fn open_makes_every_live_file_so_pi_never_writes_beside_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let keyring = Arc::new(MemoryBackend::default());
+        let vault = vault_in(dir.path(), keyring.clone());
+        let mut state = vault.open().unwrap();
+        for name in SEALED {
+            assert_eq!(std::fs::read_to_string(vault.live.join(name)).unwrap(), "{}", "{name}");
+            assert_eq!(mode(&vault.live.join(name)), 0o600);
+        }
+        assert!(vault.sync(&mut state).is_empty());
+        assert_eq!(keyring.get("file:auth.json").unwrap(), None, "nothing to seal while it is empty");
+        std::fs::write(vault.live.join("auth.json"), "{\"x\":1}").unwrap(); // a sign-in
+        assert!(vault.sync(&mut state).is_empty());
+        assert_eq!(keyring.get("file:auth.json").unwrap().as_deref(), Some("{\"x\":1}"));
+    }
+
+    #[test]
+    fn migrate_merges_a_plain_file_into_the_sealed_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("home");
+        std::fs::create_dir_all(&root).unwrap();
+        let keyring = Arc::new(MemoryBackend::default());
+        let sealed = serde_json::json!({"anthropic":{"type":"oauth","access":"A","refresh":"R","expires":1},"opencode":{"type":"api_key","key":"OLD"}});
+        keyring.set("file:auth.json", &sealed.to_string()).unwrap();
+        write(&root.join("auth.json"), serde_json::json!({"opencode":{"type":"api_key","key":"NEW"}}));
+        let vault = vault_in(dir.path(), keyring.clone());
+        vault.migrate(&root).unwrap();
+        let merged: serde_json::Value = serde_json::from_str(&keyring.get("file:auth.json").unwrap().unwrap()).unwrap();
+        assert_eq!(merged["anthropic"]["access"], "A", "the sign-in the plain file did not have survives");
+        assert_eq!(merged["opencode"]["key"], serde_json::json!(command_for(&vault.exe, &root, "key:opencode")));
+        assert_eq!(keyring.get("key:opencode").unwrap().as_deref(), Some("NEW"));
+    }
+
+    #[test]
+    fn a_sealed_file_that_is_not_an_object_is_kept_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("home");
+        std::fs::create_dir_all(&root).unwrap();
+        let keyring = Arc::new(MemoryBackend::default());
+        keyring.set("file:mcp-auth.json", "not json").unwrap();
+        std::fs::write(root.join("mcp-auth.json"), "{\"b\":2}").unwrap();
+        let vault = vault_in(dir.path(), keyring.clone());
+        vault.migrate(&root).unwrap();
+        assert_eq!(keyring.get("file:mcp-auth.json.prev").unwrap().as_deref(), Some("not json"));
+        assert_eq!(keyring.get("file:mcp-auth.json").unwrap().as_deref(), Some("{\"b\":2}"));
+    }
+
+    #[test]
+    fn migrate_takes_a_real_file_pi_wrote_in_the_agent_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("home");
+        std::fs::create_dir_all(root.join("agent")).unwrap();
+        std::fs::write(root.join("agent/mcp-auth.json"), "{\"mcp__x|u\":{\"tokens\":{}}}").unwrap();
+        let keyring = Arc::new(MemoryBackend::default());
+        let vault = vault_in(dir.path(), keyring.clone());
+        vault.migrate(&root).unwrap();
+        assert!(!root.join("agent/mcp-auth.json").exists());
+        assert_eq!(keyring.get("file:mcp-auth.json").unwrap().as_deref(), Some("{\"mcp__x|u\":{\"tokens\":{}}}"));
     }
 
     #[test]

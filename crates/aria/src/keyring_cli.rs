@@ -46,17 +46,27 @@ pub fn open_with(
     exe: PathBuf,
     live: PathBuf,
 ) -> (AriaPaths, Option<Open>) {
-    if settings.is_some_and(|s| !s.credentials.keyring) {
-        note("keys stay in plain files (credentials.keyring is off)");
-        return (paths, None);
-    }
+    let off = settings.is_some_and(|s| !s.credentials.keyring);
     let keyring = match keyring {
         Ok(keyring) => keyring,
         Err(error) => {
-            note(&format!("keys stay in plain files: {error}"));
+            if migrated(&paths.root, None) {
+                note(&format!("THE KEYS ARE IN THE KEYRING, WHICH IS NOT AVAILABLE: Aria starts without its credentials ({error})"));
+            } else {
+                note(&format!("keys stay in plain files: {error}"));
+            }
             return (paths, None);
         }
     };
+    if off {
+        // Off by hand on a home whose keys are already in the keyring: falling back to plain files would strand them
+        // (and the next sign-in would start a new auth.json). `aria keyring off` is the way back.
+        if !migrated(&paths.root, Some(keyring.as_ref())) {
+            note("keys stay in plain files (credentials.keyring is off)");
+            return (paths, None);
+        }
+        note("credentials.keyring is off, but the keys are in the keyring: run `aria keyring off` to bring them back");
+    }
     let vault = Vault { keyring, live, exe };
     match vault.migrate(&paths.root) {
         Ok(moved) if moved != Migrated::default() => note(&format!(
@@ -82,6 +92,19 @@ pub fn open_with(
             (sealed, None)
         }
     }
+}
+
+/// Whether the home's keys are already in the keyring: sealed files there, or Aria's commands in its `mcp.json`.
+fn migrated(root: &Path, keyring: Option<&dyn Backend>) -> bool {
+    let sealed =
+        keyring.is_some_and(|k| SEALED.iter().any(|name| k.get(&format!("file:{name}")).ok().flatten().is_some()));
+    let mut commands = Vec::new();
+    if let Ok(value) =
+        serde_json::from_str::<Value>(&std::fs::read_to_string(root.join("mcp.json")).unwrap_or_default())
+    {
+        own_accounts(&value, &mut commands);
+    }
+    sealed || !commands.is_empty()
 }
 
 /// What `aria secret` prints: the value, or why there is none (for stderr; stdout stays empty).
@@ -273,6 +296,22 @@ mod tests {
         assert_eq!(paths.auth(), dir.path().join("live/auth.json"));
         assert!(!dir.path().join("home/auth.json").exists());
         assert_eq!(keyring.get("key:opencode-go").unwrap().as_deref(), Some("K"));
+        assert_eq!(
+            aria_core::auth::AuthStore::for_paths(&paths).get("opencode-go").unwrap(),
+            Some(aria_core::auth::Credential::ApiKey { key: "K".into() })
+        );
+    }
+
+    #[test]
+    fn a_setting_turned_off_by_hand_on_a_migrated_home_keeps_the_keyring() {
+        let dir = tempfile::tempdir().unwrap();
+        let keyring = Arc::new(MemoryBackend::default());
+        let (_paths, open_vault) = open(home(dir.path()), &settings(true), Ok(keyring.clone()), dir.path());
+        let Open { vault, mut state } = open_vault.unwrap();
+        vault.close(&mut state);
+        let (paths, open_vault) =
+            open(AriaPaths::new(dir.path().join("home")), &settings(false), Ok(keyring), dir.path());
+        assert!(open_vault.is_some(), "the keys are only in the keyring: off by hand must not strand them");
         assert_eq!(
             aria_core::auth::AuthStore::for_paths(&paths).get("opencode-go").unwrap(),
             Some(aria_core::auth::Credential::ApiKey { key: "K".into() })
