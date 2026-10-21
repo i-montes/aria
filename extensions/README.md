@@ -15,6 +15,7 @@ every time a session starts; an extension the owner edited there is kept (see `c
 | `subagent-watch` | children stream what they do to a socket so it can be watched |
 | `clock` | Aria's own: each user message gets a hidden `[now]` line with the local date, time, weekday and time zone |
 | `background` | Aria's own: under Aria's dock (`ARIA_JOBS_SOCK`), the tools `background_agent`, `background_list`, `background_output`, `background_stop` (and `background_run` with `PI_SANDBOX=0`); a hidden `[background]` line while something runs; an `aria-background` message when a job ends |
+| `connectors` | Aria's own: every MCP tool call that writes asks first on the chat's permission card (`kind: "connector"`), by the access level of its connector in Aria's settings (`aria.json` `connectors`: Read only refuses writes, Ask asks, Allow runs them); reads run, codemode's nested calls are gated the same, `engram` never is; "don't ask again" lasts the session |
 | `install` | Aria's own: the `install` tool puts in a skill, an MCP server or a Pi package the user asked for, after the user confirms it on the permission card; the `install-from-link` skill (`agent-files/skills/`) tells the model how to read a link |
 
 Tests: `bun test extensions`.
@@ -30,7 +31,7 @@ Tests: `bun test extensions`.
   (`mode === 'tui'`) are unchanged.
   - `jev-router/modes.ts`: `routedMode` routes in `tui`, `print` and `rpc`. `jev-router/route.ts` adds `jevStatus`;
     `index.ts` sends it as `setStatus('aria-jev', …)`, the chat's route line.
-  - `sandbox/card.ts` (new): `canAsk` (a UI in `tui` or `rpc`) and `sandboxCard`. `sandbox/index.ts` asks with card
+  - `sandbox/card.ts` (new): `canAsk` (a UI in `tui` or `rpc`) and `sandboxCard` (also the `connector` card of `connectors/card.ts`). `sandbox/index.ts` asks with card
     titles in RPC (running outside the sandbox, writing outside the project) and passes the run's abort signal to its
     dialogs.
   - `sandbox/index.ts`: bash's `reason` is asked for on every command, not only with `outsideSandbox`: the dock shows it
