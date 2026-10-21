@@ -80,8 +80,10 @@ mkdir -p "$tmp/fail" && printf '#!/bin/sh\nexit 1\n' > "$tmp/fail/npm" && chmod 
 if PATH="$tmp/fail:$PATH" ARIA_HOME="$tmp/home" sh "$installer" --install-agent-browser >/dev/null 2>"$tmp/err"; then
   if grep -qF 'warning:' "$tmp/err"; then pass "a failed agent-browser install warns and the install goes on"; else fail "a failed agent-browser install does not warn"; fi
 else fail "a failed agent-browser install stops the installer"; fi
-if PATH="$tmp/fail:$PATH" ARIA_HOME="$tmp/home" ARIA_AGENT_BROWSER_VERSION=bad sh "$installer" --install-agent-browser >/dev/null 2>"$tmp/err"; then
-  if grep -qF 'warning:' "$tmp/err" && [ ! -e "$tmp/home/agent-browser" ]; then pass "a bad agent-browser version warns and installs nothing"; else fail "a bad agent-browser version is not refused cleanly"; fi
+# a bad version: a working fake npm records any call, so only the version check can keep it from running
+mkdir -p "$tmp/record" && printf '#!/bin/sh\necho "$*" >> "%s"\n' "$tmp/npm-calls" > "$tmp/record/npm" && chmod +x "$tmp/record/npm"
+if PATH="$tmp/record:$PATH" ARIA_HOME="$tmp/home" ARIA_AGENT_BROWSER_VERSION=bad sh "$installer" --install-agent-browser >/dev/null 2>"$tmp/err"; then
+  if grep -qF 'not a version number' "$tmp/err" && [ ! -e "$tmp/npm-calls" ] && [ ! -e "$tmp/home/agent-browser" ]; then pass "a bad agent-browser version warns and installs nothing"; else fail "a bad agent-browser version is not refused cleanly"; fi
 else fail "a bad agent-browser version stops the installer"; fi
 rm -r "$tmp"
 
