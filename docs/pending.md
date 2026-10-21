@@ -129,15 +129,17 @@ extension, the strip and the Alt+A list; see the [architecture](architecture.md#
   needs a new file the person has not added yet will not see it.
 - When a worktree's changes cannot come back because git itself failed (not a clash), it is reported as a clash, the
   worktree is kept, and git's message is only in the log.
-- If the dock dies between making a worktree and recording it, the worktree stays in `<repo>/.aria-worktrees/` without
-  a job naming it; `git worktree list` shows it. An empty `.aria-worktrees/` folder is left behind after the last one
-  is removed (it is excluded from git).
+- If the dock dies in the moment between making a worktree and recording it (the job is saved right after), the
+  worktree stays in `<projects dir>/.aria-worktrees/` without a job naming it; `git worktree list` shows it. An empty
+  `.aria-worktrees/` folder is left in the projects folder after the last one is removed.
 - A subagent stopped while it is still starting is shown as failed, not stopped.
 - The "update is waiting" notice is in English only, and reaches only the tabs whose Pi is running.
 - A broken `sessions.json` (moved aside at start) makes the dock forget every session's pending end notes.
-- If the dock never answers a `jobOutput`, that row's output stops refreshing until the page is loaded again.
+- If the dock never answers a `jobOutput`, that row's output stops refreshing until it is folded and opened again, or
+  the list is closed.
+- `background_output` for a subagent says its state, not what its watch says it is doing now (the jobs socket does not
+  see the watch).
 - Two background subagents in one session with the same title and task share one watch agent in the list.
-- A jobs socket that fails to open is not logged.
 - The browser check (`tools/ui-sandbox/check.ts`) prints `PAGE ERROR ReferenceError: process is not defined` a few
   times; it happens on `main` too, and every check still passes.
 

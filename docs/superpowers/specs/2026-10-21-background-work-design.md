@@ -167,7 +167,7 @@ Background work belongs to the dock (`crates/aria`), not to Pi:
 - the dock already supervises children (`aria-engine`) and already hosts one socket per session (`watch.rs`).
 
 New module `crates/aria/src/jobs.rs` (with `worktree.rs` beside it): one `Jobs` manager for the dock, shared by every
-`Chat`. A job is `{ id, number, session, kind: process|agent, title, command | task, cwd, state, started_at,
+`Chat`. A job is `{ id, number, session, kind: process|agent, title, command | task, folder, state, started_at,
 ended_at, url, exit, isolation, worktree, result }`, with
 `state: queued | running | exited | failed | stopped | done | cut`.
 
@@ -175,24 +175,28 @@ ended_at, url, exit, isolation, worktree, result }`, with
 
 One Unix socket per session, `jobs-<session>.sock` in the run directory (`$XDG_RUNTIME_DIR/aria`, beside
 `watch-<session>.sock`, same short-hash rule for long paths, mode 0600). The sandbox hides `$XDG_RUNTIME_DIR` from
-boxed commands, so a boxed command cannot reach it. Pi gets `ARIA_JOBS_SOCK`; children the dock starts for a
-subagent do not (no background inside subagents).
+boxed commands, so a boxed command cannot reach it; when `$XDG_RUNTIME_DIR` is unset (the run directory would fall
+back to `/tmp`), the dock opens no jobs socket at all and the tools say they need the dock. The box also unsets
+`ARIA_JOBS_SOCK` and `PI_WATCH_SOCK` and masks their folders. Pi gets `ARIA_JOBS_SOCK`; children the dock starts for
+a subagent do not (no background inside subagents).
 
 JSON lines. The extension sends requests with an `id`; the dock answers with the same `re`:
 
 | Extension → dock | Answer |
 |---|---|
 | `{op:"hello"}` (on connect) | `{re, ok}`, then every undelivered event for this session |
-| `{op:"start", kind:"process", command, title, cwd, env}` | `{re, ok, job}` or `{re, ok:false, error}` |
-| `{op:"start", kind:"agent", task, title, cwd, writes, isolation, model}` | `{re, ok, job}` (`job.state` running or queued) |
+| `{op:"start", kind:"process", command, line, title, folder, env}` | `{re, ok, job}` or `{re, ok:false, error}`; `line` (required) is what `bash -c` runs, the sandbox's decision; `command` is what the model asked for |
+| `{op:"start", kind:"agent", task, title, folder, writes, isolation, model}` | `{re, ok, job}` (`job.state` running or queued) |
 | `{op:"list"}` | `{re, ok, jobs}` (this session's, running, queued and finished) |
-| `{op:"output", job, lines}` | `{re, ok, lines:[…]}` |
-| `{op:"stop", job}` | `{re, ok}` |
-| `{op:"ack", event}` | none |
+| `{op:"output", job, lines}` | `{re, ok, lines:[…]}` (none for a subagent, which keeps no output) |
+| `{op:"stop", job}` | `{re, ok}`; for a job that already ended `{re, ok:true, already:true}` |
+| `{op:"ack", event}` (`event` is the event's `seq`) | none |
+
+`folder` may also be sent as `cwd` (an alias); it must be absolute (`~` is expanded) and exist.
 
 | Dock → extension (pushed) | |
 |---|---|
-| `{event:"ended", seq, job, by:"self"|"stop", result?, applied?, conflict?}` | a job ended; kept until acked |
+| `{event:"ended", seq, job, by:"self"|"stop", lastLines}` | a job ended; kept until acked. Its `result`, `conflict` and kept `worktree` are fields of `job`; `lastLines` holds a process's last 20 lines (empty for a subagent) |
 | `{event:"cut", seq, jobs:[…]}` | jobs cut when the dock last stopped |
 
 Events are kept per session until acknowledged, so a Pi that is restarting gets them when it connects again.
@@ -238,9 +242,13 @@ For a subagent that writes, in a git repository:
 
 A worktree:
 
-- is made at `<repo>/.aria-worktrees/<job id>` from `git stash create` (the person's uncommitted tracked changes,
-  without touching their folder) or `HEAD` when there are none; `.aria-worktrees/` goes into the repo's
-  `.git/info/exclude` (never its `.gitignore`). Untracked files of the person are not in it.
+- is made at `<projects dir>/.aria-worktrees/<repo dir name>-<job id>` from `git stash create` (the person's
+  uncommitted tracked changes, without touching their folder) or `HEAD` when there are none. It lives outside the
+  person's repository, so their test runners, watchers and compilers never see it, and nothing in the repository is
+  edited besides git's own worktree bookkeeping (no exclude line, no `.gitignore`). Untracked files of the person are
+  not in it.
+- Every git the dock runs (outside the box, on config a boxed command could write) turns off hooks, the file-system
+  monitor, the untracked cache, signing, ssh and every filter driver git sees.
 - When the subagent ends, its changes come back **as uncommitted changes in the person's folder** **(owner)**: the
   dock stages everything in the worktree, takes `git diff --binary --cached <base>`, and applies it to the person's
   folder with `git apply` (working tree only, nothing staged, nothing committed, the person's git settings untouched).
@@ -275,8 +283,9 @@ A worktree:
   cuts background work by itself. **(call: 30 minutes; never cut)**
 - Right before the dock execs the new version it stops every job anyway (none should be left, but the exec keeps
   the process, so nothing would kill a leftover and the new dock would mark a live job `cut`).
-- The dock quitting stops every job (process groups killed). The jobs are recorded in `~/.aria/jobs.json` (state
-  only, no output) on every change; at the next start, the ones still marked running or queued become `cut`, their
+- The dock quitting (SIGTERM, SIGINT or SIGHUP) stops every job (process groups killed) and every session's Pi, then
+  exits 0. The jobs are recorded in `~/.aria/jobs.json` on every change (each job's state, a subagent's result up to
+  8000 characters, and, until its session is told, an end event's last 20 lines; never the rest of the output); at the next start, the ones still marked running or queued become `cut`, their
   sessions get the `cut` event, and they appear under Finished.
 
 ## Settings
@@ -289,7 +298,7 @@ None new in this pass. **(call)** The limits (3 subagents, 10 processes, 1000 li
 - Rust (`jobs.rs`, `worktree.rs`): real child processes (`sh -c 'echo …; sleep …'`) for start, output, URL, stop,
   process-group kill, exit codes; the queue and the per-folder lock; persistence and `cut`; the socket protocol
   (hello, start, list, output, stop, events kept until ack); worktrees against temp git repos (made from a stash,
-  patch applied back unstaged, conflict keeps the worktree, exclude written once).
+  patch applied back unstaged, conflict keeps the worktree, the repository's hooks, fsmonitor and filters never run).
 - `chat.rs`: Pi gets `ARIA_JOBS_SOCK`; closing a tab stops its jobs; `busy` counts jobs.
 - Extensions (`bun test extensions`): the client against a fake socket; `background_run` goes through the bash
   route and sends the decided command line; without the dock it refuses; the hidden `[background]` line only when
@@ -302,8 +311,8 @@ None new in this pass. **(call)** The limits (3 subagents, 10 processes, 1000 li
 
 `docs/architecture.md` (the module, the socket, the messages), `extensions/README.md` (the new extension and the sandbox's
 `background_run`), `docs/pending.md` (what is left: steering a subagent, macOS orphan cleanup, settings for the limits),
-`CHANGELOG.md` (what Aria now writes outside the repo: `~/.aria/jobs.json`, `.aria-worktrees/` and the
-`.git/info/exclude` line in the person's repositories).
+`CHANGELOG.md` (what Aria now writes outside the repo: `~/.aria/jobs.json` and `.aria-worktrees/` in the projects
+folder).
 
 ## Left to the builder
 
