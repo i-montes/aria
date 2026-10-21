@@ -6,6 +6,7 @@ pub mod auth;
 pub mod bridge;
 pub mod files;
 pub mod json_file;
+pub mod keyring;
 pub mod mcp;
 pub mod mcp_import;
 pub mod oauth;
