@@ -141,6 +141,64 @@ pub fn choose(
     }
 }
 
+/// Why a registration pass registered nothing. Each is its own problem for the banner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HotkeyError {
+    /// Carbon's event handler could not be installed (or the call was not on the main thread): no shortcut can
+    /// work, whatever is free. The next retry installs it again before registering.
+    Handler(String),
+    /// Every candidate is held by the system or another app.
+    Taken(Vec<Shortcut>),
+}
+
+impl HotkeyError {
+    /// The problem banner's code (a UI string key `problem.<code>`).
+    pub fn problem_code(&self) -> &'static str {
+        match self {
+            HotkeyError::Handler(_) => "hotkey-handler-failed",
+            HotkeyError::Taken(_) => "hotkey-unavailable",
+        }
+    }
+
+    /// The candidates the page is told were taken (none when the handler failed: nothing was tried).
+    pub fn taken(&self) -> &[Shortcut] {
+        match self {
+            HotkeyError::Handler(_) => &[],
+            HotkeyError::Taken(taken) => taken,
+        }
+    }
+}
+
+impl std::fmt::Display for HotkeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HotkeyError::Handler(message) => f.write_str(message),
+            HotkeyError::Taken(taken) => {
+                let tried: Vec<String> = taken.iter().map(Shortcut::label).collect();
+                write!(f, "{} are taken (by the system or other apps)", tried.join(", "))
+            }
+        }
+    }
+}
+
+/// What the dock holds on the Mac between passes: the setting it registered for and the shortcut in use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Held {
+    pub setting: String,
+    pub in_use: InUse,
+}
+
+/// Whether the dock runs a registration pass now (`change_hotkey`, on the main thread). `retry_tick` is the 10 s tick.
+/// Nothing registered (every candidate taken, or the handler failed): on a settings change and on every retry tick.
+/// A shortcut registered: when the setting moved, and on every retry tick while a fallback is in use (something before
+/// it was taken), so the chosen one (or the default) is taken back once it frees up.
+pub fn pass_due(held: Option<&Held>, chosen: &str, settings_changed: bool, retry_tick: bool) -> bool {
+    match held {
+        None => settings_changed || retry_tick,
+        Some(held) => (settings_changed && held.setting != chosen) || (retry_tick && !held.in_use.taken.is_empty()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +315,60 @@ mod tests {
 
         let outcome = choose(&list, None, |_| false);
         assert_eq!(outcome, Outcome::Nothing { taken: list.clone() });
+    }
+
+    fn held(setting: &str, in_use: &str, taken: &[&str]) -> Held {
+        Held {
+            setting: setting.into(),
+            in_use: InUse { shortcut: mac(in_use), taken: taken.iter().map(|t| mac(t)).collect() },
+        }
+    }
+
+    #[test]
+    fn a_fallback_in_use_is_retried_until_the_chosen_one_frees_up() {
+        let fallback = held("Command + K", "Option + Space", &["Command + K"]);
+        assert!(pass_due(Some(&fallback), "Command + K", false, true), "every retry tick while on a fallback");
+        assert!(!pass_due(Some(&fallback), "Command + K", false, false), "not between ticks");
+        let chosen = held("Command + K", "Command + K", &[]);
+        assert!(!pass_due(Some(&chosen), "Command + K", false, true), "the chosen one in use: nothing to retry");
+        assert!(!pass_due(Some(&chosen), "Command + K", true, false), "a settings change that kept the setting");
+        assert!(pass_due(Some(&chosen), "Command + J", true, false), "the setting moved");
+        assert!(pass_due(None, "", false, true), "nothing registered: every retry tick");
+        assert!(pass_due(None, "", true, false));
+        assert!(!pass_due(None, "", false, false));
+
+        // The pass on the tick: the chosen one is still taken, so the fallback stays (nothing new is registered)…
+        let list = candidates("Command + K", Platform::Mac);
+        let current = mac("Option + Space");
+        let outcome = choose(&list, Some(&current), |_| false);
+        assert_eq!(outcome, Outcome::Kept(fallback.in_use.clone()), "the same: nothing to report");
+        // …until it frees up: it is registered and the fallback goes.
+        let outcome = choose(&list, Some(&current), |s| s.label() == "Command + K");
+        assert_eq!(outcome, Outcome::Registered(chosen.in_use.clone()));
+        // The default frees up first: it replaces the second fallback.
+        let second = mac("Control + Option + Space");
+        let outcome = choose(&list, Some(&second), |s| s.label() == "Option + Space");
+        assert_eq!(
+            outcome,
+            Outcome::Registered(InUse { shortcut: mac("Option + Space"), taken: vec![mac("Command + K")] })
+        );
+    }
+
+    #[test]
+    fn a_handler_that_failed_is_its_own_problem() {
+        let handler = HotkeyError::Handler("InstallEventHandler failed (-50)".into());
+        assert_eq!(handler.problem_code(), "hotkey-handler-failed");
+        assert!(handler.taken().is_empty(), "nothing was tried, so nothing is reported taken");
+        assert_eq!(handler.to_string(), "InstallEventHandler failed (-50)");
+        let list = candidates("", Platform::Mac);
+        let taken = HotkeyError::Taken(list.clone());
+        assert_eq!(taken.problem_code(), "hotkey-unavailable");
+        assert_eq!(taken.taken(), list.as_slice());
+        assert_eq!(
+            taken.to_string(),
+            "Option + Space, Control + Option + Space, Command + Option + Space are taken (by the system or other apps)"
+        );
+        // A handler that failed registered nothing: the next retry tick tries again (installing it first).
+        assert!(pass_due(None, "", false, true));
     }
 }

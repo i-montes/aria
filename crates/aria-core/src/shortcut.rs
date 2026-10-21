@@ -157,12 +157,17 @@ pub fn candidates(chosen: &str, platform: Platform) -> Vec<Shortcut> {
 }
 
 /// The first of `candidates` that `taken` does not refuse, and the ones before it (taken). When every one is taken, the
-/// first is used anyway (as the dock did before shortcuts could be chosen) and they are all reported taken.
+/// first is used anyway (as the dock did before shortcuts could be chosen) and the others are reported taken: the one
+/// in use is never among the taken ones, so the page never says "In use: X (X was taken)".
 pub fn first_free(candidates: &[Shortcut], taken: impl Fn(&Shortcut) -> bool) -> (Shortcut, Vec<Shortcut>) {
-    let skipped: Vec<Shortcut> = candidates.iter().take_while(|s| taken(s)).cloned().collect();
+    let mut skipped: Vec<Shortcut> = candidates.iter().take_while(|s| taken(s)).cloned().collect();
     match candidates.get(skipped.len()) {
         Some(free) => (free.clone(), skipped),
-        None => (candidates.first().cloned().expect("there is always a default"), skipped),
+        None => {
+            let first = candidates.first().cloned().expect("there is always a default");
+            skipped.retain(|s| *s != first);
+            (first, skipped)
+        }
     }
 }
 
@@ -249,6 +254,10 @@ mod tests {
 
         let (used, skipped) = first_free(&list, |_| true);
         assert_eq!(used.label(), "CTRL + ALT + K", "all taken: the first one anyway");
-        assert_eq!(skipped.len(), 4);
+        assert_eq!(
+            skipped.iter().map(Shortcut::label).collect::<Vec<_>>(),
+            ["SUPER + A", "SUPER + SHIFT + A", "SUPER + ALT + A"],
+            "the one in use is not reported taken too"
+        );
     }
 }

@@ -7,7 +7,9 @@ set -e
 cd "$(dirname "$0")/.."
 rustup target add aarch64-apple-darwin >/dev/null
 zig=$(mise x zig@0.14.1 -- which zig)
-wrapper=$(mktemp -d)/zigcc
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+wrapper="$tmp/zigcc"
 # cc-rs passes Apple's flags (-arch, --target=arm64-apple-macosx, -mmacosx-version-min); zig wants its own target.
 cat > "$wrapper" <<PY
 #!/usr/bin/env python3

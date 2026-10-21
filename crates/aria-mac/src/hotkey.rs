@@ -14,7 +14,7 @@ use std::sync::{Mutex, OnceLock};
 
 use aria_core::shortcut::{candidates, InUse, Platform, Shortcut};
 
-use crate::carbon::{self, Outcome};
+use crate::carbon::{self, HotkeyError, Outcome};
 
 type OSStatus = i32;
 
@@ -121,53 +121,52 @@ unsafe extern "C" fn hotkey_pressed(_call: *mut c_void, _event: *mut c_void, _us
     0
 }
 
-fn on_main_thread() -> Result<(), String> {
+fn on_main_thread() -> Result<(), HotkeyError> {
     match objc2_foundation::MainThreadMarker::new() {
         Some(_) => Ok(()),
-        None => Err("a global hotkey has to be registered on the main thread".into()),
+        None => Err(HotkeyError::Handler("a global hotkey has to be registered on the main thread".into())),
     }
+}
+
+/// Installs Carbon's event handler once; a failure is tried again by the next pass. Main thread only (checked).
+fn ensure_handler() -> Result<(), HotkeyError> {
+    on_main_thread()?;
+    if REGISTERED.with_borrow(|r| r.handler) {
+        return Ok(());
+    }
+    let types = EventTypeSpec { event_class: EVENT_CLASS_KEYBOARD, event_kind: EVENT_HOTKEY_PRESSED };
+    let mut handler: *mut c_void = std::ptr::null_mut();
+    // SAFETY: on the main thread (checked above); `types` and `handler` outlive the call, which copies the spec,
+    // and `hotkey_pressed` is a plain `extern "C"` function that lives for the whole process.
+    let status = unsafe {
+        InstallEventHandler(GetApplicationEventTarget(), hotkey_pressed, 1, &types, std::ptr::null_mut(), &mut handler)
+    };
+    if status != 0 {
+        return Err(HotkeyError::Handler(format!("InstallEventHandler failed ({status})")));
+    }
+    // No uninstall: the handler lives until the process ends.
+    REGISTERED.with_borrow_mut(|r| r.handler = true);
+    Ok(())
 }
 
 /// Registers the `chosen` shortcut (the `shortcut` setting; empty or unreadable means Option + Space), or the first
 /// free fallback, and calls `on_pressed` every time it is pressed. Must run on the main thread, once the application
-/// object exists and before its run loop starts. `Err` when not one candidate could be registered.
-pub fn install_hotkey(chosen: &str, on_pressed: impl Fn() + Send + 'static) -> Result<InUse, String> {
+/// object exists and before its run loop starts. `Err` when the handler could not be installed
+/// (`HotkeyError::Handler`) or not one candidate could be registered (`HotkeyError::Taken`); either way the callback
+/// is kept, and `change_hotkey` (the dock's retry) tries again.
+pub fn install_hotkey(chosen: &str, on_pressed: impl Fn() + Send + 'static) -> Result<InUse, HotkeyError> {
     on_main_thread()?;
     let slot = ON_PRESSED.get_or_init(|| Mutex::new(None));
-    *slot.lock().map_err(|_| "the hotkey callback is poisoned".to_string())? = Some(Box::new(on_pressed));
-
-    if !REGISTERED.with_borrow(|r| r.handler) {
-        let types = EventTypeSpec { event_class: EVENT_CLASS_KEYBOARD, event_kind: EVENT_HOTKEY_PRESSED };
-        let mut handler: *mut c_void = std::ptr::null_mut();
-        // SAFETY: on the main thread (checked above); `types` and `handler` outlive the call, which copies the spec,
-        // and `hotkey_pressed` is a plain `extern "C"` function that lives for the whole process.
-        let status = unsafe {
-            InstallEventHandler(
-                GetApplicationEventTarget(),
-                hotkey_pressed,
-                1,
-                &types,
-                std::ptr::null_mut(),
-                &mut handler,
-            )
-        };
-        if status != 0 {
-            return Err(format!("InstallEventHandler failed ({status})"));
-        }
-        // No uninstall: the handler lives until the process ends.
-        REGISTERED.with_borrow_mut(|r| r.handler = true);
-    }
+    *slot.lock().map_err(|_| HotkeyError::Handler("the hotkey callback is poisoned".into()))? =
+        Some(Box::new(on_pressed));
     change_hotkey(chosen)
 }
 
-/// The setting changed: registers the new choice (or the first free fallback) and only then unregisters the old one,
-/// so a choice with nothing free leaves the old shortcut working. The same handler fires for whichever is registered.
-/// Main thread only, after `install_hotkey`.
-pub fn change_hotkey(chosen: &str) -> Result<InUse, String> {
-    on_main_thread()?;
-    if !REGISTERED.with_borrow(|r| r.handler) {
-        return Err("the hotkey handler is not installed".into());
-    }
+/// A pass: installs the handler when it is not yet (a failed install is retried here), then registers the choice (or
+/// the first free fallback) and only then unregisters the old one, so a choice with nothing free leaves the old
+/// shortcut working. The same handler fires for whichever is registered. Main thread only.
+pub fn change_hotkey(chosen: &str) -> Result<InUse, HotkeyError> {
+    ensure_handler()?;
     let list = candidates(chosen, Platform::Mac);
     // The system's own shortcuts (Spotlight, input sources…): Carbon would accept them, the system would keep them.
     let system = system_hotkeys();
@@ -199,10 +198,7 @@ pub fn change_hotkey(chosen: &str) -> Result<InUse, String> {
             Ok(in_use)
         }
         Outcome::Kept(in_use) => Ok(in_use),
-        Outcome::Nothing { taken } => {
-            let tried: Vec<String> = taken.iter().map(Shortcut::label).collect();
-            Err(format!("{} are taken (by the system or other apps)", tried.join(", ")))
-        }
+        Outcome::Nothing { taken } => Err(HotkeyError::Taken(taken)),
     }
 }
 

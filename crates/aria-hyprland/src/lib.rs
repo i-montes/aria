@@ -191,7 +191,7 @@ impl Hotkey {
 
     /// The Lua for the first free one of `candidates` (by `binds_json`, the output of `hyprctl -j binds`) and what it
     /// would use. It unbinds Aria's previous shortcut and Aria's own binds listed in `binds_json`. When every candidate
-    /// is taken, the first is bound anyway, as before shortcuts could be chosen.
+    /// is taken, the first is bound anyway, as before shortcuts could be chosen (and reported in use, the others taken).
     pub fn plan(&self, binds_json: &Value, candidates: &[Shortcut]) -> (String, InUse) {
         let (chosen, skipped) = shortcut::first_free(candidates, |s| taken(binds_json, s, &self.exe));
         // What Hyprland lists as Aria's is unbound; what Aria bound last only when Hyprland gave no list (a reload drops
@@ -205,7 +205,7 @@ impl Hotkey {
     pub fn register(&mut self, candidates: &[Shortcut]) -> Result<InUse, HyprError> {
         let binds = socket_path(".socket.sock").ok().and_then(|path| binds_at(&path)).unwrap_or(Value::Null);
         let (lua, in_use) = self.plan(&binds, candidates);
-        if in_use.taken.len() == candidates.len() {
+        if candidates.iter().all(|s| taken(&binds, s, &self.exe)) {
             eprintln!("aria: every shortcut Aria can use is taken; binding {} anyway", in_use.shortcut.label());
         }
         match hyprctl_eval(&lua)?.as_str() {
@@ -682,6 +682,18 @@ mod tests {
         assert!(
             lua.starts_with(r#"hl.unbind("SUPER + ALT + A"); hl.unbind("CTRL + ALT + K"); hl.bind("CTRL + ALT + K""#),
             "no list from Hyprland: the last bind is unbound: {lua}"
+        );
+        // Every candidate taken: the first is bound anyway, and only the others are reported taken.
+        let full = serde_json::json!([
+            {"modmask": 64, "key": "A", "keycode": 0, "submap": "", "dispatcher": "__lua", "arg": "3", "description": "Omarchy thing"},
+            {"modmask": 65, "key": "A", "keycode": 0, "submap": "", "dispatcher": "__lua", "arg": "4", "description": "Another"},
+            {"modmask": 72, "key": "A", "keycode": 0, "submap": "", "dispatcher": "__lua", "arg": "5", "description": "A third"}
+        ]);
+        let (_, used) = Hotkey::new(PathBuf::from("/home/ana/.local/bin/aria"))
+            .plan(&full, &shortcut::candidates("", Platform::Linux));
+        assert_eq!(
+            used,
+            InUse { shortcut: sc("SUPER + A"), taken: vec![sc("SUPER + SHIFT + A"), sc("SUPER + ALT + A")] }
         );
         // After a reload Aria's bind is gone and the person's config now binds SUPER + A: it stays.
         hotkey.bound = Some(sc("SUPER + A"));
