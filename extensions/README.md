@@ -14,6 +14,7 @@ every time a session starts; an extension the owner edited there is kept (see `c
 | `subagent-mode` | subagents (`pi --mode json` children) get a lean prompt (`SUBAGENT.md`) |
 | `subagent-watch` | children stream what they do to a socket so it can be watched |
 | `clock` | Aria's own: each user message gets a hidden `[now]` line with the local date, time, weekday and time zone |
+| `background` | Aria's own: under Aria's dock (`ARIA_JOBS_SOCK`), the tools `background_agent`, `background_list`, `background_output`, `background_stop` (and `background_run` with `PI_SANDBOX=0`); a hidden `[background]` line while something runs; an `aria-background` message when a job ends |
 | `install` | Aria's own: the `install` tool puts in a skill, an MCP server or a Pi package the user asked for, after the user confirms it on the permission card; the `install-from-link` skill (`agent-files/skills/`) tells the model how to read a link |
 
 Tests: `bun test extensions`.
