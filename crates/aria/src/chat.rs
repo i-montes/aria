@@ -228,6 +228,8 @@ fn dialog_body(raw: &Value) -> String {
         // Never the raw command (it may hold a token, and notifications stay in history): its summary, or a path.
         Some("sandbox") => text("summary").or_else(|| Some("Aria wants to run a command outside the sandbox".into())),
         Some("write") => text("summary").or_else(|| text("path").map(|p| format!("Aria wants to write {p}"))),
+        // Never the arguments (the detail): what the connector wants to do, in a sentence.
+        Some("connector") => text("summary").or_else(|| Some("A connector wants to act".into())),
         Some("quota") => card["percent"].as_f64().map(|p| format!("Quota at {}%", p.round())),
         Some("question") => card["questions"][0]["question"].as_str().map(str::to_string),
         _ => None,
@@ -2392,6 +2394,15 @@ mod tests {
         h.chat.test_send_raw("ask_card");
         wait_for(&h, "the card", |m| matches!(m, DockMessage::ChatDialog { .. }));
         assert_eq!(h.notifier.log(), vec!["send:Aria needs an answer:Wants to run rm -rf build"]);
+    }
+
+    #[test]
+    fn a_connector_card_notifies_with_its_summary() {
+        let card = json!({"aria": 1, "kind": "connector", "summary": "Notion wants to create pages", "detail": "title: secret plans"});
+        assert_eq!(dialog_body(&json!({"title": card.to_string()})), "Notion wants to create pages");
+        // Never the arguments: without a summary, a fixed sentence.
+        let bare = json!({"aria": 1, "kind": "connector", "detail": "title: secret plans"});
+        assert_eq!(dialog_body(&json!({"title": bare.to_string()})), "A connector wants to act");
     }
 
     #[test]

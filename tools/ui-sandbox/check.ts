@@ -157,6 +157,14 @@ const script = `(async () => {
   check('saving keeps the section and says it was saved', savedShown(), $('#flow').textContent.slice(0, 80))
   window.aria.receive({ type: 'settingsChanged' }); await wait(200)
   check('the change notice that follows the save keeps the section', !!$('#flow [data-action="settings-home"]'), $('#flow').textContent.slice(0, 80))
+  // each connected server (not the memory) has its access level: Ask until one is chosen; the choice is saved
+  $('#flow [data-action="settings-home"]')?.click(); await wait(80)
+  $('#flow [data-action="settings-open"][data-value="integrations"]')?.click(); await wait(120)
+  const accessSeg = (level) => $('#flow [data-action="pick"][data-field="access:notion"][data-value="' + level + '"]')
+  check('the integrations list each connected server with Read only / Ask / Allow, Ask by default', accessSeg('read') && accessSeg('ask')?.classList.contains('selected') && accessSeg('allow') && !$('#flow [data-field="access:engram"]'), $('#flow').textContent.slice(0, 200))
+  accessSeg('allow')?.click(); await wait(80)
+  $('#flow [data-action="settings-save"]')?.click(); await wait(250)
+  check('choosing a level saves it', window.__sent.filter((m) => m.type === 'saveSettings').at(-1)?.settings?.integrations?.access?.notion === 'allow' && accessSeg('allow')?.classList.contains('selected'), JSON.stringify(window.__sent.filter((m) => m.type === 'saveSettings').at(-1)?.settings?.integrations?.access))
   $('#flow [data-action="settings-home"]')?.click(); await wait(80)
   $('#flow [data-action="settings-exit"]')?.click(); await wait(150)
   check('leaving the settings goes back to the chat', document.body.classList.contains('mode-chat'))
@@ -397,6 +405,13 @@ const script = `(async () => {
   permButtons[3].click(); await wait(60)
   check('choosing sends that exact option back', sent().some((m) => m.type === 'uiAnswer' && m.value === 'No'), JSON.stringify(sent().slice(-1)))
   check('and leaves its label as the note', $('#chat-list').textContent.includes('No') && !$('[data-chat="permission"]'))
+  // 15b. a connector's card: its plug, its three choices, and the chosen string goes back
+  await reset(); window.__sent.length = 0
+  ;[...document.querySelectorAll('nav button')].find((b) => b.textContent === 'Connector wants to write').click(); await wait(80)
+  const connButtons = [...document.querySelectorAll('[data-chat="permission"]')]
+  check('the connector card shows its summary, its arguments and three choices', connButtons.length === 3 && $('.p-perm [data-icon="plug"]') && $('.p-perm').textContent.includes('Notion wants to create pages') && $('.p-perm-code')?.textContent.includes('title: Weekly notes') && !$('.p-perm-prompt'), connButtons.map((b) => b.textContent).join(' | '))
+  connButtons[0].click(); await wait(60)
+  check('the connector card sends the chosen option', sent().some((m) => m.type === 'uiAnswer' && m.value === 'Yes, just this once') && !$('[data-chat="permission"]'), JSON.stringify(sent().slice(-1)))
   // 16. the quota card answers with the extension's string and notes the decision in the chat's words
   await reset(); window.__sent.length = 0
   ;[...document.querySelectorAll('nav button')].find((b) => b.textContent === 'Quota almost out').click(); await wait(80)

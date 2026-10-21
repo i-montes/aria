@@ -15,7 +15,7 @@ import { renderUser } from './parts/user.js'
 import { renderWorking } from './parts/working.js'
 
 /** Dialogs whose card sits in the thread (the question card is an overlay; the rest are plain dialogs). */
-export const INLINE_CARDS = ['sandbox', 'write', 'quota']
+export const INLINE_CARDS = ['sandbox', 'write', 'connector', 'quota']
 
 export const renderEmptyThread = (t) =>
   `<div class="thread-empty"><span class="thread-empty-title">${esc(t('chat.empty.title'))}</span><span class="thread-empty-text">${esc(t('chat.empty.text'))}</span></div>`

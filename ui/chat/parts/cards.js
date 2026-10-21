@@ -1,7 +1,7 @@
 // Structured cards from Pi's extension dialogs. A dialog only carries a string `title`, so an
 // extension that wants a designed card puts a JSON object in it:
 //
-//   {"aria":1,"kind":"sandbox"|"quota"|"question"|"write", ...fields}
+//   {"aria":1,"kind":"sandbox"|"quota"|"question"|"write"|"connector", ...fields}
 //
 // `aria` must be the number 1 (a version/marker); anything else is not ours. Fields per kind
 // (the contract the extensions follow; missing or mistyped fields get the defaults shown):
@@ -16,14 +16,16 @@
 //   write     path:    string ("")   the file to be changed
 //             summary: string ("")   what changes
 //             detail:  string ("")   the tool and path, in the code box
-//   sandbox, write and quota may carry `options: [{ value, label, primary? }]`: the strings the extension's
+//   connector summary: string ("")   "Notion wants to create pages"; the card's default title when empty
+//             detail:  string ("")   the call's arguments, a few `key: value` lines
+//   sandbox, write, connector and quota may carry `options: [{ value, label, primary? }]`: the strings the extension's
 //   `ctx.ui.select` accepts back; the card shows one button per option and answers with its `value`.
 // Extra fields are kept untouched. The dialog's id and its answer channel stay Pi's: the card is
 // shown while the dialog exists and answered through it.
 //
 // parseCardTitle(title) -> { kind, ...fields } | null. It never throws: non-strings, non-JSON,
 // non-objects, a wrong marker and unknown kinds all give null.
-const KINDS = new Set(['sandbox', 'quota', 'question', 'write'])
+const KINDS = new Set(['sandbox', 'quota', 'question', 'write', 'connector'])
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const str = (value) => (typeof value === 'string' ? value : '')
@@ -49,6 +51,7 @@ const FIELDS = {
     }
   },
   question: (c) => ({ questions: Array.isArray(c.questions) ? c.questions.filter(isObject) : [] }),
+  connector: (c) => ({ summary: str(c.summary), detail: str(c.detail), options: options(c.options) }),
   write: (c) => ({ path: str(c.path), summary: str(c.summary), detail: str(c.detail), options: options(c.options) }),
 }
 

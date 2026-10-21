@@ -673,3 +673,52 @@ describe('the model fields list what Pi offers for the connected provider', () =
     expect(h.root.innerHTML).not.toContain('data-model-picker')
   })
 })
+
+describe('the access level of each connector', () => {
+  const connected = ['opencode-go:api_key', 'mcp:engram', 'mcp:my-docs', 'mcp:notion']
+  const open = (settings = completed) => {
+    const h = harness()
+    h.ob.start(settings, connected)
+    h.click('settings-open', undefined, 'integrations')
+    return h
+  }
+  const selected = (html, server) => [...html.matchAll(/class="seg selected"[^>]*data-field="([^"]*)" data-value="([^"]*)"/g)].filter((m) => m[1] === `access:${server}`).map((m) => m[2])
+
+  test('integrations list each connected server with its access', () => {
+    const settings = structuredClone(completed)
+    settings.integrations.access = { notion: 'read' }
+    const html = open(settings).root.innerHTML
+    expect(html).toContain('ob.integrations.section.access')
+    expect(html).toContain('My Docs')
+    expect(html).toContain('Notion')
+    expect(html).not.toContain('access:engram')
+    for (const level of ['read', 'ask', 'allow']) {
+      expect(html).toContain(`data-field="access:notion" data-value="${level}"`)
+      expect(html).toContain('ob.integrations.access.' + level)
+    }
+    expect(selected(html, 'notion')).toEqual(['read'])
+    expect(selected(html, 'my-docs')).toEqual(['ask']) // nothing set: Ask
+  })
+
+  test('no connected server, no access rows', () => {
+    const h = harness()
+    h.ob.start(completed, ['opencode-go:api_key', 'mcp:engram'])
+    h.click('settings-open', undefined, 'integrations')
+    expect(h.root.innerHTML).not.toContain('ob.integrations.section.access')
+  })
+
+  test('choosing a level saves it', async () => {
+    const h = open()
+    h.click('pick', 'access:my-docs', 'allow')
+    expect(selected(h.root.innerHTML, 'my-docs')).toEqual(['allow'])
+    expect(h.ob.snapshot().dirty).toBe(true)
+    h.click('pick', 'access:notion', 'nonsense') // only the three levels are ever written
+    h.click('settings-save')
+    const save = h.lastRequest()
+    expect(save.message.type).toBe('saveSettings')
+    expect(save.message.settings.integrations.access).toEqual({ 'my-docs': 'allow' })
+    save.resolve({ type: 'saved' })
+    await flush()
+    expect(h.ob.snapshot().dirty).toBe(false)
+  })
+})

@@ -41,7 +41,7 @@ const sandbox = `<script>
     window.__sent.push(m)
     setTimeout(() => {
       const r = (x) => window.aria.receive({ id: m.id, ...x })
-      if (m.type === 'loadSettings') r({ type: 'settings', settings, exists: !!settings, problem: null, connected: ['opencode-go:api_key'] })
+      if (m.type === 'loadSettings') r({ type: 'settings', settings, exists: !!settings, problem: null, connected: ['opencode-go:api_key', 'mcp:engram', 'mcp:notion'] })
       else if (m.type === 'sessionsLoad') r({ type: 'sessions', sessions: [{ id: 's1', title: 'Fix the failing build' }], active: 's1' })
       else if (m.type === 'saveSettings') { settings = m.settings; r({ type: 'saved' }) }
       else if (m.type === 'checkKey') r({ type: 'keyResult', ok: true, error: null })
@@ -109,6 +109,7 @@ const sandbox = `<script>
 
   const BUTTONS = {
     'Permission request': () => { const o = ['Yes, just this once', "Yes, and don't ask again for rm this session", 'Yes, no sandbox for the rest of the session', 'No']; sim.sess(sim.active, { type: 'chatDialog', id: 'p' + ++sim.n, method: 'select', request: { title: card({ kind: 'sandbox', summary: 'Deletes the old build folder', detail: 'rm -rf ../old-build', jev: '✓ matches the description · deletes files', options: o.map((v, i) => ({ value: v, label: v, primary: i === 0 })) }), options: o }, hidden: false }) },
+    'Connector wants to write': () => { const o = ['Yes, just this once', "Yes, and don't ask again for Notion create pages this session", 'No']; sim.sess(sim.active, { type: 'chatDialog', id: 'c' + ++sim.n, method: 'select', request: { title: card({ kind: 'connector', summary: 'Notion wants to create pages', detail: 'parent: Team notes\\ntitle: Weekly notes\\ncontent: Decisions from Monday', options: o.map((v, i) => ({ value: v, label: v, primary: i === 0 })) }), options: o }, hidden: false }) },
     'Write outside': () => sim.sess(sim.active, { type: 'chatDialog', id: 'w' + ++sim.n, method: 'select', request: { title: card({ kind: 'write', path: '~/Documents/notes.md', summary: 'Wants to change a file' }), options: ['allow', 'always', 'deny'] }, hidden: false }),
     'Quota almost out': () => { const o = ['Switch to cat-jam-free now', 'Stay on deepseek-v4.1-flash']; sim.sess(sim.active, { type: 'chatDialog', id: 'q' + ++sim.n, method: 'select', request: { title: card({ kind: 'quota', percent: 98, window: '5-hour', freeModel: 'opencode-go/cat-jam-free', countdown: 300, options: [{ value: o[0], label: o[0], role: 'free', primary: true }, { value: o[1], label: o[1], role: 'keep' }] }), options: o, timeout: 300000 }, hidden: false }) },
     'Compact context': () => { sim.ev({ type: 'compaction_start', reason: 'threshold' }); setTimeout(() => { sim.ev({ type: 'compaction_end', reason: 'threshold', result: { tokensBefore: 150000 }, aborted: false }); sim.sess(sim.active, { type: 'chatEvent', event: { type: 'ui_notice', request: { method: 'notify', message: 'engram: saved the decisions from this session', notifyType: 'info' } } }) }, 1500) },

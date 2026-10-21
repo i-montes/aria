@@ -48,6 +48,20 @@ describe('permission card', () => {
     expect(renderPermission(props, {}, t)).not.toContain('style=')
   })
 
+  test('a connector card has its icon and title', () => {
+    const options = [{ value: 'Yes, just this once', label: 'Yes, just this once', primary: true }, { value: 'No', label: 'No' }]
+    const html = renderPermission({ id: 'c1', kind: 'connector', detail: 'title: Weekly notes', options }, {}, t)
+    expect(html).toContain('chat.perm.connector')
+    expect(html).toContain('data-icon="plug"')
+    expect(html).toContain('p-perm-path') // the arguments, not a shell command: no "$" prompt
+    expect(html).not.toContain('p-perm-prompt')
+    expect(html).toContain('<code class="p-perm-code">title: Weekly notes</code>')
+    expect(renderPermission({ id: 'c1', kind: 'connector', summary: 'Notion wants to create pages' }, {}, t)).toContain('Notion wants to create pages')
+    expect(renderPermission({ id: 's', kind: 'sandbox' }, {}, t)).not.toContain('data-icon="plug"')
+    expect(TEXTS.en['chat.perm.connector']).toBe('A connector wants to act')
+    expect(TEXTS.es['chat.perm.connector']).toBe('Un conector quiere actuar')
+  })
+
   test('texts exist in both languages with the same keys', () => {
     expect(Object.keys(TEXTS.es).sort()).toEqual(Object.keys(TEXTS.en).sort())
     for (const key of Object.keys(TEXTS.en)) expect(key.startsWith('chat.perm.')).toBe(true)

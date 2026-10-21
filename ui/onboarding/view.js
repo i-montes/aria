@@ -10,6 +10,13 @@ import {
 } from './steps.js'
 
 const SERVICES = ['notion', 'tavily']
+/** What a connector may do without asking (`integrations.access[server]`); a server not listed is at Ask. */
+const ACCESS_LEVELS = ['read', 'ask', 'allow']
+/** Never gated (the memory), so it has no level to set. */
+const UNGATED = new Set(['engram'])
+/** A server's name in words, as the connectors extension writes it in its card ("my-docs" -> "My Docs"). */
+const displayName = (server) =>
+  server.split(/[-_]+/).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') || server
 const SKILLS = ['brainstorming', 'writing-plans', 'test-driven-development', 'systematic-debugging', 'requesting-code-review', 'verification-before-completion']
 const STYLES = ['very-short', 'brief', 'detailed', 'technical', 'teaching']
 const LEVELS = ['low', 'medium', 'high']
@@ -507,11 +514,25 @@ export function createOnboarding(env) {
       if (serviceOf(id)) html += id === 'notion' ? notionBlock() : tavilyBlock()
     }
     if (s.integrations.services.some((service) => !isConnected(service.id))) html += c.info('amber', '', t('ob.integrations.needConnect'))
+    html += accessRows()
     const p = s.integrations.packages
     html += c.section(t('ob.integrations.section.packages'))
     // Only a local folder is built (npm, git and a gallery are not): the field is it, and it is used when it names one.
     html += c.textField('packagePath', t('ob.integrations.packagePath'), p.source === 'local' || p.source === 'path' ? p.path : '', { mono: true, placeholder: t('ob.integrations.packagePath.placeholder'), description: t('ob.integrations.packagePath.desc') })
     return html + (s.subagents.planExecute ? c.info('green', t('ob.integrations.auto.title'), t('ob.integrations.auto.desc')) : c.info('neutral', '', t('ob.integrations.auto.none')))
+  }
+
+  /** One row per connected MCP server: Read only / Ask / Allow, for what it may change without asking. */
+  function accessRows() {
+    const servers = [...state.connected].filter((id) => id.startsWith('mcp:')).map((id) => id.slice(4)).filter((server) => server && !UNGATED.has(server)).sort()
+    if (!servers.length) return ''
+    const access = state.settings.integrations.access ?? {}
+    const options = ACCESS_LEVELS.map((level) => ({ value: level, label: t(`ob.integrations.access.${level}`) }))
+    return (
+      c.section(t('ob.integrations.section.access')) +
+      c.info('neutral', '', t('ob.integrations.access.desc')) +
+      servers.map((server) => c.segments(`access:${server}`, displayName(server), options, ACCESS_LEVELS.includes(access[server]) ? access[server] : 'ask')).join('')
+    )
   }
 
   function sandboxStep() {
@@ -816,6 +837,13 @@ export function createOnboarding(env) {
       if (value !== 'other') env.setLanguage(value)
     } else if (name === 'router') {
       state.settings = setRouter(state.settings, value === 'yes')
+    } else if (name === 'access') {
+      // The server's name is everything after the first colon; only the three levels are ever written.
+      if (!ACCESS_LEVELS.includes(value)) return
+      const server = field.slice(field.indexOf(':') + 1)
+      update((s) => {
+        s.integrations.access = { ...(s.integrations.access ?? {}), [server]: value }
+      })
     } else if (name === 'effort') {
       update((s) => {
         s.effort = value === 'auto' ? { ...s.effort, mode: 'auto', fixedLevel: null } : { ...s.effort, mode: 'fixed', fixedLevel: value }

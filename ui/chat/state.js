@@ -410,7 +410,7 @@ export function answersForCard(questions, answers) {
   })
 }
 
-const CARD_LABEL = { sandbox: 'sandbox', write: 'sandbox', quota: 'model', question: 'ask' }
+const CARD_LABEL = { sandbox: 'sandbox', write: 'sandbox', connector: 'connector', quota: 'model', question: 'ask' }
 
 /** The dialog is answered: it goes away, and a card leaves what was chosen in the thread. `choice` is the
  * option's text (or the answers array of a question card; nothing for a skipped one). */

@@ -1,6 +1,8 @@
 // Run: bun test ui/chat/parts/cards.test.js
 import { describe, expect, test } from 'bun:test'
 import { parseCardTitle } from './cards.js'
+import { createChat, reduce } from '../state.js'
+import { INLINE_CARDS, renderThread } from '../thread.js'
 
 const title = (object) => JSON.stringify({ aria: 1, ...object })
 
@@ -75,5 +77,19 @@ describe('options carried by a card', () => {
 
   test('a write card keeps its detail too', () => {
     expect(parseCardTitle(JSON.stringify({ aria: 1, kind: 'write', path: '~/a', detail: 'edit ~/a' })).detail).toBe('edit ~/a')
+  })
+
+  test('kind connector routes to the permission card', () => {
+    const options = [{ value: 'Yes, just this once', label: 'Yes, just this once', primary: true }, { value: 'No', label: 'No' }]
+    const raw = { aria: 1, kind: 'connector', summary: 'Notion wants to create pages', detail: 'title: Weekly notes', options }
+    expect(parseCardTitle(JSON.stringify(raw))).toEqual({ kind: 'connector', summary: 'Notion wants to create pages', detail: 'title: Weekly notes', options })
+    expect(parseCardTitle(JSON.stringify({ aria: 1, kind: 'connector' }))).toEqual({ kind: 'connector', summary: '', detail: '', options: [] })
+    expect(INLINE_CARDS).toContain('connector')
+    const state = reduce(createChat(), { type: 'chatDialog', id: 'c1', method: 'select', request: { title: JSON.stringify(raw), options: options.map((o) => o.value) }, hidden: false })
+    const html = renderThread(state, {}, (key) => key)
+    expect(html).toContain('class="p-perm"')
+    expect(html).toContain('Notion wants to create pages')
+    expect(html.match(/data-chat="permission"/g)).toHaveLength(2)
+    expect(html).toContain('data-choice="Yes, just this once"')
   })
 })
