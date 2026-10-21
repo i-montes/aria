@@ -1,6 +1,6 @@
 // Run: bun test ui/chat/parts/subagents.test.js
 import { describe, expect, test } from 'bun:test'
-import { TEXTS, agentsSummary, renderSubagents } from './subagents.js'
+import { TEXTS, agentsSummary, jobAgent, parallelAgents, renderSubagents } from './subagents.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const EVIL = `<script>alert("x")</script> & 'q'`
@@ -68,5 +68,37 @@ describe('the status word from the socket', () => {
   test('is translated in the list', () => {
     const es = (key, vars) => ({ ...TEXTS.en, ...TEXTS.es })[key]?.replace(/\{(\w+)\}/g, (_, n) => vars?.[n] ?? '') ?? key
     expect(renderSubagents({ agents: [{ id: 'a', role: 'backend', task: 'x', status: 'writing', kind: 'active' }] }, {}, es)).toContain('escribiendo')
+  })
+})
+
+describe('with background work', () => {
+  const jobs = [
+    { id: 'j1', session: 's1', kind: 'agent', title: 'tests', task: 'fix the checkout tests', state: 'running' },
+    { id: 'j2', session: 's1', kind: 'process', title: 'bun dev', task: null, state: 'running' },
+  ]
+  const watch = [
+    { id: 'a1', role: 'tests', task: 'fix the checkout tests', status: 'writing', kind: 'active' },
+    { id: 'a2', role: 'frontend', task: 'form', status: 'writing', kind: 'active' },
+    { id: 'a3', role: 'x', task: '', status: 'queued', kind: 'queued' },
+  ]
+  test('the subagents list leaves out the agent a background job runs, and keeps parallel ones', () => {
+    expect(parallelAgents(watch, jobs).map((a) => a.id)).toEqual(['a2', 'a3'])
+    expect(jobAgent(jobs[0], watch)?.id).toBe('a1')
+    expect(jobAgent(jobs[1], watch)).toBeUndefined()
+    const html = renderSubagents({ agents: watch, jobs, background: '<section id="bg"></section>' }, {}, t)
+    expect(html).not.toContain('data-id="a1"')
+    expect(html).toContain('data-id="a2"')
+    expect(html).toContain('data-id="a3"')
+    expect(html).toContain('chat.bg.title')
+    expect(html.indexOf('id="bg"')).toBeLessThan(html.indexOf('data-id="a2"'))
+  })
+  test('with jobs and no subagents the view shows the jobs, not the empty text', () => {
+    const html = renderSubagents({ agents: [watch[0]], jobs, background: '<section id="bg"></section>' }, {}, t)
+    expect(html).toContain('id="bg"')
+    expect(html).not.toContain('chat.agents.empty')
+    expect(html).not.toContain('agent-select')
+    expect(html).not.toContain('chat.agents.summary')
+    expect(html).toContain('chat.bg.title')
+    expect(renderSubagents({ agents: [] }, {}, t)).toContain('chat.agents.title')
   })
 })

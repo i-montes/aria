@@ -74,6 +74,44 @@ const script = `(async () => {
   check('at the bottom, the session follows what the agent writes', pane().scrollHeight - pane().scrollTop - pane().clientHeight < 4, [pane().scrollTop, pane().scrollHeight, pane().clientHeight].join(' '))
   window.aria.chat.toggleAgents(); await wait(40)
 
+  // 8d. the background list (Alt+A): every session's jobs, the output polled while a row is open, a failed pill dismissed
+  {
+    const now = Date.now()
+    const job = (x) => ({ number: 1, session: 's1', kind: 'process', command: null, task: null, folder: '~/p', state: 'running', startedAt: now - 60000, endedAt: null, url: null, exit: null, isolation: null, worktree: null, writes: false, result: null, conflict: false, dismissed: false, ...x })
+    const jobs = [job({ id: 'b1', title: 'bun dev', url: 'http://localhost:3000' }), job({ id: 'b2', kind: 'agent', title: 'tests', task: 'Fix the tests' }), job({ id: 'b3', state: 'failed', endedAt: now - 1000, title: 'broken' }), job({ id: 'b4', kind: 'agent', state: 'done', endedAt: now - 2000, title: 'research', result: 'The answer <b>is</b> 42' })]
+    window.aria.chat.setAgents([{ id: 'w1', role: 'tests', task: 'Fix the tests', status: 'writing', kind: 'active', steps: [{ kind: 'msg', text: 'on it' }] }, { id: 'w2', role: 'reviewer', task: 'Review', status: 'queued', kind: 'queued' }])
+    window.aria.receive({ type: 'jobs', jobs }); await wait(60)
+    check('the hint says alt+a background while a job runs', $('.p-composer-hints')?.textContent.includes('background') || $('.p-composer-hints')?.textContent.includes('segundo plano'))
+    const before = window.__sent.length
+    $('#chat-background [data-chat="bg-open"][data-id="b2"]').click(); await wait(80)
+    const dismissed = window.__sent.slice(before).filter((m) => m.type === 'jobDismiss').map((m) => m.job)
+    check('opening the list dismisses the session’s failed job from the strip', dismissed.join() === 'b3', dismissed.join())
+    const list = $('#view-agents')
+    check('the list shows the jobs and the parallel agents, not the job’s own agent', list.querySelectorAll('[data-job]').length === 4 && !!list.querySelector('[data-chat="agent-select"][data-id="w2"]') && !list.querySelector('[data-chat="agent-select"][data-id="w1"]'), list.querySelectorAll('[data-job]').length)
+    check('opened from a pill, that row is outlined and holds the focus', list.querySelector('[data-job="b2"]')?.classList.contains('is-target') && document.activeElement?.closest('[data-job]')?.dataset.job === 'b2', document.activeElement?.outerHTML?.slice(0, 80))
+    const outputsBefore = window.__sent.filter((m) => m.type === 'jobOutput').length
+    list.querySelector('[data-chat="bg-output"][data-id="b1"]').click(); await wait(80)
+    check('Output shows the last lines', !!list.querySelector('[data-job="b1"] .p-bg-output')?.textContent.includes('ready on'), list.querySelector('[data-job="b1"]')?.textContent.replace(/\\s+/g, ' '))
+    await wait(2100)
+    const polled = window.__sent.filter((m) => m.type === 'jobOutput')
+    check('the output is asked again every second while the row is open, top level, 80 lines', polled.length - outputsBefore >= 3 && polled.every((m) => m.job === 'b1' && m.lines === 80 && typeof m.id === 'number'), polled.length - outputsBefore)
+    list.querySelector('[data-chat="bg-output"][data-id="b1"]').click(); await wait(40)
+    const folded = window.__sent.filter((m) => m.type === 'jobOutput').length
+    await wait(1200)
+    check('folding the row stops the polling', window.__sent.filter((m) => m.type === 'jobOutput').length === folded && !list.querySelector('.p-bg-output'))
+    list.querySelector('[data-chat="bg-url"][data-id="b1"]').click(); await wait(20)
+    check('Open sends the job’s URL to the browser', window.__sent.at(-1)?.type === 'openUrl' && window.__sent.at(-1)?.url === 'http://localhost:3000', JSON.stringify(window.__sent.at(-1)))
+    list.querySelector('[data-chat="bg-session"][data-id="b2"]').click(); await wait(60)
+    check('Session opens the watch agent the job runs', $('#view-session').textContent.includes('on it'), $('#view-session').textContent.slice(0, 80))
+    $('#view-session [data-chat="agent-back"]').click(); await wait(60)
+    $('#view-agents [data-chat="bg-session"][data-id="b4"]').click(); await wait(60)
+    check('Result shows a finished agent’s answer, escaped', $('#view-session').textContent.includes('The answer <b>is</b> 42') && !$('#view-session b'), $('#view-session .p-session-steps')?.innerHTML.slice(0, 120))
+    window.aria.chat.toggleAgents(); await wait(40)
+    window.aria.receive({ type: 'jobs', jobs: [job({ id: 'b5', state: 'exited', exit: 0, endedAt: now })] }); await wait(40)
+    check('a finished job alone does not change the hint', !$('.p-composer-hints')?.textContent.includes('background'), $('.p-composer-hints')?.textContent)
+    window.aria.receive({ type: 'jobs', jobs: [] }); window.aria.chat.setAgents([]); await wait(40)
+  }
+
 
   // 0b. a settings change from outside the page (/effort, /autocompact) makes the page read the settings again
   const loadsBefore = window.__sent.filter((m) => m.type === 'loadSettings').length

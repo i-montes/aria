@@ -13,6 +13,10 @@
 //       kind:   'active' | 'done' | 'queued',// drives the dot and the status colour; anything else is 'queued'
 //     }>,
 //     footnote?: string,                     // default: texts 'chat.agents.footnote'
+//     background?: string,                   // trusted HTML: the background list (background.js renderJobRows),
+//                                            // drawn above the agents; the title becomes 'chat.bg.title'
+//     jobs?: Array<Job>,                     // the session's background jobs: the agent an agent job runs is
+//                                            // left out here (its row is in the background list)
 //   }
 //   ui = {} (nothing; the part is stateless)
 //
@@ -75,6 +79,16 @@ export const statusLabel = (status, t) => {
 export const agentKind = (kind) => (KINDS.includes(kind) ? kind : 'queued')
 const agentsOf = (agents) => (Array.isArray(agents) ? agents.filter((a) => a && typeof a === 'object') : [])
 
+/** The watch agent a background agent job runs: the one the dock named with the job's task (chat.rs before_spawn). */
+export const jobAgent = (job, agents) =>
+  job?.kind === 'agent' && job.task ? agentsOf(agents).find((a) => a.task === job.task) : undefined
+
+/** The agents that are not a background job's: the session's `parallel` subagents. */
+export function parallelAgents(agents, jobs) {
+  const linked = new Set((Array.isArray(jobs) ? jobs : []).map((j) => jobAgent(j, agents)).filter(Boolean))
+  return agentsOf(agents).filter((a) => !linked.has(a))
+}
+
 /** "2 running · 1 done · 1 queued" (the design's header line). */
 export function agentsSummary(agents, t) {
   const kinds = agentsOf(agents).map((a) => agentKind(a.kind))
@@ -94,15 +108,17 @@ function item(a, t) {
 }
 
 export function renderSubagents(props, ui, t) {
-  const agents = agentsOf(props?.agents)
+  const agents = parallelAgents(props?.agents, props?.jobs)
+  const background = props?.background ?? ''
   const footnote = props?.footnote ?? t('chat.agents.footnote')
   const rows = agents.map((a) => item(a, t)).join('')
   const list = agents.length
-    ? `<ul class="p-agents-list" aria-label="${esc(t('chat.agents.aria'))}">${rows}</ul>`
-    : `<p class="p-agents-empty">${esc(t('chat.agents.empty'))}</p>`
+    ? `${background ? `<h3 class="p-agents-section">${esc(t('chat.agents.title'))}</h3>` : ''}<ul class="p-agents-list" aria-label="${esc(t('chat.agents.aria'))}">${rows}</ul>`
+    : background ? '' : `<p class="p-agents-empty">${esc(t('chat.agents.empty'))}</p>`
+  const summary = agents.length || !background ? `<span class="p-agents-summary">${esc(agentsSummary(agents, t))}</span>` : ''
   return `<div class="p-agents">
-  <div class="p-agents-head"><h2 class="p-agents-title">${esc(t('chat.agents.title'))}</h2><span class="p-agents-summary">${esc(agentsSummary(agents, t))}</span></div>
-  ${list}
-  <p class="p-agents-footnote">${esc(footnote)}</p>
+  <div class="p-agents-head"><h2 class="p-agents-title">${esc(t(background ? 'chat.bg.title' : 'chat.agents.title'))}</h2>${summary}</div>
+  ${background}${list}
+  ${agents.length || !background ? `<p class="p-agents-footnote">${esc(footnote)}</p>` : ''}
 </div>`
 }

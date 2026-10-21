@@ -5,7 +5,7 @@
 import { patchHtml, patchItems } from './patch.js'
 import { esc } from '../onboarding/components.js'
 import { renderAgentSession } from './parts/session.js'
-import { renderStrip } from './parts/background.js'
+import { hasLiveWork, renderJobRows, renderStrip, resultAgent } from './parts/background.js'
 import { renderCommandPicker, filterCommands, stepActive, clampActive, toInvocation, withSkillNames } from './parts/commands.js'
 import { renderComposer } from './parts/composer.js'
 import { PROVIDERS, renderConnect } from './parts/connect.js'
@@ -15,7 +15,7 @@ import { renderMemory, initialMemoryUi, reduceMemoryUi } from './parts/memory.js
 import { renderModelPicker, orderedModels, providerLabel, withoutPayPerUse } from './parts/models.js'
 import { questionAnswers, questionInit, questionReduce, normalizeQuestions, renderQuestion } from './parts/question.js'
 import { renderQuotaBars } from './parts/quotabars.js'
-import { renderSubagents } from './parts/subagents.js'
+import { jobAgent, renderSubagents } from './parts/subagents.js'
 import { renderSessionTabs } from './parts/tabs.js'
 import { renderTasks } from './parts/tasks.js'
 import { formatElapsed } from './parts/working.js'
@@ -160,7 +160,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   let dismissed = null // { kind, text }: Esc closed the picker for this text
   let settings = null
   const data = { tasks: null, tasksKind: 'tasks', memory: [], jobs: [] } // jobs: every session's background jobs (the dock's `jobs`)
-  const ui = { connect: null, menuOpen: false, renaming: null, view: 'chat', agent: null, job: null, memory: initialMemoryUi(), tasksOpen: true, index: { expanded: false, my: null, off: 0, height: 360, settled: false } }
+  const ui = { connect: null, menuOpen: false, renaming: null, view: 'chat', agent: null, job: null, sessionJob: null, memory: initialMemoryUi(), tasksOpen: true, index: { expanded: false, my: null, off: 0, height: 360, settled: false } }
   let toast = null
   let connectToken = 0 // a connection in progress that was closed or replaced must not act when its reply arrives
   let undoTimer = null
@@ -171,6 +171,11 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   let fileTimer = null
   let composerKey = ''
   let backgroundKey = ''
+  let agentsKey = ''
+  // The expanded process rows of the background list: job id -> { lines, busy, done }. Polled once a second while the
+  // agents view shows them; one request in flight per job at most.
+  const outputs = new Map()
+  let outputTimer = null
   let headerKey = ''
   let indexKey = ''
   let questionKey = ''
@@ -230,6 +235,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     listTop = 0
     composerKey = ''
     backgroundKey = ''
+    agentsKey = ''
     headerKey = ''
     indexKey = ''
     questionKey = ''
@@ -241,6 +247,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   function tickElapsed() {
     if (!input) return
     drawBackground() // the pills' minutes
+    if (ui.view === 'agents') drawViews() // the list's minutes (drawn only when they changed)
     for (const el of root.querySelectorAll('.p-working-time[data-since]')) {
       el.textContent = formatElapsed(Date.now() - Number(el.dataset.since))
     }
@@ -357,22 +364,20 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     el.querySelector('.p-cmd-row.on, .p-files-row.on, .p-models-row.on')?.scrollIntoView?.({ block: 'nearest' })
   }
 
-  /** The active session's background jobs, as the strip and the hint see them. */
-  const sessionJobs = () => data.jobs.filter((j) => j?.session === tabs.active)
+  /** Every job, a subagent's with what its watch reports it doing ('writing', 'testing'…) when the watch runs it. */
+  const jobsWithStatus = () =>
+    data.jobs.map((j) => {
+      if (j?.kind !== 'agent' || j.status) return j
+      const watched = jobAgent(j, chatOf(j.session).agents)
+      return watched?.kind === 'active' && watched.status ? { ...j, status: watched.status } : j
+    })
 
   /** The strip of background pills above the composer. Only what changed is replaced (a focused stop button stays), and
    * the strip folds in and out (chat.css `.chat-bg`); the composer is never touched. */
   function drawBackground() {
     const wrap = $('chat-background')
     if (!wrap) return
-    // A subagent's pill says what its watch reports it doing ('writing', 'testing'…), when the watch knows it by its title.
-    const agents = current().agents
-    const jobs = data.jobs.map((j) => {
-      if (j?.kind !== 'agent' || j.status || j.session !== tabs.active) return j
-      const watched = agents.find((a) => a.role === j.title && a.kind === 'active')
-      return watched?.status ? { ...j, status: watched.status } : j
-    })
-    const html = renderStrip({ jobs, session: tabs.active, now: Date.now() }, {}, t)
+    const html = renderStrip({ jobs: jobsWithStatus(), session: tabs.active, now: Date.now() }, {}, t)
     if (html === backgroundKey) return
     backgroundKey = html
     const inner = $('chat-background-inner')
@@ -403,7 +408,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       rows: Math.min(6, Math.max(1, value.split('\n').length)),
       showHints: true,
       agents: current().agents.length > 0,
-      background: sessionJobs().length > 0,
+      background: hasLiveWork(data.jobs, tabs.active), // live work only: a finished job alone keeps the old hint
       model: modelLabel(model) || undefined,
       modelTitle: model ?? undefined,
     }
@@ -435,12 +440,17 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     for (const name of ['chat', 'agents', 'session', 'memory']) $(`view-${name}`).hidden = name !== view
     if (view === 'chat') return
     if (view === 'agents') {
-      const list = current().agents.length ? renderSubagents({ agents: current().agents, footnote: t('chat.agents.footnote') }, {}, t) : `<p class="chat-panel-empty">${esc(t('chat.agents.empty'))}</p>`
+      const output = Object.fromEntries([...outputs].map(([id, o]) => [id, o.lines ?? []]))
+      const sessions = tabs.sessions.map((s) => ({ id: s.id, title: s.title || t('chat.untitled') }))
+      const background = renderJobRows({ jobs: jobsWithStatus(), sessions, active: tabs.active, open: ui.job, output, now: Date.now() }, {}, t)
+      const agents = current().agents
+      const jobs = data.jobs.filter((j) => j.session === tabs.active)
+      const list = agents.length || background ? renderSubagents({ agents, jobs, background, footnote: t('chat.agents.footnote') }, {}, t) : `<p class="chat-panel-empty">${esc(t('chat.agents.empty'))}</p>`
+      if (list === agentsKey && $('view-agents').firstChild) return // the tick redraws the minutes; nothing else changed
+      agentsKey = list
       drawPanel($('view-agents'), list, `<button type="button" class="chat-back" data-chat="panel-back"><kbd>Alt</kbd><kbd>A</kbd><span>${esc(t('chat.agents.back'))}</span></button>`)
     } else if (view === 'session') {
-      const agents = current().agents
-      const agent = agents.find((a) => (a.id ?? a.role) === ui.agent) ?? agents[0]
-      drawPanel($('view-session'), agent ? renderAgentSession({ agent }, { now: Date.now() }, t) : '')
+      drawPanel($('view-session'), renderAgentSession({ agent: sessionAgent() }, { now: Date.now() }, t))
     } else if (view === 'memory') {
       keepingFocus($('view-memory'), () => {
         $('view-memory').innerHTML = renderMemory({ memories: data.memory, now: Date.now() }, ui.memory, t)
@@ -504,12 +514,78 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
 
   // ---- views -----------------------------------------------------------------------------------
 
+  /** The agent the session view shows: a background job's (its watch agent, or its answer once it ended), or the
+   * subagent picked in the list. */
+  function sessionAgent() {
+    if (ui.sessionJob) {
+      const job = data.jobs.find((j) => j.id === ui.sessionJob)
+      if (!job) return null
+      return jobAgent(job, chatOf(job.session).agents) ?? resultAgent(job, t)
+    }
+    const agents = current().agents
+    return agents.find((a) => (a.id ?? a.role) === ui.agent) ?? agents[0] ?? null
+  }
+
   function openView(view) {
+    const from = ui.view
     ui.view = view
     if (view === 'memory') ui.memory = initialMemoryUi()
+    if (view !== 'agents') stopOutputs()
+    if (view === 'chat') ui.job = null
+    // Opening the list is where a failed job's pill leaves the strip (it stays under Finished).
+    if (view === 'agents' && from !== 'agents' && from !== 'session') {
+      for (const j of data.jobs) if (j.session === tabs.active && j.state === 'failed' && !j.dismissed) send({ type: 'jobDismiss', job: j.id })
+    }
     render()
-    if (view === 'chat') input?.focus()
-    else $(`view-${view}`).querySelector('button, input')?.focus()
+    if (view === 'chat') return input?.focus()
+    const section = $(`view-${view}`)
+    const target = view === 'agents' && ui.job ? [...section.querySelectorAll('[data-job]')].find((el) => el.dataset.job === ui.job) : null
+    if (target) {
+      target.scrollIntoView?.({ block: 'center' })
+      return target.querySelector('button')?.focus({ preventScroll: true })
+    }
+    section.querySelector('button, input')?.focus()
+  }
+
+  // ---- background output -------------------------------------------------------------------------
+
+  function stopOutputs() {
+    outputs.clear()
+    clearInterval(outputTimer)
+    outputTimer = null
+  }
+
+  /** Asks the dock for the last lines of every expanded row. A job that ended gets one last fetch, then no more. */
+  function pollOutputs() {
+    if (ui.view !== 'agents' || !outputs.size) return stopOutputs()
+    for (const [id, o] of outputs) {
+      if (o.busy || o.done) continue
+      const job = data.jobs.find((j) => j.id === id)
+      const last = !job || (job.state !== 'running' && job.state !== 'queued')
+      o.busy = true
+      request({ type: 'jobOutput', job: id, lines: 80 }).then((reply) => {
+        o.busy = false
+        if (outputs.get(id) !== o) return // folded, or the view closed, while it was asked
+        o.lines = Array.isArray(reply?.lines) ? reply.lines.map(String) : []
+        if (last) o.done = true
+        if (ui.view === 'agents') drawViews()
+      })
+    }
+    if ([...outputs.values()].every((o) => o.done)) {
+      clearInterval(outputTimer) // every expanded row's job has ended and been read one last time
+      outputTimer = null
+    }
+  }
+
+  function toggleOutput(id) {
+    if (outputs.delete(id)) {
+      if (!outputs.size) stopOutputs()
+    } else {
+      outputs.set(id, { lines: null, busy: false, done: false })
+      if (!outputTimer) outputTimer = setInterval(pollOutputs, 1000)
+      pollOutputs()
+    }
+    drawViews()
   }
 
   // ---- tabs ------------------------------------------------------------------------------------
@@ -522,6 +598,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     tabs = selectSession(tabs, next)
     ui.menuOpen = false
     ui.view = 'chat'
+    ui.job = null
+    stopOutputs()
     if (input) input.value = drafts.get(next) ?? ''
     save()
     post({ type: 'chatLoad' })
@@ -1308,13 +1386,24 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       case 'bg-list':
         ui.job = null
         return openView('agents')
+      case 'bg-url': {
+        const url = data.jobs.find((j) => j.id === id)?.url
+        return url ? send({ type: 'openUrl', url }) : undefined
+      }
+      case 'bg-output': return toggleOutput(id)
+      case 'bg-session':
+        ui.sessionJob = id
+        return openView('session')
       case 'tasks-toggle':
         ui.tasksOpen = !ui.tasksOpen
         return drawTasks()
       case 'agent-select':
         ui.agent = id
+        ui.sessionJob = null
         return openView('session')
-      case 'agent-back': return openView('agents')
+      case 'agent-back':
+        ui.sessionJob = null
+        return openView('agents')
       case 'panel-back': return openView('chat')
       case 'memory-back': return openView('chat')
       case 'toast-open':
@@ -1475,6 +1564,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     },
     /** Alt+A: the subagents view and back. */
     toggleAgents() {
+      if (ui.view !== 'agents' && ui.view !== 'session') ui.job = null
       openView(ui.view === 'agents' || ui.view === 'session' ? 'chat' : 'agents')
     },
     render,
