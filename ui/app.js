@@ -66,12 +66,12 @@ const handlers = {
   session: (message) => booted.then(() => chat.receive(message.session, message.message)),
   // Every session's background jobs (top level, like the dock's own messages): the strip and the list.
   jobs: (message) => booted.then(() => chat.setJobs(message.jobs)),
-  // The shortcut in use (`Super + A` on Omarchy, `Option + Space` on macOS, or what the settings chose), sent again
-  // whenever it changes; `taken`, the ones tried before it; `os`, which modifier names the Shortcut row records.
   // Aria's version, sent once when the dock starts; the settings overview shows it.
   version: (message) => {
     if (typeof message.version === 'string') state.version = message.version
   },
+  // The shortcut in use (`Super + A` on Omarchy, `Option + Space` on macOS, or what the settings chose), sent again
+  // whenever it changes; `taken`, the ones tried before it; `os`, which modifier names the Shortcut row records.
   platform: (message) => {
     // An empty hotkey: none could be registered (every candidate is in `taken`).
     if (typeof message.hotkey === 'string') state.hotkey = message.hotkey
