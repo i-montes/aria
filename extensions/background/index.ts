@@ -10,7 +10,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { subagentProblem } from '../sandbox/policy.ts'
 import { DOCK_REFUSAL, jobsClient, refusal, startProcess, textResult, type JobsClient } from './client.ts'
 import { folderOf, isChild, object, prepareRun, RUN_DESCRIPTION, RUN_PROPERTIES, str, SUBAGENT_REFUSAL, WHEN } from './run.ts'
-import { endedMessage, listText, nowLine } from './text.ts'
+import { agentOutputText, endedMessage, listText, nowLine, type Job } from './text.ts'
 
 export { SUBAGENT_REFUSAL }
 const LIST_TIMEOUT_MS = 150
@@ -35,20 +35,21 @@ function clientFor(ctx: any): { client: JobsClient } | { refused: ReturnType<typ
   return client ? { client } : { refused: refusal(DOCK_REFUSAL) }
 }
 
-/** `j3`, `#3` or `3` → the job id. */
-async function jobId(client: JobsClient, ref: unknown): Promise<string> {
+/** `j3`, `#3` or `3` → the job id, and the job when this session's list has it. */
+async function findJob(client: JobsClient, ref: unknown): Promise<{ id: string; job?: Job }> {
   const s = String(ref ?? '').trim()
   const n = s.match(/^#?(\d+)$/)
-  if (!n) return s
   try {
     const list = await client.request('list')
-    const found = (list?.jobs ?? []).find((j: any) => j.number === Number(n[1]))
-    if (found) return found.id
+    const found = (list?.jobs ?? []).find((j: any) => (n ? j.number === Number(n[1]) : j.id === s))
+    if (found) return { id: found.id, job: found }
   } catch {
     // fall back to the usual id form
   }
-  return `j${n[1]}`
+  return { id: n ? `j${n[1]}` : s }
 }
+
+const jobId = async (client: JobsClient, ref: unknown) => (await findJob(client, ref)).id
 
 const failure = (what: string, e: any) => refusal(`${what}: ${e?.message ?? e}`)
 
@@ -202,13 +203,14 @@ export default function background(pi: ExtensionAPI) {
   pi.registerTool({
     name: 'background_output',
     label: 'Background output',
-    description: "The last output lines of a background job (a process's output, or what a subagent did).",
+    description: "The last output lines of a background process. A subagent keeps no output: for one this says its state, and its result once it ended.",
     parameters: object({ job: str('The job: its id (j3) or number (#3).'), lines: { type: 'number', description: 'How many of the last lines: default 60, at most 400.' } }, ['job']),
     async execute(_id: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
       const got = use(ctx)
       if ('refused' in got) return got.refused
       try {
-        const id = await jobId(got.client, params.job)
+        const { id, job } = await findJob(got.client, params.job)
+        if (job?.kind === 'agent') return text(agentOutputText(job), { job: id, lines: 0 })
         const lines = Math.max(1, Math.min(400, Math.floor(Number(params.lines) || 60)))
         const answer = await got.client.request('output', { job: id, lines })
         if (!answer?.ok) return refusal(`Could not read ${params.job}: ${answer?.error ?? 'no answer'}`)

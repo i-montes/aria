@@ -266,20 +266,27 @@ function mountPoints(paths: string[]): string[] {
   return [...new Set(paths.map((p) => (isLink(p) ? realish(p) : p)))]
 }
 
+/** The dock's sockets for this session: the jobs socket starts work outside the box and the watch socket speaks for
+ * subagents, so a boxed command neither knows their paths nor sees their folders (they are in $XDG_RUNTIME_DIR, already
+ * hidden, unless the dock had to put them elsewhere). */
+const DOCK_SOCKETS = ['ARIA_JOBS_SOCK', 'PI_WATCH_SOCK']
+
 export function bwrapArgs(
   cwd: string,
-  opts: { home?: string; runtimeDir?: string; exists?: (p: string) => boolean } = {},
+  opts: { home?: string; runtimeDir?: string; exists?: (p: string) => boolean; env?: Record<string, string | undefined> } = {},
 ): string[] {
   const home = opts.home ?? HOME
   const exists = opts.exists ?? existsSync
+  const env = opts.env ?? process.env
+  const socketDirs = DOCK_SOCKETS.map((name) => env[name]).filter((path): path is string => !!path && path.startsWith('/')).map((path) => dirname(path))
   const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc']
   for (const root of writableRoots(cwd, home, exists)) args.push('--bind', root, root)
   for (const path of protectedPaths(cwd, home).filter(exists)) args.push('--ro-bind', path, path)
   // The masks go last: a later bind of a folder that holds a secret (the project's .pi, when a credential links into
   // the project) would bring it back.
-  for (const dir of mountPoints([...secretDirs(home, opts.runtimeDir ?? RUNTIME), ...HOST_DIRS]).filter(exists)) args.push('--tmpfs', dir)
+  for (const dir of mountPoints([...secretDirs(home, opts.runtimeDir ?? RUNTIME), ...HOST_DIRS, ...socketDirs]).filter(exists)) args.push('--tmpfs', dir)
   for (const file of mountPoints([...secretFiles(home), ...HOST_FILES]).filter(exists)) args.push('--ro-bind', '/dev/null', file)
-  args.push('--unsetenv', 'DISPLAY', '--chdir', resolve(cwd))
+  args.push('--unsetenv', 'DISPLAY', ...DOCK_SOCKETS.flatMap((name) => ['--unsetenv', name]), '--chdir', resolve(cwd))
   return args
 }
 
@@ -288,7 +295,7 @@ export const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
 export function wrapCommand(
   command: string,
   cwd: string,
-  opts: { home?: string; runtimeDir?: string; exists?: (p: string) => boolean } = {},
+  opts: { home?: string; runtimeDir?: string; exists?: (p: string) => boolean; env?: Record<string, string | undefined> } = {},
 ): string {
   return ['exec', 'bwrap', ...bwrapArgs(cwd, opts).map(shellQuote), '--', 'bash', '-c', shellQuote(command)].join(' ')
 }

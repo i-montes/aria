@@ -221,6 +221,22 @@ describe('the background extension', () => {
     expect(await dock!.waitFor((l) => l.op === 'stop')).toMatchObject({ job: 'j3' })
     expect(text(await pi.run('background_output', { job: 'j3', lines: 900 }, rpc))).toContain('lines 400')
   })
+  test('background_output for a subagent says it keeps no output, with its state and, once ended, its result', async () => {
+    let jobs = [job({ kind: 'agent', state: 'running', title: 'Fix tests' })]
+    const pi = await withDock((req) => {
+      if (req.op === 'list') return { ok: true, jobs }
+      if (req.op === 'output') return { ok: true, lines: [] }
+    })
+    const running = text(await pi.run('background_output', { job: '#3' }, rpc))
+    expect(running).toContain('#3 subagent "Fix tests" is running.')
+    expect(running).toContain('A subagent keeps no output: its steps are in its Session view (Alt+A), and you will be told when it ends.')
+    expect(running).not.toContain('no output yet')
+    jobs = [job({ kind: 'agent', state: 'done', title: 'Fix tests', result: 'All green.' })]
+    const done = text(await pi.run('background_output', { job: 'j3' }, rpc))
+    expect(done).toContain('is done.')
+    expect(done).toContain('Its result:\nAll green.')
+    expect(dock!.lines.some((l) => l.op === 'output')).toBe(false)
+  })
   test('background_run refuses a folder outside the projects folder', async () => {
     process.env.PI_SANDBOX = '0'
     const pi = await withDock()

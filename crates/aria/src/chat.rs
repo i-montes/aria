@@ -153,6 +153,9 @@ pub struct ChatCtx {
     pub chat_shown: Arc<AtomicBool>,
     /// Where the sessions' subagent sockets live (`$XDG_RUNTIME_DIR/aria`).
     pub run_dir: PathBuf,
+    /// The folder boxed commands cannot see (`$XDG_RUNTIME_DIR`, which the sandbox hides; `None` when unset). A jobs
+    /// socket is opened only inside it: anywhere else a boxed command could reach it and start work outside the box.
+    pub hidden_dir: Option<PathBuf>,
     /// The `PATH` Pi inherits (the shim directory goes in front of it).
     pub path_var: String,
     /// Reads a provider's quota (a fake in tests).
@@ -376,14 +379,23 @@ impl Chat {
     }
 
     /// The session's jobs socket, opened the first time Pi starts. Without one Pi runs without background work (its
-    /// tools say they need the dock).
+    /// tools say they need the dock): when it cannot be bound, or when the run dir is somewhere a boxed command sees.
     fn jobs_socket(&self) -> Option<PathBuf> {
         if let Some(socket) = self.inner.lock().unwrap().jobs.as_ref() {
             return Some(socket.path().to_path_buf());
         }
+        if !hidden_from_the_box(&self.ctx.run_dir, self.ctx.hidden_dir.as_deref()) {
+            return None;
+        }
         let path = jobs_socket::socket_path(&self.ctx.run_dir, &self.session);
         let launcher = Arc::new(SessionLauncher { chat: self.clone() });
-        let socket = JobsSocket::bind(&path, self.session.clone(), self.ctx.jobs.clone(), launcher).ok()?;
+        let socket = match JobsSocket::bind(&path, self.session.clone(), self.ctx.jobs.clone(), launcher) {
+            Ok(socket) => socket,
+            Err(error) => {
+                eprintln!("aria: no background work for session {}: the jobs socket: {error}", self.session);
+                return None;
+            }
+        };
         let path = socket.path().to_path_buf();
         self.inner.lock().unwrap().jobs = Some(socket);
         Some(path)
@@ -989,6 +1001,11 @@ impl Launcher for SessionLauncher {
     }
 }
 
+/// Whether `run_dir` is inside `hidden`, the folder the sandbox hides from boxed commands.
+fn hidden_from_the_box(run_dir: &Path, hidden: Option<&Path>) -> bool {
+    hidden.is_some_and(|hidden| hidden.is_absolute() && run_dir.starts_with(hidden))
+}
+
 /// Every session's jobs, as the page's background list reads them.
 pub fn jobs_message(jobs: &Jobs) -> DockMessage {
     DockMessage::Jobs { jobs: json!(jobs.list(None)) }
@@ -1355,6 +1372,7 @@ mod tests {
             dock_visible: visible.clone(),
             chat_shown: chat_shown.clone(),
             run_dir: run_dir.clone(),
+            hidden_dir: Some(dir.path().to_path_buf()),
             path_var: "/usr/bin:/bin".into(),
             quota_fetcher,
             jobs: Jobs::new(dir.path().join("jobs.json"), Arc::new(|| {})),
@@ -1674,6 +1692,7 @@ mod tests {
             dock_visible: h.visible.clone(),
             chat_shown: Arc::new(AtomicBool::new(true)),
             run_dir: h.run_dir.clone(),
+            hidden_dir: Some(h._dir.path().to_path_buf()),
             path_var: "/nonexistent".into(),
             quota_fetcher: Arc::new(|_| None),
             jobs: h.chat.ctx.jobs.clone(),
@@ -1894,6 +1913,7 @@ mod tests {
             dock_visible: h.visible.clone(),
             chat_shown: Arc::new(AtomicBool::new(true)),
             run_dir: h.run_dir.clone(),
+            hidden_dir: Some(h._dir.path().to_path_buf()),
             path_var: "/usr/bin:/bin".into(),
             quota_fetcher: Arc::new(|_| None),
             jobs: h.chat.ctx.jobs.clone(),
@@ -2580,6 +2600,49 @@ mod tests {
         };
         assert!(path.ends_with("jobs-s1.sock"), "{path}");
         assert!(std::path::Path::new(&path).exists(), "the socket is listening");
+    }
+
+    #[test]
+    fn no_jobs_socket_where_a_boxed_command_could_reach_it() {
+        let h = harness();
+        // A run dir outside the hidden folder (`$XDG_RUNTIME_DIR` unset: the run dir falls back to /tmp).
+        let ctx = ChatCtx {
+            paths: h.paths.clone(),
+            notifier: h.notifier.clone(),
+            dock_visible: h.visible.clone(),
+            chat_shown: Arc::new(AtomicBool::new(true)),
+            run_dir: h.run_dir.clone(),
+            hidden_dir: None,
+            path_var: "/usr/bin:/bin".into(),
+            quota_fetcher: Arc::new(|_| None),
+            jobs: h.chat.ctx.jobs.clone(),
+        };
+        let (sender, messages) = mpsc::channel();
+        let sender = Mutex::new(sender);
+        let chat = Chat::new(
+            Arc::new(ctx),
+            Arc::new(move |m| {
+                let _ = sender.lock().unwrap().send(m);
+            }),
+            "s2".into(),
+        );
+        chat.handle(PageMessage::ChatSend { text: "hi".into(), behavior: None });
+        chat.test_send_raw("env_jobs");
+        let path = loop {
+            match messages.recv_timeout(Duration::from_secs(5)).expect("the env") {
+                DockMessage::ChatEvent { event } if event["type"] == "env" && event.get("jobs").is_some() => {
+                    break event["jobs"].as_str().unwrap().to_string()
+                }
+                _ => continue,
+            }
+        };
+        assert_eq!(path, "", "Pi gets no ARIA_JOBS_SOCK, so its tools say they need the dock");
+        assert!(!h.run_dir.join("jobs-s2.sock").exists());
+
+        assert!(hidden_from_the_box(Path::new("/run/user/1000/aria"), Some(Path::new("/run/user/1000"))));
+        assert!(!hidden_from_the_box(Path::new("/tmp/aria"), Some(Path::new("/run/user/1000"))));
+        assert!(!hidden_from_the_box(Path::new("/tmp/aria"), None));
+        assert!(!hidden_from_the_box(Path::new("aria"), Some(Path::new(""))), "a relative folder hides nothing");
     }
 
     #[test]

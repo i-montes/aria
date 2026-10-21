@@ -23,7 +23,7 @@ use aria_hyprland::Registration;
 use chat::{ChatCtx, PlatformNotifier, Sessions};
 use dock::{Dock, HOTKEY_LABEL};
 use jobs::{Jobs, UPDATE_NOTICE_AFTER};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 use visibility::Event;
@@ -96,6 +96,14 @@ fn run_dock() {
     // overtaken by the abort that follows it.
     let dock_visible = Arc::new(AtomicBool::new(false));
     let visible_now = dock_visible.clone();
+    let run_dir =
+        control::control_socket_path().parent().map(std::path::Path::to_path_buf).unwrap_or_else(std::env::temp_dir);
+    // The sandbox hides `$XDG_RUNTIME_DIR` from boxed commands; without it (a run dir under /tmp) the sessions get no
+    // jobs socket. macOS has no box (every command asks first), so its run dir is as hidden as it needs to be.
+    #[cfg(target_os = "linux")]
+    let hidden_dir = std::env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty()).map(std::path::PathBuf::from);
+    #[cfg(target_os = "macos")]
+    let hidden_dir = Some(run_dir.clone());
     let chat = {
         let sender = reply_sender.clone();
         Sessions::new(
@@ -104,10 +112,8 @@ fn run_dock() {
                 notifier: Arc::new(PlatformNotifier),
                 dock_visible: dock_visible.clone(),
                 chat_shown: Arc::new(AtomicBool::new(true)),
-                run_dir: control::control_socket_path()
-                    .parent()
-                    .map(std::path::Path::to_path_buf)
-                    .unwrap_or_else(std::env::temp_dir),
+                run_dir,
+                hidden_dir,
                 path_var: std::env::var("PATH").unwrap_or_default(),
                 quota_fetcher: Arc::new(aria_core::quota::real_fetcher),
                 jobs: jobs.clone(),
@@ -199,11 +205,20 @@ fn run_dock() {
         }
     }
 
+    // Stopping the dock (systemd, launchd, a terminal's Ctrl+C) ends its background work and Pis, never leaves them.
+    install_quit_handlers();
     let mut was_visible = false;
     let mut update_ready = false;
     let mut jobs_wait = JobsWait::default();
     let mut ticks: u32 = 0;
     ui::every(16, move || {
+        if quit_requested(&QUIT, || {
+            eprintln!("aria: stopping");
+            jobs.stop_all();
+            chat_for_visibility.stop_for_update();
+        }) {
+            std::process::exit(0);
+        }
         // About once a second: a settings change (the settings screen, `/effort`, `/autocompact`, an editor) reaches
         // every session's Pi when its run settles, and the page reads the settings again.
         ticks = ticks.wrapping_add(1);
@@ -214,7 +229,7 @@ fn run_dock() {
             dock.send(&DockMessage::SettingsChanged);
         }
         // A dock that just hid with a question still open needs its notification.
-        let visible = visible_now.load(std::sync::atomic::Ordering::SeqCst);
+        let visible = visible_now.load(Ordering::SeqCst);
         if was_visible && !visible {
             chat_for_visibility.dock_visibility_changed();
         }
@@ -282,6 +297,39 @@ pub(crate) fn note(message: &str) {
     eprintln!("[{h:02}:{m:02}:{s:02} UTC] aria: {message}");
 }
 
+/// Set by SIGTERM, SIGINT or SIGHUP; the UI thread's tick sees it. A handler can do little more than this safely.
+static QUIT: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn on_quit_signal(_: libc::c_int) {
+    QUIT.store(true, Ordering::SeqCst);
+}
+
+/// The quit signals set [`QUIT`] instead of ending the dock at once, so its tick can stop what it started first.
+fn install_quit_handlers() {
+    for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+        // SAFETY: a zeroed `sigaction` is a valid empty one; the handler only stores to an atomic.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = on_quit_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+            action.sa_flags = libc::SA_RESTART;
+            libc::sigemptyset(&mut action.sa_mask);
+            if libc::sigaction(signal, &action, std::ptr::null_mut()) != 0 {
+                eprintln!("aria: could not handle signal {signal}: {}", std::io::Error::last_os_error());
+            }
+        }
+    }
+}
+
+/// Whether the dock should exit now: when a quit was asked for, after `shutdown` (which stops the background work and
+/// the sessions' Pis) ran.
+fn quit_requested(flag: &AtomicBool, shutdown: impl FnOnce()) -> bool {
+    if !flag.load(Ordering::SeqCst) {
+        return false;
+    }
+    shutdown();
+    true
+}
+
 /// How long an update has waited for background work alone, so the sessions with that work are told once per wait.
 #[derive(Default)]
 struct JobsWait {
@@ -320,6 +368,17 @@ pub(crate) static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_quit_stops_the_work_before_the_dock_exits() {
+        let flag = AtomicBool::new(false);
+        let mut stopped = 0;
+        assert!(!quit_requested(&flag, || stopped += 1), "no quit asked for: the dock goes on");
+        assert_eq!(stopped, 0);
+        flag.store(true, Ordering::SeqCst);
+        assert!(quit_requested(&flag, || stopped += 1));
+        assert_eq!(stopped, 1, "stopped before the exit");
+    }
 
     #[test]
     fn an_update_waiting_for_jobs_alone_is_told_once_per_wait() {

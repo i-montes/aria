@@ -64,6 +64,27 @@ describe('bwrapArgs', () => {
     expect(args).not.toContain('--die-with-parent')
   })
   test('missing secrets are skipped', () => expect(bwrapArgs('/srv/app', { home, runtimeDir: '/run/user/1000', exists: none }).join(' ')).not.toContain('.ssh'))
+  test("the dock's sockets are neither named nor seen", () => {
+    const env = { ARIA_JOBS_SOCK: '/tmp/aria/jobs-s1.sock', PI_WATCH_SOCK: '/tmp/aria-watch/watch-s1.sock' }
+    const boxed = bwrapArgs('/srv/app', { home, runtimeDir: '/run/user/1000', exists: all, env })
+    const tmpfs = boxed.flatMap((a, i) => (a === '--tmpfs' ? [boxed[i + 1]] : []))
+    expect(tmpfs).toEqual(expect.arrayContaining(['/tmp/aria', '/tmp/aria-watch']))
+    expect(boxed.lastIndexOf('/tmp/aria')).toBeGreaterThan(boxed.indexOf('/tmp'))
+    const unset = boxed.flatMap((a, i) => (a === '--unsetenv' ? [boxed[i + 1]] : []))
+    expect(unset).toEqual(expect.arrayContaining(['ARIA_JOBS_SOCK', 'PI_WATCH_SOCK']))
+  })
+  test('a socket folder that is not there is not masked', () => {
+    const env = { ARIA_JOBS_SOCK: '/tmp/aria/jobs-s1.sock' }
+    const boxed = bwrapArgs('/srv/app', { home, runtimeDir: '/run/user/1000', exists: (p) => p !== '/tmp/aria', env })
+    expect(boxed).not.toContain('/tmp/aria')
+    expect(boxed.join(' ')).toContain('--unsetenv ARIA_JOBS_SOCK')
+  })
+  test('no sockets set, nothing extra masked', () => {
+    const count = (env: Record<string, string>) =>
+      bwrapArgs('/srv/app', { home, runtimeDir: '/run/user/1000', exists: all, env }).filter((a) => a === '--tmpfs').length
+    expect(count({}) + 1).toBe(count({ ARIA_JOBS_SOCK: '/tmp/aria/jobs-s1.sock' }))
+    expect(bwrapArgs('/srv/app', { home, exists: all, env: {} }).join(' ')).toContain('--unsetenv ARIA_JOBS_SOCK --unsetenv PI_WATCH_SOCK')
+  })
 })
 
 describe('wrapCommand', () => {

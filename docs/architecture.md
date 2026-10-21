@@ -90,7 +90,7 @@ Lifetimes:
 - Hiding the dock stops nothing, and neither does a Pi restart: the extension connects again and gets the events it missed.
 - Closing a tab stops that tab's jobs and drops its queued subagents.
 - An update waits while any job runs or is queued. After 30 minutes of waiting for background work alone, the sessions with that work get one notice saying how to update now; the update never cuts the work by itself. Right before the dock execs the new version it stops every job anyway.
-- The dock quitting stops every job. `~/.aria/jobs.json` records the jobs' state (never their output) on every change; at the next start the ones still running or queued become `cut`, and their sessions are told.
+- Stopping the dock (`systemctl --user stop`, `launchctl`, Ctrl+C in a terminal: SIGTERM, SIGINT or SIGHUP) stops every job, running or queued, and every session's Pi, then the dock exits 0. The signal only sets a flag; the UI thread's tick does the stopping. A crash or SIGKILL stops nothing by itself: on Linux the children get SIGTERM from `PR_SET_PDEATHSIG`. `~/.aria/jobs.json` records, on every change, each job's state, a subagent's result (up to 8000 characters) and, until its session is told, an end note's last 20 lines of output; at the next start the ones still running or queued become `cut`, and their sessions are told.
 
 The page gets every session's jobs as one `jobs` message, at most every 250 ms, and when a session loads. It shows the active session's as pills above the composer and all of them in the background list (Alt+A), with a job's output, its URL and a way to stop it.
 

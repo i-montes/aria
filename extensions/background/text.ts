@@ -131,3 +131,11 @@ export function endedMessage(e: any): { text: string; triggerTurn: boolean } {
   const result = j.result ? `\nIts report:\n${j.result}` : ''
   return { text: `Background ${label} is done.${where}${result}\nTell the person what it did, and save its Learnings to memory.`, triggerTurn: true }
 }
+
+/** `background_output` for a subagent, which keeps no output: its state, and its result once it ended. */
+export function agentOutputText(j: Job): string {
+  const head = `${name(j)} is ${j.state}.`
+  if (active(j)) return `${head} A subagent keeps no output: its steps are in its Session view (Alt+A), and you will be told when it ends.`
+  const result = j.result ? `\nIts result:\n${j.result}` : ''
+  return `${head} A subagent keeps no output: its steps are in its Session view (Alt+A).${result}`
+}
