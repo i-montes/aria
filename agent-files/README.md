@@ -13,5 +13,7 @@ directory (`~/.aria/agent/`) every time a session starts, filled in from Aria's 
 
 - `skills/install-from-link/SKILL.md` — Aria's own skill: how to read a link the user pastes and install what it
   points to (a skill, an MCP server or a Pi package) with the `install` extension's tool.
+- `skills/verify-in-browser/SKILL.md` — Aria's own skill: check a page in a headless browser (`agent-browser`) before
+  saying it works; one `bash` call per check, because the sandbox does not keep the browser between calls.
 
 A file the owner edited in `~/.aria/agent/` is kept (Aria records the hash of what it wrote in `.aria-files`).
