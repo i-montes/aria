@@ -49,6 +49,8 @@ const handlers = {
   close: () => document.body.classList.remove('open'),
   // The chat's messages need the catalogs too (and the chat view), so they wait for the boot.
   session: (message) => booted.then(() => chat.receive(message.session, message.message)),
+  // Every session's background jobs (top level, like the dock's own messages): the strip and the list.
+  jobs: (message) => booted.then(() => chat.setJobs(message.jobs)),
   // The host's shortcut: `Super + A` on Omarchy, `Option + Space` on macOS.
   platform: (message) => {
     if (message.hotkey) state.hotkey = message.hotkey

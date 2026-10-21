@@ -74,6 +74,13 @@ describe('the thread', () => {
     expect(html).toContain('Scope')
   })
 
+  test('a background note fills its text with the job: "background · bun dev ended (exit 1)"', () => {
+    const state = { ...createChat(), messages: [{ kind: 'note', label: 'background', key: 'chat.bg.note.exited', vars: { title: 'bun <dev>', exit: 1 } }] }
+    const html = renderThread(state, {}, t)
+    expect(html).toContain('<span class="p-note-label">background</span>')
+    expect(html).toContain('bun &lt;dev&gt; ended (exit 1)')
+  })
+
   test('a sandbox card waits in the thread with its three choices; a quota card with its two', () => {
     let state = run(createChat(), dialog('u1', { kind: 'sandbox', summary: 'rm -rf <build>', detail: 'rm -rf build' }), dialog('u2', { kind: 'quota', percent: 98, freeModel: 'opencode-go/cat-jam-free', countdown: 300 }))
     const html = renderThread(state, {}, t)

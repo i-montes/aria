@@ -5,6 +5,7 @@
 import { patchHtml, patchItems } from './patch.js'
 import { esc } from '../onboarding/components.js'
 import { renderAgentSession } from './parts/session.js'
+import { renderStrip } from './parts/background.js'
 import { renderCommandPicker, filterCommands, stepActive, clampActive, toInvocation, withSkillNames } from './parts/commands.js'
 import { renderComposer } from './parts/composer.js'
 import { PROVIDERS, renderConnect } from './parts/connect.js'
@@ -158,8 +159,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   let picker = null // { kind, items, query, active, start }
   let dismissed = null // { kind, text }: Esc closed the picker for this text
   let settings = null
-  const data = { tasks: null, tasksKind: 'tasks', memory: [] }
-  const ui = { connect: null, menuOpen: false, renaming: null, view: 'chat', agent: null, memory: initialMemoryUi(), tasksOpen: true, index: { expanded: false, my: null, off: 0, height: 360, settled: false } }
+  const data = { tasks: null, tasksKind: 'tasks', memory: [], jobs: [] } // jobs: every session's background jobs (the dock's `jobs`)
+  const ui = { connect: null, menuOpen: false, renaming: null, view: 'chat', agent: null, job: null, memory: initialMemoryUi(), tasksOpen: true, index: { expanded: false, my: null, off: 0, height: 360, settled: false } }
   let toast = null
   let connectToken = 0 // a connection in progress that was closed or replaced must not act when its reply arrives
   let undoTimer = null
@@ -169,6 +170,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   let fileToken = 0
   let fileTimer = null
   let composerKey = ''
+  let backgroundKey = ''
   let headerKey = ''
   let indexKey = ''
   let questionKey = ''
@@ -209,6 +211,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
           <div class="chat-list" id="chat-list"></div>
           <div class="chat-index" id="chat-index"></div>
         </div>
+        <div class="chat-bg" id="chat-background"><div class="chat-bg-clip"><div class="chat-bg-inner" id="chat-background-inner"></div></div></div>
         <div id="chat-tasks"></div>
         <div id="chat-dialogs"></div>
         <div class="chat-overlay" id="chat-overlay"></div>
@@ -226,6 +229,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     following = true
     listTop = 0
     composerKey = ''
+    backgroundKey = ''
     headerKey = ''
     indexKey = ''
     questionKey = ''
@@ -236,6 +240,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
 
   function tickElapsed() {
     if (!input) return
+    drawBackground() // the pills' minutes
     for (const el of root.querySelectorAll('.p-working-time[data-since]')) {
       el.textContent = formatElapsed(Date.now() - Number(el.dataset.since))
     }
@@ -352,6 +357,35 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     el.querySelector('.p-cmd-row.on, .p-files-row.on, .p-models-row.on')?.scrollIntoView?.({ block: 'nearest' })
   }
 
+  /** The active session's background jobs, as the strip and the hint see them. */
+  const sessionJobs = () => data.jobs.filter((j) => j?.session === tabs.active)
+
+  /** The strip of background pills above the composer. Only what changed is replaced (a focused stop button stays), and
+   * the strip folds in and out (chat.css `.chat-bg`); the composer is never touched. */
+  function drawBackground() {
+    const wrap = $('chat-background')
+    if (!wrap) return
+    // A subagent's pill says what its watch reports it doing ('writing', 'testing'…), when the watch knows it by its title.
+    const agents = current().agents
+    const jobs = data.jobs.map((j) => {
+      if (j?.kind !== 'agent' || j.status || j.session !== tabs.active) return j
+      const watched = agents.find((a) => a.role === j.title && a.kind === 'active')
+      return watched?.status ? { ...j, status: watched.status } : j
+    })
+    const html = renderStrip({ jobs, session: tabs.active, now: Date.now() }, {}, t)
+    if (html === backgroundKey) return
+    backgroundKey = html
+    const inner = $('chat-background-inner')
+    const strip = inner.querySelector(':scope > .p-bg-strip')
+    if (html && strip) {
+      const fresh = document.createElement('template')
+      fresh.innerHTML = html
+      patchHtml(strip, fresh.content.firstElementChild.innerHTML)
+    } else if (html) inner.innerHTML = html
+    // Folding away, the last pills stay inside (hidden once folded) so they do not vanish before the strip has closed.
+    wrap.classList.toggle('is-on', !!html)
+  }
+
   function drawTasks() {
     const el = $('chat-tasks')
     el.innerHTML = data.tasks?.length ? renderTasks({ tasks: data.tasks, kind: data.tasksKind, show: true }, { open: ui.tasksOpen }, t) : ''
@@ -369,6 +403,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       rows: Math.min(6, Math.max(1, value.split('\n').length)),
       showHints: true,
       agents: current().agents.length > 0,
+      background: sessionJobs().length > 0,
       model: modelLabel(model) || undefined,
       modelTitle: model ?? undefined,
     }
@@ -459,6 +494,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     drawQuestion()
     drawDialogs()
     drawOverlay()
+    drawBackground()
     drawTasks()
     drawComposer()
     drawViews()
@@ -1263,6 +1299,15 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       case 'quota': return answer(id, { value: choice }, el.dataset.role || choice)
       case 'question': return onQuestion(el)
       case 'connect': return connectOp(el)
+      // Background jobs: stop and dismiss go to the dock itself (top level, not to a session's Pi).
+      case 'bg-stop': return send({ type: 'jobStop', job: id })
+      case 'bg-dismiss': return send({ type: 'jobDismiss', job: id })
+      case 'bg-open':
+        ui.job = id
+        return openView('agents')
+      case 'bg-list':
+        ui.job = null
+        return openView('agents')
       case 'tasks-toggle':
         ui.tasksOpen = !ui.tasksOpen
         return drawTasks()
@@ -1337,6 +1382,14 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     setAgents(list) {
       chats.set(tabs.active, reduce(current(), { type: 'chatAgents', agents: list ?? [] }))
       render()
+    },
+    /** Every session's background jobs (the dock's top-level `jobs` message): the strip shows the active session's. */
+    setJobs(jobs) {
+      data.jobs = Array.isArray(jobs) ? jobs.filter((j) => j && typeof j === 'object') : []
+      if (!$('chat-body')) return
+      drawBackground()
+      drawComposer()
+      if (ui.view !== 'chat') drawViews()
     },
     setTasks(tasks, kind = 'tasks') {
       data.tasks = tasks

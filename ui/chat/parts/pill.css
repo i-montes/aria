@@ -1,0 +1,14 @@
+/* Pill (shared): the memory panel's type filters and the background strip. The look of the former .p-memory-chip.
+   Owner's rule: the fill is SOLID and never changes on hover, focus or "pressed"; only the border takes the accent. */
+.p-pill { display: inline-flex; align-items: center; gap: 6px; min-width: 0; min-height: 30px; box-sizing: border-box; padding: 0 10px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 999px;
+  background: var(--surface, #16161a); color: #B4B4BC; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12px; font-weight: 500; cursor: pointer; }
+.p-pill:hover, .p-pill:focus-visible, .p-pill[aria-pressed='true'], .p-pill.has-extra:focus-within { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); }
+.p-pill[aria-pressed='true'] { color: #F4F4F5; }
+.p-pill:focus-visible, .p-pill-main:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 2px; }
+.p-pill-dot { flex: none; width: 6px; height: 6px; box-sizing: border-box; border-radius: 50%; background: #B4B4BC; }
+.p-pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-pill-meta { flex: none; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.75; }
+/* With controls of its own the pill is a group: the main button carries the pill's text, solid like the pill. */
+.p-pill.has-extra { padding: 0 4px 0 0; cursor: default; }
+.p-pill-main { display: inline-flex; align-items: center; gap: 6px; min-width: 0; min-height: 28px; padding: 0 4px 0 10px; border: 0; border-radius: 999px; background: var(--surface, #16161a);
+  color: inherit; font: inherit; cursor: pointer; }

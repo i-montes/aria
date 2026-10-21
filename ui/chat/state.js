@@ -8,7 +8,7 @@ import { parseCardTitle } from './parts/cards.js'
 //   { kind: 'assistant', text, thinking, done, texts, thoughts }   (texts/thoughts: streamed blocks by index)
 //   { kind: 'tools', calls: [{ id, name, args, status: 'running'|'done'|'error', summary, result }] }
 //   { kind: 'notice', tone: 'info'|'warn'|'error', key?, vars?, text? }
-//   { kind: 'note', label, text?, key? }          a one-line fact (model changed, stopped, sandbox answer…)
+//   { kind: 'note', label, text?, key?, vars? }   a one-line fact (model changed, stopped, sandbox answer, a background job ended…)
 //   { kind: 'divider', key, vars? }                 a separator (the context was compacted)
 //   { kind: 'jev', mode, action }                   the router's route line before an answer
 //   { kind: 'answers', answers: [{ header, selected, talk }] }   what you answered to a question card
@@ -164,6 +164,32 @@ function finishTool(state, event) {
   return withMessages(state, messages)
 }
 
+// ---- background work: the background extension's `aria-background` custom message, a note in the thread ---------
+
+/** How a job ended, from the message's `details` ({ job, jobs, by, event }, extensions/background/index.ts). */
+function backgroundOutcome(details) {
+  if (details?.event === 'cut') return 'cut'
+  if (details?.by === 'stop') return 'stopped'
+  const job = details?.job ?? {}
+  if (job.state === 'done') return job.conflict ? 'conflict' : 'done'
+  if (job.state === 'exited') return 'exited'
+  if (job.state === 'stopped' || job.state === 'cut') return job.state
+  return 'failed'
+}
+
+/** The note for a shown `aria-background` custom message, or null for any other message (or a hidden one). */
+function backgroundNote(message) {
+  if (message?.role !== 'custom' || message.customType !== 'aria-background' || !message.display) return null
+  const details = message.details ?? {}
+  const outcome = backgroundOutcome(details)
+  const title =
+    outcome === 'cut' && Array.isArray(details.jobs) && details.jobs.length
+      ? details.jobs.map((j) => j?.title ?? '').filter(Boolean).join(', ')
+      : String(details.job?.title ?? '')
+  const vars = outcome === 'exited' ? { title, exit: details.job?.exit ?? '?' } : { title }
+  return { kind: 'note', label: 'background', key: `chat.bg.note.${outcome}`, vars }
+}
+
 const TONES = { warning: 'warn', error: 'error' }
 
 function fromHistory(messages) {
@@ -189,6 +215,9 @@ function fromHistory(messages) {
         entries = addSteps(entries, thinkSteps(thinking))
         if (text) entries.push({ kind: 'assistant', text, thinking: '', done: true, texts: { 0: text }, thoughts: {} })
       }
+    } else if (message.role === 'custom') {
+      const note = backgroundNote(message)
+      if (note) entries.push(note)
     } else if (message.role === 'toolResult') {
       const call = calls.get(message.toolCallId)
       if (call) {
@@ -222,6 +251,10 @@ function reduceEvent(state, event) {
         const left = state.delivered.indexOf(text)
         if (left >= 0) return push({ ...state, delivered: state.delivered.filter((_, i) => i !== left) }, { kind: 'user', text })
         return state // the echo of a message the page already showed
+      }
+      if (event.message?.role === 'custom') {
+        const note = backgroundNote(event.message)
+        return note ? push(state, note) : state
       }
       return state
     case 'queue_update': {

@@ -15,12 +15,8 @@
 .p-memory-badge { flex: 0 0 auto; padding: 1px 8px; border-radius: 999px; background: #232328; color: #B4B4BC; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px; }
 
 .p-memory-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.p-memory-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; box-sizing: border-box; padding: 0 10px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 999px;
-  background: var(--surface, #16161a); color: #B4B4BC; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 12px; font-weight: 500; cursor: pointer; }
-.p-memory-chip:hover, .p-memory-chip:focus-visible, .p-memory-chip[aria-pressed='true'] { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); }
-.p-memory-chip[aria-pressed='true'] { color: #F4F4F5; }
-.p-memory-chip:focus-visible, .p-memory-toggle:focus-visible, .p-memory-sort:focus-visible, .p-memory-btn:focus-visible, .p-memory-undo-btn:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 2px; }
-.p-memory-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: #B4B4BC; }
+.p-memory-toggle:focus-visible, .p-memory-sort:focus-visible, .p-memory-btn:focus-visible, .p-memory-undo-btn:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 2px; }
+/* the type chips are pills (pill.css); memory.css keeps only their type colour, below */
 .p-memory-n { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.75; }
 
 .p-memory-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -55,13 +51,13 @@
 .p-memory-personal { padding: 0 7px; border-radius: 6px; background: #2c2029; color: #F0A8D8; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; line-height: 18px; }
 .p-memory-when { display: flex; align-items: center; gap: 6px; padding-top: 2px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; color: #8A8A94; white-space: nowrap; }
 /* the type colour: dot and type label */
-.p-memory-row.type-finding .p-memory-dot, .p-memory-chip.type-finding .p-memory-chip-dot { background: #7DD3FC; }
-.p-memory-row.type-decision .p-memory-dot, .p-memory-chip.type-decision .p-memory-chip-dot { background: #B9A8FF; }
-.p-memory-row.type-pattern .p-memory-dot, .p-memory-chip.type-pattern .p-memory-chip-dot { background: #9BE7C4; }
-.p-memory-row.type-session_summary .p-memory-dot, .p-memory-chip.type-session_summary .p-memory-chip-dot { background: #F0B44C; }
-.p-memory-row.type-manual .p-memory-dot, .p-memory-chip.type-manual .p-memory-chip-dot { background: #FF9A8B; }
-.p-memory-row.type-learning .p-memory-dot, .p-memory-chip.type-learning .p-memory-chip-dot { background: #F0A8D8; }
-.p-memory-row.type-identity .p-memory-dot, .p-memory-chip.type-identity .p-memory-chip-dot { background: #F4F4F5; }
+.p-memory-row.type-finding .p-memory-dot, .p-memory-chips .p-pill.tone-finding .p-pill-dot { background: #7DD3FC; }
+.p-memory-row.type-decision .p-memory-dot, .p-memory-chips .p-pill.tone-decision .p-pill-dot { background: #B9A8FF; }
+.p-memory-row.type-pattern .p-memory-dot, .p-memory-chips .p-pill.tone-pattern .p-pill-dot { background: #9BE7C4; }
+.p-memory-row.type-session_summary .p-memory-dot, .p-memory-chips .p-pill.tone-session_summary .p-pill-dot { background: #F0B44C; }
+.p-memory-row.type-manual .p-memory-dot, .p-memory-chips .p-pill.tone-manual .p-pill-dot { background: #FF9A8B; }
+.p-memory-row.type-learning .p-memory-dot, .p-memory-chips .p-pill.tone-learning .p-pill-dot { background: #F0A8D8; }
+.p-memory-row.type-identity .p-memory-dot, .p-memory-chips .p-pill.tone-identity .p-pill-dot { background: #F4F4F5; }
 .p-memory-row.type-finding .p-memory-type { color: #7DD3FC; }
 .p-memory-row.type-decision .p-memory-type { color: #B9A8FF; }
 .p-memory-row.type-pattern .p-memory-type { color: #9BE7C4; }

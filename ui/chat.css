@@ -66,6 +66,15 @@ body.open.mode-chat .chat { animation: enter 300ms var(--content) both; }
 }
 .chat-overlay { flex: none; position: relative; height: 0; }
 .chat-overlay > * { position: absolute; left: 0; right: 0; bottom: 6px; z-index: 5; }
+/* The background strip (parts/background.js) sits right above the tasks and the composer. It folds in and out like the
+   question card's swap (short, no bounce); folded, it gives back the view's 10px gap. The clip's 3px pad keeps the
+   pills' focus ring visible. */
+.chat-bg { flex: none; display: grid; grid-template-rows: 0fr; margin: -10px -3px 0; transition: grid-template-rows 260ms var(--content), margin 260ms var(--content); }
+.chat-bg.is-on { grid-template-rows: 1fr; margin: -3px -3px; }
+.chat-bg-clip { min-height: 0; overflow: hidden; }
+.chat-bg-inner { padding: 3px; opacity: 0; transform: translateY(6px); visibility: hidden; transition: opacity 200ms ease, transform 260ms var(--content), visibility 0s linear 260ms; }
+.chat-bg.is-on .chat-bg-inner { opacity: 1; transform: none; visibility: visible; transition: opacity 220ms ease, transform 260ms var(--content), visibility 0s linear 0ms; }
+@media (prefers-reduced-motion: reduce) { .chat-bg, .chat-bg-inner { transition: none !important; } }
 #chat-tasks:empty, #chat-undo:empty, #chat-dialogs:empty, #chat-toast:empty { display: none; }
 
 .chat-panel-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #34343B transparent; }

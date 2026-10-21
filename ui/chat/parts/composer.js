@@ -1,11 +1,13 @@
 // The composer (design/components/composer): the message field, the stop / queue / send buttons and
 // the hints line under it.
 //
-// Props: { busy, hasText, rows, showHints, placeholder }
+// Props: { busy, hasText, rows, showHints, agents, background, placeholder, model, modelTitle }
 //   busy         a run is going: the stop button shows, send is replaced by queue once there is text
 //   hasText      the field holds text (trimmed, not empty): the stop button turns outlined and queue shows
 //   rows         visible rows of the textarea, clamped to 1..6 (the design grows it with its content)
 //   showHints    false hides the hints line (default true)
+//   agents       the session has `parallel` subagents: the idle hints say "alt+a subagents"
+//   background   the session has background jobs: the idle hints say "alt+a background" instead (wins over agents)
 //   placeholder  idle placeholder (default `chat.composer.placeholder`); busy always says "A message for the next step…"
 // ui: unused. t: translate(key, vars).
 // The controller owns the text: the textarea is `#chat-input` and carries no value here.
@@ -27,6 +29,7 @@ export const TEXTS = {
     'chat.composer.queueTitle': 'Aria reads it once the step going on ends (Alt+Enter keeps it for when Aria finishes)',
     'chat.composer.hint.commands': 'for commands',
     'chat.composer.hint.agents': 'subagents',
+    'chat.composer.hint.background': 'background',
     'chat.composer.hint.queue': 'when Aria finishes',
     'chat.composer.hint.steer': 'at the next step',
   },
@@ -40,6 +43,7 @@ export const TEXTS = {
     'chat.composer.queueTitle': 'Aria lo lee cuando termine el paso en curso (Alt+Enter lo deja para cuando Aria termine)',
     'chat.composer.hint.commands': 'para comandos',
     'chat.composer.hint.agents': 'subagentes',
+    'chat.composer.hint.background': 'segundo plano',
     'chat.composer.hint.queue': 'cuando Aria termine',
     'chat.composer.hint.steer': 'en el próximo paso',
   },
@@ -54,7 +58,7 @@ const ICON = {
 
 const key = (name) => `<span class="p-composer-key">${name}</span>`
 
-export function renderComposer({ busy = false, hasText = false, rows = 1, showHints = true, agents = false, placeholder, model, modelTitle } = {}, ui = {}, t = (k) => k) {
+export function renderComposer({ busy = false, hasText = false, rows = 1, showHints = true, agents = false, background = false, placeholder, model, modelTitle } = {}, ui = {}, t = (k) => k) {
   const lines = Math.min(6, Math.max(1, Math.round(Number(rows)) || 1))
   const hint = busy ? t('chat.composer.queuePlaceholder') : (placeholder ?? t('chat.composer.placeholder'))
   const stop = busy
@@ -67,7 +71,7 @@ export function renderComposer({ busy = false, hasText = false, rows = 1, showHi
   const send = busy
     ? ''
     : `<button type="button" id="chat-send" class="p-composer-btn p-composer-send" data-chat="send" aria-label="${esc(t('chat.composer.send'))}">${ICON.send}</button>`
-  // Under the input: the model (opens the picker), then the shortcuts (alt+a only when the session has subagents); while Aria works, that Enter puts the
+  // Under the input: the model (opens the picker), then the shortcuts (alt+a only when the session has subagents or background jobs); while Aria works, that Enter puts the
   // message in at the run's next step and Alt+Enter keeps it for when the run ends.
   const chip = model
     ? `<button type="button" class="p-composer-model" data-chat="open-models"${modelTitle ? ` title="${esc(modelTitle)}"` : ''}>${esc(model)}</button>`
@@ -81,8 +85,8 @@ ${
       <span>${key('enter')} ${esc(t('chat.composer.hint.steer'))}</span>
       <span>${key('alt+enter')} ${esc(t('chat.composer.hint.queue'))}</span>`
           : `
-      <span><kbd class="p-composer-kbd">/</kbd> ${esc(t('chat.composer.hint.commands'))}</span>${agents ? `
-      <span>${key('alt+a')} ${esc(t('chat.composer.hint.agents'))}</span>` : ''}`
+      <span><kbd class="p-composer-kbd">/</kbd> ${esc(t('chat.composer.hint.commands'))}</span>${background || agents ? `
+      <span>${key('alt+a')} ${esc(t(background ? 'chat.composer.hint.background' : 'chat.composer.hint.agents'))}</span>` : ''}`
       }
     </div>`
   return `<div class="p-composer">

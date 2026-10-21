@@ -606,3 +606,35 @@ describe('one accordion per answer (design: tool-chips)', () => {
     expect(state.messages[1].calls.map((c) => c.think ? 'think' : c.name)).toEqual(['think', 'read', 'think', 'edit'])
   })
 })
+
+describe('background work in the thread', () => {
+  const job = (over = {}) => ({ id: 'j1', number: 1, session: 's1', kind: 'process', title: 'bun dev', folder: '~/p', state: 'exited', exit: 1, conflict: false, ...over })
+  const custom = (details, over = {}) => ({ role: 'custom', customType: 'aria-background', content: 'Background #1 …', display: true, details, ...over })
+  const live = (message) => ev({ type: 'message_start', message })
+  const noteOf = (message) => run(createChat(), live(message)).messages
+
+  test('an aria-background custom message becomes a background note, live and from history', () => {
+    const exited = custom({ job: job(), jobs: undefined, by: 'self', event: 'ended' })
+    const want = { kind: 'note', label: 'background', key: 'chat.bg.note.exited', vars: { title: 'bun dev', exit: 1 } }
+    expect(noteOf(exited)).toEqual([want])
+    const past = reduce(createChat(), ev({ type: 'history', messages: [{ role: 'user', content: 'run it' }, exited] })).messages
+    expect(past).toEqual([{ kind: 'user', text: 'run it' }, want])
+
+    const outcome = (details) => noteOf(custom(details))[0]?.key
+    expect(outcome({ job: job({ state: 'failed', exit: null }), by: 'self', event: 'ended' })).toBe('chat.bg.note.failed')
+    expect(outcome({ job: job({ state: 'stopped' }), by: 'stop', event: 'ended' })).toBe('chat.bg.note.stopped')
+    expect(outcome({ job: job({ kind: 'agent', state: 'done', title: 'fix the tests' }), by: 'self', event: 'ended' })).toBe('chat.bg.note.done')
+    expect(outcome({ job: job({ kind: 'agent', state: 'done', conflict: true }), by: 'self', event: 'ended' })).toBe('chat.bg.note.conflict')
+    expect(outcome({ job: job({ kind: 'agent', state: 'failed' }), by: 'self', event: 'ended' })).toBe('chat.bg.note.failed')
+    const cut = noteOf(custom({ job: null, jobs: [job({ title: 'bun dev', state: 'cut' }), job({ id: 'j2', title: 'fix it', state: 'cut' })], by: null, event: 'cut' }))[0]
+    expect(cut).toEqual({ kind: 'note', label: 'background', key: 'chat.bg.note.cut', vars: { title: 'bun dev, fix it' } })
+  })
+
+  test('a hidden custom message (display false) adds nothing', () => {
+    expect(noteOf(custom({ job: job(), by: 'self', event: 'ended' }, { display: false }))).toEqual([])
+    expect(noteOf({ role: 'custom', customType: 'aria-background-now', content: '[background] …', display: false })).toEqual([])
+    expect(noteOf({ role: 'custom', customType: 'other', content: 'x', display: true, details: { job: job() } })).toEqual([])
+    const past = reduce(createChat(), ev({ type: 'history', messages: [custom({ job: job() }, { display: false }), { role: 'custom', customType: 'other', display: true }] })).messages
+    expect(past).toEqual([])
+  })
+})

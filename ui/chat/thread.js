@@ -61,7 +61,7 @@ function renderEntry(state, entry, index, ui, t) {
     case 'jev':
       return `<div class="thread-item">${renderJev({ mode: entry.mode, action: entry.action }, {}, t)}</div>`
     case 'note':
-      return `<div class="thread-item">${renderNote({ label: entry.label, text: entry.key ? t(entry.key) : entry.text }, {}, t)}</div>`
+      return `<div class="thread-item">${renderNote({ label: entry.label, text: entry.key ? t(entry.key, entry.vars) : entry.text }, {}, t)}</div>`
     case 'divider':
       return `<div class="thread-item">${renderDivider({ text: t(entry.key, entry.vars) }, {}, t)}</div>`
     case 'answers':

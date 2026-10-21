@@ -54,6 +54,7 @@
 
 import { esc } from '../../onboarding/components.js'
 import { renderPanelHead } from './panelhead.js'
+import { renderPill } from './pill.js'
 
 export const TEXTS = {
   en: {
@@ -360,7 +361,8 @@ export function renderMemory(props, ui, t) {
   const chips = [{ id: 'all' }, ...MEMORY_TYPES]
     .map((c) => {
       const on = view.type === c.id
-      return `<button type="button" class="p-memory-chip${c.id === 'all' ? '' : ` type-${c.id}`}" aria-pressed="${on}" data-chat="memory-filter" data-value="${esc(c.id)}">${c.id === 'all' ? '' : '<span class="p-memory-chip-dot" aria-hidden="true"></span>'}<span>${esc(t(`chat.memory.type.${c.id}`))}</span><span class="p-memory-n">${esc(sel.typeCounts[c.id])}</span></button>`
+      const all = c.id === 'all'
+      return renderPill({ label: t(`chat.memory.type.${c.id}`), meta: sel.typeCounts[c.id], dot: !all, tone: all ? undefined : c.id, pressed: on, action: 'memory-filter', value: c.id }, {}, t)
     })
     .join('')
 

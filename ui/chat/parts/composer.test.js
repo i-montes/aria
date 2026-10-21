@@ -83,6 +83,14 @@ describe('renderComposer', () => {
     expect(html).not.toContain('chat.composer.hint.agents')
   })
 
+  test('the hint says alt+a background while the session has background jobs', () => {
+    const html = renderComposer({ background: true, agents: true }, {}, t)
+    expect(html).toContain('<span class="p-composer-key">alt+a</span> chat.composer.hint.background')
+    expect(html).not.toContain('chat.composer.hint.agents')
+    expect(renderComposer({ background: true }, {}, t)).toContain('chat.composer.hint.background')
+    expect(renderComposer({ agents: true }, {}, t)).not.toContain('chat.composer.hint.background')
+    expect(renderComposer({ busy: true, background: true }, {}, t)).not.toContain('chat.composer.hint.background')
+  })
   test('the model sits under the input, first on the hints row, and opens the model picker', () => {
     const html = renderComposer({ model: 'DeepSeek V4.1 Flash', modelTitle: 'opencode-go/deepseek-v4.1-flash' }, {}, t)
     const hints = html.slice(html.indexOf('p-composer-hints'))
