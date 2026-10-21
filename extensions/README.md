@@ -37,7 +37,9 @@ Tests: `bun test extensions`.
   - `sandbox/index.ts`: bash's `reason` is asked for on every command, not only with `outsideSandbox`: the dock shows it
     as the step's title (the design's "Rebuild and verify"), with the command cut to one line beside it.
   - `sandbox/policy.ts`: `isAgentCode` marks Aria's own Pi files (`extensions/`, `agents/`, `SYSTEM.md`, `settings.json`,
-    `.aria-files` in `~/.aria/agent`) as never writable by the model, whatever was granted. It is only active under Aria
+    `aria.json`, `.aria-files` in `~/.aria/agent`), Aria's `settings.json` (`$ARIA_SETTINGS`) and its attachments folder
+    (`attachments/` beside it) as never writable by the model, whatever was granted (the sandbox off for the session
+    included); `isAriaOwn` checks a tool's path, as written and with links followed. It is only active under Aria
     (both `PI_CODING_AGENT_DIR` and `ARIA_PROJECTS_DIR` set).
   - `quota-fallback/ask.ts` (new): `quotaQuestion` builds the quota card in RPC, the old text in the terminal.
   - `jev-router/modes.ts`: `/plan` asks the brainstorming questions in batches of up to 4 independent ones, not one
