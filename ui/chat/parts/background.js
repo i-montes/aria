@@ -1,5 +1,6 @@
 // Background work (design: docs/superpowers/specs/2026-10-21-background-work-design.md, "The strip", owner's option B):
-// a row of pills right above the composer, one per job of the active session that runs, waits or failed. Each pill is
+// a row of pills right above the composer, one per job of the active session that runs, waits or failed (a process that
+// exited with a code other than 0 counts as failed). Each pill is
 // the shared pill part (pill.js): a dot, the mono title, a muted meta and a stop (■) button; a failed one has a
 // dismiss (×) instead. At most four pills; a fifth job and more fold into a `+N` pill that opens the list.
 // Pure: props in, escaped HTML out. The list itself (Alt+A) is drawn by the agents view.
@@ -15,9 +16,10 @@
 // Emits:
 //   data-chat="bg-open"    data-id="<job id>"   open the background list on that job
 //   data-chat="bg-stop"    data-id="<job id>"   stop that job (a running or queued one)
-//   data-chat="bg-dismiss" data-id="<job id>"   take a failed job off the strip
+//   data-chat="bg-dismiss" data-id="<job id>"   take a failed job off the strip (a non-zero exit too)
 //   data-chat="bg-list"                         open the background list (the `+N` pill)
 // Helpers: `stripJobs(jobs, session)` (what the strip shows), `hasLiveWork(jobs, session)` (the composer's hint),
+// `isFailed(job)` (failed, or exited non-zero),
 // `jobMeta(job, now, t)`, `resultAgent(job, t)` (a finished subagent's answer as an agent session).
 //
 // The list (Alt+A, drawn inside the subagents view): `renderJobRows({ jobs, sessions, active, open, output, now }, ui, t)`
@@ -102,9 +104,13 @@ const MAX_PILLS = 4
 const STOP = '<svg aria-hidden="true" width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>'
 const CROSS = '<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>'
 
-const shown = (j) => !j.dismissed && (j.state === 'running' || j.state === 'queued' || j.state === 'failed')
+/** A job that went wrong: a failed one, or a process that exited with a code other than 0. */
+export const isFailed = (j) => j?.state === 'failed' || (j?.state === 'exited' && j.exit != null && Number(j.exit) !== 0)
 
-/** The jobs the strip shows: the session's running, queued and failed-not-dismissed ones, in the dock's order. */
+const shown = (j) => !j.dismissed && (j.state === 'running' || j.state === 'queued' || isFailed(j))
+
+/** The jobs the strip shows: the session's running, queued and failed-not-dismissed ones (a process that exited non-zero
+ * among them), in the dock's order. */
 export const stripJobs = (jobs, session) =>
   (Array.isArray(jobs) ? jobs : []).filter((j) => j && typeof j === 'object' && j.session === session && shown(j))
 
@@ -125,16 +131,17 @@ function port(url) {
 export function jobMeta(job, now = Date.now(), t) {
   if (job?.state === 'queued') return t('chat.bg.queued')
   if (job?.state === 'failed') return statusLabel('failed', t)
+  if (isFailed(job)) return t('chat.bg.end.exited', { exit: job.exit })
   if (job?.kind === 'agent') return statusLabel(job.status || (job.writes === false ? 'running' : 'writing'), t)
   const minutes = t('chat.bg.minutes', { n: Math.max(0, Math.floor((Number(now) - Number(job?.startedAt ?? now)) / 60_000)) })
   const p = job?.url ? port(job.url) : ''
   return p ? `${p} · ${minutes}` : minutes
 }
 
-const tone = (j) => (j.state === 'failed' ? 'failed' : j.state === 'queued' ? 'queued' : j.kind === 'agent' ? 'agent' : 'process')
+const tone = (j) => (isFailed(j) ? 'failed' : j.state === 'queued' ? 'queued' : j.kind === 'agent' ? 'agent' : 'process')
 
 function pill(j, now, t) {
-  const failed = j.state === 'failed'
+  const failed = isFailed(j)
   const button = failed
     ? `<button type="button" class="p-bg-act" data-chat="bg-dismiss" data-id="${esc(j.id)}" aria-label="${esc(`${t('chat.bg.dismiss')}: ${j.title ?? ''}`)}" title="${esc(t('chat.bg.dismiss'))}">${CROSS}</button>`
     : `<button type="button" class="p-bg-act" data-chat="bg-stop" data-id="${esc(j.id)}" aria-label="${esc(`${t('chat.bg.stop')}: ${j.title ?? ''}`)}" title="${esc(t('chat.bg.stop'))}">${STOP}</button>`

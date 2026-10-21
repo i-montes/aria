@@ -418,6 +418,8 @@ impl Chat {
             (inner.model.clone(), inner.thinking.clone(), inner.workdir.clone(), watch)
         };
         let args = agent_args(model, own, thinking, settings.as_ref())?;
+        // Out of the person's repositories, where their test runners and watchers would find them.
+        let worktrees = agent::workdir(settings.as_ref()).join(crate::worktree::DIR);
         let workdir = workdir.unwrap_or_else(|| agent::workdir(settings.as_ref()));
         let mut env = pi::session_env(&self.ctx.paths, &self.ctx.path_var, &workdir);
         if let Some(path) = watch {
@@ -426,7 +428,7 @@ impl Chat {
         let mut unset = pi::unset_for_pi(std::env::vars());
         // No background work inside background work.
         unset.push("ARIA_JOBS_SOCK".into());
-        Some((self.ctx.paths.bin().join("pi"), args, env, unset))
+        Some((self.ctx.paths.bin().join("pi"), args, env, unset, worktrees))
     }
 
     fn current_engine(&self) -> Option<Arc<Engine>> {
@@ -2695,7 +2697,8 @@ mod tests {
             inner.thinking = Some("high".into());
         }
         let launcher = SessionLauncher { chat: h.chat.clone() };
-        let (program, args, env, unset) = launcher.agent("session").expect("a launch");
+        let (program, args, env, unset, worktrees) = launcher.agent("session").expect("a launch");
+        assert_eq!(worktrees, h.workdir.join(".aria-worktrees"), "in the projects folder");
         assert_eq!(program, h.paths.bin().join("pi"));
         assert_eq!(args, ["--model", "opencode-go/x", "--thinking", "high"]);
         assert!(env.iter().any(|(k, v)| k == "PI_WATCH_SOCK" && v.ends_with("watch-s1.sock")), "{env:?}");
@@ -2706,14 +2709,14 @@ mod tests {
         settings.models.planning = Some("opencode-go/big".into());
         settings.models.planning_effort = "xhigh".into();
         settings::save(&h.paths, &settings).unwrap();
-        let (_, args, _, _) = launcher.agent("heavy").unwrap();
+        let (_, args, _, _, _) = launcher.agent("heavy").unwrap();
         assert_eq!(args, ["--model", "opencode-go/big", "--thinking", "xhigh"]);
 
         // Without a model of its own the session falls back to the daily model; with no settings and no model there is
         // nothing to run.
         h.chat.inner.lock().unwrap().model = None;
         h.chat.inner.lock().unwrap().thinking = None;
-        let (_, args, _, _) = launcher.agent("session").unwrap();
+        let (_, args, _, _, _) = launcher.agent("session").unwrap();
         assert_eq!(args, ["--model", "opencode-go/deepseek-v4.1-flash"]);
         std::fs::remove_file(h.paths.settings()).unwrap();
         assert!(launcher.agent("session").is_none());

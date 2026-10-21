@@ -18,6 +18,8 @@ pub struct AgentStart {
     pub writes: bool,
     /// `auto`, `folder` or `worktree`.
     pub isolation: String,
+    /// Where its worktree goes, if it gets one: `.aria-worktrees` in the projects folder.
+    pub worktrees: PathBuf,
     /// The `pi` shim the session uses.
     pub program: PathBuf,
     /// `--model`/`--thinking` pairs.
@@ -207,7 +209,8 @@ impl Core {
         let mut cwd = start.folder.clone();
         let mut made = None;
         if let (Some("worktree"), Some(root)) = (job.isolation.as_deref(), &root) {
-            let wt = worktree::create(root, id).map_err(|e| format!("Could not make a worktree: {e}"))?;
+            let wt =
+                worktree::create(root, &start.worktrees, id).map_err(|e| format!("Could not make a worktree: {e}"))?;
             // The same subfolder of the repository, in the worktree.
             let inside =
                 start.folder.canonicalize().ok().and_then(|f| f.strip_prefix(root).ok().map(Path::to_path_buf));
@@ -221,7 +224,12 @@ impl Core {
             if let Some(run) = entry.agent.as_mut() {
                 run.worktree = made.clone();
             }
-            entry.job.clone()
+            let job = entry.job.clone();
+            // Recorded before the spawn: a dock that dies now leaves a cut job that names its worktree, not an orphan.
+            if made.is_some() {
+                s.save();
+            }
+            job
         };
         if let Some(hook) = &start.before_spawn {
             hook(&job);
@@ -515,6 +523,8 @@ exit "${FAKE_EXIT:-0}"
             folder: folder.to_path_buf(),
             writes: false,
             isolation: "auto".into(),
+            // Beside the fake `pi`: outside any repository a test makes, as the projects folder is.
+            worktrees: program.parent().unwrap().canonicalize().unwrap().join(".aria-worktrees"),
             program: program.to_path_buf(),
             args: Vec::new(),
             env: env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
@@ -655,7 +665,8 @@ exit "${FAKE_EXIT:-0}"
         let b = jobs.start_agent(b).unwrap();
         assert_eq!(b.state, JobState::Running);
         assert_eq!(b.isolation.as_deref(), Some("worktree"));
-        let worktree = root.join(".aria-worktrees").join(&b.id);
+        let name = root.file_name().unwrap().to_string_lossy().into_owned();
+        let worktree = pi_dir.path().canonicalize().unwrap().join(".aria-worktrees").join(format!("{name}-{}", b.id));
         assert_eq!(b.worktree.as_deref(), Some(worktree.to_str().unwrap()));
         eventually("both say where they are", Duration::from_secs(3), || a_pwd.exists() && b_pwd.exists());
         assert_eq!(fs::read_to_string(&a_pwd).unwrap().trim(), root.to_str().unwrap());
@@ -668,7 +679,7 @@ exit "${FAKE_EXIT:-0}"
         let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (_repo_dir, root) = repo();
         let (_dir, jobs, _) = jobs();
-        let (_pi_dir, pi) = fake_pi();
+        let (pi_dir, pi) = fake_pi();
         let job = jobs.start_agent(writer(&pi, &root, "worktree", &[("FAKE_WRITE", "b.txt")])).unwrap();
         assert_eq!(job.isolation.as_deref(), Some("worktree"));
         let done = ends(&jobs, &job.id, Duration::from_secs(5));
@@ -677,7 +688,35 @@ exit "${FAKE_EXIT:-0}"
         assert_eq!(git(&root, &["diff", "--cached"]), "", "nothing staged");
         assert_eq!(done.worktree, None);
         assert!(!done.conflict);
-        assert!(!root.join(".aria-worktrees").join(&job.id).exists());
+        let name = root.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(!pi_dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(".aria-worktrees")
+            .join(format!("{name}-{}", job.id))
+            .exists());
+    }
+
+    #[test]
+    fn the_store_names_the_worktree_before_the_subagent_starts() {
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_repo_dir, root) = repo();
+        let (dir, jobs, _) = jobs();
+        let (_pi_dir, pi) = fake_pi();
+        let store = dir.path().join("jobs.json");
+        let seen: Arc<Mutex<Option<String>>> = Arc::default();
+        let (into, at) = (seen.clone(), store.clone());
+        let hook: BeforeSpawn = Arc::new(move |_: &Job| {
+            *into.lock().unwrap() = Some(fs::read_to_string(&at).unwrap_or_default());
+        });
+        let start = AgentStart { before_spawn: Some(hook), ..writer(&pi, &root, "worktree", &[]) };
+        let job = jobs.start_agent(start).unwrap();
+        let stored = seen.lock().unwrap().clone().expect("the hook ran");
+        let stored: serde_json::Value = serde_json::from_str(&stored).unwrap();
+        let path = job.worktree.clone().expect("a worktree");
+        assert_eq!(stored["jobs"][0]["worktree"], serde_json::json!(path), "saved before the spawn");
+        ends(&jobs, &job.id, Duration::from_secs(5));
     }
 
     #[test]

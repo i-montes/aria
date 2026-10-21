@@ -32,9 +32,11 @@ export function refusalText(route: BashRoute, hasBwrap: boolean): string | null 
 export const SAID_NO = 'The user said no: the command did not run.'
 
 /** The line a background command runs as (in `folder`): the bwrap line when boxed, the command itself when it runs
- * outside (already allowed, or once the user allowed it after `ask`), null when the route refuses. */
-export function backgroundLine(route: BashRoute, command: string, folder: string): string | null {
+ * outside (already allowed, or `ask` once the user said yes: `allowed`), null when the route refuses or nobody allowed
+ * an `ask`. */
+export function backgroundLine(route: BashRoute, command: string, folder: string, allowed = false): string | null {
   if (route === 'boxed') return wrapCommand(command, folder)
-  if (route === 'plain' || route === 'ask') return command
+  if (route === 'plain') return command
+  if (route === 'ask') return allowed ? command : null
   return null
 }

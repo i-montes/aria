@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { TEXTS, hasLiveWork, jobMeta, renderJobRows, renderStrip, resultAgent } from './background.js'
+import { TEXTS, hasLiveWork, isFailed, jobMeta, renderJobRows, renderStrip, resultAgent } from './background.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const NOW = 1_800_000_000_000
@@ -31,6 +31,20 @@ describe('renderStrip', () => {
     expect(html).toContain('tone-failed')
     expect(html).toContain('tone-queued')
     expect(html).toContain('tone-process')
+  })
+  test('a process that exited non-zero stays as a failed pill with a dismiss, and its dot is red', () => {
+    const exited = job({ id: 'x', state: 'exited', exit: 2, endedAt: NOW })
+    expect(isFailed(exited)).toBe(true)
+    expect(isFailed(job({ state: 'exited', exit: 0 }))).toBe(false)
+    expect(isFailed(job({ state: 'stopped', exit: null }))).toBe(false)
+    const html = renderStrip({ jobs: [exited], session: 's1', now: NOW }, {}, t)
+    expect(html).toContain('data-chat="bg-open" data-id="x"')
+    expect(html).toContain('tone-failed')
+    expect(html).toContain('data-chat="bg-dismiss" data-id="x"')
+    expect(html).not.toContain('data-chat="bg-stop"')
+    expect(html).toContain('chat.bg.end.exited exit=2')
+    expect(renderStrip({ jobs: [{ ...exited, dismissed: true }], session: 's1', now: NOW }, {}, t)).toBe('')
+    expect(renderJobRows({ jobs: [exited], now: NOW }, {}, t)).toContain('tone-failed')
   })
   test('five jobs: four pills and +1', () => {
     const jobs = [1, 2, 3, 4, 5].map((n) => job({ id: `j${n}`, number: n }))
@@ -142,7 +156,7 @@ describe('renderJobRows', () => {
       job({ id: 'st', state: 'stopped', endedAt: NOW - 9000 }),
       job({ id: 'fa', state: 'failed', endedAt: NOW - 8000, dismissed: true }),
       job({ id: 'cu', state: 'cut', endedAt: NOW - 7000 }),
-      job({ id: 'dn', kind: 'agent', state: 'done', endedAt: NOW - 2000, worktree: '/repo/.aria-worktrees/j9', conflict: true, result: 'ok' }),
+      job({ id: 'dn', kind: 'agent', state: 'done', endedAt: NOW - 2000, worktree: '/projects/.aria-worktrees/repo-j9', conflict: true, result: 'ok' }),
     ]
     const html = rows({ jobs })
     expect(html).toContain('chat.bg.finished')
@@ -151,7 +165,7 @@ describe('renderJobRows', () => {
     expect(html).toContain('chat.bg.end.exited exit=0')
     expect(html).toContain('chat.bg.end.exited exit=1')
     for (const end of ['stopped', 'failed', 'cut', 'done']) expect(html).toContain(`chat.bg.end.${end}`)
-    expect(html).toContain('chat.bg.worktree path=/repo/.aria-worktrees/j9')
+    expect(html).toContain('chat.bg.worktree path=/projects/.aria-worktrees/repo-j9')
     expect(html).not.toContain('bg-stop')
     expect(html).not.toContain('bg-url')
     expect(html).toContain('data-chat="bg-session" data-id="dn"')

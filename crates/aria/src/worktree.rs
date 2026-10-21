@@ -1,17 +1,20 @@
-//! Worktrees for subagents that write: each gets its own checkout at `<git root>/.aria-worktrees/<job id>`, made from
-//! the person's uncommitted changes, so it sees the folder as they left it and two of them never step on each other or
-//! on the person. When it is done, its changes come back as a plain `git apply` to the person's working tree: nothing is
-//! committed or staged for them, and a patch that does not apply leaves the worktree in place for the person to look
-//! at. Untracked files of the person are not copied into the worktree (`git stash create` leaves them out).
+//! Worktrees for subagents that write: each gets its own checkout at `<projects dir>/.aria-worktrees/<repo>-<job id>`,
+//! made from the person's uncommitted changes, so it sees the folder as they left it and two of them never step on each
+//! other or on the person. They live outside the person's repository, so its test runners, watchers and compilers never
+//! see them, and nothing in the repository is edited besides git's own worktree bookkeeping. When it is done, its
+//! changes come back as a plain `git apply` to the person's working tree: nothing is committed or staged for them, and a
+//! patch that does not apply leaves the worktree in place for the person to look at. Untracked files of the person are
+//! not copied into the worktree (`git stash create` leaves them out).
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::{Arc, Mutex, OnceLock};
 
-/// Folder, under the git root, that holds every worktree; also the line that keeps it out of `git status`.
-const DIR: &str = ".aria-worktrees";
-const EXCLUDE_LINE: &str = ".aria-worktrees/";
+/// Folder, in the projects folder, that holds every worktree.
+pub const DIR: &str = ".aria-worktrees";
 
 /// Settings that would make git run a program of the repository's choosing. The repository's config and hooks can be
 /// written by a boxed command, and the dock runs git outside the box, so every git it runs turns them off: hooks, the
@@ -128,43 +131,20 @@ pub struct Worktree {
     pub base: String,
 }
 
-/// Makes the worktree for job `id` under `root`. It starts from a stash commit of the person's uncommitted changes
-/// (made without touching their folder or stash list), or from `HEAD` when there are none.
-pub fn create(root: &Path, id: &str) -> io::Result<Worktree> {
+/// Makes the worktree for job `id` of the repository at `root`, as `<repo dir name>-<id>` in `worktrees`. It starts
+/// from a stash commit of the person's uncommitted changes (made without touching their folder or stash list), or from
+/// `HEAD` when there are none.
+pub fn create(root: &Path, worktrees: &Path, id: &str) -> io::Result<Worktree> {
     debug_assert!(!id.is_empty() && !id.contains('/') && id != "." && id != "..", "a job id names one folder: {id:?}");
     let off = neutral(&[root])?;
     let stash = git_ok(root, &off, &["stash", "create"])?;
     let base = if stash.is_empty() { git_ok(root, &off, &["rev-parse", "HEAD"])? } else { stash };
-    // Before the worktree exists, so the person's `git status` never shows it.
-    exclude(root, &off)?;
-    let path = root.join(DIR).join(id);
+    let repo = root.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| "repo".into());
+    fs::create_dir_all(worktrees)?;
+    let path = worktrees.join(format!("{repo}-{id}"));
     let path_str = path.to_string_lossy();
     git_ok(root, &off, &["worktree", "add", "--detach", &path_str, &base])?;
     Ok(Worktree { path, base })
-}
-
-/// Adds `.aria-worktrees/` to the repository's own exclude file (shared by every worktree, never committed), once.
-fn exclude(root: &Path, off: &[String]) -> io::Result<()> {
-    let common = PathBuf::from(git_ok(root, off, &["rev-parse", "--git-common-dir"])?);
-    let common = if common.is_relative() { root.join(common) } else { common };
-    let info = common.join("info");
-    fs::create_dir_all(&info)?;
-    let file = info.join("exclude");
-    let current = match fs::read_to_string(&file) {
-        Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e),
-    };
-    if current.lines().any(|line| line == EXCLUDE_LINE) {
-        return Ok(());
-    }
-    let mut text = current;
-    if !text.is_empty() && !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text.push_str(EXCLUDE_LINE);
-    text.push('\n');
-    fs::write(&file, text)
 }
 
 /// What became of a subagent's changes.
@@ -178,9 +158,18 @@ pub enum Back {
     Conflict(String),
 }
 
+/// One lock per repository: two subagents that finish at once never apply their patches into it together.
+fn root_lock(root: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS.get_or_init(Mutex::default).lock().unwrap_or_else(|e| e.into_inner());
+    locks.entry(root.to_path_buf()).or_default().clone()
+}
+
 /// Brings the worktree's changes (edits, new and deleted files, binaries) back to the person's folder as a patch
-/// against the commit it started from.
+/// against the commit it started from. One at a time per repository.
 pub fn bring_back(root: &Path, wt: &Worktree) -> io::Result<Back> {
+    let lock = root_lock(root);
+    let _one_at_a_time = lock.lock().unwrap_or_else(|e| e.into_inner());
     // Read again now: the subagent may have added a driver while it worked.
     let off = neutral(&[root, &wt.path])?;
     // Staged in the worktree only, so new files are part of the diff; the person's index is never touched.
@@ -250,6 +239,13 @@ pub(crate) mod tests {
         (dir, root)
     }
 
+    /// Where the worktrees go: `.aria-worktrees` in a projects folder of its own.
+    pub(crate) fn worktrees() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let spot = dir.path().canonicalize().unwrap().join(DIR);
+        (dir, spot)
+    }
+
     fn read(path: &Path) -> String {
         fs::read_to_string(path).unwrap()
     }
@@ -258,10 +254,10 @@ pub(crate) mod tests {
     fn the_worktree_starts_from_the_persons_uncommitted_changes() {
         let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (_dir, root) = repo();
+        let (_spot, spot) = worktrees();
         fs::write(root.join("a.txt"), "2\n").unwrap();
         let before = git(&root, &["status", "--porcelain"]);
-        let wt = create(&root, "j1").unwrap();
-        assert_eq!(wt.path, root.join(".aria-worktrees/j1"));
+        let wt = create(&root, &spot, "j1").unwrap();
         assert_eq!(read(&wt.path.join("a.txt")), "2\n");
         assert_eq!(read(&root.join("a.txt")), "2\n");
         assert_eq!(git(&root, &["status", "--porcelain"]), before);
@@ -271,28 +267,38 @@ pub(crate) mod tests {
     fn a_clean_repo_starts_from_head() {
         let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (_dir, root) = repo();
+        let (_spot, spot) = worktrees();
         let head = git(&root, &["rev-parse", "HEAD"]).trim().to_string();
-        let wt = create(&root, "j1").unwrap();
+        let wt = create(&root, &spot, "j1").unwrap();
         assert_eq!(wt.base, head);
         assert_eq!(read(&wt.path.join("a.txt")), "1\n");
     }
 
     #[test]
-    fn the_exclude_line_is_written_once() {
+    fn the_worktree_is_outside_the_repo_and_the_repo_is_not_edited() {
         let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (_dir, root) = repo();
-        create(&root, "j1").unwrap();
-        create(&root, "j2").unwrap();
-        let exclude = read(&root.join(".git/info/exclude"));
-        assert_eq!(exclude.lines().filter(|l| *l == ".aria-worktrees/").count(), 1);
-        assert!(!git(&root, &["status", "--porcelain"]).contains(".aria-worktrees"));
+        let (_spot, spot) = worktrees();
+        let exclude = fs::read_to_string(root.join(".git/info/exclude")).ok();
+        let one = create(&root, &spot, "j1").unwrap();
+        let two = create(&root, &spot, "j2").unwrap();
+        let name = root.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(one.path, spot.join(format!("{name}-j1")));
+        assert_eq!(two.path, spot.join(format!("{name}-j2")));
+        assert!(!one.path.starts_with(&root));
+        assert_eq!(fs::read_to_string(root.join(".git/info/exclude")).ok(), exclude, "no exclude line");
+        assert_eq!(git(&root, &["status", "--porcelain"]), "");
+        remove(&root, &one.path).unwrap();
+        assert!(!one.path.exists());
+        assert!(!git(&root, &["worktree", "list"]).contains(&format!("{name}-j1")));
     }
 
     #[test]
     fn changes_come_back_unstaged() {
         let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (_dir, root) = repo();
-        let wt = create(&root, "j1").unwrap();
+        let (_spot, spot) = worktrees();
+        let wt = create(&root, &spot, "j1").unwrap();
         fs::write(wt.path.join("a.txt"), "3\n").unwrap();
         fs::write(wt.path.join("new.txt"), "new\n").unwrap();
         assert_eq!(bring_back(&root, &wt).unwrap(), Back::Applied);
@@ -306,8 +312,9 @@ pub(crate) mod tests {
     fn the_persons_diff_config_does_not_shape_the_patch() {
         let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (_dir, root) = repo();
+        let (_spot, spot) = worktrees();
         git(&root, &["config", "diff.noprefix", "true"]);
-        let wt = create(&root, "j1").unwrap();
+        let wt = create(&root, &spot, "j1").unwrap();
         fs::create_dir(wt.path.join("src")).unwrap();
         fs::write(wt.path.join("src/new.txt"), "new\n").unwrap();
         assert_eq!(bring_back(&root, &wt).unwrap(), Back::Applied);
@@ -319,8 +326,9 @@ pub(crate) mod tests {
     fn the_persons_whitespace_rule_does_not_refuse_the_patch() {
         let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (_dir, root) = repo();
+        let (_spot, spot) = worktrees();
         git(&root, &["config", "apply.whitespace", "error"]);
-        let wt = create(&root, "j1").unwrap();
+        let wt = create(&root, &spot, "j1").unwrap();
         fs::write(wt.path.join("a.txt"), "1  \n").unwrap();
         assert_eq!(bring_back(&root, &wt).unwrap(), Back::Applied);
         assert_eq!(read(&root.join("a.txt")), "1  \n");
@@ -330,7 +338,8 @@ pub(crate) mod tests {
     fn a_clash_keeps_the_worktree() {
         let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (_dir, root) = repo();
-        let wt = create(&root, "j1").unwrap();
+        let (_spot, spot) = worktrees();
+        let wt = create(&root, &spot, "j1").unwrap();
         fs::write(wt.path.join("a.txt"), "3\n").unwrap();
         fs::write(root.join("a.txt"), "4\n").unwrap();
         assert!(matches!(bring_back(&root, &wt).unwrap(), Back::Conflict(_)));
@@ -342,7 +351,8 @@ pub(crate) mod tests {
     fn nothing_changed_is_empty() {
         let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (_dir, root) = repo();
-        let wt = create(&root, "j1").unwrap();
+        let (_spot, spot) = worktrees();
+        let wt = create(&root, &spot, "j1").unwrap();
         assert_eq!(bring_back(&root, &wt).unwrap(), Back::Empty);
         assert!(!wt.path.exists());
     }
@@ -351,6 +361,7 @@ pub(crate) mod tests {
     fn the_repos_own_programs_never_run() {
         let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (_dir, root) = repo();
+        let (_spot, spot) = worktrees();
         let marks = tempfile::tempdir().unwrap();
         let mark = |name: &str| marks.path().join(name).display().to_string();
         let hook = root.join(".git/hooks/post-checkout");
@@ -371,7 +382,7 @@ pub(crate) mod tests {
         fs::set_permissions(&monitor, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
         git(&root, &["config", "core.fsmonitor", monitor.to_str().unwrap()]);
         fs::write(root.join("a.txt"), "two\n").unwrap();
-        let wt = create(&root, "j1").unwrap();
+        let wt = create(&root, &spot, "j1").unwrap();
         assert_eq!(read(&wt.path.join("a.txt")), "two\n", "checked out as it is");
         fs::write(wt.path.join("a.txt"), "three\n").unwrap();
         fs::write(wt.path.join("new.txt"), "new\n").unwrap();
@@ -386,8 +397,9 @@ pub(crate) mod tests {
     fn a_driver_the_subagent_adds_does_not_run_either() {
         let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (_dir, root) = repo();
+        let (_spot, spot) = worktrees();
         let marks = tempfile::tempdir().unwrap();
-        let wt = create(&root, "j1").unwrap();
+        let wt = create(&root, &spot, "j1").unwrap();
         // Written from inside the box while the subagent works: the common config and an attributes file.
         let clean = format!("touch {}; tr a-z A-Z", marks.path().join("clean").display());
         git(&wt.path, &["config", "filter.late.clean", &clean]);
@@ -399,10 +411,39 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn one_repo_brings_back_one_at_a_time() {
+        let (a, b) = (Path::new("/repo/a"), Path::new("/repo/b"));
+        assert!(Arc::ptr_eq(&root_lock(a), &root_lock(a)), "one lock per repository");
+        assert!(!Arc::ptr_eq(&root_lock(a), &root_lock(b)), "another repository does not wait");
+        let held = root_lock(a);
+        let _guard = held.lock().unwrap();
+        assert!(root_lock(a).try_lock().is_err(), "a second bring-back in the same repository waits");
+        assert!(root_lock(b).try_lock().is_ok());
+    }
+
+    #[test]
+    fn two_agents_finishing_at_once_both_come_back() {
+        let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_dir, root) = repo();
+        let (_spot, spot) = worktrees();
+        let one = create(&root, &spot, "j1").unwrap();
+        let two = create(&root, &spot, "j2").unwrap();
+        fs::write(one.path.join("one.txt"), "1\n").unwrap();
+        fs::write(two.path.join("two.txt"), "2\n").unwrap();
+        let (r1, r2) = (root.clone(), root.clone());
+        let first = std::thread::spawn(move || bring_back(&r1, &one).unwrap());
+        let second = std::thread::spawn(move || bring_back(&r2, &two).unwrap());
+        assert_eq!(first.join().unwrap(), Back::Applied);
+        assert_eq!(second.join().unwrap(), Back::Applied);
+        assert_eq!(read(&root.join("one.txt")), "1\n");
+        assert_eq!(read(&root.join("two.txt")), "2\n");
+    }
+
+    #[test]
     #[should_panic(expected = "a job id names one folder")]
     fn an_id_cannot_leave_the_worktrees_folder() {
         // Checked before any git runs, so no repo (and no `SERIAL`, which a panic would poison) is needed.
-        let _ = create(Path::new("/nonexistent"), "../escape");
+        let _ = create(Path::new("/nonexistent"), Path::new("/nonexistent"), "../escape");
     }
 
     #[test]

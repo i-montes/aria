@@ -156,9 +156,10 @@ export default function sandbox(pi: ExtensionAPI) {
       if ('refused' in ready) return ready.refused
       const { command, title, outsideSandbox } = params
       const route = routeOf(command, outsideSandbox, ctx)
-      if (route === 'ask' && !(await askOutside(ctx, command, title))) return refuse(SAID_NO)
-      const line = backgroundLine(route, command, ready.folder)
-      if (line === null) return refuse(refusalText(route, hasBwrap)!)
+      const allowed = route === 'ask' && (await askOutside(ctx, command, title))
+      if (route === 'ask' && !allowed) return refuse(SAID_NO)
+      const line = backgroundLine(route, command, ready.folder, allowed)
+      if (line === null) return refuse(refusalText(route, hasBwrap) ?? SAID_NO)
       return startProcess({ command, line, title, folder: ready.folder })
     },
   } as any)

@@ -45,8 +45,8 @@ pub fn socket_path(dir: &Path, session: &str) -> PathBuf {
 }
 
 /// How a subagent is run: the program (the session's `pi` shim), its extra arguments (`--model`/`--thinking`), the env
-/// to add and the names to remove.
-pub type AgentLaunch = (PathBuf, Vec<String>, Vec<(String, String)>, Vec<String>);
+/// to add, the names to remove, and where its worktree goes if it gets one.
+pub type AgentLaunch = (PathBuf, Vec<String>, Vec<(String, String)>, Vec<String>, PathBuf);
 
 /// How the dock starts a subagent for this session.
 pub trait Launcher: Send + Sync {
@@ -358,7 +358,7 @@ fn start_agent(session: &Session, request: &Value) -> Result<Job, String> {
     if !matches!(model, "session" | "heavy") {
         return Err("model must be \"session\" or \"heavy\"".into());
     }
-    let Some((program, args, env, unset)) = session.launcher.agent(model) else {
+    let Some((program, args, env, unset, worktrees)) = session.launcher.agent(model) else {
         return Err("cannot start a subagent now: the session's Pi is not ready".into());
     };
     let launcher = session.launcher.clone();
@@ -369,6 +369,7 @@ fn start_agent(session: &Session, request: &Value) -> Result<Job, String> {
         folder,
         writes,
         isolation: isolation.to_string(),
+        worktrees,
         program,
         args,
         env,
@@ -394,7 +395,10 @@ mod tests {
 
     impl Launcher for FakeLauncher {
         fn agent(&self, _model: &str) -> Option<AgentLaunch> {
-            self.pi.clone().map(|pi| (pi, Vec::new(), Vec::new(), Vec::new()))
+            self.pi.clone().map(|pi| {
+                let worktrees = pi.with_file_name(".aria-worktrees");
+                (pi, Vec::new(), Vec::new(), Vec::new(), worktrees)
+            })
         }
         fn before_spawn(&self, _job: &Job) {
             self.spawned.fetch_add(1, Ordering::SeqCst);

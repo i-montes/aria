@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { createChat } from './state.js'
 import { chatTexts } from './texts.js'
-import { insertFile, keepRenameField, pickerQuery, renderDialog, renderPath, renderProblem, renderUndo, preloadOrder, shortPath } from './view.js'
+import { hasParallelAgents, insertFile, keepRenameField, pickerQuery, renderDialog, renderPath, renderProblem, renderUndo, preloadOrder, shortPath } from './view.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const ev = (event) => ({ type: 'chatEvent', event })
@@ -146,4 +146,15 @@ describe('preloading the saved tabs', () => {
     expect(preloadOrder(tabs)).toEqual(['b', 'a', 'c'])
   })
   test('no tabs, nothing to load', () => expect(preloadOrder({ sessions: [], active: null })).toEqual([]))
+})
+
+describe('the composer', () => {
+  test("the subagents hint counts parallel subagents only, not a background subagent's own agent", () => {
+    const job = { id: 'j1', kind: 'agent', title: 'Fix tests', task: 'Make the suite pass', state: 'running' }
+    const watched = { id: 'a1', role: 'Fix tests', task: 'Make the suite pass', kind: 'active' }
+    expect(hasParallelAgents([watched], [job])).toBe(false)
+    expect(hasParallelAgents([watched, { id: 'a2', role: 'security', task: 'Review', kind: 'active' }], [job])).toBe(true)
+    expect(hasParallelAgents([watched], [])).toBe(true)
+    expect(hasParallelAgents([], [job])).toBe(false)
+  })
 })

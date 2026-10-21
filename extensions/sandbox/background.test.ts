@@ -15,7 +15,11 @@ describe('the line background_run sends to the dock', () => {
   })
   test('plain and allowed-after-asking: the command as is', () => {
     expect(backgroundLine('plain', 'bun dev', '/p')).toBe('bun dev')
-    expect(backgroundLine('ask', 'bun dev', '/p')).toBe('bun dev')
+    expect(backgroundLine('ask', 'bun dev', '/p', true)).toBe('bun dev')
+  })
+  test('ask without an explicit yes runs nothing', () => {
+    expect(backgroundLine('ask', 'bun dev', '/p')).toBeNull()
+    expect(backgroundLine('ask', 'bun dev', '/p', false)).toBeNull()
   })
   test('refusals stay refusals', () => {
     expect(backgroundLine('refuse-nobody', 'bun dev', '/p')).toBeNull()

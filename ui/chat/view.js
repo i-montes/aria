@@ -5,7 +5,7 @@
 import { patchHtml, patchItems } from './patch.js'
 import { esc } from '../onboarding/components.js'
 import { renderAgentSession } from './parts/session.js'
-import { hasLiveWork, renderJobRows, renderStrip, resultAgent } from './parts/background.js'
+import { hasLiveWork, isFailed, renderJobRows, renderStrip, resultAgent } from './parts/background.js'
 import { renderCommandPicker, filterCommands, stepActive, clampActive, toInvocation, withSkillNames } from './parts/commands.js'
 import { renderComposer } from './parts/composer.js'
 import { PROVIDERS, renderConnect } from './parts/connect.js'
@@ -15,7 +15,7 @@ import { renderMemory, initialMemoryUi, reduceMemoryUi } from './parts/memory.js
 import { renderModelPicker, orderedModels, providerLabel, withoutPayPerUse } from './parts/models.js'
 import { questionAnswers, questionInit, questionReduce, normalizeQuestions, renderQuestion } from './parts/question.js'
 import { renderQuotaBars } from './parts/quotabars.js'
-import { jobAgent, renderSubagents } from './parts/subagents.js'
+import { jobAgent, parallelAgents, renderSubagents } from './parts/subagents.js'
 import { renderSessionTabs } from './parts/tabs.js'
 import { renderTasks } from './parts/tasks.js'
 import { formatElapsed } from './parts/working.js'
@@ -145,6 +145,10 @@ const SWAP_MS = 480
 
 /** The saved tabs to wake when the dock starts, so each one's conversation is there before the dock opens: the active
  * tab first (its Pi is the one wanted soonest), then the others in their order. */
+/** The composer's subagents hint: the session's `parallel` subagents only. A background subagent's watch agent is
+ * the background's (its own hint), not one of them. */
+export const hasParallelAgents = (agents, jobs) => parallelAgents(agents, jobs).length > 0
+
 export const preloadOrder = (tabs) => {
   const ids = (tabs?.sessions ?? []).map((s) => s.id)
   return ids.includes(tabs?.active) ? [tabs.active, ...ids.filter((id) => id !== tabs.active)] : ids
@@ -176,8 +180,10 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   // The expanded process rows of the background list: job id -> { lines, done }. Polled once a second while the
   // agents view shows them; one request in flight per job at most.
   const outputs = new Map()
-  const outputAsked = new Set() // job ids with a `jobOutput` in flight: kept apart from the entry, so a fold and a
-  // re-expand never send a second request while the first is still out
+  // Job ids with a `jobOutput` in flight, each with its own token: one request per job at a time. A fold or a closed
+  // view forgets it, so a reply that never comes cannot freeze the row; a late reply then clears only its own mark.
+  const outputAsked = new Map()
+  let outputToken = 0
   let outputTimer = null
   let headerKey = ''
   let indexKey = ''
@@ -410,7 +416,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       hasText: value.trim().length > 0,
       rows: Math.min(6, Math.max(1, value.split('\n').length)),
       showHints: true,
-      agents: current().agents.length > 0,
+      agents: hasParallelAgents(current().agents, data.jobs.filter((j) => j.session === tabs.active)),
       background: hasLiveWork(data.jobs, tabs.active), // live work only: a finished job alone keeps the old hint
       model: modelLabel(model) || undefined,
       modelTitle: model ?? undefined,
@@ -549,7 +555,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     if (view === 'chat') ui.job = null
     // Opening the list is where a failed job's pill leaves the strip (it stays under Finished).
     if (view === 'agents' && from !== 'agents' && from !== 'session') {
-      for (const j of data.jobs) if (j.session === tabs.active && j.state === 'failed' && !j.dismissed) send({ type: 'jobDismiss', job: j.id })
+      for (const j of data.jobs) if (j.session === tabs.active && isFailed(j) && !j.dismissed) send({ type: 'jobDismiss', job: j.id })
     }
     render()
     if (view === 'chat') return input?.focus()
@@ -566,6 +572,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
 
   function stopOutputs() {
     outputs.clear()
+    outputAsked.clear()
     clearInterval(outputTimer)
     outputTimer = null
   }
@@ -577,9 +584,10 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       if (outputAsked.has(id) || o.done) continue
       const job = data.jobs.find((j) => j.id === id)
       const last = !job || (job.state !== 'running' && job.state !== 'queued')
-      outputAsked.add(id)
+      const token = ++outputToken
+      outputAsked.set(id, token)
       request({ type: 'jobOutput', job: id, lines: 80 }).then((reply) => {
-        outputAsked.delete(id)
+        if (outputAsked.get(id) === token) outputAsked.delete(id)
         if (outputs.get(id) !== o) return // folded, or the view closed, while it was asked
         o.lines = Array.isArray(reply?.lines) ? reply.lines.map(String) : []
         if (last) o.done = true
@@ -594,6 +602,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
 
   function toggleOutput(id) {
     if (outputs.delete(id)) {
+      outputAsked.delete(id)
       if (!outputs.size) stopOutputs()
     } else {
       outputs.set(id, { lines: null, done: false })

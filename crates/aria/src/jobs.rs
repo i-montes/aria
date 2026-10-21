@@ -1,11 +1,12 @@
 //! Background work the dock owns: processes a session's Pi starts (dev servers, watchers, long builds) that keep
 //! running while the conversation goes on. The dock, not Pi, is their parent, so a Pi that restarts never takes them
 //! down. Every child is spawned from one long-lived thread and leads its own process group, so Stop reaches whatever it
-//! forked, and the page is told about changes at most four times a second.
+//! forked, and the page is told about changes (never a line of output) at most four times a second.
 //!
 //! How a job ended becomes an event for its session, kept until Pi acknowledges it, so a Pi that restarts in between
-//! still hears about it exactly once. The jobs (never their output) are kept in a store; a dock that went away while
-//! jobs ran finds them there and reports them as cut.
+//! still hears about it exactly once. The jobs are kept in a store (their state, a subagent's result, and an end event's
+//! last lines until it is acknowledged; never the rest of the output); a dock that went away while jobs ran finds them
+//! there and reports them as cut.
 //!
 //! Subagents (`agent`) are jobs too: a `pi` run in JSON mode whose last answer is the job's result.
 
@@ -443,8 +444,9 @@ fn own_group(command: &mut Command) {
     }
 }
 
-/// Runs `line` with `bash -c` in `folder`, stdout and stderr into one pipe so their lines interleave as printed.
-/// Called on the spawner thread only.
+/// Runs `line` with `bash -c` in `folder`, stdout and stderr into one pipe so their lines interleave as printed. Its
+/// environment is `env` alone (Pi sends all of its own): the dock's would bring back what Pi's start took out, such as
+/// the provider keys. Called on the spawner thread only.
 fn spawn_process(line: &str, folder: &Path, env: &[(String, String)]) -> std::io::Result<(Child, File)> {
     let (read, write) = pipe()?;
     let mut command = Command::new("bash");
@@ -452,6 +454,7 @@ fn spawn_process(line: &str, folder: &Path, env: &[(String, String)]) -> std::io
         .arg("-c")
         .arg(line)
         .current_dir(folder)
+        .env_clear()
         .envs(env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .stdout(Stdio::from(write.try_clone()?))
@@ -502,14 +505,17 @@ fn read_output(id: String, pipe: File, state: Arc<Mutex<State>>, _drained: mpsc:
         let line = clean(&bytes);
         let mut s = state.lock().unwrap();
         let Some(entry) = s.entry(&id) else { break };
-        if entry.job.url.is_none() {
-            entry.job.url = detect_url(&line);
-        }
+        // Only the URL is shown in the list: a chatty process must not have the whole list sent four times a second
+        // (the page's Output view asks for the lines itself).
+        let found = entry.job.url.is_none().then(|| detect_url(&line)).flatten();
         entry.output.push_back(line);
         while entry.output.len() > OUTPUT_LINES {
             entry.output.pop_front();
         }
-        s.dirty = true;
+        if found.is_some() {
+            entry.job.url = found;
+            s.dirty = true;
+        }
     }
 }
 
@@ -978,6 +984,27 @@ mod tests {
     }
 
     #[test]
+    fn the_docks_own_env_does_not_reach_a_process() {
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, jobs, _) = jobs();
+        std::env::set_var("ARIA_TEST_DOCK_ONLY", "leaked");
+        let line = r#"echo "${ARIA_TEST_DOCK_ONLY:-absent} $X""#;
+        let job = jobs.start_process(ProcessStart {
+            session: "s1".into(),
+            title: "env".into(),
+            command: line.into(),
+            line: line.into(),
+            folder: dir.path().to_path_buf(),
+            env: vec![("X".into(), "sent".into())],
+        });
+        std::env::remove_var("ARIA_TEST_DOCK_ONLY");
+        let job = job.unwrap();
+        eventually("the line", Duration::from_secs(2), || {
+            jobs.output(&job.id, 10) == Some(vec!["absent sent".to_string()])
+        });
+    }
+
+    #[test]
     fn changes_are_reported_at_most_four_times_a_second() {
         let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (dir, jobs, changes) = jobs();
@@ -988,6 +1015,20 @@ mod tests {
         std::thread::sleep(Duration::from_millis(300));
         let seen = changes.load(Ordering::SeqCst);
         assert!((1..=5).contains(&seen), "{seen} changes");
+    }
+
+    #[test]
+    fn output_after_the_url_changes_nothing_the_page_shows() {
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, jobs, changes) = jobs();
+        let job = start(&jobs, dir.path(), "echo http://localhost:3000; sleep 0.5; seq 300; sleep 5");
+        eventually("the url", Duration::from_secs(2), || jobs.get(&job.id).unwrap().url.is_some());
+        std::thread::sleep(Duration::from_millis(300));
+        let before = changes.load(Ordering::SeqCst);
+        eventually("the burst", Duration::from_secs(3), || jobs.output(&job.id, 400).is_some_and(|o| o.len() == 301));
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(changes.load(Ordering::SeqCst), before, "no list update for output lines");
+        jobs.stop_all();
     }
 
     #[test]
