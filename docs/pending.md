@@ -78,11 +78,14 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
 
 - Click-through: the whole 700 px panel takes clicks; a click on the veil closes the dock instead of passing through to the app below.
 - Desktop notifications come from `osascript`; clicking one does not open the dock (an unbundled app has no notification action). The chat still posts one when a prompt is hidden.
-- On macOS, still to check on the Mac (they cannot be built here): a missing page file is served as an empty 200
-  (`dock/mac.rs`, GTK answers NotFound); the hotkey and screen tests in `aria-mac` mostly check their own constants;
-  `cargo fmt` on the Mac files. The installer gives up waiting for the old agent after 5 s, and `bootstrap` then fails
-  after the binary was replaced.
-- `crates/aria/src/dock/mac.rs` repeats the page queue, the open/close generations and the notice timing of `dock/gtk.rs`; sharing them needs the Mac build to verify.
+- Checked on the Mac (2026-10-21): the dock runs, `cargo test --workspace` passes, and so does
+  `install/install-mac.test.sh`. Still open:
+  - A missing page file is served as an empty 200 (`dock/mac.rs`, logged as "missing page asset"); GTK answers
+    NotFound.
+  - The `aria-mac` hotkey test checks its own constants; the screen tests check the geometry only.
+  - The installer gives up waiting for the old agent after 5 s, and `bootstrap` then fails after the binary was
+    replaced.
+- `crates/aria/src/dock/mac.rs` repeats the page queue, the open/close generations and the notice timing of `dock/gtk.rs`; they can be shared now that the Mac build is at hand.
 - The owner's `sandbox` extension uses `bwrap` (Linux). On macOS there is no box yet: every command asks first with the permission card (`extensions/sandbox/route.ts`). A Seatbelt (`sandbox-exec`) profile with the same limits is the macOS sandbox still to design; some of its tests assume Linux paths.
 - No `.app` bundle, signing or notarization, so the standard "open at login" UI and notification actions wait.
 - The panel opens on the screen under the pointer and joins all spaces; multi-monitor and full-screen behavior needs manual testing on the owner's layout.
