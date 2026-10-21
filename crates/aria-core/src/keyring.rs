@@ -87,6 +87,77 @@ impl Backend for MemoryBackend {
     }
 }
 
+/// `security`'s exit code for an item that is not there.
+const MAC_MISSING: i32 = 44;
+/// `security -i` cuts its input lines at 4095 characters (checked on macOS 26): every line Aria writes stays below.
+const MAC_LINE: usize = 4000;
+/// The longest base64 text one item holds; a longer value is kept in pieces.
+const PIECE: usize = 3000;
+/// What an item holds when its value is in pieces: `chunks:<n>`, never base64 (which has no `:`).
+const PIECES: &str = "chunks:";
+
+/// The stored texts of a keychain, below the values: base64, or the `chunks:<n>` mark.
+pub trait Raw {
+    fn raw_get(&self, account: &str) -> Result<Option<String>, KeyringError>;
+    fn raw_set(&self, account: &str, text: &str) -> Result<(), KeyringError>;
+    fn raw_delete(&self, account: &str) -> Result<(), KeyringError>;
+}
+
+fn piece(account: &str, n: usize) -> String {
+    format!("{account}#{n}")
+}
+
+fn pieces(text: &Option<String>) -> usize {
+    text.as_deref().and_then(|t| t.strip_prefix(PIECES)).and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
+/// Stores `value`, in pieces when its base64 is long: the pieces first and the mark last, so a reader never sees a mix;
+/// pieces an earlier, longer value left are removed after.
+pub fn chunked_set(raw: &dyn Raw, account: &str, value: &str) -> Result<(), KeyringError> {
+    let text = encode(value);
+    let before = pieces(&raw.raw_get(account)?);
+    let now = if text.len() <= PIECE {
+        raw.raw_set(account, &text)?;
+        0
+    } else {
+        let parts: Vec<&str> = text.as_bytes().chunks(PIECE).map(|c| std::str::from_utf8(c).expect("base64")).collect();
+        for (n, part) in parts.iter().enumerate() {
+            raw.raw_set(&piece(account, n), part)?;
+        }
+        raw.raw_set(account, &format!("{PIECES}{}", parts.len()))?;
+        parts.len()
+    };
+    for n in now..before {
+        raw.raw_delete(&piece(account, n))?;
+    }
+    Ok(())
+}
+
+pub fn chunked_get(raw: &dyn Raw, account: &str) -> Result<Option<String>, KeyringError> {
+    let Some(text) = raw.raw_get(account)? else { return Ok(None) };
+    let count = pieces(&Some(text.clone()));
+    if count == 0 {
+        return decode(&text).map(Some);
+    }
+    let mut whole = String::new();
+    for n in 0..count {
+        let part = raw
+            .raw_get(&piece(account, n))?
+            .ok_or_else(|| KeyringError::Failed(format!("{account}: a piece is missing")))?;
+        whole.push_str(&part);
+    }
+    decode(&whole).map(Some)
+}
+
+pub fn chunked_delete(raw: &dyn Raw, account: &str) -> Result<(), KeyringError> {
+    let count = pieces(&raw.raw_get(account)?);
+    raw.raw_delete(account)?;
+    for n in 0..count {
+        raw.raw_delete(&piece(account, n))?;
+    }
+    Ok(())
+}
+
 /// The login keychain through `security`. A write goes through `security -i` with the command on stdin, so the secret is
 /// never in a process's arguments. Items carry no access list of their own: their creator, `security`, reads, updates and
 /// deletes them without a dialog, while `-T` on an update would ask macOS to change the list and raise one each time.
@@ -96,33 +167,38 @@ pub struct MacBackend {
     pub service: String,
 }
 
-/// `security`'s exit code for an item that is not there.
-const MAC_MISSING: i32 = 44;
-
 impl MacBackend {
-    /// `security -i` reads double-quoted words; a service or account with a quote in it cannot be written safely.
-    fn quoted(&self, account: &str) -> Result<(String, String), KeyringError> {
-        if self.service.contains('"') || account.contains('"') {
-            return Err(KeyringError::Failed("a service or account with a double quote".into()));
+    /// `security -i` reads double-quoted words on one line: a quote, a backslash or a control character in a name could end
+    /// the word or the line (and start another command), so such a name is refused.
+    fn checked<'a>(&self, account: &'a str) -> Result<&'a str, KeyringError> {
+        let unsafe_char = |c: char| c == '"' || c == '\\' || c.is_control();
+        if self.service.chars().any(unsafe_char) || account.chars().any(unsafe_char) {
+            return Err(KeyringError::Failed("a service or account Aria cannot write safely".into()));
         }
-        Ok((format!("\"{}\"", self.service), format!("\"{account}\"")))
+        Ok(account)
     }
 }
 
-impl Backend for MacBackend {
-    fn get(&self, account: &str) -> Result<Option<String>, KeyringError> {
+impl Raw for MacBackend {
+    fn raw_get(&self, account: &str) -> Result<Option<String>, KeyringError> {
+        let account = self.checked(account)?;
         let output = run(&self.program, &["find-generic-password", "-s", &self.service, "-a", account, "-w"], None)?;
         match output.status.code() {
-            Some(0) => decode(&String::from_utf8_lossy(&output.stdout)).map(Some),
+            Some(0) => Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_string())),
             Some(MAC_MISSING) => Ok(None),
             _ => Err(failed("security", &output)),
         }
     }
 
-    fn set(&self, account: &str, value: &str) -> Result<(), KeyringError> {
-        let (service, quoted) = self.quoted(account)?;
-        let label = format!("\"{}:{account}\"", self.service);
-        let line = format!("add-generic-password -U -s {service} -a {quoted} -l {label} -w {}\n", encode(value));
+    fn raw_set(&self, account: &str, text: &str) -> Result<(), KeyringError> {
+        let account = self.checked(account)?;
+        let line = format!(
+            "add-generic-password -U -s \"{service}\" -a \"{account}\" -l \"{service}:{account}\" -w {text}\n",
+            service = self.service
+        );
+        if line.len() >= MAC_LINE {
+            return Err(KeyringError::Failed("a keychain line security would cut".into()));
+        }
         let output = run(&self.program, &["-i"], Some(&line))?;
         if !output.status.success() || !output.stderr.is_empty() {
             return Err(failed("security", &output));
@@ -130,12 +206,25 @@ impl Backend for MacBackend {
         Ok(())
     }
 
-    fn delete(&self, account: &str) -> Result<(), KeyringError> {
+    fn raw_delete(&self, account: &str) -> Result<(), KeyringError> {
+        let account = self.checked(account)?;
         let output = run(&self.program, &["delete-generic-password", "-s", &self.service, "-a", account], None)?;
         match output.status.code() {
             Some(0) | Some(MAC_MISSING) => Ok(()),
             _ => Err(failed("security", &output)),
         }
+    }
+}
+
+impl Backend for MacBackend {
+    fn get(&self, account: &str) -> Result<Option<String>, KeyringError> {
+        chunked_get(self, account)
+    }
+    fn set(&self, account: &str, value: &str) -> Result<(), KeyringError> {
+        chunked_set(self, account, value)
+    }
+    fn delete(&self, account: &str) -> Result<(), KeyringError> {
+        chunked_delete(self, account)
     }
 }
 
@@ -257,7 +346,7 @@ mod tests {
         let keyring = MacBackend { program: fake(dir.path(), "exit 0"), service: "aria:/t".into() };
         keyring.set("key:x", "s3cr3t'").unwrap();
         let argv = log(dir.path(), "argv.log");
-        assert_eq!(argv.trim(), "-i");
+        assert_eq!(argv.lines().last(), Some("-i"), "the write is `security -i` (a read comes first, for old pieces)");
         assert!(!argv.contains("s3cr3t"));
         let stdin = log(dir.path(), "stdin.log");
         assert!(stdin.contains(r#"add-generic-password -U -s "aria:/t" -a "key:x""#), "{stdin}");
@@ -293,6 +382,62 @@ mod tests {
         assert!(matches!(keyring.set("key:x", "v"), Err(KeyringError::Failed(_))));
     }
 
+    /// A keychain in memory that refuses a stored text as long as the `security -i` line `security` would cut.
+    #[derive(Debug, Default)]
+    struct ShortLines {
+        items: Mutex<BTreeMap<String, String>>,
+    }
+
+    impl Raw for ShortLines {
+        fn raw_get(&self, account: &str) -> Result<Option<String>, KeyringError> {
+            Ok(self.items.lock().unwrap().get(account).cloned())
+        }
+        fn raw_set(&self, account: &str, text: &str) -> Result<(), KeyringError> {
+            assert!(text.len() + account.len() + 120 < MAC_LINE, "a line of {} would be cut", text.len());
+            self.items.lock().unwrap().insert(account.to_string(), text.to_string());
+            Ok(())
+        }
+        fn raw_delete(&self, account: &str) -> Result<(), KeyringError> {
+            self.items.lock().unwrap().remove(account);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_large_value_is_stored_in_pieces_and_read_whole() {
+        let keyring = ShortLines::default();
+        let big: String = (0..20_000).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        chunked_set(&keyring, "file:mcp-auth.json", &big).unwrap();
+        assert!(keyring.items.lock().unwrap().len() > 2, "stored in pieces");
+        assert_eq!(chunked_get(&keyring, "file:mcp-auth.json").unwrap().as_deref(), Some(big.as_str()));
+        // Smaller again: one item, and the old pieces gone.
+        chunked_set(&keyring, "file:mcp-auth.json", "small").unwrap();
+        assert_eq!(keyring.items.lock().unwrap().len(), 1);
+        assert_eq!(chunked_get(&keyring, "file:mcp-auth.json").unwrap().as_deref(), Some("small"));
+        chunked_set(&keyring, "file:mcp-auth.json", &big).unwrap();
+        chunked_delete(&keyring, "file:mcp-auth.json").unwrap();
+        assert!(keyring.items.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_missing_piece_is_an_error_not_a_short_value() {
+        let keyring = ShortLines::default();
+        let big = "x".repeat(10_000);
+        chunked_set(&keyring, "k", &big).unwrap();
+        keyring.items.lock().unwrap().remove("k#1");
+        assert!(matches!(chunked_get(&keyring, "k"), Err(KeyringError::Failed(_))));
+    }
+
+    #[test]
+    fn a_name_with_a_control_character_or_backslash_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let keyring = MacBackend { program: fake(dir.path(), "exit 0"), service: "aria".into() };
+        for account in ["mcp:a\ndelete-keychain x:env:K", "mcp:a\\b:env:K", "mcp:\tx:env:K"] {
+            assert!(matches!(keyring.set(account, "v"), Err(KeyringError::Failed(_))), "{account:?}");
+        }
+        assert_eq!(log(dir.path(), "argv.log"), "", "security never ran");
+    }
+
     #[test]
     fn linux_store_reads_stdin_and_lookup_decodes() {
         let dir = tempfile::tempdir().unwrap();
@@ -323,6 +468,12 @@ mod tests {
         // An update of an item that exists: it must not raise a dialog (the test would hang).
         keyring.set("key:live", "second").unwrap();
         assert_eq!(keyring.get("key:live").unwrap().as_deref(), Some("second"));
+        // A value longer than one `security -i` line: kept in pieces, read back whole, and every piece removed.
+        let big: String = (0..10_000).map(|i| char::from(b'!' + (i % 90) as u8)).collect();
+        keyring.set("key:live", &big).unwrap();
+        assert_eq!(keyring.get("key:live").unwrap().as_deref(), Some(big.as_str()));
+        keyring.delete("key:live").unwrap();
+        assert_eq!(keyring.raw_get("key:live#0").unwrap(), None);
         keyring.delete("key:live").unwrap();
         assert_eq!(keyring.get("key:live").unwrap(), None);
     }
