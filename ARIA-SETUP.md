@@ -17,9 +17,9 @@ Snapshot of the Pi setup behind Aria, as of 2026-10-18. Everything lives in `~/.
 
 ## B. Defaults
 
-7. **Daily model:** `opencode-go/deepseek-v4.1-flash`. Never `opencode/*` (Zen, pay per use) unless the user names the model.
+7. **Daily model:** `opencode-go/mimo-v2.6-flash`. Never `opencode/*` (Zen, pay per use) unless the user names the model.
 8. **Classifier:** `opencode/jev-1.13-free`, exact id (`jev-1.13` is paid).
-9. **`/plan` model:** `opencode-go/glm-5.3` at `high` effort.
+9. **`/plan` model:** `opencode-go/mimo-v2.6-pro` at `high` effort.
 10. **Free fallback model:** `opencode-go/cat-jam-free`, from 98% of the Go quota (90% in `/plan`), always asking first. Only OpenCode Go has a free tier, so only it offers fallback models.
 11. **Claude Max:** provider `claude-bridge`, settings in `claude-bridge.json` (Max plan by default).
 12. **Compaction:** 40% by default; **90% today** (`autocompact.json`).

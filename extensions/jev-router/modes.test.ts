@@ -92,7 +92,7 @@ describe("plan mode follows Aria's settings", () => {
       expect(planQuotaThreshold()).toBe(80)
     }))
 
-  test('without a config the plan model is glm-5.3 at high, switching at 90%', () =>
+  test('without a config the plan model is mimo-v2.6-pro at high, switching at 90%', () =>
     withConfig(null, () => {
       expect(planModel()).toEqual(PLAN_MODEL)
       expect(planThinking()).toBe('high')

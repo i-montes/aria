@@ -31,11 +31,11 @@ Check kinds:
 | 5 | `pi-claude-agent-sdk` (0.9.2), the `claude-bridge` provider | test | `crates/aria-core/src/agent.rs::the_install_command_runs_the_pinned_pi_in_aria_s_agent_dir_with_the_shims_first` | pass 2026-10-19 |
 | 5 | The local `meeting` package | out-of-scope | The owner's local package, left out of phase 2. | out of scope |
 | 6 | OpenPencil | out-of-scope | The owner's integration, left out of phase 2. | out of scope |
-| 7 | Daily model `opencode-go/deepseek-v4.1-flash` | test | `crates/aria-core/src/providers.rs::apply_opencode_go` | pass 2026-10-19 |
-| 7 | The daily model is Pi's default | test | `crates/aria-core/src/agent.rs::sets_default_provider_and_model_from_the_daily_model` | pass 2026-10-19 |
-| 7 | Never `opencode/*` unless allowed | test | `ui/chat/parts/models.test.js::are hidden unless allowed` | pass 2026-10-19 |
+| 7 | Daily model `opencode-go/mimo-v2.6-flash` | test | `crates/aria-core/src/providers.rs::apply_opencode_go` | pass 2026-10-21 |
+| 7 | The daily model is Pi's default | test | `crates/aria-core/src/agent.rs::sets_default_provider_and_model_from_the_daily_model` | pass 2026-10-21 |
+| 7 | Never `opencode/*` unless allowed | test | `ui/chat/parts/models.test.js::are hidden unless allowed` | pass 2026-10-21 |
 | 8 | Classifier `opencode/jev-1.13-free`, exact id | test | `extensions/jev-router/route.test.ts::the classifier is the free Jev` | pass 2026-10-19 |
-| 9 | `/plan` on `glm-5.3` at `high` | test | `extensions/jev-router/modes.test.ts::without a config the plan model is glm-5.3 at high, switching at 90%` | pass 2026-10-19 |
+| 9 | `/plan` on `mimo-v2.6-pro` at `high` | test | `extensions/jev-router/modes.test.ts::without a config the plan model is mimo-v2.6-pro at high, switching at 90%` | pass 2026-10-21 |
 | 10 | Free fallback `cat-jam-free` from 98% | test | `extensions/quota-fallback/fallback.test.ts::without a config: cat-jam-free at 98%, five minutes` | pass 2026-10-19 |
 | 10 | Always asking first | test | `extensions/lib/config.test.ts::without aria.json every value is today` | pass 2026-10-19 |
 | 10 | Only OpenCode Go offers fallback models | test | `crates/aria-core/src/agent_config.rs::a_provider_without_a_free_tier_has_no_quota_section` | pass 2026-10-19 |

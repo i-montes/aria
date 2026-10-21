@@ -15,8 +15,8 @@ import { type AriaConfig, ariaConfig, DEFAULTS, type Model } from '../lib/config
 
 export type Mode = 'normal' | 'plan' | 'execute'
 
-// The user picked this model for planning (2026-10-13, trying glm-5.3 after deepseek-v4-pro); it
-// stays inside the OpenCode Go plan.
+// The user picked this model for planning (2026-10-21, mimo-v2.6-pro after glm-5.3 and deepseek-v4-pro);
+// it stays inside the OpenCode Go plan.
 export const PLAN_MODEL = DEFAULTS.models.plan
 /** The planning model: Aria's setting, or PLAN_MODEL. */
 export const planModel = (): Model => ariaConfig().models.plan

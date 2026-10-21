@@ -54,6 +54,8 @@ static PROVIDERS: [ProviderModule; 3] = [
         auth: AuthKind::ApiKey,
         auth_entries: &["opencode-go", "opencode"],
         models: &[
+            model("opencode-go/mimo-v2.6-flash", "MiMo V2.6 Flash"),
+            model("opencode-go/mimo-v2.6-pro", "MiMo V2.6 Pro"),
             model("opencode-go/deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
             model("opencode-go/glm-5.3", "GLM 5.3"),
             model("opencode-go/kimi-k3", "Kimi K3"),
@@ -72,8 +74,8 @@ static PROVIDERS: [ProviderModule; 3] = [
             on_no_answer: "switch",
         }),
         includes_jev: true,
-        daily_default: "opencode-go/deepseek-v4.1-flash",
-        planning_default: "opencode-go/glm-5.3",
+        daily_default: "opencode-go/mimo-v2.6-flash",
+        planning_default: "opencode-go/mimo-v2.6-pro",
     },
     ProviderModule {
         id: "anthropic-api",
@@ -169,8 +171,8 @@ mod tests {
         assert_eq!(quota.free_model, "opencode-go/cat-jam-free");
         assert!(quota.ask_first);
         assert_eq!((quota.countdown_minutes, quota.on_no_answer.as_str()), (5, "switch"));
-        assert_eq!(s.models.daily.as_deref(), Some("opencode-go/deepseek-v4.1-flash"));
-        assert_eq!(s.models.planning.as_deref(), Some("opencode-go/glm-5.3"));
+        assert_eq!(s.models.daily.as_deref(), Some("opencode-go/mimo-v2.6-flash"));
+        assert_eq!(s.models.planning.as_deref(), Some("opencode-go/mimo-v2.6-pro"));
         assert_eq!((s.router.enabled, s.router.backend.as_str()), (true, "opencode"));
         assert_eq!(s.effort.mode, "auto");
         assert!(s.sandbox.jev_review);

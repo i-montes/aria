@@ -69,7 +69,7 @@ mod tests {
     fn todays() -> Value {
         json!({
             "version": 1,
-            "models": { "plan": { "provider": "opencode-go", "id": "glm-5.3" }, "planThinking": "high", "allowPayPerUse": false },
+            "models": { "plan": { "provider": "opencode-go", "id": "mimo-v2.6-pro" }, "planThinking": "high", "allowPayPerUse": false },
             "quota": { "switchAt": 98, "planSwitchAt": 90, "freeModel": { "provider": "opencode-go", "id": "cat-jam-free" },
                        "askFirst": true, "countdownMs": 300000, "onNoAnswer": "switch" },
             "router": { "enabled": true },

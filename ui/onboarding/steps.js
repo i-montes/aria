@@ -13,6 +13,8 @@ export const PROVIDERS = [
     keyProvider: 'opencode-go',
     jevIncluded: true,
     models: [
+      { id: 'opencode-go/mimo-v2.6-flash', label: 'MiMo V2.6 Flash' },
+      { id: 'opencode-go/mimo-v2.6-pro', label: 'MiMo V2.6 Pro' },
       { id: 'opencode-go/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash' },
       { id: 'opencode-go/glm-5.3', label: 'GLM 5.3' },
       { id: 'opencode-go/kimi-k3', label: 'Kimi K3' },
@@ -23,8 +25,8 @@ export const PROVIDERS = [
       { id: 'opencode-go/longcat-2.5-preview-free', label: 'Longcat 2.5 preview (free)' },
     ],
     quota: { switchAt: 98, planSwitchAt: 90, freeModel: 'opencode-go/cat-jam-free', askFirst: true, countdownMinutes: 5, onNoAnswer: 'switch' },
-    daily: 'opencode-go/deepseek-v4.1-flash',
-    planning: 'opencode-go/glm-5.3',
+    daily: 'opencode-go/mimo-v2.6-flash',
+    planning: 'opencode-go/mimo-v2.6-pro',
   },
   {
     id: 'anthropic-api',
