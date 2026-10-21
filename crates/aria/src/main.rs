@@ -3,6 +3,7 @@
 //! is not running. `aria update-ready` (run by the installer after it replaced the files) asks the running dock to
 //! restart into the new binary as soon as it is hidden and no session has a run going; it fails when no dock answers,
 //! and the installer then restarts the service itself.
+//! `aria --version` prints the version.
 
 mod attachments;
 mod chat;
@@ -46,9 +47,10 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("--version" | "-V" | "version") => println!("aria {}", env!("CARGO_PKG_VERSION")),
         None => run_dock(),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show|update-ready]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show|update-ready|--version]");
             std::process::exit(2);
         }
     }
@@ -170,6 +172,7 @@ fn run_dock() {
     // Option + Space on macOS) until the one in use is known, and again whenever it changes.
     let default_hotkey = InUse { shortcut: default_shortcut(ShortcutPlatform::current()), taken: Vec::new() };
     dock.send(&DockMessage::platform(&default_hotkey, ShortcutPlatform::current()));
+    dock.send(&DockMessage::Version { version: env!("CARGO_PKG_VERSION").into() });
     if first_run {
         dock.show_notice();
     }

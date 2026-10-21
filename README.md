@@ -81,9 +81,13 @@ bun test extensions         # the owner's Pi extensions that run inside Aria (th
 sh install/install.test.sh  # the installer's Omarchy branch, without touching your system (skipped on macOS)
 sh install/install-mac.test.sh  # the installer's macOS branch (skipped on Omarchy)
 sh tools/check-macos.sh     # type-checks the macOS build from Linux (clippy for aarch64-apple-darwin, zig through mise; nothing runs)
+sh tools/release.test.sh    # the release script, in a scratch repository
 ARIA_DEBUG=1 target/release/aria   # logs state changes and the page's console to the terminal
 ARIA_HOME=$(mktemp -d) target/release/aria   # try a first run without touching ~/.aria
 ```
+
+Versions follow SemVer and are git tags (`vX.Y.Z`); what each one changed is in [RELEASES.md](RELEASES.md), and
+`sh tools/release.sh X.Y.Z` makes the next one. `aria --version` says which one is installed.
 
 ## Contributing a provider or a platform
 

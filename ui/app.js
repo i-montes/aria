@@ -10,7 +10,7 @@ import { keyName } from './onboarding/shortcut.js'
 let i18n = createI18n({})
 const t = (key, vars) => i18n.t(key, vars)
 // mode: `setup` (the onboarding) or `chat`. `hotkey`, `taken` and `os` are the dock's last `platform` message.
-const state = { problem: null, mode: 'setup', hotkey: 'Super + A', taken: [], os: 'linux' }
+const state = { problem: null, mode: 'setup', hotkey: 'Super + A', taken: [], os: 'linux', version: '' }
 
 // ---- bridge ----------------------------------------------------------------------------------
 
@@ -68,6 +68,10 @@ const handlers = {
   jobs: (message) => booted.then(() => chat.setJobs(message.jobs)),
   // The shortcut in use (`Super + A` on Omarchy, `Option + Space` on macOS, or what the settings chose), sent again
   // whenever it changes; `taken`, the ones tried before it; `os`, which modifier names the Shortcut row records.
+  // Aria's version, sent once when the dock starts; the settings overview shows it.
+  version: (message) => {
+    if (typeof message.version === 'string') state.version = message.version
+  },
   platform: (message) => {
     // An empty hotkey: none could be registered (every candidate is in `taken`).
     if (typeof message.hotkey === 'string') state.hotkey = message.hotkey
@@ -173,6 +177,7 @@ const onboarding = createOnboarding({
   browserLanguage: () => normalizeLanguage(navigator.language),
   hotkey: () => state.hotkey,
   platform: () => ({ hotkey: state.hotkey, taken: state.taken, os: state.os }),
+  version: () => state.version,
   // The settings' model fields list what Pi really offers (the chat's own `listModels`).
   listModels: () => chat.listModels(),
   // "Start using Aria" / "Close" on the last screen: on to the chat.

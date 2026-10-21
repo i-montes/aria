@@ -813,6 +813,12 @@ export function createOnboarding(env) {
     return state.section ? settingsSectionHtml() : settingsOverviewHtml()
   }
 
+  /** The overview's corner: where the settings live, and which Aria this is (`Aria 0.2.0`) once the dock said. */
+  function settingsMeta() {
+    const version = env.version?.()
+    return version ? `~/.aria/settings.json · Aria ${version}` : '~/.aria/settings.json'
+  }
+
   function settingsOverviewHtml() {
     const values = summaryValues()
     const blocked = new Set(blockedSections().map((section) => section.id))
@@ -824,7 +830,7 @@ export function createOnboarding(env) {
         </button>`)
       .join('')
     return `
-      ${renderPanelHead({ back: { attrs: 'data-nav data-action="settings-exit" data-key="settings-exit"', label: t('settings.back') }, title: t('settings.title'), meta: '~/.aria/settings.json' })}
+      ${renderPanelHead({ back: { attrs: 'data-nav data-action="settings-exit" data-key="settings-exit"', label: t('settings.back') }, title: t('settings.title'), meta: settingsMeta() })}
       <p class="intro settings-intro">${c.esc(t('settings.desc'))}</p>
       <div class="settings-cards">${cards}</div>
       ${settingsBar()}`

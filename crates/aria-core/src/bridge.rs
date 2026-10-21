@@ -146,6 +146,9 @@ pub enum DockMessage {
     /// could be registered (macOS, every candidate taken; `taken` lists them all).
     #[serde(rename = "platform")]
     Platform { hotkey: String, taken: Vec<String>, os: String },
+    /// Aria's version (`0.2.0`, from the workspace's `Cargo.toml`), sent once when the dock starts; the settings show it.
+    #[serde(rename = "version")]
+    Version { version: String },
     /// `connected` names what is really set up, never a secret: `provider:type` for each credential in
     /// `auth.json` (`anthropic:oauth`) and `mcp:<service>` for each configured MCP service. `servers` names every server
     /// in Aria's `mcp.json` except `engram` (connected or not): the connectors whose access level the settings show.
@@ -507,6 +510,10 @@ mod tests {
         assert_eq!(value(DockMessage::Open { monitor: "DP-2".into() }), json!({"type": "open", "monitor": "DP-2"}));
         assert_eq!(value(DockMessage::Close), json!({"type": "close"}));
         assert_eq!(value(DockMessage::Notice), json!({"type": "notice"}));
+        assert_eq!(
+            value(DockMessage::Version { version: "0.2.0".into() }),
+            json!({"type": "version", "version": "0.2.0"})
+        );
         assert_eq!(
             value(DockMessage::Platform {
                 hotkey: "Control + Option + Space".into(),

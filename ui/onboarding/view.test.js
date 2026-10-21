@@ -552,6 +552,13 @@ describe('the settings screen', () => {
     expect(h.root.innerHTML).not.toContain('settings-save') // nothing changed, nothing to save
   })
 
+  test('the overview says which Aria this is once the dock told the version', () => {
+    expect(settingsHarness().root.innerHTML).not.toContain('Aria 0.')
+    const h = harness({ version: () => '0.2.0' })
+    h.ob.start(completed, ['opencode-go:api_key'])
+    expect(h.root.innerHTML).toContain('~/.aria/settings.json · Aria 0.2.0')
+  })
+
   test('a section shows every step it groups, with the quota only for a provider that has one', () => {
     const h = settingsHarness()
     h.click('settings-open', undefined, 'provider')
