@@ -2,6 +2,8 @@
 //! messages into Pi commands and Pi's events into dock messages, and asks for attention with a
 //! desktop notification when an extension dialog arrives while the dock is hidden.
 
+use crate::jobs::{Job, JobState, Jobs};
+use crate::jobs_socket::{self, AgentLaunch, JobsSocket, Launcher};
 use aria_core::agent;
 use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::files;
@@ -34,6 +36,11 @@ const PI_COMMANDS: [(&str, Duration); 3] = [
 ];
 const FILE_LIMIT: usize = 50;
 const QUOTA_MAX_AGE: Duration = Duration::from_secs(20);
+/// What a session with background work is told when an update has waited `UPDATE_NOTICE_AFTER` for that work alone.
+pub const UPDATE_WAITS: &str =
+    "An Aria update is waiting for the background work to finish; stop it from the background list to update now.";
+/// Output lines the page gets when its `jobOutput` names no number.
+const PAGE_OUTPUT_LINES: usize = 80;
 
 /// Raises and removes the desktop notification for a prompt nobody can see.
 ///
@@ -150,6 +157,9 @@ pub struct ChatCtx {
     pub path_var: String,
     /// Reads a provider's quota (a fake in tests).
     pub quota_fetcher: Arc<aria_core::quota::Fetcher>,
+    /// The dock's background work, every session's. One for the dock's whole life: its spawner thread is the parent
+    /// every job is tied to (`PR_SET_PDEATHSIG`), so the last clone going away ends them all.
+    pub jobs: Jobs,
 }
 
 #[derive(Default)]
@@ -173,6 +183,9 @@ struct Inner {
     told: bool,
     /// The socket this session's subagents stream to (kept across Pi restarts, removed when the tab closes).
     watch: Option<Arc<crate::watch::Watch>>,
+    /// The socket this session's Pi reaches its background work through (kept across Pi restarts, so a job that ends
+    /// while Pi restarts is heard by the next one; removed when the tab closes).
+    jobs: Option<JobsSocket>,
     /// A restart was asked while a run was going: it happens when the run settles.
     restart_pending: bool,
     /// Prompts sent and not yet accepted, by command id, so a refusal can name its text.
@@ -338,9 +351,7 @@ impl Chat {
         if std::mem::replace(&mut self.inner.lock().unwrap().told, true) {
             return;
         }
-        let notice = |message: String| {
-            self.emit(DockMessage::ChatEvent { event: json!({"type": "ui_notice", "request": {"method": "notify", "message": message, "notifyType": "warning"}}) });
-        };
+        let notice = |message: String| self.notice(message);
         if !kept.is_empty() {
             notice(format!("Aria kept your edited {} in ~/.aria/agent: its own updates to them are not applied. To get Aria's version back, delete the file and its line in ~/.aria/agent/.aria-files.", kept.join(", ")));
         }
@@ -352,9 +363,58 @@ impl Chat {
         }
     }
 
+    /// A warning in the chat, as an extension's `notify` shows.
+    fn notice(&self, message: String) {
+        self.emit(DockMessage::ChatEvent {
+            event: json!({"type": "ui_notice", "request": {"method": "notify", "message": message, "notifyType": "warning"}}),
+        });
+    }
+
     /// The tab closed: its subagent socket goes away.
     pub fn forget_watch(&self) {
         self.inner.lock().unwrap().watch = None;
+    }
+
+    /// The session's jobs socket, opened the first time Pi starts. Without one Pi runs without background work (its
+    /// tools say they need the dock).
+    fn jobs_socket(&self) -> Option<PathBuf> {
+        if let Some(socket) = self.inner.lock().unwrap().jobs.as_ref() {
+            return Some(socket.path().to_path_buf());
+        }
+        let path = jobs_socket::socket_path(&self.ctx.run_dir, &self.session);
+        let launcher = Arc::new(SessionLauncher { chat: self.clone() });
+        let socket = JobsSocket::bind(&path, self.session.clone(), self.ctx.jobs.clone(), launcher).ok()?;
+        let path = socket.path().to_path_buf();
+        self.inner.lock().unwrap().jobs = Some(socket);
+        Some(path)
+    }
+
+    /// The tab closed: its jobs socket goes away (and with it the launcher, which holds this chat).
+    pub fn forget_jobs(&self) {
+        self.inner.lock().unwrap().jobs = None;
+    }
+
+    /// How a subagent of this session runs: the `pi` shim with the session's environment, in its folder, watched by its
+    /// subagent socket. `model` `"session"` is the model and thinking level this session's Pi reported (the daily model
+    /// before it did); `"heavy"` is the planning model and its effort, or the session's when none is set. `None` when
+    /// there is neither a model nor settings to run with. Never panics: it runs on a socket thread.
+    fn agent_launch(&self, model: &str) -> Option<AgentLaunch> {
+        let settings = self.settings();
+        let (own, thinking, workdir, watch) = {
+            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            let watch = inner.watch.as_ref().map(|w| w.path().display().to_string());
+            (inner.model.clone(), inner.thinking.clone(), inner.workdir.clone(), watch)
+        };
+        let args = agent_args(model, own, thinking, settings.as_ref())?;
+        let workdir = workdir.unwrap_or_else(|| agent::workdir(settings.as_ref()));
+        let mut env = pi::session_env(&self.ctx.paths, &self.ctx.path_var, &workdir);
+        if let Some(path) = watch {
+            env.push(("PI_WATCH_SOCK".into(), path));
+        }
+        let mut unset = pi::unset_for_pi(std::env::vars());
+        // No background work inside background work.
+        unset.push("ARIA_JOBS_SOCK".into());
+        Some((self.ctx.paths.bin().join("pi"), args, env, unset))
     }
 
     fn current_engine(&self) -> Option<Arc<Engine>> {
@@ -452,6 +512,9 @@ impl Chat {
         let mut spec = spec;
         if let Some(watch) = self.watch() {
             spec.env.push(("PI_WATCH_SOCK".into(), watch.path().display().to_string()));
+        }
+        if let Some(path) = self.jobs_socket() {
+            spec.env.push(("ARIA_JOBS_SOCK".into(), path.display().to_string()));
         }
         let spec_args = spec.args.clone();
         let (engine, events) = Engine::spawn(spec).map_err(|_| "pi-failed")?;
@@ -877,6 +940,64 @@ impl Chat {
     }
 }
 
+/// The `--model`/`--thinking` a subagent runs with (see `Chat::agent_launch`).
+fn agent_args(
+    model: &str,
+    own: Option<String>,
+    thinking: Option<String>,
+    settings: Option<&Settings>,
+) -> Option<Vec<String>> {
+    let with_thinking = |model: String, thinking: Option<String>| {
+        let mut args = vec!["--model".to_string(), model];
+        if let Some(level) = thinking.filter(|level| !level.is_empty()) {
+            args.extend(["--thinking".to_string(), level]);
+        }
+        args
+    };
+    let planning = settings.and_then(|s| s.models.planning.clone().map(|m| (m, s.models.planning_effort.clone())));
+    match (model, planning) {
+        ("heavy", Some((planning, effort))) => Some(with_thinking(planning, Some(effort))),
+        _ => match own {
+            Some(own) => Some(with_thinking(own, thinking)),
+            // Pi's own default when the settings name no daily model either.
+            None => {
+                settings.map(|s| s.models.daily.clone().map(|daily| with_thinking(daily, None)).unwrap_or_default())
+            }
+        },
+    }
+}
+
+/// How the session's jobs socket starts subagents: as this chat's Pi would run them.
+struct SessionLauncher {
+    chat: Chat,
+}
+
+impl Launcher for SessionLauncher {
+    fn agent(&self, model: &str) -> Option<AgentLaunch> {
+        self.chat.agent_launch(model)
+    }
+
+    /// Names the subagent in the session's watch, so its card reads its title rather than the first line of its brief.
+    /// It runs on a jobs thread, which must never be taken down by it: a poisoned lock or a panic in the watch is
+    /// ignored (the card is then named after its task).
+    fn before_spawn(&self, job: &Job) {
+        let watch = self.chat.inner.lock().map(|inner| inner.watch.clone()).unwrap_or(None);
+        if let Some(watch) = watch {
+            let args = json!({"task": job.task, "agent": job.title});
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| watch.expect_tasks(&args)));
+        }
+    }
+}
+
+/// Every session's jobs, as the page's background list reads them.
+pub fn jobs_message(jobs: &Jobs) -> DockMessage {
+    DockMessage::Jobs { jobs: json!(jobs.list(None)) }
+}
+
+fn is_active(job: &Job) -> bool {
+    matches!(job.state, JobState::Queued | JobState::Running)
+}
+
 /// The dock's tabs: one `Chat` (and so one Pi) per session id, created the first time a message names it.
 #[derive(Clone)]
 pub struct Sessions {
@@ -989,7 +1110,12 @@ impl Sessions {
                     return;
                 }
                 if let Some(chat) = self.chat(&session) {
+                    let first_look = matches!(*message, PageMessage::ChatLoad);
                     chat.handle(*message);
+                    // The background list shows every session's jobs; a session's first look is the page's too.
+                    if first_look {
+                        (self.emit)(jobs_message(&self.ctx.jobs));
+                    }
                 }
             }
             PageMessage::SessionsLoad { id } => {
@@ -1014,7 +1140,17 @@ impl Sessions {
                 if let Some(chat) = chat {
                     chat.close_for_good();
                     chat.forget_watch();
+                    chat.forget_jobs();
                 }
+                self.close_jobs(session);
+            }
+            PageMessage::JobStop { job } => {
+                self.ctx.jobs.stop(&job);
+            }
+            PageMessage::JobDismiss { job } => self.ctx.jobs.dismiss(&job),
+            PageMessage::JobOutput { id, job, lines } => {
+                let lines = self.ctx.jobs.output(&job, lines.unwrap_or(PAGE_OUTPUT_LINES)).unwrap_or_default();
+                (self.emit)(DockMessage::JobOutput { id, lines });
             }
             _ => {}
         }
@@ -1027,9 +1163,55 @@ impl Sessions {
         }
     }
 
-    /// Some session has a run going or a dialog waiting: an update must not restart the dock now.
+    /// A closed tab's jobs stop (its queued subagents never start), and once they have ended its events are dropped:
+    /// nobody will ever acknowledge them. Off the caller's thread: a group has `STOP_GRACE` to go.
+    fn close_jobs(&self, session: String) {
+        let jobs = self.ctx.jobs.clone();
+        jobs.stop_session(&session);
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while jobs.list(Some(&session)).iter().any(is_active) && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            jobs.forget_session(&session);
+        });
+    }
+
+    /// At start: the jobs of sessions whose tab is gone (closed while the dock was away, or never saved) drop their
+    /// events, which nobody will ever acknowledge.
+    pub fn forget_gone_sessions(&self) {
+        let open: HashSet<String> =
+            sessions::load(&self.ctx.paths).sessions.into_iter().map(|entry| entry.id).collect();
+        let stored: HashSet<String> = self.ctx.jobs.list(None).into_iter().map(|job| job.session).collect();
+        for gone in stored.difference(&open) {
+            self.ctx.jobs.forget_session(gone);
+        }
+    }
+
+    /// Some session has a run going or a dialog waiting, or background work is running or queued: an update must not
+    /// restart the dock now (a restart would end that work).
     pub fn busy(&self) -> bool {
+        self.busy_without_jobs() || self.ctx.jobs.active() > 0
+    }
+
+    /// Some session has a run going or a dialog waiting (background work aside): when this is false and the dock is
+    /// still busy, the update waits for background work alone.
+    pub fn busy_without_jobs(&self) -> bool {
         self.chats.lock().unwrap().values().any(Chat::busy)
+    }
+
+    /// An update has waited long for background work alone: each session with work running or queued says so, with how
+    /// to update now.
+    pub fn tell_update_waits(&self) {
+        let waiting: HashSet<String> =
+            self.ctx.jobs.list(None).into_iter().filter(is_active).map(|job| job.session).collect();
+        let chats: Vec<Chat> = {
+            let chats = self.chats.lock().unwrap();
+            waiting.iter().filter_map(|session| chats.get(session).cloned()).collect()
+        };
+        for chat in chats {
+            chat.notice(UPDATE_WAITS.into());
+        }
     }
 
     /// Every Pi stops, as for a restart (what they started keeps running), and this returns once they are gone, so the
@@ -1175,6 +1357,7 @@ mod tests {
             run_dir: run_dir.clone(),
             path_var: "/usr/bin:/bin".into(),
             quota_fetcher,
+            jobs: Jobs::new(dir.path().join("jobs.json"), Arc::new(|| {})),
         };
         Harness {
             _turn: turn,
@@ -1493,6 +1676,7 @@ mod tests {
             run_dir: h.run_dir.clone(),
             path_var: "/nonexistent".into(),
             quota_fetcher: Arc::new(|_| None),
+            jobs: h.chat.ctx.jobs.clone(),
         };
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);
@@ -1712,6 +1896,7 @@ mod tests {
             run_dir: h.run_dir.clone(),
             path_var: "/usr/bin:/bin".into(),
             quota_fetcher: Arc::new(|_| None),
+            jobs: h.chat.ctx.jobs.clone(),
         };
         let sessions = Sessions::new(ctx, emit);
         SessionsHarness { h, sessions, messages }
@@ -2353,6 +2538,259 @@ mod tests {
         s.sessions.handle(PageMessage::SessionClose { session: "aa".into() });
         std::thread::sleep(Duration::from_millis(100));
         assert!(!path.exists());
+    }
+
+    // ---- background work ----------------------------------------------------------------------------
+
+    fn sleeper(jobs: &Jobs, session: &str, folder: &std::path::Path) -> crate::jobs::Job {
+        jobs.start_process(crate::jobs::ProcessStart {
+            session: session.into(),
+            title: "sleep".into(),
+            command: "sleep 30".into(),
+            line: "sleep 30".into(),
+            folder: folder.to_path_buf(),
+            env: Vec::new(),
+        })
+        .unwrap()
+    }
+
+    fn eventually(what: &str, test: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if test() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("{what}");
+    }
+
+    #[test]
+    fn pi_gets_the_jobs_socket() {
+        let h = harness();
+        ready(&h);
+        h.chat.test_send_raw("env_jobs");
+        let path = match wait_for(
+            &h,
+            "the socket path",
+            |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "env" && event.get("jobs").is_some()),
+        ) {
+            DockMessage::ChatEvent { event } => event["jobs"].as_str().unwrap().to_string(),
+            _ => unreachable!(),
+        };
+        assert!(path.ends_with("jobs-s1.sock"), "{path}");
+        assert!(std::path::Path::new(&path).exists(), "the socket is listening");
+    }
+
+    #[test]
+    fn closing_a_tab_stops_its_jobs() {
+        let s = sessions_harness();
+        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        let socket = s.h.run_dir.join("jobs-aa.sock");
+        assert!(socket.exists());
+        let jobs = s.sessions.ctx.jobs.clone();
+        let mine = sleeper(&jobs, "aa", s.h._dir.path());
+        let other = sleeper(&jobs, "bb", s.h._dir.path());
+        s.sessions.handle(PageMessage::SessionClose { session: "aa".into() });
+        eventually("the closed tab's job stopped", || {
+            jobs.get(&mine.id).is_some_and(|j| j.state == crate::jobs::JobState::Stopped)
+        });
+        eventually("nobody will ever ack a closed tab's events: they are dropped", || jobs.events("aa").is_empty());
+        assert_eq!(
+            jobs.get(&other.id).unwrap().state,
+            crate::jobs::JobState::Running,
+            "another tab's job keeps running"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!socket.exists(), "the closed tab's jobs socket is gone");
+        jobs.stop_all();
+    }
+
+    #[test]
+    fn background_jobs_keep_the_dock_busy() {
+        let s = sessions_harness();
+        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        wait_session(&s, "settled", "aa", settled);
+        assert!(!s.sessions.busy());
+        let jobs = s.sessions.ctx.jobs.clone();
+        sleeper(&jobs, "aa", s.h._dir.path());
+        assert!(s.sessions.busy(), "a running job keeps the update waiting");
+        assert!(!s.sessions.busy_without_jobs(), "only the job is in the way");
+        jobs.stop_all();
+        assert!(!s.sessions.busy());
+    }
+
+    #[test]
+    fn a_session_launcher_uses_the_sessions_model() {
+        use crate::jobs_socket::Launcher;
+        let h = harness();
+        h.chat.watch().expect("the watch socket");
+        {
+            let mut inner = h.chat.inner.lock().unwrap();
+            inner.model = Some("opencode-go/x".into());
+            inner.thinking = Some("high".into());
+        }
+        let launcher = SessionLauncher { chat: h.chat.clone() };
+        let (program, args, env, unset) = launcher.agent("session").expect("a launch");
+        assert_eq!(program, h.paths.bin().join("pi"));
+        assert_eq!(args, ["--model", "opencode-go/x", "--thinking", "high"]);
+        assert!(env.iter().any(|(k, v)| k == "PI_WATCH_SOCK" && v.ends_with("watch-s1.sock")), "{env:?}");
+        assert!(env.iter().any(|(k, _)| k == "PI_CODING_AGENT_DIR"), "{env:?}");
+        assert!(unset.iter().any(|name| name == "ARIA_JOBS_SOCK"), "{unset:?}");
+
+        let mut settings = settings::load(&h.paths).unwrap().unwrap();
+        settings.models.planning = Some("opencode-go/big".into());
+        settings.models.planning_effort = "xhigh".into();
+        settings::save(&h.paths, &settings).unwrap();
+        let (_, args, _, _) = launcher.agent("heavy").unwrap();
+        assert_eq!(args, ["--model", "opencode-go/big", "--thinking", "xhigh"]);
+
+        // Without a model of its own the session falls back to the daily model; with no settings and no model there is
+        // nothing to run.
+        h.chat.inner.lock().unwrap().model = None;
+        h.chat.inner.lock().unwrap().thinking = None;
+        let (_, args, _, _) = launcher.agent("session").unwrap();
+        assert_eq!(args, ["--model", "opencode-go/deepseek-v4.1-flash"]);
+        std::fs::remove_file(h.paths.settings()).unwrap();
+        assert!(launcher.agent("session").is_none());
+        assert!(launcher.agent("heavy").is_none());
+    }
+
+    #[test]
+    fn a_launcher_names_the_subagent_in_the_watch_before_it_starts() {
+        use crate::jobs_socket::Launcher;
+        use std::io::Write;
+        let h = harness();
+        ready(&h);
+        let launcher = SessionLauncher { chat: h.chat.clone() };
+        let mut job = sleeper(&h.chat.ctx.jobs, "s1", h._dir.path());
+        h.chat.ctx.jobs.stop_all();
+        job.title = "Fix the tests".into();
+        job.task = Some("Make the suite pass".into());
+        launcher.before_spawn(&job);
+        let path = h.run_dir.join("watch-s1.sock");
+        let mut child = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        writeln!(child, "{}", json!({"t": "prompt", "text": "Task: Make the suite pass\n\nWork in /x."})).unwrap();
+        wait_for(
+            &h,
+            "the named agent",
+            |m| matches!(m, DockMessage::ChatAgents { agents } if agents[0]["role"] == "Fix the tests"),
+        );
+    }
+
+    #[test]
+    fn the_page_reaches_every_job_from_any_session() {
+        let s = sessions_harness();
+        let jobs = s.sessions.ctx.jobs.clone();
+        let job = sleeper(&jobs, "aa", s.h._dir.path());
+        // The page's first look: any session's chatLoad brings the whole list, unwrapped.
+        s.sessions.handle(in_session("bb", PageMessage::ChatLoad));
+        let listed = loop {
+            match s.messages.recv_timeout(Duration::from_secs(5)).expect("the jobs list") {
+                DockMessage::Jobs { jobs } => break jobs,
+                _ => continue,
+            }
+        };
+        assert_eq!(listed[0]["id"], json!(job.id));
+        assert_eq!(listed[0]["session"], json!("aa"));
+        s.sessions.handle(PageMessage::JobOutput { id: 7, job: "j999".into(), lines: None });
+        let reply = loop {
+            match s.messages.recv_timeout(Duration::from_secs(5)).expect("the output") {
+                m @ DockMessage::JobOutput { .. } => break m,
+                _ => continue,
+            }
+        };
+        assert_eq!(reply, DockMessage::JobOutput { id: 7, lines: vec![] }, "an unknown job has no output");
+        s.sessions.handle(PageMessage::JobStop { job: job.id.clone() });
+        eventually("the job stopped", || jobs.get(&job.id).is_some_and(|j| j.state == crate::jobs::JobState::Stopped));
+        s.sessions.handle(PageMessage::JobDismiss { job: job.id.clone() });
+        assert!(jobs.get(&job.id).unwrap().dismissed);
+    }
+
+    #[test]
+    fn a_job_s_output_reaches_the_page() {
+        let s = sessions_harness();
+        let jobs = s.sessions.ctx.jobs.clone();
+        let job = jobs
+            .start_process(crate::jobs::ProcessStart {
+                session: "aa".into(),
+                title: "count".into(),
+                command: "seq 100".into(),
+                line: "seq 100".into(),
+                folder: s.h._dir.path().to_path_buf(),
+                env: Vec::new(),
+            })
+            .unwrap();
+        eventually("it ended", || jobs.get(&job.id).is_some_and(|j| j.state != crate::jobs::JobState::Running));
+        s.sessions.handle(PageMessage::JobOutput { id: 1, job: job.id.clone(), lines: None });
+        s.sessions.handle(PageMessage::JobOutput { id: 2, job: job.id.clone(), lines: Some(3) });
+        let mut replies = Vec::new();
+        while replies.len() < 2 {
+            if let DockMessage::JobOutput { id, lines } = s.messages.recv_timeout(Duration::from_secs(5)).unwrap() {
+                replies.push((id, lines));
+            }
+        }
+        assert_eq!(replies[0].1.len(), 80, "80 lines when the page names no number");
+        assert_eq!(replies[0].1.last().map(String::as_str), Some("100"));
+        assert_eq!(replies[1], (2, vec!["98".to_string(), "99".into(), "100".into()]));
+    }
+
+    #[test]
+    fn sessions_whose_tab_is_gone_are_forgotten_at_start() {
+        let s = sessions_harness();
+        let jobs = s.sessions.ctx.jobs.clone();
+        for session in ["aa", "gone"] {
+            let job = jobs
+                .start_process(crate::jobs::ProcessStart {
+                    session: session.into(),
+                    title: "true".into(),
+                    command: "true".into(),
+                    line: "true".into(),
+                    folder: s.h._dir.path().to_path_buf(),
+                    env: Vec::new(),
+                })
+                .unwrap();
+            eventually("it ended", || jobs.get(&job.id).is_some_and(|j| j.state != crate::jobs::JobState::Running));
+        }
+        let entries = vec![aria_core::sessions::SessionEntry { id: "aa".into(), title: "Kept".into() }];
+        aria_core::sessions::save(&s.h.paths, &SessionList { sessions: entries, active: None }).unwrap();
+        s.sessions.forget_gone_sessions();
+        assert_eq!(jobs.events("aa").len(), 1, "an open tab keeps its event for its Pi");
+        assert!(jobs.events("gone").is_empty(), "nobody will ever ack a gone tab's event");
+    }
+
+    #[test]
+    fn sessions_with_background_work_are_told_an_update_waits() {
+        let s = sessions_harness();
+        for id in ["aa", "bb"] {
+            s.sessions.handle(in_session(id, PageMessage::ChatLoad));
+            wait_session(&s, "its state", id, |m| matches!(m, DockMessage::ChatState { .. }));
+        }
+        let jobs = s.sessions.ctx.jobs.clone();
+        sleeper(&jobs, "aa", s.h._dir.path());
+        std::thread::sleep(Duration::from_millis(100));
+        while s.messages.try_recv().is_ok() {}
+        s.sessions.tell_update_waits();
+        let notice = wait_session(
+            &s,
+            "the notice",
+            "aa",
+            |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "ui_notice"),
+        );
+        match notice {
+            DockMessage::ChatEvent { event } => {
+                assert_eq!(event["request"]["notifyType"], json!("warning"));
+                assert_eq!(event["request"]["message"], json!(UPDATE_WAITS));
+            }
+            _ => unreachable!(),
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        let to_bb = std::iter::from_fn(|| s.messages.try_recv().ok()).any(|m| {
+            matches!(m, DockMessage::Session { ref session, ref message } if session == "bb" && matches!(**message, DockMessage::ChatEvent { .. }))
+        });
+        assert!(!to_bb, "a session without background work is not told");
+        jobs.stop_all();
     }
 
     #[cfg(target_os = "linux")]

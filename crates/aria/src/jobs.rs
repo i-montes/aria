@@ -23,8 +23,6 @@ mod agent;
 
 use crate::lines::read_line;
 
-// The dock starts subagents from Task 6's wiring on; until then only the tests do.
-#[allow(unused_imports)]
 pub use agent::AgentStart;
 
 /// Processes running at once, across every session.
@@ -47,6 +45,8 @@ const OUTPUT_DRAIN: Duration = Duration::from_millis(500);
 /// How long a stopped group has after SIGTERM before SIGKILL.
 const STOP_GRACE: Duration = Duration::from_secs(3);
 const THROTTLE: Duration = Duration::from_millis(250);
+/// How long an update waits for background work alone before the sessions with that work are told how to update now.
+pub const UPDATE_NOTICE_AFTER: Duration = Duration::from_secs(30 * 60);
 /// Bytes read of one line before the rest is skipped: a child that never prints a newline cannot grow the dock's memory.
 const LINE_BYTES: u64 = (LINE_CHARS * 4) as u64;
 

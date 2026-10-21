@@ -95,6 +95,15 @@ pub enum PageMessage {
     /// Close a session's Pi (its conversation stays in Pi's session file).
     #[serde(rename = "sessionClose")]
     SessionClose { session: String },
+    /// Stop a background job (any session's: the page lists them all) and whatever it forked.
+    #[serde(rename = "jobStop")]
+    JobStop { job: String },
+    /// The latest `lines` lines of a job's output (80 when absent); replies `jobOutput` with the same `id`.
+    #[serde(rename = "jobOutput")]
+    JobOutput { id: u64, job: String, lines: Option<usize> },
+    /// Hide a finished job from the background list.
+    #[serde(rename = "jobDismiss")]
+    JobDismiss { job: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -173,6 +182,13 @@ pub enum DockMessage {
     Session { session: String, message: Box<DockMessage> },
     #[serde(rename = "sessions")]
     Sessions { id: u64, sessions: Vec<SessionEntry>, active: Option<String> },
+    /// Every session's background jobs (crates/aria/src/jobs.rs `Job`, camelCase): running and queued first, then
+    /// finished, newest first. Sent whenever they change (at most four times a second) and on any session's `chatLoad`.
+    #[serde(rename = "jobs")]
+    Jobs { jobs: Value },
+    /// The answer to a `jobOutput`: empty when the job is unknown or keeps no output (a subagent).
+    #[serde(rename = "jobOutput")]
+    JobOutput { id: u64, lines: Vec<String> },
 }
 
 impl PageMessage {
@@ -379,6 +395,26 @@ mod tests {
         assert_eq!(
             value(DockMessage::Files { id: 10, files: vec!["a.rs".into()] }),
             json!({"type": "files", "id": 10, "files": ["a.rs"]})
+        );
+    }
+
+    #[test]
+    fn job_messages_round_trip() {
+        assert_eq!(page(r#"{"type":"jobStop","job":"j3"}"#), PageMessage::JobStop { job: "j3".into() });
+        assert_eq!(
+            page(r#"{"type":"jobOutput","id":4,"job":"j3"}"#),
+            PageMessage::JobOutput { id: 4, job: "j3".into(), lines: None }
+        );
+        assert_eq!(
+            page(r#"{"type":"jobOutput","id":5,"job":"j3","lines":200}"#),
+            PageMessage::JobOutput { id: 5, job: "j3".into(), lines: Some(200) }
+        );
+        assert_eq!(page(r#"{"type":"jobDismiss","job":"j3"}"#), PageMessage::JobDismiss { job: "j3".into() });
+        let value = |m: DockMessage| serde_json::to_value(m).unwrap();
+        assert_eq!(value(DockMessage::Jobs { jobs: json!([]) }), json!({"type": "jobs", "jobs": []}));
+        assert_eq!(
+            value(DockMessage::JobOutput { id: 4, lines: vec!["ready on :3000".into()] }),
+            json!({"type": "jobOutput", "id": 4, "lines": ["ready on :3000"]})
         );
     }
 

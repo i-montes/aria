@@ -66,6 +66,8 @@ while IFS= read -r line; do
       printf '{"type":"env","settings":"%s"}\n' "$ARIA_SETTINGS" ;;
     env_watch)
       printf '{"type":"env","watch":"%s"}\n' "$PI_WATCH_SOCK" ;;
+    env_jobs)
+      printf '{"type":"env","jobs":"%s"}\n' "$ARIA_JOBS_SOCK" ;;
     parallel_call)
       printf '{"type":"tool_execution_start","toolCallId":"p1","toolName":"parallel","args":{"tasks":[{"agent":"security","task":"Review the policy"}]}}\n' ;;
     crash) exit 3 ;;

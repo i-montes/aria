@@ -8,18 +8,12 @@ mod chat;
 mod control;
 mod dock;
 mod handlers;
-// Wired into the dock in a later step of background work; until then only its tests use it.
-#[allow(dead_code)]
 mod jobs;
-// Wired into the chat in a later step of background work; until then only its tests use it.
-#[allow(dead_code)]
 mod jobs_socket;
 mod lines;
 mod ui;
 mod visibility;
 mod watch;
-// Used by background subagents in a later step of background work; until then only its tests use it.
-#[allow(dead_code)]
 mod worktree;
 
 use aria_core::bridge::{DockMessage, PageMessage};
@@ -28,9 +22,10 @@ use aria_core::paths::AriaPaths;
 use aria_hyprland::Registration;
 use chat::{ChatCtx, PlatformNotifier, Sessions};
 use dock::{Dock, HOTKEY_LABEL};
+use jobs::{Jobs, UPDATE_NOTICE_AFTER};
 use std::sync::atomic::AtomicBool;
-use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::sync::{mpsc, Arc, OnceLock};
+use std::time::{Duration, Instant};
 use visibility::Event;
 
 fn main() {
@@ -80,6 +75,23 @@ fn run_dock() {
     let mut settings_watch = chat::SettingsWatch::new(paths.settings());
     let ctx = Arc::new(handlers::Ctx::real(paths.clone()));
 
+    // The background work of every session, one for the dock's whole life: its spawner thread is what every job is tied
+    // to, so it must outlive them all. The page hears of every change (at most four times a second).
+    let jobs = {
+        let (slot, sender) = (Arc::new(OnceLock::<Jobs>::new()), reply_sender.clone());
+        let seen = slot.clone();
+        let jobs = Jobs::new(
+            paths.jobs(),
+            Arc::new(move || {
+                if let Some(jobs) = seen.get() {
+                    let _ = sender.send(chat::jobs_message(jobs));
+                }
+            }),
+        );
+        let _ = slot.set(jobs.clone());
+        jobs
+    };
+
     // The chat owns Pi. Its messages go through one worker thread, in order, so a send is never
     // overtaken by the abort that follows it.
     let dock_visible = Arc::new(AtomicBool::new(false));
@@ -98,12 +110,14 @@ fn run_dock() {
                     .unwrap_or_else(std::env::temp_dir),
                 path_var: std::env::var("PATH").unwrap_or_default(),
                 quota_fetcher: Arc::new(aria_core::quota::real_fetcher),
+                jobs: jobs.clone(),
             },
             Arc::new(move |message| {
                 let _ = sender.send(message);
             }),
         )
     };
+    chat.forget_gone_sessions();
     let (chat_sender, chat_receiver) = mpsc::channel::<PageMessage>();
     let chat_for_visibility = chat.clone();
     let chat_for_settings = chat.clone();
@@ -187,6 +201,7 @@ fn run_dock() {
 
     let mut was_visible = false;
     let mut update_ready = false;
+    let mut jobs_wait = JobsWait::default();
     let mut ticks: u32 = 0;
     ui::every(16, move || {
         // About once a second: a settings change (the settings screen, `/effort`, `/autocompact`, an editor) reaches
@@ -222,11 +237,21 @@ fn run_dock() {
                 _ => {}
             }
         }
-        // A new binary is installed: it takes over once nobody is looking and no run would be cut. The tabs and their
-        // conversations come back as after any restart.
+        // An update kept waiting by background work alone (a dev server can run all day): its sessions say how to
+        // update now, once per wait.
+        if update_ready && ticks.is_multiple_of(60) {
+            let only_jobs = !chat_for_visibility.busy_without_jobs() && jobs.active() > 0;
+            if jobs_wait.due(only_jobs, Instant::now()) {
+                chat_for_visibility.tell_update_waits();
+            }
+        }
+        // A new binary is installed: it takes over once nobody is looking and no run or background work would be cut.
+        // The tabs and their conversations come back as after any restart.
         if update_ready && ticks.is_multiple_of(60) && !visible && !chat_for_visibility.busy() {
             eprintln!("aria: restarting into the new version");
             chat_for_visibility.stop_for_update();
+            // Nothing should be running (`busy` said so), but a job started since must not outlive this dock unseen.
+            jobs.stop_all();
             let error = control::reexec();
             eprintln!("aria: could not start the new version: {error}");
             std::process::exit(75); // not a clean exit: systemd and launchd start the dock again
@@ -257,6 +282,30 @@ pub(crate) fn note(message: &str) {
     eprintln!("[{h:02}:{m:02}:{s:02} UTC] aria: {message}");
 }
 
+/// How long an update has waited for background work alone, so the sessions with that work are told once per wait.
+#[derive(Default)]
+struct JobsWait {
+    since: Option<Instant>,
+    told: bool,
+}
+
+impl JobsWait {
+    /// `only_jobs`: the update waits for background work and nothing else right now. True once, when that has lasted
+    /// `UPDATE_NOTICE_AFTER`; anything else in the way (a run, a dialog) or no work left starts a new wait.
+    fn due(&mut self, only_jobs: bool, now: Instant) -> bool {
+        if !only_jobs {
+            *self = JobsWait::default();
+            return false;
+        }
+        let since = *self.since.get_or_insert(now);
+        if self.told || now.duration_since(since) < UPDATE_NOTICE_AFTER {
+            return false;
+        }
+        self.told = true;
+        true
+    }
+}
+
 #[cfg(target_os = "linux")]
 const HOTKEY_HINT: &str = "SUPER + A";
 #[cfg(target_os = "macos")]
@@ -267,3 +316,23 @@ const HOTKEY_HINT: &str = "Option + Space";
 /// "listening" and a freshly written script "busy" for a moment.
 #[cfg(test)]
 pub(crate) static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_update_waiting_for_jobs_alone_is_told_once_per_wait() {
+        let start = Instant::now();
+        let mut wait = JobsWait::default();
+        assert!(!wait.due(true, start));
+        assert!(!wait.due(true, start + UPDATE_NOTICE_AFTER - Duration::from_secs(1)));
+        assert!(wait.due(true, start + UPDATE_NOTICE_AFTER));
+        assert!(!wait.due(true, start + UPDATE_NOTICE_AFTER * 2), "once per wait");
+        // A run in between starts a new wait.
+        assert!(!wait.due(false, start + UPDATE_NOTICE_AFTER * 2));
+        let again = start + UPDATE_NOTICE_AFTER * 3;
+        assert!(!wait.due(true, again));
+        assert!(wait.due(true, again + UPDATE_NOTICE_AFTER));
+    }
+}

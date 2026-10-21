@@ -102,6 +102,9 @@ pub fn is_chat(message: &PageMessage) -> bool {
             | PageMessage::SessionClose { .. }
             | PageMessage::EnginesRestart
             | PageMessage::ChatShown { .. }
+            | PageMessage::JobStop { .. }
+            | PageMessage::JobOutput { .. }
+            | PageMessage::JobDismiss { .. }
     )
 }
 
@@ -142,7 +145,8 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
                 (ctx.opener)(&url);
             }
         }
-        // The chat messages are handled by `chat::Sessions`, not here (they arrive wrapped in a session).
+        // The chat messages are handled by `chat::Sessions`, not here (they arrive wrapped in a session, or are about
+        // background jobs, which the dock owns for every session).
         PageMessage::ChatSend { .. }
         | PageMessage::ChatAbort
         | PageMessage::ChatLoad
@@ -158,7 +162,10 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         | PageMessage::Session { .. }
         | PageMessage::SessionsLoad { .. }
         | PageMessage::SessionsSave { .. }
-        | PageMessage::SessionClose { .. } => {}
+        | PageMessage::SessionClose { .. }
+        | PageMessage::JobStop { .. }
+        | PageMessage::JobOutput { .. }
+        | PageMessage::JobDismiss { .. } => {}
     }
 }
 
@@ -468,6 +475,14 @@ mod tests {
             true
         });
         ran
+    }
+
+    #[test]
+    fn background_job_messages_go_to_the_chat() {
+        assert!(is_chat(&PageMessage::JobStop { job: "j1".into() }));
+        assert!(is_chat(&PageMessage::JobOutput { id: 1, job: "j1".into(), lines: None }));
+        assert!(is_chat(&PageMessage::JobDismiss { job: "j1".into() }));
+        assert!(!is_chat(&PageMessage::LoadSettings { id: 1 }));
     }
 
     #[test]
