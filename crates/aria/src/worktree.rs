@@ -153,13 +153,13 @@ pub fn remove(root: &Path, wt_path: &Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::fs;
     use std::process::Command;
 
     /// Runs git in `dir` for a test, blind to the person's own git config.
-    fn git(dir: &Path, args: &[&str]) -> String {
+    pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
         let out = Command::new("git")
             .arg("-C")
             .arg(dir)
@@ -174,7 +174,7 @@ mod tests {
     }
 
     /// A repo with `a.txt` committed as "1\n".
-    fn repo() -> (tempfile::TempDir, PathBuf) {
+    pub(crate) fn repo() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         git(&root, &["init", "-q"]);

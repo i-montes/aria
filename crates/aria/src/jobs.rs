@@ -6,6 +6,8 @@
 //! How a job ended becomes an event for its session, kept until Pi acknowledges it, so a Pi that restarts in between
 //! still hears about it exactly once. The jobs (never their output) are kept in a store; a dock that went away while
 //! jobs ran finds them there and reports them as cut.
+//!
+//! Subagents (`agent`) are jobs too: a `pi` run in JSON mode whose last answer is the job's result.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -17,8 +19,18 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod agent;
+
+// The dock starts subagents from Task 6's wiring on; until then only the tests do.
+#[allow(unused_imports)]
+pub use agent::AgentStart;
+
 /// Processes running at once, across every session.
 const MAX_PROCESSES: usize = 10;
+/// Subagents running at once, across every session; more wait, queued, and start in order.
+const MAX_AGENTS_RUNNING: usize = 3;
+/// Characters kept of a subagent's last answer, its result.
+const RESULT_CHARS: usize = 8000;
 /// Lines of output kept per job (the latest ones).
 const OUTPUT_LINES: usize = 1000;
 /// Characters kept of one line of output.
@@ -155,6 +167,8 @@ struct Entry {
     group: i32,
     /// Stop was asked: the exit that follows is `Stopped`, not `Exited`.
     stopping: bool,
+    /// A subagent's own part while it is queued or running.
+    agent: Option<agent::AgentRun>,
 }
 
 #[derive(Default)]
@@ -267,7 +281,7 @@ impl State {
                 job.ended_at = Some(ended_at);
                 cut.entry(job.session.clone()).or_default().push(job.clone());
             }
-            self.entries.push(Entry { job, output: VecDeque::new(), group: 0, stopping: false });
+            self.entries.push(Entry { job, output: VecDeque::new(), group: 0, stopping: false, agent: None });
         }
         let changed = !cut.is_empty();
         for (session, jobs) in cut {
@@ -286,7 +300,23 @@ type Spawn = Box<dyn FnOnce() + Send>;
 #[derive(Clone)]
 pub struct Jobs {
     state: Arc<Mutex<State>>,
-    spawner: mpsc::Sender<Spawn>,
+    /// Job threads hold it weakly, so the spawner thread (and with it every child) ends with the last clone of `Jobs`.
+    spawner: Arc<mpsc::Sender<Spawn>>,
+}
+
+/// Runs `spawn` on the spawner thread and waits for what it returns.
+fn on_spawner<T: Send + 'static>(
+    spawner: &mpsc::Sender<Spawn>,
+    spawn: impl FnOnce() -> std::io::Result<T> + Send + 'static,
+) -> std::io::Result<T> {
+    let gone = || std::io::Error::other("the spawner is gone");
+    let (reply, spawned) = mpsc::channel();
+    match spawner.send(Box::new(move || {
+        let _ = reply.send(spawn());
+    })) {
+        Ok(()) => spawned.recv().unwrap_or_else(|_| Err(gone())),
+        Err(_) => Err(gone()),
+    }
 }
 
 fn now_ms() -> i64 {
@@ -398,6 +428,19 @@ fn pipe() -> std::io::Result<(File, OwnedFd)> {
     Ok((File::from(read), write))
 }
 
+/// Makes the child the leader of its own group, so Stop reaches everything it forks, and, on Linux, tells it to end if
+/// the spawner thread dies (the dock exits or crashes) instead of living on unseen.
+fn own_group(command: &mut Command) {
+    std::os::unix::process::CommandExt::process_group(command, 0);
+    #[cfg(target_os = "linux")]
+    unsafe {
+        std::os::unix::process::CommandExt::pre_exec(command, || {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
+}
+
 /// Runs `line` with `bash -c` in `folder`, stdout and stderr into one pipe so their lines interleave as printed.
 /// Called on the spawner thread only.
 fn spawn_process(line: &str, folder: &Path, env: &[(String, String)]) -> std::io::Result<(Child, File)> {
@@ -411,16 +454,7 @@ fn spawn_process(line: &str, folder: &Path, env: &[(String, String)]) -> std::io
         .stdin(Stdio::null())
         .stdout(Stdio::from(write.try_clone()?))
         .stderr(Stdio::from(write));
-    // Its own group, so Stop reaches everything it forks.
-    std::os::unix::process::CommandExt::process_group(&mut command, 0);
-    // If the spawner thread dies (the dock exits or crashes), the child is told to end instead of living on unseen.
-    #[cfg(target_os = "linux")]
-    unsafe {
-        std::os::unix::process::CommandExt::pre_exec(&mut command, || {
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-            Ok(())
-        });
-    }
+    own_group(&mut command);
     let child = command.spawn()?;
     // `command` holds the parent's copies of the write end; it drops here, so the reader sees EOF when the group ends.
     Ok((child, read))
@@ -454,26 +488,34 @@ fn clean(bytes: &[u8]) -> String {
     strip_ansi(text).chars().take(LINE_CHARS).collect()
 }
 
+/// Reads one line, at most `limit` bytes of it, into `bytes`; the rest of a longer line is skipped, a bounded chunk at a
+/// time. False at the end of the input.
+fn read_line(reader: &mut impl BufRead, limit: u64, bytes: &mut Vec<u8>) -> bool {
+    match reader.by_ref().take(limit).read_until(b'\n', bytes) {
+        Ok(0) | Err(_) => return false,
+        Ok(_) => {}
+    }
+    if bytes.last() != Some(&b'\n') && bytes.len() as u64 >= limit {
+        loop {
+            let mut rest = Vec::new();
+            match reader.by_ref().take(limit).read_until(b'\n', &mut rest) {
+                Ok(0) | Err(_) => break,
+                Ok(_) if rest.last() == Some(&b'\n') => break,
+                Ok(_) => {}
+            }
+        }
+    }
+    true
+}
+
 /// Reads a job's output until every process holding the pipe has closed it. `_drained` drops at the end, which tells the
 /// waiter the output is complete.
 fn read_output(id: String, pipe: File, state: Arc<Mutex<State>>, _drained: mpsc::Sender<()>) {
     let mut reader = BufReader::new(pipe);
     loop {
         let mut bytes = Vec::new();
-        match (&mut reader).take(LINE_BYTES).read_until(b'\n', &mut bytes) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
-        if bytes.last() != Some(&b'\n') && bytes.len() as u64 >= LINE_BYTES {
-            // too long: skip the rest of it, a bounded chunk at a time
-            loop {
-                let mut rest = Vec::new();
-                match (&mut reader).take(LINE_BYTES).read_until(b'\n', &mut rest) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) if rest.last() == Some(&b'\n') => break,
-                    Ok(_) => {}
-                }
-            }
+        if !read_line(&mut reader, LINE_BYTES, &mut bytes) {
+            break;
         }
         let line = clean(&bytes);
         let mut s = state.lock().unwrap();
@@ -548,7 +590,7 @@ impl Jobs {
                 }
             });
         }
-        Jobs { state, spawner }
+        Jobs { state, spawner: Arc::new(spawner) }
     }
 
     /// Starts a process in the background and returns at once: its output and exit are recorded as they come.
@@ -585,18 +627,11 @@ impl Jobs {
                 conflict: false,
                 dismissed: false,
             };
-            s.entries.push(Entry { job: job.clone(), output: VecDeque::new(), group: 0, stopping: false });
+            s.entries.push(Entry { job: job.clone(), output: VecDeque::new(), group: 0, stopping: false, agent: None });
             job
         };
-        let (reply, spawned) = mpsc::channel();
         let ProcessStart { line, folder, env, .. } = start;
-        let sent = self.spawner.send(Box::new(move || {
-            let _ = reply.send(spawn_process(&line, &folder, &env));
-        }));
-        let result = match sent {
-            Ok(()) => spawned.recv().unwrap_or_else(|_| Err(std::io::Error::other("the spawner is gone"))),
-            Err(_) => Err(std::io::Error::other("the spawner is gone")),
-        };
+        let result = on_spawner(&self.spawner, move || spawn_process(&line, &folder, &env));
         let mut s = self.state.lock().unwrap();
         match result {
             Ok((child, pipe)) => {
@@ -628,32 +663,55 @@ impl Jobs {
         Some(entry.output.iter().skip(skip).cloned().collect())
     }
 
-    /// Marks running jobs as stopping and returns their groups.
-    fn stopping(&self, which: impl Fn(&Job) -> bool) -> Vec<i32> {
+    /// Marks running jobs as stopping and returns their groups, and whether any job was stopped. A queued subagent is
+    /// stopped here and never starts; one still being started is stopped as soon as it has a group.
+    fn stopping(&self, which: impl Fn(&Job) -> bool) -> (Vec<i32>, bool) {
         let mut s = self.state.lock().unwrap();
-        let groups: Vec<i32> = s
-            .entries
-            .iter_mut()
-            .filter(|e| e.job.state == JobState::Running && e.group > 0 && which(&e.job))
-            .map(|e| {
-                e.stopping = true;
-                e.group
-            })
-            .collect();
-        if !groups.is_empty() {
+        let (mut groups, mut any, mut dropped) = (Vec::new(), false, Vec::new());
+        let now = now_ms();
+        for e in s.entries.iter_mut().filter(|e| which(&e.job)) {
+            match e.job.state {
+                JobState::Running if e.group > 0 => {
+                    e.stopping = true;
+                    groups.push(e.group);
+                    any = true;
+                }
+                JobState::Running if e.job.kind == Kind::Agent => {
+                    e.stopping = true;
+                    any = true;
+                }
+                JobState::Queued => {
+                    e.job.state = JobState::Stopped;
+                    e.job.ended_at = Some(now);
+                    e.agent = None;
+                    dropped.push(e.job.clone());
+                    any = true;
+                }
+                _ => {}
+            }
+        }
+        let save = !dropped.is_empty();
+        for job in dropped {
+            let session = job.session.clone();
+            s.emit(&session, |seq| JobEvent::Ended { seq, job, by: EndedBy::Stopped, last_lines: Vec::new() });
+        }
+        if save {
+            s.prune();
+            s.save();
+        }
+        if any {
             s.dirty = true;
         }
-        groups
+        (groups, any)
     }
 
-    /// Stops a running job and everything it forked, without waiting. False when it is not running.
+    /// Stops a running or queued job and everything it forked, without waiting. False when it is neither.
     pub fn stop(&self, id: &str) -> bool {
-        let groups = self.stopping(|j| j.id == id);
-        if groups.is_empty() {
-            return false;
+        let (groups, any) = self.stopping(|j| j.id == id);
+        if !groups.is_empty() {
+            std::thread::spawn(move || end_groups(&groups));
         }
-        std::thread::spawn(move || end_groups(&groups));
-        true
+        any
     }
 
     pub fn get(&self, id: &str) -> Option<Job> {
@@ -678,9 +736,9 @@ impl Jobs {
         self.state.lock().unwrap().entries.iter().filter(|e| e.job.state.active()).count()
     }
 
-    /// Stops every running job of a session (its tab closed), without waiting.
+    /// Stops every running job of a session (its tab closed), without waiting; its queued subagents never start.
     pub fn stop_session(&self, session: &str) {
-        let groups = self.stopping(|j| j.session == session);
+        let (groups, _) = self.stopping(|j| j.session == session);
         if !groups.is_empty() {
             std::thread::spawn(move || end_groups(&groups));
         }
@@ -689,7 +747,7 @@ impl Jobs {
     /// Stops every running job and returns once their groups are gone (the dock is quitting), at most `STOP_GRACE`
     /// and a second later.
     pub fn stop_all(&self) {
-        let groups = self.stopping(|_| true);
+        let (groups, _) = self.stopping(|_| true);
         end_groups(&groups);
         // The waiters record each exit as the groups go; give them a moment to catch up.
         let deadline = Instant::now() + Duration::from_millis(500);
@@ -751,7 +809,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    fn jobs() -> (tempfile::TempDir, Jobs, Arc<AtomicUsize>) {
+    pub(super) fn jobs() -> (tempfile::TempDir, Jobs, Arc<AtomicUsize>) {
         let dir = tempfile::tempdir().unwrap();
         let changes = Arc::new(AtomicUsize::new(0));
         let counter = changes.clone();
@@ -776,7 +834,7 @@ mod tests {
         .unwrap()
     }
 
-    fn eventually(what: &str, within: Duration, test: impl Fn() -> bool) {
+    pub(super) fn eventually(what: &str, within: Duration, test: impl Fn() -> bool) {
         let deadline = Instant::now() + within;
         while Instant::now() < deadline {
             if test() {
@@ -978,7 +1036,7 @@ mod tests {
         .unwrap()
     }
 
-    fn ended(event: &JobEvent) -> (&Job, EndedBy, &[String]) {
+    pub(super) fn ended(event: &JobEvent) -> (&Job, EndedBy, &[String]) {
         match event {
             JobEvent::Ended { job, by, last_lines, .. } => (job, *by, last_lines),
             other => panic!("not an end: {other:?}"),
