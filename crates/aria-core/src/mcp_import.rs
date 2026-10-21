@@ -476,7 +476,7 @@ mod tests {
 
     fn aria() -> (tempfile::TempDir, AriaPaths) {
         let dir = tempfile::tempdir().unwrap();
-        let paths = AriaPaths { root: dir.path().to_path_buf() };
+        let paths = AriaPaths::new(dir.path().to_path_buf());
         (dir, paths)
     }
 

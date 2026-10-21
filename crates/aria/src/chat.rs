@@ -1497,7 +1497,7 @@ mod tests {
     fn harness_with(install_pi: bool) -> Harness {
         let turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
-        let paths = AriaPaths { root: dir.path().join(".aria") };
+        let paths = AriaPaths::new(dir.path().join(".aria"));
         paths.ensure_root().unwrap();
         if install_pi {
             let binary = paths.pi_install(aria_core::pi::pinned_version()).join("node_modules/.bin/pi");

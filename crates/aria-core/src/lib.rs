@@ -19,6 +19,7 @@ pub mod sessions;
 pub mod settings;
 pub mod shortcut;
 pub mod validate;
+pub mod vault;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

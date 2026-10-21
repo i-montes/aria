@@ -148,7 +148,7 @@ mod tests {
 
     fn auth_with(entries: Value) -> (tempfile::TempDir, AuthStore) {
         let dir = tempfile::tempdir().unwrap();
-        let paths = AriaPaths { root: dir.path().to_path_buf() };
+        let paths = AriaPaths::new(dir.path().to_path_buf());
         std::fs::write(paths.auth(), entries.to_string()).unwrap();
         let store = AuthStore::new(paths.auth());
         (dir, store)

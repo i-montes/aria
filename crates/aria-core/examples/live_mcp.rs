@@ -6,7 +6,7 @@ use aria_core::validate::{check_key, KeyCheck, KeyKind};
 
 fn main() {
     let dir = std::path::PathBuf::from(std::env::args().nth(1).expect("a directory for the files"));
-    let paths = AriaPaths { root: dir };
+    let paths = AriaPaths::new(dir);
     paths.ensure_root().unwrap();
 
     println!("tavily with a fake key:  {:?}", check_key(KeyKind::Tavily, "tvly-not-a-real-key"));

@@ -475,7 +475,7 @@ mod tests {
         let r = restarts.clone();
         let key_verdict = verdict.clone();
         let ctx = Ctx {
-            paths: AriaPaths { root: dir.path().to_path_buf() },
+            paths: AriaPaths::new(dir.path().to_path_buf()),
             validator: Arc::new(move |kind, key| {
                 s.lock().unwrap().push((kind, key.to_string()));
                 key_verdict.clone()
