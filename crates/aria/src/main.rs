@@ -12,6 +12,7 @@ mod dock;
 mod handlers;
 mod jobs;
 mod jobs_socket;
+mod keyring_cli;
 mod lines;
 mod ui;
 mod visibility;
@@ -61,10 +62,15 @@ fn main() {
             }
         },
         Some("start") => start_service(),
+        Some("secret") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            std::process::exit(keyring_cli::secret_command(&args));
+        }
+        Some("keyring") => std::process::exit(keyring_cli::keyring_command(std::env::args().nth(2).as_deref())),
         Some("--version" | "-V" | "version") => println!("aria {}", env!("CARGO_PKG_VERSION")),
         None => run_dock(),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show|start|quit|update-ready|--version]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show|start|quit|keyring|secret|update-ready|--version]");
             std::process::exit(2);
         }
     }
@@ -90,6 +96,11 @@ fn run_dock() {
     let (reply_sender, reply_receiver) = mpsc::channel::<DockMessage>();
     let paths = AriaPaths::from_env();
     let first_run = !paths.settings().exists();
+    // The keys: in the keyring, with the sealed files written live, before anything below reads a credential (the paths
+    // are cloned into the handlers, the chat and the jobs).
+    let initial = aria_core::settings::load(&paths).ok().flatten();
+    let (paths, vault) = keyring_cli::open_for_dock(paths, initial.as_ref());
+    let vault = std::rc::Rc::new(std::cell::RefCell::new(vault));
     let mut settings_watch = chat::SettingsWatch::new(paths.settings());
     // The chat's messages go through one worker thread (below); the handlers reach it too, to restart every Pi after an
     // MCP import.
@@ -245,13 +256,15 @@ fn run_dock() {
     // live on unseen (macOS has no PR_SET_PDEATHSIG to end it with the dock).
     #[cfg(target_os = "macos")]
     {
-        let (jobs, chat) = (jobs.clone(), chat_for_visibility.clone());
+        let (jobs, chat, vault) = (jobs.clone(), chat_for_visibility.clone(), vault.clone());
         ui::on_terminate(move || {
             eprintln!("aria: stopping");
             jobs.stop_all();
             chat.stop_for_update();
+            close_vault(&vault);
         });
     }
+    let mut vault_problem: Option<String> = None;
     let mut was_visible = false;
     let mut update_ready = false;
     let mut jobs_wait = JobsWait::default();
@@ -261,12 +274,25 @@ fn run_dock() {
             eprintln!("aria: stopping");
             jobs.stop_all();
             chat_for_visibility.stop_for_update();
+            close_vault(&vault);
         }) {
             std::process::exit(0);
         }
         // About once a second: a settings change (the settings screen, `/effort`, `/autocompact`, an editor) reaches
         // every session's Pi when its run settles, and the page reads the settings again.
         ticks = ticks.wrapping_add(1);
+        // A sealed file Pi changed (a refreshed token, a sign-in) goes back into the keyring within a second; a failure
+        // is logged once until it changes, and tried again every second.
+        if ticks.is_multiple_of(60) {
+            if let Some(open) = vault.borrow_mut().as_mut() {
+                let errors = open.vault.sync(&mut open.state);
+                let problem = errors.first().map(ToString::to_string);
+                if problem.is_some() && problem != vault_problem {
+                    note(&format!("the keyring could not take a change: {}", problem.as_deref().unwrap_or_default()));
+                }
+                vault_problem = problem;
+            }
+        }
         let settings_changed = ticks.is_multiple_of(60) && settings_watch.changed();
         if settings_changed {
             // Off the UI thread: preparing the agent directory reads and writes files.
@@ -340,6 +366,10 @@ fn run_dock() {
             chat_for_visibility.stop_for_update();
             // Nothing should be running (`busy` said so), but a job started since must not outlive this dock unseen.
             jobs.stop_all();
+            // The live copies stay for the new process, which seals them when it opens the vault.
+            if let Some(open) = vault.borrow_mut().as_mut() {
+                open.vault.sync(&mut open.state);
+            }
             let error = control::reexec();
             eprintln!("aria: could not start the new version: {error}");
             std::process::exit(75); // not a clean exit: systemd and launchd start the dock again
@@ -436,6 +466,15 @@ pub(crate) fn note(message: &str) {
 
 /// Set by SIGTERM, SIGINT or SIGHUP; the UI thread's tick sees it. A handler can do little more than this safely.
 static QUIT: AtomicBool = AtomicBool::new(false);
+
+/// The dock's last word to the keyring: changes sealed, live copies removed.
+fn close_vault(vault: &std::cell::RefCell<Option<keyring_cli::Open>>) {
+    if let Some(open) = vault.borrow_mut().as_mut() {
+        for error in open.vault.close(&mut open.state) {
+            note(&format!("the keyring could not take the last change; its live copy is kept: {error}"));
+        }
+    }
+}
 
 /// Quits the dock on its next tick, the way a signal does: background work and Pis are stopped first (Cmd+Q twice in the
 /// page, `aria quit`).
