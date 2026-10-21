@@ -62,7 +62,7 @@ const sandbox = `<script>
         if (inner.type === 'chatLoad') sim.sess(m.session, { type: 'chatState', workdir: '/home/ana/Projects/aria', running: false, model: sim.model, thinking: 'medium', context: sim.context, problem: null })
         // Like the dock: Pi answers with the session's history (empty here), which ends the page's loading state.
         // ARIA_SANDBOX_HISTORY_DELAY=<ms> holds it back, to see the loading state.
-        if (inner.type === 'chatLoad') setTimeout(() => sim.sess(m.session, { type: 'chatEvent', event: { type: 'history', messages: [] } }), Number(process.env.ARIA_SANDBOX_HISTORY_DELAY ?? 0))
+        if (inner.type === 'chatLoad') setTimeout(() => sim.sess(m.session, { type: 'chatEvent', event: { type: 'history', messages: [] } }), ${Number(process.env.ARIA_SANDBOX_HISTORY_DELAY ?? 0)})
         else if (inner.type === 'chatSend' && inner.text === 'REFUSE') sim.sess(m.session, { type: 'chatEvent', event: { type: 'command_failed', command: 'prompt', error: 'Cannot submit a prompt while compaction is in progress', text: 'REFUSE' } })
         else if (inner.type === 'chatSend' && inner.behavior === 'followUp') { sim.queue.push(sim.withLines(inner, m.session)); sim.ev({ type: 'queue_update', steering: [...sim.steering], followUp: [...sim.queue] }, m.session) }
         else if (inner.type === 'chatSend' && inner.behavior === 'steer') { sim.steering.push(sim.withLines(inner, m.session)); sim.ev({ type: 'queue_update', steering: [...sim.steering], followUp: [...sim.queue] }, m.session) }

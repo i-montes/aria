@@ -7,7 +7,7 @@ import { esc } from '../onboarding/components.js'
 import { renderAgentSession } from './parts/session.js'
 import { hasLiveWork, isFailed, renderJobRows, renderStrip, resultAgent } from './parts/background.js'
 import { renderCommandPicker, filterCommands, stepActive, clampActive, toInvocation, withSkillNames } from './parts/commands.js'
-import { admit } from './parts/attachments.js'
+import { admit, releaseAccepted } from './parts/attachments.js'
 import { renderComposer } from './parts/composer.js'
 import { PROVIDERS, renderConnect } from './parts/connect.js'
 import { renderFilePicker, filterFiles } from './parts/files.js'
@@ -164,9 +164,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   // files, so a message the dock or Pi refuses gets its files back in the composer along with its text.
   const attached = new Map()
   const reading = new Map()
-  const sentWith = new Map() // session id -> [{ text, files }], the last few
+  // session id -> [{ text (as sent), shown (as typed), files }]: only messages Pi has not taken yet (releaseAccepted)
+  const sentWith = new Map()
   let attachSeq = 0
-  let dragDepth = 0
   const expandedOf = new Map() // session id -> { open, rows, more }: which tool groups and rows are open
   const wizards = new Map() // dialog id -> the question card's wizard state
   const commandsBy = new Map() // session id -> the slash commands its Pi offers
@@ -771,7 +771,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       chats.set(session, addUser(chat, text, shown))
     }
     if (files.length) {
-      sentWith.set(session, [...(sentWith.get(session) ?? []), { text: sentText, files }].slice(-5))
+      sentWith.set(session, [...(sentWith.get(session) ?? []), { text: sentText, shown: text, files }])
       attached.delete(session)
     }
     const before = tabs
@@ -834,13 +834,17 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     input?.focus()
   }
 
-  /** A refused message's files come back to the composer with its text (when the composer has none of its own). */
+  /** A refused message's files come back to the composer with its text: next to the files there now when the limits
+   * allow it, or else a note says how many could not come back. */
   function giveFilesBack(session, text) {
     const list = sentWith.get(session) ?? []
     const at = list.findLastIndex((m) => m.text === text)
     if (at < 0) return
     sentWith.set(session, list.filter((_, i) => i !== at))
-    if (!filesOf(session).length) attached.set(session, list[at].files)
+    const back = list[at].files
+    const { take } = admit([...filesOf(session), ...(reading.get(session) ?? [])], back)
+    if (take.length === back.length) attached.set(session, [...filesOf(session), ...back])
+    else chats.set(session, addNotice(chatOf(session), 'warn', 'chat.attach.notBack', { count: back.length }))
   }
 
   /** Pi's own commands, which its RPC does not take as typed text: each runs through its RPC command (or here, for
@@ -1380,32 +1384,34 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     event.preventDefault()
     addFiles(files)
   })
-  const dropTarget = (event) =>
-    ui.view === 'chat' && [...(event.dataTransfer?.types ?? [])].includes('Files') && event.target?.closest?.('#view-chat') ? $('view-chat') : null
+  // A file dragged anywhere on the dock never opens in it: outside the chat view the drop simply does nothing.
+  const carriesFiles = (event) => [...(event.dataTransfer?.types ?? [])].includes('Files')
+  const dropTarget = (event) => (ui.view === 'chat' && carriesFiles(event) && event.target?.closest?.('#view-chat') ? $('view-chat') : null)
+  const outline = (on) => $('view-chat')?.classList.toggle('is-dropping', on)
   root.addEventListener('dragenter', (event) => {
-    const view = dropTarget(event)
-    if (!view) return
+    if (!carriesFiles(event)) return
     event.preventDefault()
-    dragDepth++
-    view.classList.add('is-dropping')
+    outline(!!dropTarget(event))
   })
   root.addEventListener('dragover', (event) => {
-    if (!dropTarget(event)) return
+    if (!carriesFiles(event)) return
     event.preventDefault()
-    event.dataTransfer.dropEffect = 'copy'
+    const view = dropTarget(event)
+    event.dataTransfer.dropEffect = view ? 'copy' : 'none'
+    outline(!!view) // dragover repeats while the drag moves, so the outline follows it even without relatedTarget
   })
   root.addEventListener('dragleave', (event) => {
-    if (!dragDepth) return
-    dragDepth--
-    if (!dragDepth) $('view-chat')?.classList.remove('is-dropping')
+    // Moving onto another element of the view keeps the outline; only leaving the view (or the dock) drops it.
+    const view = $('view-chat')
+    if (!carriesFiles(event) || (view && event.relatedTarget && view.contains(event.relatedTarget))) return
+    outline(false)
   })
   root.addEventListener('drop', (event) => {
-    const view = dropTarget(event)
-    dragDepth = 0
-    $('view-chat')?.classList.remove('is-dropping')
-    if (!view) return
+    if (!carriesFiles(event)) return
     event.preventDefault()
-    addFiles(event.dataTransfer.files)
+    const view = dropTarget(event)
+    outline(false)
+    if (view) addFiles(event.dataTransfer.files)
   })
 
   root.addEventListener('keydown', (event) => {
@@ -1498,8 +1504,17 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
         const at = Number(id)
         const rest = current().queue.filter((_, i) => i !== at)
         // A message with files goes back as Pi had it, its attachment lines included (`raw`): the files stay named.
+        // One Pi has not reported yet (no `raw`) still has its files' data here: it goes back as a new send with them, after
+        // the rest (it is the newest of its list, so the order holds).
+        const pending = sentWith.get(tabs.active) ?? []
+        const unsaid = (q) => !q.raw && q.files?.length && pending.some((m) => m.shown === q.text)
         const again = (q) => q.raw ?? q.text
-        post({ type: 'chatClearQueue', steer: rest.filter((q) => q.steer).map(again), keep: rest.filter((q) => !q.steer).map(again) })
+        const kept = rest.filter((q) => !unsaid(q))
+        post({ type: 'chatClearQueue', steer: kept.filter((q) => q.steer).map(again), keep: kept.filter((q) => !q.steer).map(again) })
+        for (const q of rest.filter(unsaid)) {
+          const sent = pending.findLast((m) => m.shown === q.text)
+          post({ type: 'chatSend', text: sent.text, behavior: q.steer ? 'steer' : 'followUp', attachments: sent.files.map(({ name, mime, data }) => ({ name, mime, data })) })
+        }
         chats.set(tabs.active, clearQueue(current(), at))
         return render()
       }
@@ -1654,6 +1669,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       }
       const before = chatOf(session)
       chats.set(session, reduce(before, message))
+      if (sentWith.has(session)) sentWith.set(session, releaseAccepted(sentWith.get(session), message))
       // A refused message goes back to the composer (when it is empty), so nothing looks sent that was not.
       const giveBack = chatOf(session).giveBack
       if (giveBack !== null && giveBack !== undefined) {

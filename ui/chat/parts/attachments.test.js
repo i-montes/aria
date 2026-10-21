@@ -1,7 +1,7 @@
 // Run: bun test ui/chat/parts/attachments.test.js
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { LIMITS, TEXTS, admit, humanSize, plainText, renderAttachments, splitAttached } from './attachments.js'
+import { LIMITS, TEXTS, admit, humanSize, plainText, releaseAccepted, renderAttachments, splitAttached } from './attachments.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const hostile = '<script>alert("x")</script> & \'q\''
@@ -65,6 +65,24 @@ describe('admit', () => {
   })
 })
 
+describe('releaseAccepted', () => {
+  const ev = (event) => ({ type: 'chatEvent', event })
+  const lines = '\n\n[attached: a.txt (text/plain, 7 B) at /x/1-a.txt]'
+  const kept = [{ text: 'look', files: [{ data: 'AAAA' }] }, { text: 'later', files: [{ data: 'BBBB' }] }]
+  test('the data is released after the echo', () => {
+    expect(releaseAccepted(kept, ev({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: 'look' + lines }] } }))).toEqual([kept[1]])
+  })
+  test('a queue holding the text releases it too', () => {
+    expect(releaseAccepted(kept, ev({ type: 'queue_update', steering: ['later' + lines], followUp: [] }))).toEqual([kept[0]])
+  })
+  test('anything else keeps the list as it is', () => {
+    expect(releaseAccepted(kept, ev({ type: 'message_start', message: { role: 'assistant', content: [] } }))).toBe(kept)
+    expect(releaseAccepted(kept, ev({ type: 'command_failed', text: 'look' }))).toBe(kept)
+    expect(releaseAccepted(kept, { type: 'chatState' })).toBe(kept)
+    expect(releaseAccepted(undefined, ev({ type: 'queue_update', steering: [], followUp: [] }))).toEqual([])
+  })
+})
+
 describe('renderAttachments', () => {
   test('chips with names, sizes and remove', () => {
     const html = renderAttachments({ files: [{ id: 'a1', name: 'notes.txt', size: 12 * 1024 }, { id: 'a2', name: 'shot.png', size: 7 }], removable: true }, {}, t)
@@ -83,6 +101,11 @@ describe('renderAttachments', () => {
     expect(html).toContain('<span class="p-pill-meta">chat.attach.image</span>')
     expect(html).toContain('title="/x/1-a.pdf"')
     expect(html).not.toContain('attach-remove')
+  })
+  test('the thread\'s chips are not buttons (nothing to press), with the pill\'s look', () => {
+    const html = renderAttachments({ files: [{ name: 'a.pdf', size: '1 KB' }] }, {}, t)
+    expect(html).not.toContain('<button')
+    expect(html).toContain('<span class="p-pill is-static tone-file"')
   })
   test('no files, nothing drawn', () => {
     expect(renderAttachments({ files: [] }, {}, t)).toBe('')

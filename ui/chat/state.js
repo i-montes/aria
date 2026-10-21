@@ -412,7 +412,9 @@ export function reduce(state, message) {
   }
 }
 
-const withFiles = (entry, files) => (files?.length ? { ...entry, files } : entry)
+// A file the page attached is an image by its type, as the dock's lines say for history.
+const marked = (file) => ('image' in file ? file : { ...file, image: String(file.mime ?? '').startsWith('image/') })
+const withFiles = (entry, files) => (files?.length ? { ...entry, files: files.map(marked) } : entry)
 /** `files`: what the message carries ([{ name, mime, size }]), drawn as chips before the dock has answered. */
 export const addUser = (state, text, files) => push(state, withFiles({ kind: 'user', text }, files))
 /** A notice from the page itself (an attachment refused). */

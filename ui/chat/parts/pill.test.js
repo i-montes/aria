@@ -30,6 +30,12 @@ describe('renderPill', () => {
     expect(html.indexOf('p-pill-main')).toBeLessThan(html.indexOf('data-chat="bg-stop"'))
     expect(html.indexOf('</button>')).toBeLessThan(html.indexOf('data-chat="bg-stop"'))
   })
+  test('a static pill is a span with the same look and no action', () => {
+    const html = renderPill({ label: 'a.pdf', meta: '1 KB', tone: 'file', title: '/x/a.pdf', static: true }, {}, t)
+    expect(html.startsWith('<span class="p-pill is-static tone-file" title="/x/a.pdf">')).toBe(true)
+    expect(html).not.toContain('<button')
+    expect(html).toContain('<span class="p-pill-meta">1 KB</span>')
+  })
   test('escapes every value', () => {
     const html = renderPill({ label: hostile, meta: hostile, tone: hostile, action: hostile, id: hostile, value: hostile }, {}, t)
     expect(html).not.toContain('<script>')

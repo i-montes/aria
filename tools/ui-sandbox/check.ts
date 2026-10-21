@@ -523,6 +523,7 @@ const script = `(async () => {
     const a = out[0]?.attachments ?? []
     check('send carries the attachments', out.length === 1 && out[0].text === typedBefore && a.length === 1 && a[0].name === 'shot.png' && a[0].mime === 'image/png' && atob(a[0].data).length === 2048, JSON.stringify(out.map((m) => ({ ...m, attachments: (m.attachments ?? []).map((x) => x.name) }))))
     const bubbles = [...document.querySelectorAll('#chat-list .p-user')]
+    check('a sent message’s chips are not buttons', !document.querySelector('#chat-list .p-user button.p-pill') && !!document.querySelector('#chat-list .p-user span.p-pill.is-static'), document.querySelector('#chat-list .p-user')?.innerHTML.slice(0, 160))
     check('the sent bubble shows the chip once, without the raw lines', bubbles.length === 1 && bubbles[0].textContent.includes('shot.png') && !$('#chat-list').textContent.includes('[attached'), bubbles.length + ' ' + $('#chat-list').textContent.slice(0, 160))
     check('the composer is empty after sending', !$('#chat-composer .p-composer-files'), chips().join())
     await resetHere()
@@ -535,6 +536,22 @@ const script = `(async () => {
     $('#chat-list').dispatchEvent(new DragEvent('drop', { dataTransfer: drag, bubbles: true, cancelable: true }))
     await wait(80)
     check('a dropped file is attached', chips().join() === 'data.csv' && !view.classList.contains('is-dropping'), chips().join())
+
+    // a drag coming from the header into the list keeps the outline (the header's dragleave comes after the list's dragenter)
+    const header = $('#chat-header')
+    header.dispatchEvent(new DragEvent('dragenter', { dataTransfer: drag, bubbles: true, cancelable: true }))
+    check('dragging files over the header does not outline the chat', !view.classList.contains('is-dropping'))
+    $('#chat-list').dispatchEvent(new DragEvent('dragenter', { dataTransfer: drag, bubbles: true, cancelable: true, relatedTarget: header }))
+    header.dispatchEvent(new DragEvent('dragleave', { dataTransfer: drag, bubbles: true, cancelable: true, relatedTarget: $('#chat-list') }))
+    check('a drag from the header into the list keeps the outline', view.classList.contains('is-dropping'))
+    $('#chat-list').dispatchEvent(new DragEvent('dragleave', { dataTransfer: drag, bubbles: true, cancelable: true, relatedTarget: header }))
+    check('leaving the view drops the outline', !view.classList.contains('is-dropping'))
+    // a file dropped outside the chat view does not open in the dock, and is not attached
+    const overHeader = new DragEvent('dragover', { dataTransfer: drag, bubbles: true, cancelable: true })
+    header.dispatchEvent(overHeader)
+    const onHeader = new DragEvent('drop', { dataTransfer: filesIn(new File(['h'], 'header.txt', { type: 'text/plain' })), bubbles: true, cancelable: true })
+    header.dispatchEvent(onHeader); await wait(60)
+    check('a file dropped on the header is stopped and not attached', overHeader.defaultPrevented && onHeader.defaultPrevented && chips().join() === 'data.csv', chips().join())
 
     // a pasted image is attached; a pasted text is the browser's own paste
     const pasted = new ClipboardEvent('paste', { clipboardData: filesIn(new File([new Uint8Array(10)], 'image.png', { type: 'image/png' })), bubbles: true, cancelable: true })
@@ -567,6 +584,19 @@ const script = `(async () => {
     const clear = sent().filter((m) => m.type === 'chatClearQueue').at(-1)
     check('cancelling another queued message sends this one back with its lines', clear?.keep?.length === 1 && clear.keep[0].startsWith('queued one\\n\\n[attached: data.csv'), JSON.stringify(clear))
     check('after the cancel the queued message still shows its chips', $('#chat-list .p-user.is-queued')?.textContent.includes('data.csv'), $('#chat-list .p-user.is-queued')?.textContent)
+    // cancelled before Pi reported the queue: the message without its lines yet goes again with its files
+    await wait(40)
+    fileInput.files = filesIn(new File(['e'], 'early.txt', { type: 'text/plain' })).files
+    fileInput.dispatchEvent(new Event('change', { bubbles: true })); await wait(80)
+    typeIn('early one')
+    const mark = sent().length
+    key($('#chat-input'), 'Enter', { altKey: true })
+    $('#chat-list .p-user.is-queued [data-chat="cancel-queued"][data-id="0"]').click() // before the stub's queue_update
+    const early = sent().slice(mark)
+    const resent = early.filter((m) => m.type === 'chatSend' && m.text === 'early one')
+    const cleared = early.find((m) => m.type === 'chatClearQueue')
+    check('a queued message cancelled before Pi reported it keeps its files', resent.length === 2 && resent[1].attachments?.[0]?.name === 'early.txt' && cleared && !cleared.keep.includes('early one'), JSON.stringify(early.map((m) => [m.type, m.text ?? m.keep, (m.attachments ?? []).length])))
+    await wait(80) // the stub's queue updates land before the reset
     await resetHere()
 
     // a refused message gives its text and its files back to the composer

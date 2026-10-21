@@ -24,6 +24,7 @@ export const TEXTS = {
     'chat.attach.tooBig': '{name} is larger than {max}, so it was not attached',
     'chat.attach.tooMuch': 'The files of one message can take at most {max} together',
     'chat.attach.unreadable': 'Could not read {name}, so it was not attached',
+    'chat.attach.notBack': '{count} file(s) of the refused message did not fit next to the ones attached now',
   },
   es: {
     'chat.attach.remove': 'Quitar {name}',
@@ -32,6 +33,7 @@ export const TEXTS = {
     'chat.attach.tooBig': '{name} pesa más de {max}, así que no se adjuntó',
     'chat.attach.tooMuch': 'Los archivos de un mensaje pueden sumar como máximo {max}',
     'chat.attach.unreadable': 'No se pudo leer {name}, así que no se adjuntó',
+    'chat.attach.notBack': '{count} archivo(s) del mensaje rechazado no cupieron junto a los que ya están adjuntos',
   },
 }
 
@@ -91,6 +93,19 @@ export function admit(have, adding) {
   return { take: fit, notes }
 }
 
+/** The sent messages still holding their files' data (`[{ text, … }]`, `text` as sent), less the ones this dock message
+ * shows Pi has taken: its echo of the message, or its queue holding it. Data is kept only for a message that can still
+ * be refused (its files go back to the composer then). */
+export function releaseAccepted(list = [], message) {
+  const event = message?.type === 'chatEvent' ? message.event ?? {} : {}
+  const textOf = (content) => (typeof content === 'string' ? content : (content ?? []).filter((b) => b.type === 'text').map((b) => b.text).join(''))
+  let taken = null
+  if (event.type === 'message_start' && event.message?.role === 'user') taken = [plainText(textOf(event.message.content))]
+  else if (event.type === 'queue_update') taken = [...(event.steering ?? []), ...(event.followUp ?? [])].map(plainText)
+  if (!taken) return list
+  return list.filter((m) => !taken.includes(m.text))
+}
+
 const X =
   '<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>'
 
@@ -102,7 +117,7 @@ export function renderAttachments({ files, removable = false } = {}, ui, t = (k)
     const extra = removable
       ? `<button type="button" class="p-attach-remove" data-chat="attach-remove" data-id="${esc(file.id)}" aria-label="${esc(label)}" title="${esc(label)}">${X}</button>`
       : ''
-    return renderPill({ label: file.name, meta, tone: file.image ? 'image' : 'file', title: file.path || file.name, extra }, {}, t)
+    return renderPill({ label: file.name, meta, tone: file.image ? 'image' : 'file', title: file.path || file.name, extra, static: !removable }, {}, t)
   })
   return `<div class="p-attach">${chips.join('')}</div>`
 }

@@ -644,19 +644,23 @@ describe('attachments', () => {
   const lines = '\n\n[attached: notes.txt (text/plain, 2 KB) at /x/1-notes.txt]'
   test('a sent message shows its files at once, and Pi\'s echo with the lines is not a second bubble', () => {
     let state = addUser(createChat(), 'look', files)
-    expect(state.messages).toEqual([{ kind: 'user', text: 'look', files }])
+    expect(state.messages).toEqual([{ kind: 'user', text: 'look', files: [{ ...files[0], image: false }] }])
     state = run(state, ev({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: 'look' + lines }, { type: 'image', data: 'x' }] } }))
     expect(state.messages.length).toBe(1)
   })
   test('a_queued_message_keeps_its_attachments', () => {
     let state = addQueued(run(createChat(), ev({ type: 'agent_start' })), 'look', false, files)
-    expect(state.queue).toEqual([{ text: 'look', files }])
+    expect(state.queue).toEqual([{ text: 'look', files: [{ ...files[0], image: false }] }])
     // Pi's queue holds the text the dock built, lines and all: the entry keeps them to give back on a re-queue
     state = run(state, ev({ type: 'queue_update', steering: [], followUp: ['look' + lines] }))
     expect(state.queue).toEqual([{ text: 'look', raw: 'look' + lines, files: [{ name: 'notes.txt', mime: 'text/plain', size: '2 KB', path: '/x/1-notes.txt', image: false }] }])
     state = run(state, ev({ type: 'queue_update', steering: [], followUp: [] }), ev({ type: 'message_start', message: { role: 'user', content: 'look' + lines } }))
     expect(state.queue).toEqual([])
     expect(state.messages).toEqual([{ kind: 'user', text: 'look', files: [{ name: 'notes.txt', mime: 'text/plain', size: '2 KB', path: '/x/1-notes.txt', image: false }] }])
+  })
+  test('the page\'s own bubble marks an image as history does', () => {
+    const state = addUser(createChat(), 'see', [{ name: 's.png', mime: 'image/png', size: 7 }, { name: 'a.txt', mime: 'text/plain', size: 7 }])
+    expect(state.messages[0].files.map((f) => f.image)).toEqual([true, false])
   })
   test('a steering message keeps them too', () => {
     const state = run(addQueued(createChat(), 'now', true, files), ev({ type: 'queue_update', steering: ['now' + lines], followUp: [] }))
