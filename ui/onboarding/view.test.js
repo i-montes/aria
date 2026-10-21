@@ -1026,6 +1026,35 @@ describe('the shortcut row', () => {
     expect(saved(h)).toBe('')
   })
 
+  test('backspace with Super held (however the engine says it) is a key, not a reset', () => {
+    for (const name of ['Super', 'OS', 'Meta']) {
+      const h = open({ hotkey: 'Ctrl + Alt + K', taken: [], os: 'linux' }, { ...completed, shortcut: 'CTRL + ALT + K' })
+      h.click('key-capture', 'shortcut')
+      h.press({ key: 'Backspace', code: 'Backspace', getModifierState: (n) => n === name })
+      expect(h.root.innerHTML).toContain('ob.shortcut.recording') // still recording, with a note
+      expect(h.root.innerHTML).toContain('ob.shortcut.unsupported')
+      expect(h.ob.snapshot().dirty).toBe(false) // not reset to the default
+    }
+  })
+
+  test('typing in the field again takes the "not a shortcut" note away', () => {
+    const h = open()
+    h.type('shortcutText', 'super + return')
+    h.click('shortcut-apply', 'shortcutText')
+    expect(h.root.innerHTML).toContain('ob.shortcut.typedInvalid')
+    h.type('shortcutText', 'super + r')
+    h.ob.platformChanged() // any redraw
+    expect(h.root.innerHTML).not.toContain('ob.shortcut.typedInvalid')
+    // the fallback note comes back once the person's own note is gone
+    const p = { hotkey: 'Super + Alt + A', taken: ['Super + A'], os: 'linux' }
+    const g = open(p)
+    g.type('shortcutText', 'nope')
+    g.click('shortcut-apply', 'shortcutText')
+    g.type('shortcutText', 'nope2')
+    g.ob.platformChanged()
+    expect(g.root.innerHTML).toContain('ob.shortcut.inUse.one')
+  })
+
   test('in use shows a fallback', () => {
     const platform = { hotkey: 'Super + A', taken: [], os: 'linux' }
     const h = open(platform, { ...completed, shortcut: 'super + shift + a' })
@@ -1089,6 +1118,12 @@ describe('the shortcut row', () => {
     const html = h.root.innerHTML.replaceAll('&quot;', '"')
     expect(html).toContain('ob.shortcut.none{"taken":"Option + key.space, Control + Option + key.space, Command + Option + key.space"}')
     expect(html).not.toContain('ob.shortcut.inUse')
+  })
+
+  test('no shortcut and none tried (the Mac\'s key handler failed) says the dock keeps trying', () => {
+    const h = open({ hotkey: '', taken: [], os: 'mac' })
+    expect(h.root.innerHTML).toContain('ob.shortcut.failed')
+    expect(h.root.innerHTML).not.toContain('ob.shortcut.none')
   })
 
   test('only the release of the key that ended a recording is taken', () => {

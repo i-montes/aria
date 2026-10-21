@@ -21,6 +21,9 @@ function held(event, flag) {
   return ['Super', 'OS', 'Meta'].some((name) => event.getModifierState(name))
 }
 
+/** Whether any modifier is held, by the same rule as a recorded shortcut (Super however the engine reports it). */
+export const anyModifierHeld = (event) => FLAGS.some((flag) => held(event, flag))
+
 const platform = (os) => (os === 'mac' ? 'mac' : 'linux')
 
 /** The canonical key: `A`–`Z`, `0`–`9`, `Space`, `F1`–`F12`; null for anything else. */
@@ -70,3 +73,7 @@ export function fromKeyEvent(event, os) {
   if (!mods.length) return { error: 'needsModifier' }
   return { label: label({ mods, key }) }
 }
+
+/** A key's name as the page shows it (`t` the page's translator): `Space` in the reader's language, the others as
+ * they are. The corner notice and the Shortcut row both say keys this way. */
+export const keyName = (key, t) => (key === 'Space' ? t('key.space') : key)

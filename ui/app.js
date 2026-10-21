@@ -5,6 +5,7 @@ import { createI18n, normalizeLanguage } from './i18n.js'
 import { chatTexts } from './chat/texts.js'
 import { createChatView } from './chat/view.js'
 import { createOnboarding } from './onboarding/view.js'
+import { keyName } from './onboarding/shortcut.js'
 
 let i18n = createI18n({})
 const t = (key, vars) => i18n.t(key, vars)
@@ -73,6 +74,9 @@ const handlers = {
     state.taken = Array.isArray(message.taken) ? message.taken : []
     if (message.os) state.os = message.os
     onboarding.platformChanged()
+    // The first-run notice goes up with the default; the shortcut really registered (a fallback, or none) can come
+    // after it: the notice shown says that one.
+    if (document.body.classList.contains('show-notice')) booted.then(renderNotice)
   },
   // settings.json changed outside the page (/effort or /autocompact in a session, an editor): read it again. An open
   // settings screen shows it unless the reader has changes of their own on it (onboarding.refreshSettings).
@@ -140,17 +144,21 @@ function setMode(mode) {
 
 const NOTICE_MS = 8000
 
-/** A key's name as the page shows it: `Space` in the reader's language. */
-const keyName = (key) => (key === 'Space' ? t('key.space') : key)
-
 /** The hotkey as the design shows it: one key per `<kbd>`. */
-const hotkeyHtml = () => state.hotkey.split(' + ').map((key) => `<kbd>${keyName(key)}</kbd>`).join(' ')
+const hotkeyHtml = () => state.hotkey.split(' + ').map((key) => `<kbd>${keyName(key, t)}</kbd>`).join(' ')
 
-function showNotice() {
-  const line = state.hotkey ? `${t('notice.press')} ${hotkeyHtml()} ${t('notice.toSetUp')}` : t('notice.noHotkey')
+/** The corner notice's text, from the shortcut in use now. */
+function renderNotice() {
+  // No shortcut: every candidate taken (`taken` lists them), or none could be tried (the Mac's key handler failed).
+  const none = state.taken.length ? t('notice.noHotkey') : t('notice.hotkeyFailed')
+  const line = state.hotkey ? `${t('notice.press')} ${hotkeyHtml()} ${t('notice.toSetUp')}` : none
   document.getElementById('notice').innerHTML = `
     <span class="dot"></span>
     <div><b>${t('notice.title')}</b><span class="line">${line}</span></div>`
+}
+
+function showNotice() {
+  renderNotice()
   document.body.classList.add('show-notice')
   setTimeout(() => document.body.classList.remove('show-notice'), NOTICE_MS)
 }

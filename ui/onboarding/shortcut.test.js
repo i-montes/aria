@@ -1,6 +1,6 @@
 // Run: bun test ui
 import { describe, expect, test } from 'bun:test'
-import { defaultShortcut, display, fromKeyEvent, label, parseShortcut } from './shortcut.js'
+import { anyModifierHeld, defaultShortcut, display, fromKeyEvent, keyName, label, parseShortcut } from './shortcut.js'
 
 describe('the shortcut, as the page reads and records it', () => {
   test('parsing mirrors the dock: forgiving, canonical, per platform', () => {
@@ -32,5 +32,21 @@ describe('the shortcut, as the page reads and records it', () => {
     expect(fromKeyEvent({ key: 'k', code: 'KeyK' }, 'linux')).toEqual({ error: 'needsModifier' })
     expect(fromKeyEvent({ key: 'Tab', code: 'Tab', altKey: true }, 'linux')).toEqual({ error: 'unsupported' })
     expect(fromKeyEvent({ key: 'F13', code: 'F13', altKey: true }, 'linux')).toEqual({ error: 'unsupported' })
+  })
+})
+
+describe('one place for how keys are said and which modifiers count', () => {
+  test('Space is said in the reader\'s language, the other keys as they are', () => {
+    const t = (key) => ({ 'key.space': 'Espacio' })[key] ?? key
+    expect(keyName('Space', t)).toBe('Espacio')
+    expect(keyName('A', t)).toBe('A')
+    expect(keyName('F5', t)).toBe('F5')
+  })
+
+  test('a modifier counts however the engine reports Super', () => {
+    expect(anyModifierHeld({})).toBe(false)
+    expect(anyModifierHeld({ getModifierState: () => false })).toBe(false)
+    for (const flag of ['metaKey', 'ctrlKey', 'altKey', 'shiftKey']) expect(anyModifierHeld({ [flag]: true })).toBe(true)
+    for (const name of ['Super', 'OS', 'Meta']) expect(anyModifierHeld({ getModifierState: (n) => n === name })).toBe(true)
   })
 })

@@ -2,7 +2,7 @@
 // the settings object (see steps.js); this file turns it into HTML, handles every interaction in one
 // delegated listener, and talks to the dock through `env.request`. Widgets live in components.js.
 import * as c from './components.js'
-import { defaultShortcut, display, fromKeyEvent, label as shortcutLabel, parseShortcut } from './shortcut.js'
+import { anyModifierHeld, defaultShortcut, display, fromKeyEvent, keyName, label as shortcutLabel, parseShortcut } from './shortcut.js'
 import { renderPanelHead } from '../chat/parts/panelhead.js'
 import { orderedModels, renderModelPicker } from '../chat/parts/models.js'
 import {
@@ -353,25 +353,15 @@ export function createOnboarding(env) {
    * pressing it; under it why a press did not count, or which shortcut the dock really uses when the chosen one is
    * taken. */
   function shortcutRow() {
-    const { os, hotkey: inUse, taken } = platform()
+    const { os } = platform()
     const chosen = parseShortcut(state.settings.shortcut, os)
     const shown = chosen ?? defaultShortcut(os)
     const row = state.ui.shortcut
-    let note = ''
-    let tone = ''
-    if (row.note) {
-      note = t(row.note === 'needsModifier' ? `ob.shortcut.needsModifier.${os === 'mac' ? 'mac' : 'linux'}` : `ob.shortcut.${row.note}`)
-      tone = 'error'
-    } else if (!inUse && taken?.length) {
-      note = t('ob.shortcut.none', { taken: taken.map(keysText).join(', ') })
-      tone = 'error'
-    } else if (taken?.length) {
-      note = t(taken.length === 1 ? 'ob.shortcut.inUse.one' : 'ob.shortcut.inUse.many', { hotkey: keysText(inUse), taken: taken.map(keysText).join(', ') })
-    }
+    const { note, tone } = shortcutNote()
     // A shortcut the desktop takes before the page sees it (one already bound, Aria's own) can only be typed.
     const example = os === 'mac' ? 'Command + Shift + A' : 'SUPER + SHIFT + A'
     return (
-      c.keyCapture('shortcut', t('ob.shortcut.label'), t('ob.shortcut.desc'), display(shown).split(' + ').map(keyName), {
+      c.keyCapture('shortcut', t('ob.shortcut.label'), t('ob.shortcut.desc'), display(shown).split(' + ').map((key) => keyName(key, t)), {
         recording: row.recording,
         recordingText: t('ob.shortcut.recording'),
         meta: chosen ? '' : t('ob.shortcut.default'),
@@ -387,9 +377,26 @@ export function createOnboarding(env) {
     )
   }
 
-  /** A key's name on the page: `Space` in the reader's language, the others as they are. */
-  const keyName = (key) => (key === 'Space' ? t('key.space') : key)
-  const keysText = (text) => String(text).split(' + ').map(keyName).join(' + ')
+  /** The line under the Shortcut row: why a press or a typed one did not count, else which shortcut the dock really
+   * uses when the chosen one is taken (or that none could be). */
+  function shortcutNote() {
+    const { os, hotkey: inUse, taken } = platform()
+    const row = state.ui.shortcut
+    if (row.note) {
+      const key = row.note === 'needsModifier' ? `ob.shortcut.needsModifier.${os === 'mac' ? 'mac' : 'linux'}` : `ob.shortcut.${row.note}`
+      return { note: t(key), tone: 'error' }
+    }
+    if (!inUse && taken?.length) return { note: t('ob.shortcut.none', { taken: taken.map(keysText).join(', ') }), tone: 'error' }
+    // None in use and none tried: the Mac's key handler could not be installed (the dock tries again).
+    if (!inUse) return { note: t('ob.shortcut.failed'), tone: 'error' }
+    if (taken?.length) {
+      const key = taken.length === 1 ? 'ob.shortcut.inUse.one' : 'ob.shortcut.inUse.many'
+      return { note: t(key, { hotkey: keysText(inUse), taken: taken.map(keysText).join(', ') }), tone: '' }
+    }
+    return { note: '', tone: '' }
+  }
+
+  const keysText = (text) => String(text).split(' + ').map((key) => keyName(key, t)).join(' + ')
 
   /** Recording ends. The press that ended it (if one did) is still down: its release is the row's too (see keyup). */
   function stopRecording(event) {
@@ -421,7 +428,7 @@ export function createOnboarding(env) {
     event.stopPropagation()
     event.stopImmediatePropagation()
     heldKeys.add(event.code)
-    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.getModifierState?.('Super')
+    const plain = !anyModifierHeld(event)
     if (event.key === 'Escape' || (plain && event.key === 'Backspace')) {
       if (event.key === 'Backspace') update((s) => (s.shortcut = ''))
       stopRecording(event)
@@ -1078,6 +1085,16 @@ export function createOnboarding(env) {
     }
     if (field === 'shortcutText') {
       state.ui.shortcut.draft = value
+      // Typing again: the note about the last one goes (in place, so the field keeps its focus and caret).
+      if (state.ui.shortcut.note) {
+        state.ui.shortcut.note = null
+        const line = root.querySelector('[data-action="key-capture"][data-field="shortcut"]')?.parentElement?.querySelector('.state')
+        const { note, tone } = shortcutNote()
+        if (line && note) {
+          line.className = `state ${tone}`
+          line.textContent = note
+        } else line?.remove()
+      }
       return
     }
     if (field === 'key' || field === 'typesafeKey') {
