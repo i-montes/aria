@@ -5,7 +5,7 @@
 import { patchHtml, patchItems } from './patch.js'
 import { esc } from '../onboarding/components.js'
 import { renderAgentSession } from './parts/session.js'
-import { renderCommandPicker, filterCommands, stepActive, clampActive } from './parts/commands.js'
+import { renderCommandPicker, filterCommands, stepActive, clampActive, toInvocation, withSkillNames } from './parts/commands.js'
 import { renderComposer } from './parts/composer.js'
 import { PROVIDERS, renderConnect } from './parts/connect.js'
 import { renderFilePicker, filterFiles } from './parts/files.js'
@@ -583,6 +583,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       return openConnect(connect[1])
     }
     if (/^\/model(\s|$)/.test(text)) return // the model picker answers this one
+    const own = /^\/(compact|session|copy|export|reload)(?:\s+([\s\S]*))?$/.exec(text)
+    if (own) {
+      clearDraft()
+      drawComposer()
+      return runOwnCommand(own[1], (own[2] ?? '').trim())
+    }
     const session = tabs.active
     const chat = chatOf(session)
     // Extension commands (and Aria's own) run at once, even during a run; a skill or a prompt template is an ordinary
@@ -591,10 +597,10 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const command = name !== null ? commandsBy.get(session)?.find((c) => c.name === name) : null
     const immediate = name !== null && (!command || command.source === 'extension' || command.source === 'aria')
     if (chat.running && !immediate) {
-      post({ type: 'chatSend', text, behavior: 'followUp' }, session)
+      post({ type: 'chatSend', text: toInvocation(text, commandsBy.get(session) ?? []), behavior: 'followUp' }, session)
       chats.set(session, addQueued(chat, text))
     } else {
-      post({ type: 'chatSend', text, behavior: null }, session)
+      post({ type: 'chatSend', text: toInvocation(text, commandsBy.get(session) ?? []), behavior: null }, session)
       chats.set(session, addUser(chat, text))
     }
     const before = tabs
@@ -609,6 +615,73 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
 
   function stop() {
     post({ type: 'chatAbort' })
+  }
+
+  /** Pi's own commands, which its RPC does not take as typed text: each runs through its RPC command (or here, for
+   * /copy) and answers with a note in the thread. */
+  async function runOwnCommand(name, rest) {
+    const session = tabs.active
+    const say = (key, vars) => {
+      chats.set(session, addNote(chatOf(session), 'aria', t(key, vars)))
+      render()
+    }
+    // Pi's own refusal reads as it is; a code of the dock's (`command-failed`, `pi-missing`…) is translated.
+    const pi = async (command, args) => {
+      const reply = await ask({ type: 'piCommand', command, args }, session)
+      const key = `chat.problem.${reply.error}`
+      return t(key) === key ? reply : { ...reply, error: t(key) }
+    }
+    if (name === 'copy') {
+      const last = chatOf(session).messages.findLast((m) => m.kind === 'assistant' && m.text)
+      if (!last) return say('chat.copy.none')
+      return say((await copyText(last.text)) ? 'chat.copy.done' : 'chat.copy.failed')
+    }
+    if (name === 'reload') {
+      post({ type: 'enginesRestart' }, session)
+      return say('chat.reload.done')
+    }
+    if (name === 'compact') {
+      // Its progress and its divider come from Pi's compaction events; only a refusal needs saying.
+      const reply = await pi('compact', rest ? { customInstructions: rest } : {})
+      if (!reply.ok) say('chat.compact.failed', { error: reply.error })
+      return
+    }
+    if (name === 'export') {
+      const reply = await pi('export_html')
+      return reply.ok ? say('chat.export.done', { path: reply.data.path }) : say('chat.export.failed', { error: reply.error })
+    }
+    const reply = await pi('get_session_stats')
+    if (!reply.ok) return say('chat.session.failed', { error: reply.error })
+    const stats = reply.data
+    const number = (n) => Number(n ?? 0).toLocaleString()
+    const line = t('chat.session.stats', {
+      messages: number(stats.totalMessages),
+      tools: number(stats.toolCalls),
+      tokens: number(stats.tokens?.total),
+      cost: Number(stats.cost ?? 0).toFixed(2),
+    })
+    const usage = stats.contextUsage
+    const context = usage && Number.isFinite(usage.percent) ? t('chat.session.context', { percent: Math.round(usage.percent), window: number(usage.contextWindow) }) : ''
+    chats.set(session, addNote(chatOf(session), 'aria', context ? `${line} · ${context}` : line))
+    render()
+  }
+
+  /** The clipboard API, or the older copy command where the web view does not offer it. */
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      const field = document.createElement('textarea')
+      field.value = text
+      field.style.cssText = 'position: fixed; opacity: 0;'
+      document.body.appendChild(field)
+      field.select()
+      const done = document.execCommand('copy')
+      field.remove()
+      input?.focus()
+      return done
+    }
   }
 
   function closePicker(draw = true) {
@@ -655,12 +728,17 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       { name: 'memory', description: t('chat.cmd.memory'), source: 'aria' },
       { name: 'model', description: t('chat.cmd.model'), source: 'aria' },
       { name: 'connect', description: t('chat.cmd.connect'), source: 'aria' },
+      { name: 'compact', description: t('chat.cmd.compact'), source: 'aria' },
+      { name: 'session', description: t('chat.cmd.session'), source: 'aria' },
+      { name: 'copy', description: t('chat.cmd.copy'), source: 'aria' },
+      { name: 'export', description: t('chat.cmd.export'), source: 'aria' },
+      { name: 'reload', description: t('chat.cmd.reload'), source: 'aria' },
     ]
     if (asked.kind === 'command') {
       let items = commandsBy.get(session)
       if (!items) {
         const reply = await ask({ type: 'listCommands' }, session)
-        items = [...local(), ...(reply.commands ?? [])]
+        items = [...local(), ...withSkillNames(reply.commands ?? [])]
         // An empty list means Pi could not answer (not started yet, or busy): do not remember that.
         if ((reply.commands ?? []).length) commandsBy.set(session, items)
       }

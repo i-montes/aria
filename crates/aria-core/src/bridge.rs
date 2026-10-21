@@ -62,6 +62,15 @@ pub enum PageMessage {
     SetModel { id: u64, model: String },
     #[serde(rename = "listFiles")]
     ListFiles { id: u64, query: String },
+    /// One of Pi's own commands the dock offers in its `/` menu (`compact`, `get_session_stats`, `export_html`), with its
+    /// fields; replies `piReply`.
+    #[serde(rename = "piCommand")]
+    PiCommand {
+        id: u64,
+        command: String,
+        #[serde(default)]
+        args: Value,
+    },
     /// Download and list the Claude provider (`claude-bridge`) in Aria's Pi; replies `saved`, or an `error` whose `code` is
     /// `pi-missing`, `claude-code-missing` or `claude-bridge-install-failed`.
     #[serde(rename = "installClaudeBridge")]
@@ -153,6 +162,9 @@ pub enum DockMessage {
     Models { id: u64, models: Value },
     #[serde(rename = "files")]
     Files { id: u64, files: Vec<String> },
+    /// Pi's answer to a `piCommand`: its `data`, or its `error` when it refused (or `command-unknown`, never sent).
+    #[serde(rename = "piReply")]
+    PiReply { id: u64, ok: bool, data: Value, error: Option<String> },
     /// What a session says (its chat messages and the replies to its requests).
     #[serde(rename = "session")]
     Session { session: String, message: Box<DockMessage> },
@@ -244,6 +256,14 @@ mod tests {
         );
         assert_eq!(page(r#"{"type":"listCommands","id":7}"#), PageMessage::ListCommands { id: 7 });
         assert_eq!(page(r#"{"type":"listModels","id":8}"#), PageMessage::ListModels { id: 8 });
+        assert_eq!(
+            page(r#"{"type":"piCommand","id":5,"command":"compact","args":{"customInstructions":"code"}}"#),
+            PageMessage::PiCommand { id: 5, command: "compact".into(), args: json!({"customInstructions": "code"}) }
+        );
+        assert_eq!(
+            page(r#"{"type":"piCommand","id":6,"command":"get_session_stats"}"#),
+            PageMessage::PiCommand { id: 6, command: "get_session_stats".into(), args: Value::Null }
+        );
         assert_eq!(
             page(r#"{"type":"setModel","id":9,"model":"opencode-go/glm-5.3"}"#),
             PageMessage::SetModel { id: 9, model: "opencode-go/glm-5.3".into() }

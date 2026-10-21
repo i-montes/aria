@@ -331,6 +331,8 @@
   "chat.problem.pi-missing": "The engine (Pi) is not installed. Run the Aria installer again.",
   "chat.problem.node-missing": "Node 22.19 or newer is needed to run the engine. Install it, then run the Aria installer again.",
   "chat.problem.agent-dir-unwritable": "Aria could not write its engine folder in ~/.aria/agent. Check the folder's permissions.",
+  "chat.problem.command-failed": "Pi did not answer the command.",
+  "chat.problem.command-unknown": "The dock does not offer that command.",
   "chat.problem.pi-failed": "The engine did not start. Try again; if it keeps failing, run the Aria installer again.",
   "chat.untitled": "New session",
   "chat.sessions": "Sessions",

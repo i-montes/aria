@@ -251,11 +251,16 @@ function reduceEvent(state, event) {
     case 'auto_retry_start':
       return push(state, notice('warn', { key: 'chat.retry', vars: { attempt: event.attempt, max: event.maxAttempts } }))
     case 'compaction_start':
-      return { ...state, phase: 'compacting context' }
-    case 'compaction_end':
+      // One asked with /compact while nothing runs shows the working line too, until it ends.
+      return state.running
+        ? { ...state, phase: 'compacting context' }
+        : { ...state, phase: 'compacting context', running: true, compacting: true, startedAt: Date.now() }
+    case 'compaction_end': {
+      const ended = state.compacting ? { ...state, running: false, compacting: false, startedAt: null } : state
       return event.aborted || !event.result
-        ? { ...state, phase: 'working' }
-        : push({ ...state, phase: 'working' }, { kind: 'divider', key: 'chat.compacted' })
+        ? { ...ended, phase: 'working' }
+        : push({ ...ended, phase: 'working' }, { kind: 'divider', key: 'chat.compacted' })
+    }
     case 'engine_exited':
       return push({ ...state, running: false }, notice('error', { key: 'chat.engine.exited' }))
     case 'command_failed': {

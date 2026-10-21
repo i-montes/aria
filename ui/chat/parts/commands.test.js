@@ -1,7 +1,7 @@
 // Run: bun test ui/chat/parts/commands.test.js
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { TEXTS, clampActive, filterCommands, keepVisible, renderCommandPicker, segments, stepActive } from './commands.js'
+import { TEXTS, clampActive, filterCommands, keepVisible, renderCommandPicker, segments, stepActive, toInvocation, withSkillNames } from './commands.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const hostile = '<script>alert("x")</script> & \'q\''
@@ -11,7 +11,8 @@ const items = [
   { name: 'agents', description: 'Show the subagents that are running', source: 'extension' },
   { name: 'compact', description: 'Compact the context to save tokens', source: 'builtin' },
   { name: 'model', description: 'Choose which model Aria uses', source: 'builtin' },
-  { name: 'memory', description: 'Search or save what Aria remembers', source: 'skill' },
+  { name: 'memory', description: 'Search or save what Aria remembers', source: 'aria' },
+  { name: 'debugging', description: 'Find the root cause before fixing', source: 'skill' },
 ]
 const names = (query, list = items) => filterCommands(list, query).map((x) => x.item.name)
 
@@ -57,6 +58,40 @@ describe('filterCommands', () => {
   })
 })
 
+describe('skills', () => {
+  const fromPi = [
+    { name: 'plan', source: 'extension' },
+    { name: 'skill:brainstorming', source: 'skill' },
+    { name: 'skill:plan', source: 'skill' },
+  ]
+
+  test('the commands come first and the skills after them, each group in its own ranking', () => {
+    const list = [
+      { name: 'debugging', source: 'skill' },
+      { name: 'debug-x', source: 'extension' },
+      { name: 'de', source: 'skill' },
+    ]
+    expect(names('de', list)).toEqual(['debug-x', 'debugging', 'de'])
+  })
+
+  test('a skill is named without its prefix, unless a command already has that name', () => {
+    expect(withSkillNames(fromPi).map((c) => [c.name, c.invoke])).toEqual([
+      ['plan', undefined],
+      ['brainstorming', 'skill:brainstorming'],
+      ['skill:plan', undefined],
+    ])
+  })
+
+  test('a skill typed by its short name is sent to Pi by its real name, with what follows', () => {
+    const shown = withSkillNames(fromPi)
+    expect(toInvocation('/brainstorming a new header', shown)).toBe('/skill:brainstorming a new header')
+    expect(toInvocation('/brainstorming', shown)).toBe('/skill:brainstorming')
+    expect(toInvocation('/plan the release', shown)).toBe('/plan the release')
+    expect(toInvocation('/skill:plan x', shown)).toBe('/skill:plan x')
+    expect(toInvocation('just text /brainstorming', shown)).toBe('just text /brainstorming')
+  })
+})
+
 describe('active helpers', () => {
   test('segments split a text into plain and highlighted pieces', () => {
     expect(segments('compact', [[0, 1], [2, 4]])).toEqual([
@@ -94,12 +129,29 @@ describe('renderCommandPicker', () => {
 
   test('one option per match, with pick and hover emits', () => {
     const html = renderCommandPicker(picker(), {}, t)
-    expect(html.match(/data-chat="pick"/g)).toHaveLength(6)
-    expect(html.match(/data-chat="picker-hover"/g)).toHaveLength(6)
-    expect(html).toContain('data-index="5"')
+    expect(html.match(/data-chat="pick"/g)).toHaveLength(7)
+    expect(html.match(/data-chat="picker-hover"/g)).toHaveLength(7)
+    expect(html).toContain('data-index="6"')
     expect(html).toContain('role="listbox"')
     expect(html).toContain('chat.commands.title')
     expect(html).toContain('chat.commands.count.other n=6')
+  })
+
+  test('the skills have their own heading with their own count, which is not an option', () => {
+    const html = renderCommandPicker(picker(), {}, t)
+    expect(html).toContain('chat.commands.count.other n=6')
+    expect(html).toContain('chat.commands.skills')
+    expect(html).toContain('chat.commands.skillCount.one n=1')
+    expect(html.indexOf('chat.commands.skills')).toBeLessThan(html.indexOf('data-index="6"'))
+    expect(html.indexOf('chat.commands.skills')).toBeGreaterThan(html.indexOf('data-index="5"'))
+    expect(html).toMatch(/<li role="presentation" class="p-cmd-group">/)
+  })
+
+  test('when only skills match, the heading says skills and there is no second one', () => {
+    const html = renderCommandPicker(picker({ query: 'root cause' }), {}, t)
+    expect(html.match(/chat\.commands\.skills/g)).toHaveLength(1)
+    expect(html).not.toContain('chat.commands.title<')
+    expect(html).toContain('chat.commands.skillCount.one n=1')
   })
 
   test('the count is singular for one match', () => {
@@ -111,7 +163,7 @@ describe('renderCommandPicker', () => {
     expect(html.match(/aria-selected="true"/g)).toHaveLength(1)
     expect(html.match(/class="p-cmd-row on"/g)).toHaveLength(1)
     expect(html).toMatch(/class="p-cmd-row on" data-chat="pick" data-index="1"/)
-    expect(renderCommandPicker(picker({ active: 99 }), {}, t)).toMatch(/class="p-cmd-row on" data-chat="pick" data-index="5"/)
+    expect(renderCommandPicker(picker({ active: 99 }), {}, t)).toMatch(/class="p-cmd-row on" data-chat="pick" data-index="6"/)
   })
 
   test('the matched letters are highlighted', () => {

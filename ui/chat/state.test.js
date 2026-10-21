@@ -296,6 +296,22 @@ describe('phase, elapsed time and the notes around a run', () => {
     expect(state.startedAt).toBeGreaterThanOrEqual(before)
   })
 
+  test('a compaction asked while idle shows the working line until it ends', () => {
+    let state = run(createChat(), ev({ type: 'compaction_start', reason: 'manual' }))
+    expect(state.running).toBe(true)
+    expect(state.phase).toBe('compacting context')
+    expect(Number.isFinite(state.startedAt)).toBe(true)
+    state = reduce(state, ev({ type: 'compaction_end', reason: 'manual', result: { tokensBefore: 150000 }, aborted: false }))
+    expect(state.running).toBe(false)
+    expect(state.messages.at(-1)).toMatchObject({ kind: 'divider', key: 'chat.compacted' })
+  })
+
+  test('a compaction inside a run leaves the run going', () => {
+    let state = run(createChat(), ev({ type: 'agent_start' }), ev({ type: 'compaction_start', reason: 'threshold' }))
+    state = reduce(state, ev({ type: 'compaction_end', reason: 'threshold', aborted: true }))
+    expect(state.running).toBe(true)
+  })
+
   test('compaction shows its phase and leaves a divider when it ends', () => {
     let state = run(createChat(), ev({ type: 'compaction_start', reason: 'threshold' }))
     expect(state.phase).toBe('compacting context')

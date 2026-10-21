@@ -32,6 +32,10 @@ while IFS= read -r line; do
       printf '{"type":"response","id":"%s","command":"get_messages","success":true,"data":{"messages":[{"role":"user","content":"earlier"}]}}\n' "$id" ;;
     get_session_stats)
       printf '{"type":"response","id":"%s","command":"get_session_stats","success":true,"data":{"contextUsage":{"tokens":60000,"contextWindow":200000,"percent":30}}}\n' "$id" ;;
+    compact)
+      printf '{"type":"response","id":"%s","command":"compact","success":true,"data":{"tokensBefore":150000,"estimatedTokensAfter":32000,"instructions":"%s"}}\n' "$id" "$(field customInstructions "$line")" ;;
+    export_html)
+      printf '{"type":"response","id":"%s","command":"export_html","success":false,"error":"Nothing to export"}\n' "$id" ;;
     clear_queue)
       printf '{"type":"response","id":"%s","command":"clear_queue","success":true,"data":{"steering":[],"followUp":["x"]}}\n' "$id"
       printf '{"type":"queue_update","steering":[],"followUp":[]}\n' ;;

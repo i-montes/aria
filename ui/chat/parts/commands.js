@@ -1,14 +1,15 @@
 // The slash-command picker (design/components/command-picker). It floats above the composer while
 // the text is `/something`; the list is filtered and ranked by `filterCommands`.
 //
-// Props: { items: [{ name, description, source, hint? }], query, active, open }
-//   items   the commands Pi offers (`hint` is an optional key shortcut such as "alt+a"; without it the
-//           `source` — extension, skill, builtin… — shows in the same small tag)
+// Props: { items: [{ name, description, source }], query, active, open }
+//   items   the commands Pi offers, and Aria's own; the skills (`source` "skill") are listed after them under
+//           their own heading, by their names without Pi's `skill:` prefix (`withSkillNames`)
 //   query   the text after the `/`
 //   active  index in the FILTERED list of the highlighted row (clamped)
 //   open    false keeps the element but hides it, so it can animate out
 // ui: unused. t: translate(key, vars).
-// Pure helpers exported for the controller: filterCommands, segments, clampActive, stepActive, keepVisible.
+// Pure helpers exported for the controller: filterCommands, withSkillNames, toInvocation, segments, clampActive,
+// stepActive, keepVisible.
 //
 // Emits (on the row's button / its list item):
 //   data-chat="pick"          data-index  the index in the filtered list (Enter, Tab and click choose it)
@@ -20,6 +21,9 @@ export const TEXTS = {
     'chat.commands.title': 'COMMANDS',
     'chat.commands.count.one': '{n} command',
     'chat.commands.count.other': '{n} commands',
+    'chat.commands.skills': 'SKILLS',
+    'chat.commands.skillCount.one': '{n} skill',
+    'chat.commands.skillCount.other': '{n} skills',
     'chat.commands.empty': 'No command matches “/{query}”',
     'chat.commands.emptyHint': 'Press enter to send it as a message.',
     'chat.commands.navigate': 'navigate',
@@ -30,6 +34,9 @@ export const TEXTS = {
     'chat.commands.title': 'COMANDOS',
     'chat.commands.count.one': '{n} comando',
     'chat.commands.count.other': '{n} comandos',
+    'chat.commands.skills': 'SKILLS',
+    'chat.commands.skillCount.one': '{n} skill',
+    'chat.commands.skillCount.other': '{n} skills',
     'chat.commands.empty': 'Ningún comando coincide con “/{query}”',
     'chat.commands.emptyHint': 'Pulsa enter para enviarlo como mensaje.',
     'chat.commands.navigate': 'moverse',
@@ -84,7 +91,27 @@ export function filterCommands(items, query) {
     }
     if (score !== null) out.push({ item, order, score, nameRanges, descRanges })
   })
-  return out.sort((a, b) => a.score - b.score || a.order - b.order)
+  return out.sort((a, b) => isSkill(a.item) - isSkill(b.item) || a.score - b.score || a.order - b.order)
+}
+
+const isSkill = (item) => item.source === 'skill'
+
+/** Pi names a skill `skill:<name>`; the menu shows and takes `<name>`, unless a command already has that name (then the
+ * skill keeps its prefix). `invoke` is the name Pi needs. */
+export function withSkillNames(items) {
+  const taken = new Set(items.filter((item) => !isSkill(item)).map((item) => item.name))
+  return items.map((item) => {
+    if (!isSkill(item)) return item
+    const short = String(item.name ?? '').replace(/^skill:/, '')
+    return taken.has(short) ? item : { ...item, name: short, invoke: item.name }
+  })
+}
+
+/** The text Pi needs: a skill typed by its short name (`/brainstorming …`) goes as `/skill:brainstorming …`. */
+export function toInvocation(text, items) {
+  const match = /^\/(\S+)/.exec(text)
+  const skill = match && items.find((item) => item.invoke && item.name === match[1])
+  return skill ? `/${skill.invoke}${text.slice(match[0].length)}` : text
 }
 
 /** Splits `text` into plain and highlighted pieces: [{ text, hit }]. `ranges` are sorted [start, end). */
@@ -124,9 +151,14 @@ export function renderCommandPicker({ items = [], query = '', active = 0, open =
   const list = filterCommands(items, query)
   const n = list.length
   const on = clampActive(active, n)
+  const commands = list.filter(({ item }) => !isSkill(item)).length
+  const heading = (skills, count) =>
+    `<span>${esc(t(skills ? 'chat.commands.skills' : 'chat.commands.title'))}</span><span class="p-cmd-count">${esc(t(`chat.commands.${skills ? 'skillCount' : 'count'}.${count === 1 ? 'one' : 'other'}`, { n: count }))}</span>`
+  // The panel's heading names the first group; the skills, when commands come before them, get their own.
+  const skillsHeading = commands && n > commands ? `<li role="presentation" class="p-cmd-group">${heading(true, n - commands)}</li>` : ''
   const rows = list
     .map(({ item, nameRanges, descRanges }, i) => {
-      return `<li role="option" id="p-cmd-opt-${i}" aria-selected="${i === on}" data-chat="picker-hover" data-index="${i}">
+      return `${i === commands ? skillsHeading : ''}<li role="option" id="p-cmd-opt-${i}" aria-selected="${i === on}" data-chat="picker-hover" data-index="${i}">
         <button type="button" class="p-cmd-row${i === on ? ' on' : ''}" data-chat="pick" data-index="${i}">
           <span class="p-cmd-name"><span class="p-cmd-slash">/</span>${hl(segments(String(item.name ?? ''), nameRanges), 'p-cmd-hl')}</span>
           <span class="p-cmd-desc" title="${esc(String(item.description ?? ''))}">${hl(segments(String(item.description ?? ''), descRanges), 'p-cmd-desc-hl')}</span>
@@ -140,7 +172,7 @@ export function renderCommandPicker({ items = [], query = '', active = 0, open =
     : `<div class="p-cmd-empty"><span class="p-cmd-empty-main">${esc(t('chat.commands.empty', { query: String(query ?? '').trim() }))}</span><span class="p-cmd-empty-hint">${esc(t('chat.commands.emptyHint'))}</span></div>`
   return `<div class="p-cmd${open ? ' is-open' : ''}" aria-hidden="${!open}">
     <div class="p-cmd-panel">
-      <div class="p-cmd-head"><span>${esc(t('chat.commands.title'))}</span><span class="p-cmd-count">${esc(t(n === 1 ? 'chat.commands.count.one' : 'chat.commands.count.other', { n }))}</span></div>
+      <div class="p-cmd-head">${n && !commands ? heading(true, n) : heading(false, commands)}</div>
       ${body}
       <div class="p-cmd-foot"><span><kbd>↑↓</kbd> ${esc(t('chat.commands.navigate'))}</span><span><kbd>↵</kbd> ${esc(t('chat.commands.select'))}</span><span><kbd>esc</kbd> ${esc(t('chat.commands.close'))}</span></div>
     </div>

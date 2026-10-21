@@ -26,6 +26,12 @@ pub type Emit = Arc<dyn Fn(DockMessage) + Send + Sync>;
 const NOTIFICATION_TITLE: &str = "Aria needs an answer";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+/// Pi's own commands the `/` menu offers, and how long each may take: a compaction is a model call over the whole context.
+const PI_COMMANDS: [(&str, Duration); 3] = [
+    ("compact", Duration::from_secs(600)),
+    ("get_session_stats", REQUEST_TIMEOUT),
+    ("export_html", Duration::from_secs(60)),
+];
 const FILE_LIMIT: usize = 50;
 const QUOTA_MAX_AGE: Duration = Duration::from_secs(20);
 
@@ -278,6 +284,9 @@ impl Chat {
             PageMessage::UiAnswer { id, value, confirmed, cancelled } => self.answer(&id, value, confirmed, cancelled),
             PageMessage::ListCommands { id } => self.list(id, "get_commands", "commands"),
             PageMessage::ListModels { id } => self.list(id, "get_available_models", "models"),
+            PageMessage::PiCommand { id, command, args } => self.pi_command(id, command, args),
+            // `/reload`: this tab's Pi starts again (reading its extensions, skills and templates), after its run.
+            PageMessage::EnginesRestart => self.restart_when_idle(),
             PageMessage::SetModel { id, model } => self.set_model(id, model),
             PageMessage::ListFiles { id, query } => {
                 let chat = self.clone();
@@ -542,6 +551,34 @@ impl Chat {
             chat.emit(match key {
                 "commands" => DockMessage::Commands { id, commands: data },
                 _ => DockMessage::Models { id, models: data },
+            });
+        });
+    }
+
+    /// A command of Pi's own from the `/` menu. Only the ones in `PI_COMMANDS` are sent; the page cannot reach the rest.
+    fn pi_command(&self, id: u64, command: String, args: Value) {
+        let Some(&(command, timeout)) = PI_COMMANDS.iter().find(|(name, _)| *name == command) else {
+            let error = Some("command-unknown".into());
+            return self.emit(DockMessage::PiReply { id, ok: false, data: Value::Null, error });
+        };
+        let args = if args.is_object() { args } else { json!({}) };
+        let chat = self.clone();
+        std::thread::spawn(move || {
+            let reply = chat
+                .ensure_engine()
+                .map_err(str::to_string)
+                .and_then(|engine| engine.request(command, args, timeout).map_err(|_| "command-failed".to_string()));
+            chat.emit(match reply {
+                Ok(response) if response.success => {
+                    DockMessage::PiReply { id, ok: true, data: response.data, error: None }
+                }
+                Ok(response) => DockMessage::PiReply {
+                    id,
+                    ok: false,
+                    data: Value::Null,
+                    error: Some(response.error.unwrap_or_else(|| "command-failed".into())),
+                },
+                Err(code) => DockMessage::PiReply { id, ok: false, data: Value::Null, error: Some(code) },
             });
         });
     }
@@ -1487,6 +1524,59 @@ mod tests {
             DockMessage::ChatEvent { event } => assert_eq!(event["messages"][0]["content"], json!("earlier")),
             _ => unreachable!(),
         }
+    }
+
+    fn pi_reply(h: &Harness, id: u64) -> (bool, Value, Option<String>) {
+        match wait_for(h, "the reply", |m| matches!(m, DockMessage::PiReply { id: got, .. } if *got == id)) {
+            DockMessage::PiReply { ok, data, error, .. } => (ok, data, error),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn the_menus_pi_commands_reach_pi_with_their_fields() {
+        let h = harness();
+        h.chat.handle(PageMessage::PiCommand { id: 1, command: "get_session_stats".into(), args: Value::Null });
+        let (ok, data, _) = pi_reply(&h, 1);
+        assert!(ok);
+        assert_eq!(data["contextUsage"]["percent"], json!(30));
+        h.chat.handle(PageMessage::PiCommand {
+            id: 2,
+            command: "compact".into(),
+            args: json!({"customInstructions": "keep the code"}),
+        });
+        let (ok, data, _) = pi_reply(&h, 2);
+        assert!(ok);
+        assert_eq!(data["instructions"], json!("keep the code"));
+        h.chat.handle(PageMessage::PiCommand { id: 3, command: "export_html".into(), args: Value::Null });
+        assert_eq!(pi_reply(&h, 3), (false, Value::Null, Some("Nothing to export".into())));
+    }
+
+    #[test]
+    fn a_pi_command_the_menu_does_not_offer_is_never_sent() {
+        let h = harness();
+        h.chat.handle(PageMessage::PiCommand { id: 4, command: "crash".into(), args: Value::Null });
+        assert_eq!(pi_reply(&h, 4), (false, Value::Null, Some("command-unknown".into())));
+        assert!(
+            !drain(&h).iter().any(|m| matches!(m, DockMessage::ChatEngine { state } if state == "exited")),
+            "Pi never got it"
+        );
+    }
+
+    #[test]
+    fn reload_restarts_only_its_own_pi() {
+        let s = sessions_harness();
+        for id in ["aa", "bb"] {
+            s.sessions.handle(in_session(id, PageMessage::ChatSend { text: "x".into(), behavior: None }));
+            wait_session(&s, "settled", id, settled);
+        }
+        s.sessions.handle(in_session("aa", PageMessage::EnginesRestart));
+        wait_session(&s, "aa stopped", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "stopped"));
+        std::thread::sleep(Duration::from_millis(200));
+        let bb_stopped = std::iter::from_fn(|| s.messages.try_recv().ok()).any(|m| {
+            matches!(m, DockMessage::Session { ref session, ref message } if session == "bb" && matches!(**message, DockMessage::ChatEngine { ref state } if state == "stopped"))
+        });
+        assert!(!bb_stopped, "the other tab's Pi keeps running");
     }
 
     #[test]

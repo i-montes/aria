@@ -331,6 +331,8 @@
   "chat.problem.pi-missing": "El motor (Pi) no está instalado. Vuelve a ejecutar el instalador de Aria.",
   "chat.problem.node-missing": "Hace falta Node 22.19 o más nuevo para ejecutar el motor. Instálalo y vuelve a ejecutar el instalador de Aria.",
   "chat.problem.agent-dir-unwritable": "Aria no pudo escribir la carpeta de su motor en ~/.aria/agent. Revisa los permisos de la carpeta.",
+  "chat.problem.command-failed": "Pi no respondió al comando.",
+  "chat.problem.command-unknown": "El dock no ofrece ese comando.",
   "chat.problem.pi-failed": "El motor no arrancó. Inténtalo otra vez; si sigue fallando, vuelve a ejecutar el instalador de Aria.",
   "chat.untitled": "Sesión nueva",
   "chat.sessions": "Sesiones",

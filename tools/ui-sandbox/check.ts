@@ -180,6 +180,17 @@ const script = `(async () => {
   // 5. Esc order
   typeIn('/'); await wait(120)
   check('the command picker opens', $('.p-cmd.is-open'))
+  const pickerText = $('.p-cmd').textContent
+  check('the skills have their own heading, after the commands', $('.p-cmd-group')?.textContent.includes('SKILLS') && $('.p-cmd-group').compareDocumentPosition($('.p-cmd-row')) === Node.DOCUMENT_POSITION_PRECEDING)
+  check("a skill shows without Pi's skill: prefix", pickerText.includes('/systematic-debugging') && !pickerText.includes('skill:'), pickerText.slice(0, 200))
+  check("Pi's own commands are in the menu", ['compact', 'session', 'copy', 'export', 'reload'].every((name) => pickerText.includes('/' + name)))
+  window.aria.chat.escape()
+  window.__sent.length = 0
+  typeIn('/systematic-debugging the flaky test'); key($('#chat-input'), 'Enter'); await settle()
+  check('a skill typed by its short name reaches Pi by its real name', sent().some((m) => m.type === 'chatSend' && m.text === '/skill:systematic-debugging the flaky test'), JSON.stringify(sent().slice(-1)))
+  check('the thread shows it as it was typed', $('#chat-list').textContent.includes('/systematic-debugging the flaky test') && !$('#chat-list').textContent.includes('skill:'))
+  await reset()
+  typeIn('/'); await wait(120)
   check('Esc closes the picker first', window.aria.chat.escape() === true && !$('.p-cmd.is-open'))
   ev({ type: 'agent_start' }); await settle(); window.__sent.length = 0
   check('Esc during a run does not stop it: it is left to the dock, which closes', window.aria.chat.escape() === false && !sent().some((m) => m.type === 'chatAbort'))

@@ -154,6 +154,7 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         | PageMessage::ListModels { .. }
         | PageMessage::SetModel { .. }
         | PageMessage::ListFiles { .. }
+        | PageMessage::PiCommand { .. }
         | PageMessage::Session { .. }
         | PageMessage::SessionsLoad { .. }
         | PageMessage::SessionsSave { .. }
