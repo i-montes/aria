@@ -60,6 +60,14 @@ while IFS= read -r line; do
       printf '{"type":"tool_execution_start","toolCallId":"t1","toolName":"bash","args":{"command":"cargo build"}}\n' ;;
     tool_end)
       printf '{"type":"tool_execution_end","toolCallId":"t1","toolName":"bash","result":{},"isError":false}\n' ;;
+    tool_start_b)
+      printf '{"type":"tool_execution_start","toolCallId":"t2","toolName":"bash","args":{"command":"bun test"}}\n' ;;
+    tool_end_b)
+      printf '{"type":"tool_execution_end","toolCallId":"t2","toolName":"bash","result":{},"isError":false}\n' ;;
+    compaction_start)
+      printf '{"type":"compaction_start","reason":"threshold"}\n' ;;
+    compaction_end)
+      printf '{"type":"compaction_end","reason":"threshold","aborted":false,"willRetry":false}\n' ;;
     abort)
       printf '{"type":"abort_seen"}\n' ;;
     settle)

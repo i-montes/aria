@@ -204,6 +204,9 @@ struct Inner {
     /// The tool executions under way (by `toolCallId`, nested ones too): while any is open the watchdog waits, since a
     /// long build or test is silent and has its own timeouts.
     tools: HashSet<String>,
+    /// Pi is compacting the context inside the run (`compaction_start` … `compaction_end`, silent meanwhile): the
+    /// watchdog waits, as for a tool.
+    compacting: bool,
     /// The turn watchdog stopped this run already (it stops a run once; the next `agent_start` clears it).
     watchdog_fired: bool,
 }
@@ -389,7 +392,7 @@ impl Chat {
     /// The turn watchdog: it covers the model being silent. A run that got nothing from Pi (no event, reply or UI
     /// request) for `limit` is stopped as the page's stop does (`clear_queue`, `abort`), once per run, and the chat says
     /// why; the run then settles as usual. A dialog waiting for the person or a tool under way pauses it: its clock
-    /// starts again when the dialog closes or the last tool ends. A zero `limit` turns it off. True when it stopped the
+    /// starts again when the dialog closes or the last tool ends. A compaction pauses it too. A zero `limit` turns it off. True when it stopped the
     /// run.
     pub fn check_stalled(&self, now: Instant, limit: Duration) -> bool {
         let engine = {
@@ -397,7 +400,7 @@ impl Chat {
             if limit.is_zero() || !inner.running || inner.watchdog_fired {
                 return false;
             }
-            if !inner.dialogs.is_empty() || !inner.tools.is_empty() {
+            if !inner.dialogs.is_empty() || !inner.tools.is_empty() || inner.compacting {
                 inner.last_activity = Some(now);
                 return false;
             }
@@ -637,6 +640,7 @@ impl Chat {
             inner.engine = Some(engine.clone());
             inner.running = false;
             inner.tools.clear();
+            inner.compacting = false;
             inner.workdir = Some(workdir);
             inner.spawn_args = spec_args.clone();
             inner.pending_prompts.clear();
@@ -843,8 +847,11 @@ impl Chat {
                             inner.running = true;
                             inner.watchdog_fired = false;
                             inner.tools.clear();
+                            inner.compacting = false;
                         }
                         // The last tool ending restarts the watchdog's clock (this event already set it).
+                        Some("compaction_start") => self.inner.lock().unwrap().compacting = true,
+                        Some("compaction_end") => self.inner.lock().unwrap().compacting = false,
                         Some("tool_execution_end") => {
                             let id = raw["toolCallId"].as_str().unwrap_or_default();
                             self.inner.lock().unwrap().tools.remove(id);
@@ -866,6 +873,7 @@ impl Chat {
                                 let mut inner = self.inner.lock().unwrap();
                                 inner.running = false;
                                 inner.tools.clear();
+                                inner.compacting = false;
                                 let restart = std::mem::take(&mut inner.restart_pending);
                                 (inner.dialogs.keys().cloned().collect::<Vec<_>>(), restart)
                             };
@@ -972,6 +980,7 @@ impl Chat {
             inner.engine = None;
             inner.running = false;
             inner.tools.clear();
+            inner.compacting = false;
             let open: Vec<String> = inner.dialogs.drain().map(|(id, _)| id).collect();
             let dismiss = !inner.notified.is_empty();
             inner.notified.clear();
@@ -1033,6 +1042,7 @@ impl Chat {
             let engine = inner.engine.take();
             inner.running = false;
             inner.tools.clear();
+            inner.compacting = false;
             inner.restart_pending = false;
             // A credential may have changed (that is why Pis restart): the quota is read afresh next time.
             inner.quota = None;
@@ -1152,6 +1162,8 @@ pub struct Sessions {
     emit: Emit,
     chats: Arc<Mutex<HashMap<String, Chat>>>,
     closed: Arc<Mutex<HashSet<String>>>,
+    /// The turn watchdog's limit as last read from the settings.
+    turn_limit: Arc<Mutex<Duration>>,
 }
 
 /// Watches `settings.json` by content: a change from the settings screen, from `/effort` or `/autocompact` in Pi, or
@@ -1230,6 +1242,9 @@ impl Sessions {
             emit,
             chats: Arc::new(Mutex::new(HashMap::new())),
             closed: Arc::new(Mutex::new(HashSet::new())),
+            turn_limit: Arc::new(Mutex::new(Duration::from_secs(
+                u64::from(aria_core::settings::Models::default().turn_timeout_minutes) * 60,
+            ))),
         }
     }
 
@@ -1363,19 +1378,21 @@ impl Sessions {
 
     /// The turn watchdog's limit, read from the settings on every check (a change applies without a restart). Settings
     /// that cannot be read keep the default.
-    fn limit(paths: &AriaPaths) -> Duration {
-        let minutes = settings::load(paths)
-            .ok()
-            .flatten()
-            .map(|s| s.models.turn_timeout_minutes)
-            .unwrap_or_else(|| aria_core::settings::Models::default().turn_timeout_minutes);
-        Duration::from_secs(u64::from(minutes) * 60)
+    /// A file that cannot be read (half written, broken) keeps the last limit read, so a `0` (off) is never turned back
+    /// into the default; with no file at all the default applies.
+    fn read_limit(paths: &AriaPaths, last: &Mutex<Duration>) -> Duration {
+        let mut last = last.lock().unwrap_or_else(|e| e.into_inner());
+        if let Ok(settings) = settings::load(paths) {
+            let minutes = settings.unwrap_or_default().models.turn_timeout_minutes;
+            *last = Duration::from_secs(u64::from(minutes) * 60);
+        }
+        *last
     }
 
     /// Every 30 s: each session's run that got nothing from its Pi for the settings' limit is stopped (see
     /// `Chat::check_stalled`). Returns how many were.
     pub fn check_stalled(&self, now: Instant) -> usize {
-        let limit = Self::limit(&self.ctx.paths);
+        let limit = Self::read_limit(&self.ctx.paths, &self.turn_limit);
         if limit.is_zero() {
             return 0;
         }
@@ -2583,6 +2600,41 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_tools_pause_it_until_the_last_ends() {
+        let h = harness();
+        silent_run(&h);
+        h.chat.test_send_raw("tool_start");
+        wait_for(&h, "the first tool", |m| event_of(m, "tool_execution_start"));
+        h.chat.test_send_raw("tool_start_b");
+        wait_for(&h, "the second tool", |m| event_of(m, "tool_execution_start"));
+        let hour = Duration::from_secs(3600);
+        h.chat.test_send_raw("tool_end");
+        wait_for(&h, "the first tool's end", |m| event_of(m, "tool_execution_end"));
+        assert!(!h.chat.check_stalled(Instant::now() + hour, LIMIT), "one tool still runs");
+        h.chat.test_send_raw("tool_end_b");
+        wait_for(&h, "the second tool's end", |m| event_of(m, "tool_execution_end"));
+        assert!(!h.chat.check_stalled(Instant::now(), LIMIT), "the clock starts again when the last tool ends");
+        assert!(h.chat.check_stalled(Instant::now() + 2 * LIMIT, LIMIT), "then the silence counts");
+    }
+
+    #[test]
+    fn a_compaction_pauses_the_watchdog() {
+        let h = harness();
+        silent_run(&h);
+        h.chat.test_send_raw("compaction_start");
+        wait_for(&h, "the compaction", |m| event_of(m, "compaction_start"));
+        let hour = Duration::from_secs(3600);
+        assert!(!h.chat.check_stalled(Instant::now() + hour, LIMIT), "a long compaction is not a hang");
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!drain(&h).iter().any(|m| event_of(m, "abort_seen") || is_watchdog_notice(m)));
+        h.chat.test_send_raw("compaction_end");
+        wait_for(&h, "the compaction's end", |m| event_of(m, "compaction_end"));
+        assert!(!h.chat.check_stalled(Instant::now(), LIMIT), "the clock starts again when it ends");
+        assert!(h.chat.check_stalled(Instant::now() + 2 * LIMIT, LIMIT), "then the silence counts");
+        wait_for(&h, "the abort reaching Pi", |m| event_of(m, "abort_seen"));
+    }
+
+    #[test]
     fn zero_turns_it_off() {
         let h = harness();
         silent_run(&h);
@@ -2625,10 +2677,16 @@ mod tests {
         let mut settings = settings::load(&h.paths).unwrap().unwrap();
         settings.models.turn_timeout_minutes = 0;
         settings::save(&h.paths, &settings).unwrap();
-        assert_eq!(Sessions::limit(&h.paths), Duration::ZERO);
-        settings.models.turn_timeout_minutes = 10;
+        let limit = Arc::new(Mutex::new(Duration::from_secs(600)));
+        assert_eq!(Sessions::read_limit(&h.paths, &limit), Duration::ZERO);
+        settings.models.turn_timeout_minutes = 15;
         settings::save(&h.paths, &settings).unwrap();
-        assert_eq!(Sessions::limit(&h.paths), Duration::from_secs(600));
+        assert_eq!(Sessions::read_limit(&h.paths, &limit), Duration::from_secs(900));
+        settings.models.turn_timeout_minutes = 0;
+        settings::save(&h.paths, &settings).unwrap();
+        assert_eq!(Sessions::read_limit(&h.paths, &limit), Duration::ZERO);
+        std::fs::write(h.paths.settings(), "{ half written").unwrap();
+        assert_eq!(Sessions::read_limit(&h.paths, &limit), Duration::ZERO, "an unreadable file keeps the last limit");
     }
 
     #[test]

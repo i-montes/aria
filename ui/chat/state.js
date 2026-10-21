@@ -24,6 +24,8 @@ export function createChat() {
   return {
     workdir: '', running: false, engine: 'idle', model: null, thinking: null, context: null, problem: null,
     messages: [], dialogs: [], queue: [], delivered: [], phase: 'working', startedAt: null, quota: [], giveBack: null, agents: [], turnFrom: 0,
+    // The dock's turn watchdog stopped the current run (its notice says so; the settle then is not "stopped by you").
+    stoppedByWatchdog: false,
     // Until Pi sends the session's history (empty for a new one) the thread shows that it is loading, timed from here.
     loaded: false, loadingSince: Date.now(),
   }
@@ -251,10 +253,12 @@ function reduceEvent(state, event) {
   switch (event.type) {
     case 'agent_start':
       // A new run starts a new group, even when its question's echo never became an entry.
-      return { ...state, running: true, startedAt: Date.now(), phase: 'working', turnFrom: state.messages.length }
+      return { ...state, running: true, startedAt: Date.now(), phase: 'working', turnFrom: state.messages.length, stoppedByWatchdog: false }
     case 'agent_settled': {
-      const settled = { ...state, running: false, startedAt: null, phase: 'working', delivered: [] }
-      return event.aborted ? push(settled, { kind: 'note', label: 'aria', key: 'chat.stoppedByYou' }) : settled
+      const settled = { ...state, running: false, startedAt: null, phase: 'working', delivered: [], stoppedByWatchdog: false }
+      // The dock's watchdog stopped it: its notice already says why, and it was not the person.
+      if (!event.aborted || state.stoppedByWatchdog) return settled
+      return push(settled, { kind: 'note', label: 'aria', key: 'chat.stoppedByYou' })
     }
     case 'message_start':
       if (event.message?.role === 'assistant') {
@@ -333,7 +337,10 @@ function reduceEvent(state, event) {
       if (request.method === 'notify') {
         const tone = TONES[request.notifyType] ?? 'info'
         // The dock's own notices (the turn watchdog) name a key, so the page says them in its language.
-        if (typeof request.key === 'string') return push(state, notice(tone, request.vars ? { key: request.key, vars: request.vars } : { key: request.key }))
+        if (typeof request.key === 'string') {
+          const next = request.key === 'chat.watchdog.stopped' ? { ...state, stoppedByWatchdog: true } : state
+          return push(next, notice(tone, request.vars ? { key: request.key, vars: request.vars } : { key: request.key }))
+        }
         return push(state, notice(tone, { text: request.message }))
       }
       // The router's route line (jev-router sends it as the status `aria-jev`).

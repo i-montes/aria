@@ -26,7 +26,8 @@ hangs without closing: the watchdog covers the model being silent, never a tool 
 - A running tool pauses the watchdog (tool executions are tracked from `tool_execution_start` to `tool_execution_end`
   by `toolCallId`, nested ones too): a long silent build or test (`cargo build`, `bun test`, `sleep`) sends no events
   for minutes and must not be cut. The silence clock starts again when the last tool ends. A dialog waiting for the
-  person pauses the watchdog the same way.
+  person and an auto-compaction inside the run (`compaction_start` … `compaction_end`) pause the watchdog the same
+  way.
 - Setting: `models.turnTimeoutMinutes` (number, default 10; 0 turns the watchdog off), in Settings → Models next to
   the effort, with the same widgets as the other numbers.
 

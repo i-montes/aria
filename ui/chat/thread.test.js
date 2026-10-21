@@ -1,6 +1,8 @@
 // Run: bun test ui
 import { describe, expect, test } from 'bun:test'
 import { chatTexts } from './texts.js'
+import { createI18n } from '../i18n.js'
+import { readFileSync } from 'node:fs'
 import { addQueued, addUser, answerDialog, createChat, reduce } from './state.js'
 import { renderThread, threadItems } from './thread.js'
 
@@ -9,6 +11,24 @@ const t = (key, vars) => (texts[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => 
 const ev = (event) => ({ type: 'chatEvent', event })
 const run = (state, ...messages) => messages.reduce(reduce, state)
 const dialog = (id, card, extra = {}) => ({ type: 'chatDialog', id, method: 'select', request: { title: JSON.stringify({ aria: 1, ...card }), options: ['x'], ...extra }, hidden: false })
+
+describe('the watchdog notice is said in the page\'s language, with the catalogs the page boots with', () => {
+  const catalog = (code) => JSON.parse(readFileSync(new URL(`../i18n/${code}.json`, import.meta.url), 'utf8'))
+  const parts = chatTexts()
+  const i18n = createI18n({ en: { ...catalog('en'), ...parts.en }, es: { ...catalog('es'), ...parts.es } })
+  const stopped = ev({ type: 'ui_notice', request: { method: 'notify', key: 'chat.watchdog.stopped', vars: { minutes: 10 }, notifyType: 'warning' } })
+  for (const [language, text] of [
+    ['en', 'Aria stopped this turn: nothing came back for 10 minutes.'],
+    ['es', 'Aria detuvo este turno: no llegó nada en 10 minutos.'],
+  ]) {
+    test(language, () => {
+      i18n.setLanguage(language)
+      const html = renderThread(run(createChat(), ev({ type: 'history', messages: [] }), stopped), {}, i18n.t)
+      expect(html).toContain(text)
+      expect(html).not.toContain('chat.watchdog.stopped')
+    })
+  }
+})
 
 describe('the thread', () => {
   test('an empty session shows the design\'s start hint once its history came back empty', () => {

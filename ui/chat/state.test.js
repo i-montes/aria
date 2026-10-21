@@ -339,6 +339,15 @@ describe('phase, elapsed time and the notes around a run', () => {
     expect(state.messages.at(-1)).toMatchObject({ kind: 'note', label: 'aria', key: 'chat.stoppedByYou' })
   })
 
+  test('a run the watchdog stopped says so once, not also "stopped by you"; the next stop is yours again', () => {
+    const watchdog = ev({ type: 'ui_notice', request: { method: 'notify', key: 'chat.watchdog.stopped', vars: { minutes: 10 }, notifyType: 'warning' } })
+    let state = run(createChat(), ev({ type: 'agent_start' }), watchdog, ev({ type: 'agent_settled', aborted: true }))
+    expect(state.messages.at(-1)).toMatchObject({ kind: 'notice', key: 'chat.watchdog.stopped' })
+    expect(state.messages.some((m) => m.key === 'chat.stoppedByYou')).toBe(false)
+    state = run(state, ev({ type: 'agent_start' }), ev({ type: 'agent_settled', aborted: true }))
+    expect(state.messages.at(-1)).toMatchObject({ kind: 'note', key: 'chat.stoppedByYou' })
+  })
+
   test('a model change under a conversation leaves a note', () => {
     const one = run(createChat(), { type: 'chatState', workdir: '/w', running: false, model: 'a/one', thinking: null, context: null, problem: null })
     const state = run(addUser(one, 'hi'), { type: 'chatState', workdir: '/w', running: false, model: 'a/two', thinking: null, context: null, problem: null })
