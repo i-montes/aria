@@ -5,6 +5,11 @@
 #   sh install.sh --local target/release/aria          install a binary you built yourself
 #   sh install.sh --uninstall                          remove Aria (asks before deleting ~/.aria)
 #   sh install.sh --dry-run [...]                      print what would happen and change nothing
+#   sh install.sh --restart-now [...]                  restart a running dock at once, even mid-run
+#
+# An update does not cut a run: the running dock is told a new version is installed and restarts into it once it
+# is hidden and no session has a run going. Only a changed service file, --restart-now, or a dock too old to
+# understand that restarts it at once.
 #
 # It detects the platform. On Omarchy it installs Aria's system libraries and a systemd user unit that
 # starts the dock at login; on macOS it installs a LaunchAgent and needs no system packages. Both put
@@ -31,6 +36,8 @@ if [ -f "$0" ]; then SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || SC
 PI_PACKAGE=@earendil-works/pi-coding-agent
 
 DRY_RUN=0
+RESTART_NOW=0
+SERVICE_CHANGED=0
 LOCAL=""
 MODE=install
 TMP=""
@@ -76,7 +83,7 @@ detect_platform() {
 }
 
 usage() {
-  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # The unit file. `curl | sh` has no sibling files, so the script carries it (install/aria.service
@@ -319,23 +326,64 @@ sha256_of() {
   fi
 }
 
+# Writes the service file, and sets SERVICE_CHANGED=1 when it is new or different: a running dock then has to be
+# restarted by the service manager to pick it up.
 write_unit() {
   detect_platform
   if [ "$PLATFORM" = Darwin ]; then
     run mkdir -p "$AGENT_DIR"
     run install -d -m 700 "$DATA_DIR/logs"
-    if [ "$DRY_RUN" = 1 ]; then
-      say "would: write $AGENT_DIR/$AGENT"
-    else
-      print_agent > "$AGENT_DIR/$AGENT"
-    fi
+    write_service_file "$AGENT_DIR/$AGENT" "$(print_agent)"
     return
   fi
   run mkdir -p "$UNIT_DIR"
+  write_service_file "$UNIT_DIR/$UNIT" "$(print_unit)"
+}
+
+write_service_file() {
+  if [ -f "$1" ] && [ "$(cat "$1")" = "$2" ]; then return; fi
+  SERVICE_CHANGED=1
   if [ "$DRY_RUN" = 1 ]; then
-    say "would: write $UNIT_DIR/$UNIT"
+    say "would: write $1"
   else
-    print_unit > "$UNIT_DIR/$UNIT"
+    printf '%s\n' "$2" > "$1"
+  fi
+}
+
+# Asks the running dock to restart into the new binary when it is hidden and idle. Fails (and the caller restarts the
+# service) when the service file changed, --restart-now was given, or no dock understands the request.
+soft_restart() {
+  [ "$SERVICE_CHANGED" = 0 ] && [ "$RESTART_NOW" = 0 ] || return 1
+  run "$BIN_DIR/aria" update-ready 2>/dev/null || return 1
+  say "Aria is updated. The dock restarts into the new version once it is hidden and nothing is running."
+}
+
+# Starts the dock, or brings the running one to the new version. $1 is 1 when the dock was running before the install.
+restart_dock() {
+  detect_platform
+  if [ "$PLATFORM" = Darwin ]; then
+    if [ "$1" = 1 ] && soft_restart; then return; fi
+    uid=$(id -u)
+    # The LaunchAgent may already be loaded from an earlier install: unload it, then load the new file.
+    # bootstrap fails with "Input/output error" while the old instance is still exiting, so wait for the
+    # label to disappear first. `RunAtLoad` starts the new binary.
+    run launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
+    if [ "$DRY_RUN" != 1 ]; then
+      attempts=0
+      while launchctl print "gui/$uid/$LABEL" >/dev/null 2>&1 && [ "$attempts" -lt 50 ]; do
+        attempts=$((attempts + 1))
+        sleep 0.1
+      done
+    fi
+    run launchctl bootstrap "gui/$uid" "$AGENT_DIR/$AGENT"
+    say "Aria is installed. Press Option + Space to set it up."
+  else
+    run systemctl --user daemon-reload
+    run systemctl --user enable --now "$UNIT"
+    if [ "$1" = 1 ] && soft_restart; then return; fi
+    # An update replaces the binary under a running dock: restart it so the new one runs.
+    if [ "$1" = 1 ]; then run systemctl --user restart "$UNIT"; fi
+    say "Aria is installed. Press Super+A to set it up."
   fi
 }
 
@@ -364,28 +412,7 @@ do_install() {
   install_engram
   install_binary
   write_unit
-  if [ "$PLATFORM" = Darwin ]; then
-    uid=$(id -u)
-    # The LaunchAgent may already be loaded from an earlier install: unload it, then load the new file.
-    # bootstrap fails with "Input/output error" while the old instance is still exiting, so wait for the
-    # label to disappear first. `RunAtLoad` starts the new binary.
-    run launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
-    if [ "$DRY_RUN" != 1 ]; then
-      attempts=0
-      while launchctl print "gui/$uid/$LABEL" >/dev/null 2>&1 && [ "$attempts" -lt 50 ]; do
-        attempts=$((attempts + 1))
-        sleep 0.1
-      done
-    fi
-    run launchctl bootstrap "gui/$uid" "$AGENT_DIR/$AGENT"
-    say "Aria is installed. Press Option + Space to set it up."
-  else
-    run systemctl --user daemon-reload
-    run systemctl --user enable --now "$UNIT"
-    # An update replaces the binary under a running dock: restart it so the new one runs.
-    if [ "$was_active" = 1 ]; then run systemctl --user restart "$UNIT"; fi
-    say "Aria is installed. Press Super+A to set it up."
-  fi
+  restart_dock "$was_active"
 }
 
 # True only for a real directory (not a symlink) that is neither / nor the home directory and that
@@ -444,6 +471,7 @@ do_uninstall() {
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
+    --restart-now) RESTART_NOW=1 ;;
     --local)
       [ $# -ge 2 ] || die "--local needs the path of a binary"
       LOCAL=$2
@@ -455,6 +483,12 @@ while [ $# -gt 0 ]; do
     --print-pi-version) MODE=print-pi-version ;;
     --link-node) MODE=link-node ;;
     --install-engram) MODE=install-engram ;; # test hook
+    --restart-dock) # test hook: the last step of an install; $2 is 1 when a dock was running, $3 when the service file changed
+      [ $# -ge 3 ] || die "--restart-dock needs two values"
+      SERVICE_CHANGED=$3
+      restart_dock "$2"
+      exit $?
+      ;;
     --can-delete) # test hook: exit 0 when the directory is one uninstall would delete
       [ $# -ge 2 ] || die "--can-delete needs a directory"
       safe_to_delete "$2"

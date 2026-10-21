@@ -85,6 +85,26 @@ else
 fi
 [ ! -e "$tmp/bin/aria" ] && [ ! -e "$tmp/home" ] && pass "nothing was created by the refused install" || fail "the refused install left files behind"
 
+# an update tells the running dock instead of restarting it; anything else restarts the agent
+mkdir -p "$tmp/fakes"
+# launchctl knows no running agent (`print` fails, so the installer does not wait) and accepts everything else.
+printf '#!/bin/sh\necho "launchctl $*" >> "%s"\n[ "$1" != print ]\n' "$tmp/calls" > "$tmp/fakes/launchctl"
+printf '#!/bin/sh\necho "aria $*" >> "%s"\nexit $(cat "%s")\n' "$tmp/calls" "$tmp/answer" > "$tmp/bin/aria"
+chmod +x "$tmp/fakes/launchctl" "$tmp/bin/aria"
+restart() { : > "$tmp/calls"; echo "$1" > "$tmp/answer"; shift; PATH="$tmp/fakes:$PATH" env_run sh "$installer" "$@" 2>&1; }
+out=$(restart 0 --restart-dock 1 0)
+if grep -qF 'aria update-ready' "$tmp/calls" && ! grep -qF 'bootout' "$tmp/calls"; then pass "an update with the same agent file asks the dock instead of restarting it"; else fail "an update restarted the dock: $(cat "$tmp/calls")"; fi
+printf '%s\n' "$out" | grep -qF 'restarts into the new version once it is hidden' && pass "the soft update says when it applies" || fail "the soft update does not say when it applies"
+restart 1 --restart-dock 1 0 >/dev/null
+grep -qF 'bootout' "$tmp/calls" && grep -qF 'bootstrap' "$tmp/calls" && pass "a dock that does not answer is restarted" || fail "a dock that did not answer was left running: $(cat "$tmp/calls")"
+restart 0 --restart-dock 1 1 >/dev/null
+! grep -qF 'update-ready' "$tmp/calls" && grep -qF 'bootout' "$tmp/calls" && pass "a changed agent file restarts the dock" || fail "a changed agent file did not restart the dock"
+restart 0 --restart-now --restart-dock 1 0 >/dev/null
+! grep -qF 'update-ready' "$tmp/calls" && grep -qF 'bootout' "$tmp/calls" && pass "--restart-now restarts the dock" || fail "--restart-now did not restart the dock"
+restart 0 --restart-dock 0 0 >/dev/null
+! grep -qF 'update-ready' "$tmp/calls" && grep -qF 'bootstrap' "$tmp/calls" && pass "a first install starts the agent" || fail "a first install did not start the agent"
+rm -f "$tmp/bin/aria"
+
 # Node is the same requirement on both platforms
 out=$(env_run sh "$installer" --check-node 2>&1) && pass "a modern Node is accepted" || fail "a modern Node was refused: $out"
 

@@ -1,7 +1,8 @@
 //! One dock at a time, reached through a Unix socket. On Omarchy it lives in `$XDG_RUNTIME_DIR/aria/`
 //! (or `/tmp/aria/`); on macOS it lives in `~/.aria/run/`, so a dock started by the LaunchAgent
 //! and a dock started from a terminal agree on the same path. `aria toggle` sends a line to the running
-//! dock, and starts the dock first when nothing answers.
+//! dock, and starts the dock first when nothing answers. `aria update-ready` (the installer's) asks the running dock to
+//! restart into the new binary once nothing is running, and waits for its answer.
 
 use std::io::Write;
 use std::os::unix::fs::DirBuilderExt;
@@ -64,6 +65,41 @@ pub fn send(path: &Path, command: &str) -> std::io::Result<()> {
     stream.write_all(format!("{command}\n").as_bytes())
 }
 
+/// Sends `command` and waits up to `timeout` for the dock's one-line answer. A dock that does not know the command
+/// (an older version) closes the connection without one, which is an error.
+pub fn ask(path: &Path, command: &str, timeout: Duration) -> std::io::Result<String> {
+    use std::io::{BufRead, BufReader};
+    let mut stream = UnixStream::connect(path)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.write_all(format!("{command}\n").as_bytes())?;
+    let mut answer = String::new();
+    BufReader::new(stream).read_line(&mut answer)?;
+    if answer.is_empty() {
+        return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "the dock did not answer"));
+    }
+    Ok(answer.trim_end().to_string())
+}
+
+/// The path to run the installed binary from. On Linux the running binary's path reads "… (deleted)" once the
+/// installer has replaced the file; the new one is at the same path.
+pub fn binary_path(current: PathBuf) -> PathBuf {
+    match current.to_str().and_then(|path| path.strip_suffix(" (deleted)")) {
+        Some(path) => PathBuf::from(path),
+        None => current,
+    }
+}
+
+/// Replaces this process with the binary now installed at its path, with the same arguments and environment. The
+/// process id stays, so systemd and launchd keep supervising it. Returns only if the exec failed.
+pub fn reexec() -> std::io::Error {
+    use std::os::unix::process::CommandExt;
+    let exe = match std::env::current_exe() {
+        Ok(exe) => binary_path(exe),
+        Err(error) => return error,
+    };
+    Command::new(exe).args(std::env::args_os().skip(1)).exec()
+}
+
 /// `aria toggle` / `aria show`: send `command`, starting `exe` (detached) first when no dock is running.
 pub fn command_or_start(path: &Path, exe: &Path, command: &str) -> Result<(), ControlError> {
     if send(path, command).is_ok() {
@@ -120,6 +156,46 @@ mod tests {
         let mut line = String::new();
         BufReader::new(stream).read_line(&mut line).unwrap();
         assert_eq!(line, "toggle\n");
+    }
+
+    #[test]
+    fn ask_returns_the_docks_answer() {
+        use std::io::{BufRead, BufReader};
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("control.sock");
+        let listener = bind_single_instance(&path).unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(&stream).read_line(&mut line).unwrap();
+            assert_eq!(line, "update-ready\n");
+            stream.write_all(b"ok\n").unwrap();
+        });
+        assert_eq!(ask(&path, "update-ready", Duration::from_secs(2)).unwrap(), "ok");
+    }
+
+    #[test]
+    fn ask_fails_when_the_dock_does_not_answer() {
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("control.sock");
+        // An older dock reads the line and drops it without a word.
+        let listener = bind_single_instance(&path).unwrap();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            drop(stream);
+        });
+        assert!(ask(&path, "update-ready", Duration::from_millis(500)).is_err());
+    }
+
+    #[test]
+    fn the_replaced_binary_is_run_by_its_path() {
+        assert_eq!(
+            binary_path(PathBuf::from("/home/me/.local/bin/aria (deleted)")),
+            PathBuf::from("/home/me/.local/bin/aria")
+        );
+        assert_eq!(binary_path(PathBuf::from("/Users/me/.local/bin/aria")), PathBuf::from("/Users/me/.local/bin/aria"));
     }
 
     #[test]

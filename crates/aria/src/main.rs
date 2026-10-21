@@ -1,6 +1,8 @@
 //! `aria` runs the dock (resident, hidden until you press the hotkey); `aria toggle` shows or hides
 //! it, and `aria show` only shows it (a notification's click uses that), starting it first when it
-//! is not running.
+//! is not running. `aria update-ready` (run by the installer after it replaced the files) asks the running dock to
+//! restart into the new binary as soon as it is hidden and no session has a run going; it fails when no dock answers,
+//! and the installer then restarts the service itself.
 
 mod chat;
 mod control;
@@ -18,7 +20,6 @@ use chat::{ChatCtx, PlatformNotifier, Sessions};
 use dock::{Dock, HOTKEY_LABEL};
 use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc};
-#[cfg(target_os = "linux")]
 use std::time::Duration;
 use visibility::Event;
 
@@ -31,9 +32,16 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("update-ready") => {
+            let answer = control::ask(&control::control_socket_path(), "update-ready", Duration::from_secs(2));
+            if let Err(error) = answer {
+                eprintln!("aria: no dock took the update: {error}");
+                std::process::exit(1);
+            }
+        }
         None => run_dock(),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show|update-ready]");
             std::process::exit(2);
         }
     }
@@ -128,9 +136,13 @@ fn run_dock() {
     let (sender, receiver) = mpsc::channel::<String>();
     let listener_sender = sender.clone();
     std::thread::spawn(move || {
-        use std::io::{BufRead, BufReader};
+        use std::io::{BufRead, BufReader, Write};
         for stream in listener.incoming().map_while(Result::ok) {
-            if let Some(Ok(line)) = BufReader::new(stream).lines().next() {
+            if let Some(Ok(line)) = BufReader::new(&stream).lines().next() {
+                // The installer waits for this answer; without it (an older dock) it restarts the service itself.
+                if line == "update-ready" {
+                    let _ = (&stream).write_all(b"ok\n");
+                }
                 let _ = listener_sender.send(line);
             }
         }
@@ -164,12 +176,13 @@ fn run_dock() {
     }
 
     let mut was_visible = false;
+    let mut update_ready = false;
     let mut ticks: u32 = 0;
     ui::every(16, move || {
         // About once a second: a settings change (the settings screen, `/effort`, `/autocompact`, an editor) reaches
         // every session's Pi when its run settles, and the page reads the settings again.
         ticks = ticks.wrapping_add(1);
-        if ticks % 60 == 0 && settings_watch.changed() {
+        if ticks.is_multiple_of(60) && settings_watch.changed() {
             // Off the UI thread: preparing the agent directory reads and writes files.
             let sessions = chat_for_settings.clone();
             std::thread::spawn(move || sessions.settings_changed());
@@ -185,8 +198,21 @@ fn run_dock() {
             match command.as_str() {
                 "toggle" => dock.feed(Event::Toggle),
                 "show" => dock.show(),
+                "update-ready" => {
+                    eprintln!("aria: a new version is installed; restarting once the dock is hidden and idle");
+                    update_ready = true;
+                }
                 _ => {}
             }
+        }
+        // A new binary is installed: it takes over once nobody is looking and no run would be cut. The tabs and their
+        // conversations come back as after any restart.
+        if update_ready && ticks.is_multiple_of(60) && !visible && !chat_for_visibility.busy() {
+            eprintln!("aria: restarting into the new version");
+            chat_for_visibility.stop_for_update();
+            let error = control::reexec();
+            eprintln!("aria: could not start the new version: {error}");
+            std::process::exit(75); // not a clean exit: systemd and launchd start the dock again
         }
         while let Ok(reply) = reply_receiver.try_recv() {
             dock.send(&reply);

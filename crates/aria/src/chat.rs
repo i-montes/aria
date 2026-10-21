@@ -773,7 +773,14 @@ impl Chat {
         self.stop(true);
     }
 
-    fn stop(&self, group: bool) {
+    /// A run is going or a dialog waits for an answer.
+    fn busy(&self) -> bool {
+        let inner = self.inner.lock().unwrap();
+        inner.running || !inner.dialogs.is_empty()
+    }
+
+    /// The returned thread is closing Pi; joining it waits until Pi is gone.
+    fn stop(&self, group: bool) -> Option<std::thread::JoinHandle<()>> {
         let (stale, engine) = {
             let mut inner = self.inner.lock().unwrap();
             inner.generation += 1; // whatever the old Pi still says is ignored
@@ -789,17 +796,17 @@ impl Chat {
             ((open, dismiss), engine)
         };
         self.close_stale(stale);
-        if let Some(engine) = engine {
-            std::thread::spawn(move || {
-                if group {
-                    engine.close_group(Duration::from_secs(3))
-                } else {
-                    engine.close(Duration::from_secs(3))
-                }
-            });
-            self.emit(DockMessage::ChatEngine { state: "stopped".into() });
-            self.emit(self.state_message(None));
-        }
+        let engine = engine?;
+        let closing = std::thread::spawn(move || {
+            if group {
+                engine.close_group(Duration::from_secs(3))
+            } else {
+                engine.close(Duration::from_secs(3))
+            }
+        });
+        self.emit(DockMessage::ChatEngine { state: "stopped".into() });
+        self.emit(self.state_message(None));
+        Some(closing)
     }
 
     /// Keeps a quota reading only if it is for the model in use now (a reading for the previous model can land late).
@@ -975,6 +982,21 @@ impl Sessions {
         let chats: Vec<Chat> = self.chats.lock().unwrap().values().cloned().collect();
         for chat in chats {
             chat.dock_visibility_changed();
+        }
+    }
+
+    /// Some session has a run going or a dialog waiting: an update must not restart the dock now.
+    pub fn busy(&self) -> bool {
+        self.chats.lock().unwrap().values().any(Chat::busy)
+    }
+
+    /// Every Pi stops, as for a restart (what they started keeps running), and this returns once they are gone, so the
+    /// new dock does not open a session an old Pi still writes.
+    pub fn stop_for_update(&self) {
+        let chats: Vec<Chat> = self.chats.lock().unwrap().values().cloned().collect();
+        let closing: Vec<_> = chats.iter().filter_map(|chat| chat.stop(false)).collect();
+        for thread in closing {
+            let _ = thread.join();
         }
     }
 
@@ -1768,6 +1790,25 @@ mod tests {
             "aa",
             |m| matches!(m, DockMessage::ChatEngine { state } if state == "stopped"),
         );
+    }
+
+    #[test]
+    fn an_update_waits_while_a_run_goes_and_then_stops_every_pi() {
+        let s = sessions_harness();
+        assert!(!s.sessions.busy(), "no session has run yet");
+        s.sessions.handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None }));
+        wait_session(&s, "the first run settled", "aa", settled);
+        std::thread::sleep(Duration::from_millis(100));
+        while s.messages.try_recv().is_ok() {}
+        s.sessions.test_send_raw("aa", "start"); // a run that has not settled
+        wait_session(&s, "the run", "aa", |m| event_of(m, "agent_start"));
+        assert!(s.sessions.busy(), "a run is going");
+        s.sessions.test_send_raw("aa", "settle");
+        wait_session(&s, "settled", "aa", settled);
+        assert!(!s.sessions.busy(), "the run settled");
+        s.sessions.stop_for_update();
+        wait_session(&s, "stopped", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "stopped"));
+        assert!(s.sessions.chat("aa").unwrap().current_engine().is_none(), "no Pi is left");
     }
 
     fn stopped_within(s: &SessionsHarness, ms: u64) -> bool {

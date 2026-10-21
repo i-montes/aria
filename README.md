@@ -14,7 +14,7 @@ curl -fsSL https://<your site>/install.sh | sh
 
 The installer detects the system. It needs **Node 22.19 or newer** (it checks, and says so if not). It puts the `aria` binary in `~/.local/bin`, creates `~/.aria/`, installs the pinned Pi engine in `~/.aria/pi/<version>`, and installs a login item: a **systemd user unit** on Omarchy, a **LaunchAgent** (`~/Library/LaunchAgents/com.aria.dock.plist`) on macOS. On Omarchy it adds Aria's system libraries, asking for `sudo` only if they are missing, and it **never edits `~/.config/hypr/`**: Aria registers `Super + A` with Hyprland itself each time it starts. On macOS it needs no `sudo`, no Accessibility permission and no system configuration: `Option + Space` is registered with Carbon, and the dock runs as an accessory app (no Dock icon).
 
-Run it again to update. To remove Aria: `sh install.sh --uninstall` (it asks before deleting `~/.aria`). Add `--dry-run` to any command to see what would happen without changing anything.
+Run it again to update. An update does not cut a run: the running dock restarts into the new version once it is hidden and no session is working (`--restart-now` restarts it at once). To remove Aria: `sh install.sh --uninstall` (it asks before deleting `~/.aria`). Add `--dry-run` to any command to see what would happen without changing anything.
 
 ### Build it yourself
 
