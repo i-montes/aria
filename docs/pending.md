@@ -208,6 +208,16 @@ the MCP servers other apps have, and the shortcut is chosen in the settings (the
 - On Hyprland, a combination already bound (or Aria's own) never reaches the page, so the Shortcut row cannot record
   it by pressing it; it can be typed in the field under the row.
 
+## Keys in the keyring
+
+- A command in the sandbox can still run `aria secret` (or `security`, `secret-tool`) and read a key: the keyring keeps
+  keys out of plain files, not out of reach of the person's own processes ([design](superpowers/specs/2026-10-21-keyring-design.md)).
+- Claude Code's own credentials (the Claude sign-in through `claude-bridge`) stay where Claude Code keeps them.
+- The settings screen has no row for the keyring: `credentials.keyring`, `aria keyring on|off|status` and the dock's log.
+- On Omarchy the keyring needs a running Secret Service (gnome-keyring); without one the dock keeps plain files and says
+  why in its log. Not yet tried on the Omarchy machine.
+- No Touch ID: the keyring opens with the session, as the owner chose (2026-10-21).
+
 ## Known limits of the page (from the review, deferred)
 
 - The thread is redrawn on every streamed fragment, so text cannot be selected or copied while a run streams; the other regions only redraw when they change.

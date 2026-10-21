@@ -133,7 +133,13 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 
 ## Data and safety
 
-- Everything Aria stores is under `~/.aria/`. `settings.json` never holds a secret; `auth.json`, `mcp.json` and `mcp-auth.json` are mode `600`, and so is `jobs.json`, which holds each job's state, a subagent's result (up to 8000 characters) and, until its session is told, an end note's last 20 lines of output. Attachments are saved in `~/.aria/attachments/` (folders `700`, files `600`) and never removed; the model can read them, and neither a command in the sandbox nor Pi's write and edit can change them (nor `settings.json` and `agent/aria.json`, whatever the session granted). The one exception is a background subagent's worktree, in the projects folder (`<projects dir>/.aria-worktrees/`).
+- Keys live in the system keyring (`aria-core/src/keyring.rs`: Apple's `security` on macOS, `secret-tool` on Linux).
+  `aria-core/src/vault.rs` moves them there from plain files once (each value read back before its file changes), leaves
+  `!aria secret …` commands in `auth.json` and `mcp.json` that Pi runs to read a key, and seals `auth.json` and
+  `mcp-auth.json` (which Pi rewrites) whole; the dock writes them live into a private folder outside `~/.aria` at start,
+  seals every change within a second and removes them when it quits. `AriaPaths::vault` points `auth()` and
+  `mcp_auth()` at the live copies ([design](superpowers/specs/2026-10-21-keyring-design.md)).
+- Everything else Aria stores is under `~/.aria/`. `settings.json` never holds a secret; `mcp.json` (and, with the keyring off, `auth.json` and `mcp-auth.json`) are mode `600`, and so is `jobs.json`, which holds each job's state, a subagent's result (up to 8000 characters) and, until its session is told, an end note's last 20 lines of output. Attachments are saved in `~/.aria/attachments/` (folders `700`, files `600`) and never removed; the model can read them, and neither a command in the sandbox nor Pi's write and edit can change them (nor `settings.json` and `agent/aria.json`, whatever the session granted). The one exception is a background subagent's worktree, in the projects folder (`<projects dir>/.aria-worktrees/`).
 - Files are written atomically (a unique temp file and rename), and a file that cannot be parsed is reported, never overwritten (a broken `sessions.json` is moved to `sessions.json.broken`).
 - A key is validated against its provider before it is stored, and a rejected or unreachable check writes nothing.
 - The installer never edits `~/.config/hypr/`.
