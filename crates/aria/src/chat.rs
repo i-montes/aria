@@ -390,10 +390,10 @@ impl Chat {
     }
 
     /// The turn watchdog: it covers the model being silent. A run that got nothing from Pi (no event, reply or UI
-    /// request) for `limit` is stopped as the page's stop does (`clear_queue`, `abort`), once per run, and the chat says
-    /// why; the run then settles as usual. A dialog waiting for the person or a tool under way pauses it: its clock
-    /// starts again when the dialog closes or the last tool ends. A compaction pauses it too. A zero `limit` turns it off. True when it stopped the
-    /// run.
+    /// request) for `limit` is stopped with `abort` alone, once per run, and the chat says why; the run then settles as
+    /// usual. Unlike the page's stop it leaves Pi's queue alone: what the person queued while the turn hung still runs.
+    /// A dialog waiting for the person or a tool under way pauses it: its clock starts again when the dialog closes or
+    /// the last tool ends. A compaction pauses it too. A zero `limit` turns it off. True when it stopped the run.
     pub fn check_stalled(&self, now: Instant, limit: Duration) -> bool {
         let engine = {
             let mut inner = self.inner.lock().unwrap();
@@ -412,7 +412,6 @@ impl Chat {
             inner.watchdog_fired = true;
             engine
         };
-        let _ = engine.send("clear_queue", json!({}));
         let _ = engine.send("abort", json!({}));
         self.notice_key("chat.watchdog.stopped", json!({"minutes": limit.as_secs().div_ceil(60)}));
         true
@@ -849,9 +848,9 @@ impl Chat {
                             inner.tools.clear();
                             inner.compacting = false;
                         }
-                        // The last tool ending restarts the watchdog's clock (this event already set it).
                         Some("compaction_start") => self.inner.lock().unwrap().compacting = true,
                         Some("compaction_end") => self.inner.lock().unwrap().compacting = false,
+                        // The last tool ending restarts the watchdog's clock (this event already set it).
                         Some("tool_execution_end") => {
                             let id = raw["toolCallId"].as_str().unwrap_or_default();
                             self.inner.lock().unwrap().tools.remove(id);
@@ -1376,8 +1375,7 @@ impl Sessions {
         }
     }
 
-    /// The turn watchdog's limit, read from the settings on every check (a change applies without a restart). Settings
-    /// that cannot be read keep the default.
+    /// The turn watchdog's limit, read from the settings on every check (a change applies without a restart).
     /// A file that cannot be read (half written, broken) keeps the last limit read, so a `0` (off) is never turned back
     /// into the default; with no file at all the default applies.
     fn read_limit(paths: &AriaPaths, last: &Mutex<Duration>) -> Duration {
@@ -2559,6 +2557,21 @@ mod tests {
         h.chat.test_send_raw("start");
         wait_for(&h, "the next run", |m| event_of(m, "agent_start"));
         assert!(h.chat.check_stalled(Instant::now() + 2 * LIMIT, LIMIT));
+    }
+
+    #[test]
+    fn a_watchdog_stop_keeps_what_the_person_queued() {
+        let h = harness();
+        silent_run(&h);
+        assert!(h.chat.check_stalled(Instant::now() + 2 * LIMIT, LIMIT));
+        wait_for(&h, "the abort reaching Pi", |m| event_of(m, "abort_seen"));
+        // Pi reads its stdin in order: a `clear_queue` sent before the abort would have answered (and emptied the
+        // queue, a `queue_update`) before `abort_seen`. Pi kept its queue, so the queued follow-ups still run.
+        let before = drain(&h);
+        assert!(!before.iter().any(|m| event_of(m, "queue_update")), "the queue was not cleared: {before:?}");
+        // The page's own stop still empties it, as the person asked.
+        h.chat.handle(PageMessage::ChatAbort);
+        wait_for(&h, "the page's stop clearing the queue", |m| event_of(m, "queue_update"));
     }
 
     #[test]

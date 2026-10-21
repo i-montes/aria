@@ -14,6 +14,10 @@ import { renderTools } from './parts/tools.js'
 import { renderUser } from './parts/user.js'
 import { renderWorking } from './parts/working.js'
 
+/** The catalog key a dock notice is said with: the watchdog's has a one-minute and a many-minutes wording. */
+const noticeKey = (key, vars) =>
+  key === 'chat.watchdog.stopped' ? `${key}.${Number(vars?.minutes) === 1 ? 'one' : 'many'}` : key
+
 /** Dialogs whose card sits in the thread (the question card is an overlay; the rest are plain dialogs). */
 export const INLINE_CARDS = ['sandbox', 'write', 'connector', 'quota']
 
@@ -67,7 +71,7 @@ function renderEntry(state, entry, index, ui, t) {
     case 'answers':
       return `<div class="thread-item">${renderAnswers({ answers: entry.answers }, {}, t)}</div>`
     case 'notice':
-      return `<div class="notice tone-${esc(entry.tone)}">${esc(entry.key ? t(entry.key, entry.vars) : entry.text)}</div>`
+      return `<div class="notice tone-${esc(entry.tone)}">${esc(entry.key ? t(noticeKey(entry.key, entry.vars), entry.vars) : entry.text)}</div>`
     default:
       return ''
   }

@@ -16,14 +16,16 @@ describe('the watchdog notice is said in the page\'s language, with the catalogs
   const catalog = (code) => JSON.parse(readFileSync(new URL(`../i18n/${code}.json`, import.meta.url), 'utf8'))
   const parts = chatTexts()
   const i18n = createI18n({ en: { ...catalog('en'), ...parts.en }, es: { ...catalog('es'), ...parts.es } })
-  const stopped = ev({ type: 'ui_notice', request: { method: 'notify', key: 'chat.watchdog.stopped', vars: { minutes: 10 }, notifyType: 'warning' } })
-  for (const [language, text] of [
-    ['en', 'Aria stopped this turn: nothing came back for 10 minutes.'],
-    ['es', 'Aria detuvo este turno: no llegó nada en 10 minutos.'],
+  const stopped = (minutes) => ev({ type: 'ui_notice', request: { method: 'notify', key: 'chat.watchdog.stopped', vars: { minutes }, notifyType: 'warning' } })
+  for (const [language, minutes, text] of [
+    ['en', 10, 'Aria stopped this turn: nothing came back for 10 minutes.'],
+    ['es', 10, 'Aria detuvo este turno: no llegó nada en 10 minutos.'],
+    ['en', 1, 'Aria stopped this turn: nothing came back for 1 minute.'],
+    ['es', 1, 'Aria detuvo este turno: no llegó nada en 1 minuto.'],
   ]) {
-    test(language, () => {
+    test(`${language}, ${minutes} min`, () => {
       i18n.setLanguage(language)
-      const html = renderThread(run(createChat(), ev({ type: 'history', messages: [] }), stopped), {}, i18n.t)
+      const html = renderThread(run(createChat(), ev({ type: 'history', messages: [] }), stopped(minutes)), {}, i18n.t)
       expect(html).toContain(text)
       expect(html).not.toContain('chat.watchdog.stopped')
     })
