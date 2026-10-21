@@ -36,7 +36,7 @@ pub struct Settings {
     pub subagents: Subagents,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Setup {
     pub completed: bool,
@@ -44,7 +44,7 @@ pub struct Setup {
     pub mode: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProviderSettings {
     /// "opencode-go" | "anthropic-api" | "anthropic-oauth" | null
@@ -115,7 +115,7 @@ pub struct Memory {
     pub project: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Integrations {
     pub services: Vec<Service>,
@@ -177,16 +177,6 @@ pub struct Expert {
     pub read_only: bool,
 }
 
-impl Default for Setup {
-    fn default() -> Self {
-        Setup { completed: false, mode: None }
-    }
-}
-impl Default for ProviderSettings {
-    fn default() -> Self {
-        ProviderSettings { id: None, quota: None }
-    }
-}
 impl Default for Router {
     fn default() -> Self {
         Router { enabled: true, backend: "opencode".into() }
@@ -215,11 +205,6 @@ impl Default for Compaction {
 impl Default for Memory {
     fn default() -> Self {
         Memory { enabled: true, project: "aria".into() }
-    }
-}
-impl Default for Integrations {
-    fn default() -> Self {
-        Integrations { services: Vec::new(), packages: Packages::default() }
     }
 }
 impl Default for Packages {

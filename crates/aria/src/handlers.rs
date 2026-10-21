@@ -775,7 +775,7 @@ mod tests {
         match &replies[0] {
             DockMessage::OAuthUrl { id: 11, url } => {
                 assert!(url.starts_with("https://claude.ai/oauth/authorize?"));
-                assert_eq!(h.opened.lock().unwrap().as_slice(), [url.clone()]);
+                assert_eq!(h.opened.lock().unwrap().as_slice(), std::slice::from_ref(url));
             }
             other => panic!("expected the sign-in URL first, got {other:?}"),
         }

@@ -77,7 +77,7 @@ pub fn parse_go_usage(body: &Value) -> Option<Vec<Window>> {
     let mut windows = Vec::new();
     for (key, id, label) in [("rolling", "5h", "5h"), ("weekly", "week", "Week"), ("monthly", "month", "Month")] {
         let Some(window) = usage.get(key) else { continue };
-        let Some(percent) = window.get("percent").and_then(Value::as_f64) else { return None };
+        let percent = window.get("percent").and_then(Value::as_f64)?;
         windows.push(Window {
             id: id.into(),
             label: label.into(),
