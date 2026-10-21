@@ -319,6 +319,15 @@ impl Vault {
     pub fn protect_mcp(&self, root: &Path) -> Result<usize, VaultError> {
         let path = root.join("mcp.json");
         let Some(mut file) = read_object(&path)? else { return Ok(0) };
+        let moved = self.protect_servers(root, &mut file)?;
+        if moved > 0 {
+            write_json_atomic(&path, &Value::Object(file), 0o600)?;
+        }
+        Ok(moved)
+    }
+
+    /// `protect_mcp` on an `mcp.json` still in memory, so a writer never puts the key in the file even for a moment.
+    pub fn protect_servers(&self, root: &Path, file: &mut Map<String, Value>) -> Result<usize, VaultError> {
         let mut moved = 0;
         let remote: Vec<String> = match file.get("mcpServers") {
             Some(Value::Object(servers)) => {
@@ -326,7 +335,7 @@ impl Vault {
             }
             _ => Vec::new(),
         };
-        each_mcp_value(&mut file, |account, value| {
+        each_mcp_value(file, |account, value| {
             let mut parts = account.splitn(4, ':').skip(1);
             let (server, kind, name) =
                 (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
@@ -341,9 +350,6 @@ impl Vault {
             moved += 1;
             Ok(Some(command_for(&self.exe, root, account)))
         })?;
-        if moved > 0 {
-            write_json_atomic(&path, &Value::Object(file), 0o600)?;
-        }
         Ok(moved)
     }
 

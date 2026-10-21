@@ -127,3 +127,14 @@ fn serve_one(
     response.push_str(&payload);
     let _ = stream.write_all(response.as_bytes());
 }
+
+/// A home in `dir` whose credentials go through a vault backed by memory (never the real keyring): its live copies in
+/// `dir/live`, its commands naming `/bin/aria`.
+pub fn vault_paths(dir: &std::path::Path) -> (crate::paths::AriaPaths, Arc<crate::keyring::MemoryBackend>) {
+    let keyring = Arc::new(crate::keyring::MemoryBackend::default());
+    let live = dir.join("live");
+    std::fs::create_dir_all(&live).unwrap();
+    let vault = crate::vault::Vault { keyring: keyring.clone(), live, exe: std::path::PathBuf::from("/bin/aria") };
+    let paths = crate::paths::AriaPaths { root: dir.to_path_buf(), vault: Some(vault) };
+    (paths, keyring)
+}

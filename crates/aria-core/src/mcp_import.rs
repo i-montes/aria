@@ -86,6 +86,8 @@ pub enum ImportError {
     Write(#[from] std::io::Error),
     #[error("none of the servers asked for can be imported")]
     NothingToImport,
+    #[error(transparent)]
+    Vault(#[from] crate::vault::VaultError),
 }
 
 /// Where each app keeps its servers, and under which key, in the order they are listed. `config` is the Linux config
@@ -434,6 +436,9 @@ pub fn import(paths: &AriaPaths, found: &[Found], ids: &[String]) -> Result<Vec<
         written.push(name);
     }
     file.insert("mcpServers".into(), Value::Object(servers));
+    if let Some(vault) = &paths.vault {
+        vault.protect_servers(&paths.root, &mut file)?;
+    }
     write_json_atomic(&paths.mcp(), &Value::Object(file), 0o600)?;
     Ok(written)
 }
@@ -615,6 +620,25 @@ mod tests {
         assert_eq!(std::fs::metadata(paths.mcp()).unwrap().permissions().mode() & 0o777, 0o600);
         // The other apps' files are untouched.
         assert_eq!(std::fs::read_to_string(home.path().join(".claude.json")).unwrap(), CLAUDE_CODE);
+    }
+
+    #[test]
+    fn with_a_vault_imported_secrets_become_commands() {
+        use crate::keyring::Backend;
+        let home = home();
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, keyring) = crate::testing::vault_paths(dir.path());
+        let found = find_in(home.path(), &home.path().join(".config"), &[]);
+        import(&paths, &found, &["claude-code:weather".into()]).unwrap();
+        let text = std::fs::read_to_string(paths.mcp()).unwrap();
+        assert!(!text.contains("weather-secret-value"), "the key never reaches the file");
+        let file = read_json(&paths.mcp()).unwrap().unwrap();
+        let account = "mcp:weather:header:Authorization";
+        assert_eq!(
+            file["mcpServers"]["weather"]["headers"]["Authorization"],
+            json!(crate::vault::command_for(std::path::Path::new("/bin/aria"), dir.path(), account))
+        );
+        assert_eq!(keyring.get(account).unwrap().as_deref(), Some("Bearer weather-secret-value"));
     }
 
     #[test]

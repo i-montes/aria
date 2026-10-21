@@ -208,12 +208,13 @@ fn mcp_import(id: u64, ids: &[String], ctx: &Ctx) -> DockMessage {
         Err(ImportError::NothingToImport) => DockMessage::Error { id, code: "nothing-to-import".into() },
         Err(ImportError::File(_)) => DockMessage::Error { id, code: "mcp-file-broken".into() },
         Err(ImportError::Write(_)) => DockMessage::Error { id, code: "mcp-write-failed".into() },
+        Err(ImportError::Vault(_)) => DockMessage::Error { id, code: "keyring-failed".into() },
     }
 }
 
 /// What is really set up on disk (names only): the credentials in `auth.json` and the MCP services.
 fn connected(ctx: &Ctx) -> Vec<String> {
-    let mut found = AuthStore::new(ctx.paths.auth()).summary();
+    let mut found = AuthStore::for_paths(&ctx.paths).summary();
     found.extend(mcp::connected(&ctx.paths));
     found.sort();
     found
@@ -299,12 +300,15 @@ fn save_key(id: u64, provider: &str, key: &str, ctx: &Ctx) -> DockMessage {
         return match mcp::set_tavily_key(&ctx.paths, key) {
             Ok(()) => key_result(id, None),
             Err(McpError::File(_) | McpError::Write(_)) => key_result(id, Some("mcp-file-broken")),
+            Err(McpError::Vault(_)) => key_result(id, Some("keyring-failed")),
         };
     }
-    let store = AuthStore::new(ctx.paths.auth());
+    let store = AuthStore::for_paths(&ctx.paths);
     for entry in entries {
-        if store.set(entry, &Credential::ApiKey { key: key.to_string() }).is_err() {
-            return key_result(id, Some("auth-file-broken"));
+        match store.set(entry, &Credential::ApiKey { key: key.to_string() }) {
+            Ok(()) => {}
+            Err(aria_core::auth::AuthError::Vault(_)) => return key_result(id, Some("keyring-failed")),
+            Err(_) => return key_result(id, Some("auth-file-broken")),
         }
     }
     key_result(id, None)
@@ -323,7 +327,7 @@ fn check_stored_key(id: u64, provider: &str, ctx: &Ctx) -> DockMessage {
         // Tavily's key lives in mcp.json and is checked when it is saved, not here.
         return DockMessage::Error { id, code: "unknown-provider".into() };
     }
-    let store = AuthStore::new(ctx.paths.auth());
+    let store = AuthStore::for_paths(&ctx.paths);
     let mut stored = None;
     for entry in entries {
         match store.get(entry) {
@@ -350,7 +354,7 @@ fn check_stored_key(id: u64, provider: &str, ctx: &Ctx) -> DockMessage {
 /// when it can be refreshed (Pi does that when it runs); a live one is confirmed against the same cheap
 /// usage endpoint the quota bars read.
 fn check_stored_oauth(id: u64, ctx: &Ctx) -> DockMessage {
-    let store = AuthStore::new(ctx.paths.auth());
+    let store = AuthStore::for_paths(&ctx.paths);
     let credential = match store.get("anthropic") {
         Ok(Some(credential)) => credential,
         Ok(None) => return key_result(id, Some("key-missing")),
@@ -439,7 +443,7 @@ fn oauth_flow(id: u64, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
     emit(DockMessage::OAuthUrl { id, url: sign_in.url.clone() });
     (ctx.opener)(&sign_in.url);
     match sign_in.wait(ctx.oauth_timeout) {
-        Ok(credential) => match AuthStore::new(ctx.paths.auth()).set("anthropic", &credential) {
+        Ok(credential) => match AuthStore::for_paths(&ctx.paths).set("anthropic", &credential) {
             Ok(()) => emit(result(None)),
             Err(_) => emit(result(Some("auth-file-broken"))),
         },
@@ -505,7 +509,7 @@ mod tests {
     }
 
     fn auth(h: &Harness) -> AuthStore {
-        AuthStore::new(h.ctx.paths.auth())
+        AuthStore::for_paths(&h.ctx.paths)
     }
 
     // ---- importing other apps' MCP servers -------------------------------------------------------------
@@ -783,6 +787,40 @@ mod tests {
         assert_eq!(store.get("opencode").unwrap(), Some(Credential::ApiKey { key: "k1".into() }));
     }
 
+    /// A keyring that refuses everything (locked, or the Secret Service gone).
+    #[derive(Debug)]
+    struct Refusing;
+
+    impl aria_core::keyring::Backend for Refusing {
+        fn get(&self, _: &str) -> Result<Option<String>, aria_core::keyring::KeyringError> {
+            Ok(None)
+        }
+        fn set(&self, _: &str, _: &str) -> Result<(), aria_core::keyring::KeyringError> {
+            Err(aria_core::keyring::KeyringError::Failed("locked".into()))
+        }
+        fn delete(&self, _: &str) -> Result<(), aria_core::keyring::KeyringError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_keyring_that_refuses_a_key_says_so_and_writes_nothing() {
+        let mut h = harness(KeyCheck::Valid);
+        let live = h.dir.path().join("live");
+        std::fs::create_dir_all(&live).unwrap();
+        h.ctx.paths.vault = Some(aria_core::vault::Vault {
+            keyring: Arc::new(Refusing),
+            live,
+            exe: std::path::PathBuf::from("/bin/aria"),
+        });
+        let replies = run(&h, PageMessage::SaveKey { id: 7, provider: "opencode-go".into(), key: "k1".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 7, ok: false, error: Some("keyring-failed".into()) }]);
+        assert!(!h.ctx.paths.auth().exists());
+        let replies = run(&h, PageMessage::SaveKey { id: 8, provider: "tavily".into(), key: "t".into() });
+        assert_eq!(replies, vec![DockMessage::KeyResult { id: 8, ok: false, error: Some("keyring-failed".into()) }]);
+        assert!(!h.ctx.paths.mcp().exists());
+    }
+
     #[test]
     fn other_keys_land_under_their_own_entries() {
         let h = harness(KeyCheck::Valid);
@@ -859,7 +897,7 @@ mod tests {
     #[test]
     fn a_stored_key_that_was_revoked_is_reported_and_kept() {
         let h = harness(KeyCheck::Rejected);
-        AuthStore::new(h.ctx.paths.auth()).set("opencode-go", &Credential::ApiKey { key: "old".into() }).unwrap();
+        AuthStore::for_paths(&h.ctx.paths).set("opencode-go", &Credential::ApiKey { key: "old".into() }).unwrap();
         let before = std::fs::read_to_string(h.ctx.paths.auth()).unwrap();
         let replies = run(&h, PageMessage::CheckKey { id: 4, provider: "opencode-go".into() });
         assert_eq!(replies, vec![DockMessage::KeyResult { id: 4, ok: false, error: Some("key-rejected".into()) }]);
@@ -888,7 +926,7 @@ mod tests {
     #[test]
     fn a_stored_claude_sign_in_is_checked_against_the_usage_endpoint() {
         let h = harness(KeyCheck::Valid);
-        AuthStore::new(h.ctx.paths.auth())
+        AuthStore::for_paths(&h.ctx.paths)
             .set("anthropic", &Credential::OAuth { access: "tok".into(), refresh: "ref".into(), expires: i64::MAX })
             .unwrap();
         let replies = run(&h, PageMessage::CheckKey { id: 8, provider: "anthropic-oauth".into() });
@@ -902,7 +940,7 @@ mod tests {
     #[test]
     fn an_expired_claude_sign_in_with_a_refresh_token_still_works_without_a_request() {
         let h = harness(KeyCheck::Rejected);
-        AuthStore::new(h.ctx.paths.auth())
+        AuthStore::for_paths(&h.ctx.paths)
             .set("anthropic", &Credential::OAuth { access: "old".into(), refresh: "ref".into(), expires: 1 })
             .unwrap();
         let replies = run(&h, PageMessage::CheckKey { id: 9, provider: "anthropic-oauth".into() });
@@ -913,7 +951,7 @@ mod tests {
     #[test]
     fn an_expired_claude_sign_in_that_cannot_be_refreshed_asks_to_sign_in_again() {
         let h = harness(KeyCheck::Valid);
-        AuthStore::new(h.ctx.paths.auth())
+        AuthStore::for_paths(&h.ctx.paths)
             .set("anthropic", &Credential::OAuth { access: "old".into(), refresh: String::new(), expires: 1 })
             .unwrap();
         let replies = run(&h, PageMessage::CheckKey { id: 10, provider: "anthropic-oauth".into() });
@@ -923,7 +961,7 @@ mod tests {
     #[test]
     fn a_revoked_claude_token_is_reported() {
         let h = harness(KeyCheck::Rejected);
-        AuthStore::new(h.ctx.paths.auth())
+        AuthStore::for_paths(&h.ctx.paths)
             .set("anthropic", &Credential::OAuth { access: "tok".into(), refresh: "ref".into(), expires: i64::MAX })
             .unwrap();
         let replies = run(&h, PageMessage::CheckKey { id: 11, provider: "anthropic-oauth".into() });
@@ -1008,7 +1046,7 @@ mod tests {
         let h = harness(KeyCheck::Valid);
         run(&h, PageMessage::SaveKey { id: 1, provider: "opencode-go".into(), key: "k".into() });
         run(&h, PageMessage::SaveKey { id: 2, provider: "tavily".into(), key: "t".into() });
-        AuthStore::new(h.ctx.paths.auth())
+        AuthStore::for_paths(&h.ctx.paths)
             .set("anthropic", &Credential::OAuth { access: "a".into(), refresh: "r".into(), expires: 1 })
             .unwrap();
         match &run(&h, PageMessage::LoadSettings { id: 3 })[0] {

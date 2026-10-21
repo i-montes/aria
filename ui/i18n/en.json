@@ -112,6 +112,7 @@
   "ob.error.key-missing": "There is no saved key to check.",
   "ob.error.network-unavailable": "Could not reach the service. Check your connection and try again.",
   "ob.error.auth-file-broken": "Aria could not write ~/.aria/auth.json.",
+  "ob.error.keyring-failed": "Aria could not keep the key in the system keyring. Unlock it and try again (or run aria keyring off).",
   "ob.error.oauth-denied": "Sign-in was cancelled.",
   "ob.error.oauth-timeout": "Sign-in took too long. Try again.",
   "ob.error.oauth-state": "The sign-in did not match this request. Try again.",

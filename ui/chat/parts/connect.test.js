@@ -79,7 +79,7 @@ describe('OpenCode Go and errors', () => {
   })
 
   test('every error code the Rust side can answer has a text', () => {
-    for (const code of ['key-rejected', 'network-unavailable', 'auth-file-broken', 'oauth-denied', 'oauth-timeout', 'oauth-state', 'oauth-failed', 'pi-missing', 'claude-code-missing', 'claude-bridge-install-failed', 'unknown-provider', 'generic']) {
+    for (const code of ['key-rejected', 'network-unavailable', 'auth-file-broken', 'keyring-failed', 'oauth-denied', 'oauth-timeout', 'oauth-state', 'oauth-failed', 'pi-missing', 'claude-code-missing', 'claude-bridge-install-failed', 'unknown-provider', 'generic']) {
       expect(TEXTS.en[`chat.connect.error.${code}`], code).toBeDefined()
       expect(TEXTS.es[`chat.connect.error.${code}`], code).toBeDefined()
     }
