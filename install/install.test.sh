@@ -57,6 +57,34 @@ if ARIA_HOME="$tmp/home" ARIA_ENGRAM_URL="file://$tmp/engram.tar.gz" ARIA_ENGRAM
 out=$(ARIA_HOME="$tmp/home" ARIA_ENGRAM_URL="file:///nonexistent" sh "$installer" --install-engram 2>&1) && printf '%s\n' "$out" | grep -qF "Engram $engram_version is already installed" && pass "an installed Engram is not downloaded again" || fail "an installed Engram is downloaded again"
 rm -r "$tmp"
 
+# agent-browser (the agents' browser check): the pinned version from agent-browser-version, after the Pi packages and
+# before the binary is replaced; a failure only warns
+browser_version=$(tr -d '[:space:]' < "$here/../agent-browser-version")
+tmp=$(mktemp -d)
+out=$(ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria 2>&1)
+last=$(line_of "$out" "install git:") || last=""
+[ -n "$last" ] || { fail "the dry run lists no Pi packages"; last=0; }
+ordered=1
+for step in \
+  "would: npm install --prefix $tmp/home/agent-browser/$browser_version --no-audit --no-fund agent-browser@$browser_version" \
+  "would: ln -sf $tmp/home/agent-browser/$browser_version/node_modules/.bin/agent-browser $tmp/home/bin/agent-browser" \
+  "would: $tmp/home/bin/agent-browser install" \
+  "would: install -Dm755"; do
+  at=$(line_of "$out" "$step") || at=""
+  if [ -z "$at" ]; then fail "install dry run lacks '$step'"; ordered=0
+  elif [ "$at" -le "$last" ]; then fail "install dry run has '$step' out of order"; ordered=0
+  else last=$at; fi
+done
+[ "$ordered" = 1 ] && pass "agent-browser $browser_version and its browser are installed after the Pi packages, before the binary"
+mkdir -p "$tmp/fail" && printf '#!/bin/sh\nexit 1\n' > "$tmp/fail/npm" && chmod +x "$tmp/fail/npm"
+if PATH="$tmp/fail:$PATH" ARIA_HOME="$tmp/home" sh "$installer" --install-agent-browser >/dev/null 2>"$tmp/err"; then
+  if grep -qF 'warning:' "$tmp/err"; then pass "a failed agent-browser install warns and the install goes on"; else fail "a failed agent-browser install does not warn"; fi
+else fail "a failed agent-browser install stops the installer"; fi
+if PATH="$tmp/fail:$PATH" ARIA_HOME="$tmp/home" ARIA_AGENT_BROWSER_VERSION=bad sh "$installer" --install-agent-browser >/dev/null 2>"$tmp/err"; then
+  if grep -qF 'warning:' "$tmp/err" && [ ! -e "$tmp/home/agent-browser" ]; then pass "a bad agent-browser version warns and installs nothing"; else fail "a bad agent-browser version is not refused cleanly"; fi
+else fail "a bad agent-browser version stops the installer"; fi
+rm -r "$tmp"
+
 # Pi and Node: the pinned version is read from pi-version, Pi is installed under ~/.aria/pi/<version>
 pinned=$(tr -d '[:space:]' < "$here/../pi-version")
 tmp=$(mktemp -d)
@@ -64,7 +92,7 @@ out=$(ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria 2>&
 printf '%s\n' "$out" | grep -qF "would: npm install --prefix $tmp/home/pi/$pinned --no-audit --no-fund @earendil-works/pi-coding-agent@$pinned" && pass "install dry run installs the pinned Pi ($pinned)" || fail "install dry run lacks the pinned Pi install"
 mkdir -p "$tmp/home/pi/$pinned/node_modules/.bin" && : > "$tmp/home/pi/$pinned/node_modules/.bin/pi" && chmod +x "$tmp/home/pi/$pinned/node_modules/.bin/pi"
 out=$(ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria 2>&1)
-printf '%s\n' "$out" | grep -qF 'npm install' && fail "an installed Pi is installed again" || pass "an installed Pi is not installed again"
+printf '%s\n' "$out" | grep -qF "npm install --prefix $tmp/home/pi/" && fail "an installed Pi is installed again" || pass "an installed Pi is not installed again"
 fake_node() { mkdir -p "$tmp/$1" && printf '#!/bin/sh\necho %s\n' "$2" > "$tmp/$1/node" && chmod +x "$tmp/$1/node" && printf '#!/bin/sh\n' > "$tmp/$1/npm" && chmod +x "$tmp/$1/npm"; }
 fake_node old v20.0.0
 fake_node new v22.23.2
