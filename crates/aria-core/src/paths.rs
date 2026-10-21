@@ -42,6 +42,11 @@ impl AriaPaths {
         self.root.join("sessions.json")
     }
 
+    /// The background jobs the dock ran: what each one was and how it ended, kept across restarts.
+    pub fn jobs(&self) -> PathBuf {
+        self.root.join("jobs.json")
+    }
+
     /// Pi's agent directory (`PI_CODING_AGENT_DIR`): its own settings, links to our credentials, the
     /// persona, extensions and sessions. Aria owns and regenerates it.
     pub fn agent(&self) -> PathBuf {
@@ -90,6 +95,7 @@ mod tests {
     fn agent_and_pi_paths() {
         let paths = AriaPaths { root: PathBuf::from("/r") };
         assert_eq!(paths.agent(), PathBuf::from("/r/agent"));
+        assert_eq!(paths.jobs(), PathBuf::from("/r/jobs.json"));
         assert_eq!(paths.bin(), PathBuf::from("/r/bin"));
         assert_eq!(paths.pi_root(), PathBuf::from("/r/pi"));
         assert_eq!(paths.pi_install("1.3.0"), PathBuf::from("/r/pi/1.3.0"));

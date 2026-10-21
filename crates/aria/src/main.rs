@@ -8,6 +8,9 @@ mod chat;
 mod control;
 mod dock;
 mod handlers;
+// Wired into the dock in a later step of background work; until then only its tests use it.
+#[allow(dead_code)]
+mod jobs;
 mod ui;
 mod visibility;
 mod watch;
