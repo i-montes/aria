@@ -93,7 +93,9 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
   taken. To try there: Command + Space (Spotlight: it should fall back, the row saying "In use: …"), Control + Space
   (input sources), a combination another app holds (another hotkey app, or a second Aria-like registration), a change
   in the settings (the new one works at once, the old one no longer opens the dock), every candidate taken (the banner,
-  "None available", a retry once one is freed), and a letter on a non-US layout (Carbon codes are key positions).
+  "None available", a retry once one is freed), a fallback in use (freeing the chosen one: within 10 s the dock takes
+  it back), and a letter on a non-US layout (Carbon codes are key positions). A failed `InstallEventHandler` (its own
+  banner, `hotkey-handler-failed`, retried every 10 s) cannot be provoked on purpose.
 - `crates/aria/src/dock/mac.rs` repeats the page queue, the open/close generations and the notice timing of `dock/gtk.rs`; they can be shared now that the Mac build is at hand.
 - The owner's `sandbox` extension uses `bwrap` (Linux). On macOS there is no box yet: every command asks first with the permission card (`extensions/sandbox/route.ts`). A Seatbelt (`sandbox-exec`) profile with the same limits is the macOS sandbox still to design; some of its tests assume Linux paths.
 - No `.app` bundle, signing or notarization, so the standard "open at login" UI and notification actions wait.
@@ -189,6 +191,10 @@ the MCP servers other apps have, and the shortcut is chosen in the settings (the
 - A tool that never reports its end keeps the watchdog paused for the rest of that run (a running tool pauses it on
   purpose, so a long silent build is not cut); the watchdog only covers the model being silent.
 - An imported server whose env var is empty in the other app reaches Pi without that variable.
+- What Pi cannot read as the other app did is imported as it is and only warned about in the row ("check it after
+  importing"): a variable in a command, argument, folder or URL (Pi expands none there), Claude Code's
+  `${NAME:-default}`, an editor's `${workspaceFolder}`, a `~` argument, VS Code's `envFile`. The person fixes those in
+  `~/.aria/mcp.json` by hand.
 - The test `an_import_that_cannot_write_says_so` fails when the tests run as root (a read-only folder does not stop
   root).
 - In the import list, the checks are lost when the setup goes Back and returns to Integrations.
