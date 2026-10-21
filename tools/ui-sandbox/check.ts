@@ -172,6 +172,7 @@ const script = `(async () => {
     const box = (id) => $('#flow [data-action="check"][data-field="mcpImport"][data-value="' + id + '"]')
     const importButton = () => $('#flow [data-action="mcp-import"]')
     check('the found servers are listed, SSE without a checkbox, Import closed until one is checked', box('claude-code:files') && box('cursor:docs') && !box('cursor:feed') && $('#flow').textContent.includes('Not supported (SSE)') && $('#flow').textContent.includes('my docs → my-docs') && importButton()?.disabled, $('#flow').textContent.slice(-600))
+    check('a warning about the server is said in plain words', $('#flow').textContent.includes('an argument starts with ~, which Aria reads as your home folder'), $('#flow').textContent.slice(-600))
     box('claude-code:files')?.click(); await wait(80)
     check('checking a server opens Import and is not a change to save', importButton() && !importButton().disabled && !$('#flow [data-action="settings-save"]'))
     importButton()?.click(); await wait(300)

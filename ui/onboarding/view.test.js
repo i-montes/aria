@@ -2,6 +2,7 @@
 // Drives the onboarding controller without a browser: a fake root, delegated events and a bridge whose
 // replies the test releases by hand, so slow sign-ins and reopenings can be reproduced exactly.
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { applyProvider, defaultSettings } from './steps.js'
 import { createOnboarding } from './view.js'
 
@@ -846,6 +847,83 @@ describe('the MCP servers the person already has', () => {
     expect(h.root.innerHTML).toContain('ob.error.mcp-write-failed')
   })
 
+  test('what may not work the same in Aria is said in plain words', async () => {
+    const odd = { id: 'vscode:db', name: 'db', importAs: 'db', source: 'vscode', kind: 'stdio', target: 'db', secrets: [], importable: true, disabled: false,
+      warnings: ['expands:TOOLS', 'expands:KEY', 'default:PORT', 'unsupported:workspaceFolder', 'tilde-arg', 'envFile'] }
+    const h = await inSettings([odd, ...found])
+    const html = h.root.innerHTML
+    expect(html).toContain('ob.integrations.found.warn.expands{&quot;names&quot;:&quot;TOOLS, KEY&quot;}')
+    expect(html).toContain('ob.integrations.found.warn.default{&quot;names&quot;:&quot;PORT&quot;}')
+    expect(html).toContain('ob.integrations.found.warn.unsupported{&quot;names&quot;:&quot;${workspaceFolder}&quot;}')
+    expect(html).toContain('ob.integrations.found.warn.tildeArg')
+    expect(html).toContain('ob.integrations.found.warn.envFile')
+    // a server without warnings (or from an older dock, with no field) has none
+    expect(html.match(/ob\.integrations\.found\.warn\.envFile/g)).toHaveLength(1)
+  })
+
+  test('the warnings read well in both languages', () => {
+    const catalog = (code) => JSON.parse(readFileSync(new URL(`../i18n/${code}.json`, import.meta.url), 'utf8'))
+    for (const code of ['en', 'es']) {
+      const texts = catalog(code)
+      for (const key of ['expands', 'default', 'unsupported', 'tildeArg', 'envFile']) expect(texts[`ob.integrations.found.warn.${key}`]).toBeTruthy()
+    }
+    expect(catalog('en')['ob.integrations.found.imported.one'].replace('{names}', 'files')).toBe('Imported 1: files')
+    expect(catalog('es')['ob.integrations.found.imported.one'].replace('{names}', 'files')).toBe('Importado 1: files')
+    expect(catalog('es')['ob.integrations.found.imported.many'].replace('{n}', '2').replace('{names}', 'a, b')).toBe('Importados 2: a, b')
+  })
+
+  test('a server name is shown as text, never as markup', async () => {
+    const evil = { id: 'cursor:<img src=x onerror=alert(1)>', name: '<img src=x onerror=alert(1)>', importAs: 'img-src-x-onerror-alert-1', source: 'cursor', kind: 'stdio', target: '<b>run</b>', secrets: ['<i>KEY</i>'], importable: true, disabled: false }
+    const h = await inSettings([evil])
+    const html = h.root.innerHTML
+    expect(html).not.toContain('<img')
+    expect(html).not.toContain('<b>run</b>')
+    expect(html).not.toContain('<i>KEY</i>')
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    expect(html).toContain('&lt;b&gt;run&lt;/b&gt;')
+  })
+
+  test('one server imported is said in the singular, more in the plural', async () => {
+    const h = await inSettings()
+    h.click('check', 'mcpImport', 'claude-code:files')
+    h.click('mcp-import')
+    await answer(h.lastRequest(), { type: 'saved', id: 2 })
+    await answer(h.lastRequest(), { type: 'settings', settings: completed, connected: [], servers: ['notion', 'files'] })
+    await answer(scanOf(h), { type: 'mcpFound', id: 3, servers: found.slice(1) })
+    expect(h.root.innerHTML).toContain('ob.integrations.found.imported.one{&quot;n&quot;:1,&quot;names&quot;:&quot;files&quot;}')
+    h.click('check', 'mcpImport', 'cursor:docs')
+    h.click('check', 'mcpImport', 'vscode:tracker')
+    h.click('mcp-import')
+    await answer(h.lastRequest(), { type: 'saved', id: 4 })
+    await answer(h.lastRequest(), { type: 'settings', settings: completed, connected: [], servers: ['notion', 'files', 'my-docs', 'tracker'] })
+    await answer(scanOf(h), { type: 'mcpFound', id: 5, servers: found.slice(3) })
+    expect(h.root.innerHTML).toContain('ob.integrations.found.imported.many{&quot;n&quot;:2,&quot;names&quot;:&quot;my-docs, tracker&quot;}')
+  })
+
+  test('nothing left to import reads the list again and says why', async () => {
+    const h = await inSettings()
+    h.click('check', 'mcpImport', 'claude-code:files')
+    h.click('mcp-import')
+    await answer(h.lastRequest(), { type: 'error', code: 'nothing-to-import' })
+    const again = scanOf(h)
+    expect(again).toBeTruthy() // a new scan
+    await answer(again, { type: 'mcpFound', id: 3, servers: found.slice(1) })
+    const html = h.root.innerHTML
+    expect(html).not.toContain('data-value="claude-code:files"') // gone from the other app
+    expect(html).toContain('ob.error.nothing-to-import')
+  })
+
+  test('a broken mcp.json says nothing was imported', async () => {
+    const h = await inSettings()
+    h.click('check', 'mcpImport', 'claude-code:files')
+    h.click('mcp-import')
+    await answer(h.lastRequest(), { type: 'error', code: 'mcp-file-broken' })
+    const html = h.root.innerHTML
+    expect(html).toContain('ob.integrations.found.fileBroken')
+    expect(html).not.toContain('ob.error.mcp-file-broken')
+    expect(scanOf(h)).toBeFalsy() // no new scan for this one
+  })
+
   test('nothing found says so', async () => {
     const h = await inSettings([])
     expect(h.root.innerHTML).toContain('ob.integrations.found.none')
@@ -865,7 +943,7 @@ describe('the MCP servers the person already has', () => {
     await answer(scanOf(h), { type: 'mcpFound', id: 3, servers: found.slice(1) })
     const html = h.root.innerHTML
     expect(html).not.toContain('data-value="claude-code:files"')
-    expect(html).toContain('ob.integrations.found.imported{&quot;n&quot;:1,&quot;names&quot;:&quot;files&quot;}')
+    expect(html).toContain('ob.integrations.found.imported.one{&quot;n&quot;:1,&quot;names&quot;:&quot;files&quot;}')
     expect(h.ob.snapshot().dirty).toBe(false)
   })
 })

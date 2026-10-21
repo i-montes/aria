@@ -414,7 +414,14 @@
   "ob.integrations.found.sse": "No compatible (SSE)",
   "ob.integrations.found.import": "Importar",
   "ob.integrations.found.importing": "Importando…",
-  "ob.integrations.found.imported": "Importados {n}: {names}",
+  "ob.integrations.found.imported.one": "Importado 1: {names}",
+  "ob.integrations.found.imported.many": "Importados {n}: {names}",
+  "ob.integrations.found.fileBroken": "No se pudo leer el mcp.json de Aria; no se importó nada.",
+  "ob.integrations.found.warn.expands": "rellena {names} en su comando, argumentos, carpeta o dirección, y Aria no: revísalo después de importar",
+  "ob.integrations.found.warn.default": "da a {names} un valor por defecto, y Aria no: revísalo después de importar",
+  "ob.integrations.found.warn.unsupported": "usa {names}, que Aria no puede rellenar: revísalo después de importar",
+  "ob.integrations.found.warn.tildeArg": "un argumento empieza con ~, que Aria lee como tu carpeta personal: revísalo después de importar",
+  "ob.integrations.found.warn.envFile": "su archivo de entorno no se importa: añade esas variables después de importar",
   "ob.error.mcp-write-failed": "Aria no pudo escribir ~/.aria/mcp.json.",
   "ob.error.nothing-to-import": "Ninguno de los servidores marcados se puede importar ya."
 }

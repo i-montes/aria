@@ -660,7 +660,7 @@ export function createOnboarding(env) {
     let html = c.section(t('ob.integrations.found.section'))
     if (f.status === 'idle' || f.status === 'scanning') return html + c.info('neutral', '', t('ob.integrations.found.scanning'))
     if (f.status === 'error') return html + c.info('amber', '', t(`ob.error.${f.error}`))
-    const result = f.result ? c.info('green', '', t('ob.integrations.found.imported', { n: f.result.length, names: f.result.join(', ') })) : ''
+    const result = f.result ? c.info('green', '', t(f.result.length === 1 ? 'ob.integrations.found.imported.one' : 'ob.integrations.found.imported.many', { n: f.result.length, names: f.result.join(', ') })) : ''
     if (!f.servers.length) return html + (result || c.info('neutral', '', t('ob.integrations.found.none')))
     const importable = f.servers.filter((server) => server.importable)
     html += c.info('neutral', '', t('ob.integrations.found.desc'))
@@ -669,11 +669,14 @@ export function createOnboarding(env) {
     }
     for (const server of f.servers.filter((server) => !server.importable)) html += c.info('neutral', foundName(server), foundDetails(server))
     if (importable.length) {
-      const stateText = f.importing ? t('ob.integrations.found.importing') : f.error ? t(`ob.error.${f.error}`) : ''
+      const stateText = f.importing ? t('ob.integrations.found.importing') : f.error ? t(importErrorKey(f.error)) : ''
       html += c.actionButton('mcp-import', t('ob.integrations.found.import'), stateText, { disabled: f.importing || !f.picked.length, tone: f.error ? 'error' : '' })
     }
     return html + result
   }
+
+  /** An import's error, said for the import: a broken `mcp.json` means nothing was imported. */
+  const importErrorKey = (code) => (code === 'mcp-file-broken' ? 'ob.integrations.found.fileBroken' : `ob.error.${code}`)
 
   /** The name, and the one Aria gives it when Pi would refuse it ("my docs → my-docs"). */
   const foundName = (server) => (server.importAs && server.importAs !== server.name ? `${server.name} → ${server.importAs}` : String(server.name))
@@ -685,9 +688,27 @@ export function createOnboarding(env) {
     const parts = [t(`ob.integrations.found.source.${server.source}`), server.target]
     if (names.length) parts.push(t('ob.integrations.found.uses', { names: names.join(', ') }))
     for (const secret of secrets.filter((secret) => secret.startsWith('input:'))) parts.push(t('ob.integrations.found.input', { id: secret.slice(6) }))
+    parts.push(...foundWarnings(server))
     if (server.disabled) parts.push(t('ob.integrations.found.disabled'))
     if (!server.importable) parts.push(t('ob.integrations.found.sse'))
     return parts.filter(Boolean).join(' · ')
+  }
+
+  /** What may not work the same in Aria (the dock's `warnings`), in plain words, one line per kind: `expands:<NAME>`,
+   * `default:<NAME>`, `unsupported:<what>`, `tilde-arg`, `envFile`. */
+  function foundWarnings(server) {
+    const warnings = Array.isArray(server.warnings) ? server.warnings.map(String) : []
+    const named = (prefix, shown = (name) => name) => warnings.filter((w) => w.startsWith(`${prefix}:`)).map((w) => shown(w.slice(prefix.length + 1)))
+    const lines = []
+    const expands = named('expands')
+    if (expands.length) lines.push(t('ob.integrations.found.warn.expands', { names: expands.join(', ') }))
+    const defaults = named('default')
+    if (defaults.length) lines.push(t('ob.integrations.found.warn.default', { names: defaults.join(', ') }))
+    const unsupported = named('unsupported', (what) => `\${${what}}`)
+    if (unsupported.length) lines.push(t('ob.integrations.found.warn.unsupported', { names: unsupported.join(', ') }))
+    if (warnings.includes('tilde-arg')) lines.push(t('ob.integrations.found.warn.tildeArg'))
+    if (warnings.includes('envFile')) lines.push(t('ob.integrations.found.warn.envFile'))
+    return lines
   }
 
   function sandboxStep() {
@@ -1270,7 +1291,7 @@ export function createOnboarding(env) {
   }
 
   /** Asks the dock what MCP servers the other apps have. `result` (the names just imported) stays on the new list. */
-  async function scanFound(result = null) {
+  async function scanFound(result = null, error = null) {
     const f = freshFound(result)
     f.status = 'scanning'
     state.found = f
@@ -1280,6 +1301,7 @@ export function createOnboarding(env) {
     if (reply.type === 'mcpFound') {
       f.status = 'ready'
       f.servers = Array.isArray(reply.servers) ? reply.servers.filter((server) => server && typeof server.id === 'string') : []
+      f.error = error
     } else {
       f.status = 'error'
       f.error = reply.code ?? 'generic'
@@ -1308,7 +1330,10 @@ export function createOnboarding(env) {
     f.importing = false
     if (reply.type !== 'saved') {
       f.error = reply.code ?? 'generic'
-      if (state.found === f) render()
+      if (state.found !== f) return
+      // The list is out of date (a server went away or was imported elsewhere): read it again, keeping the note.
+      if (f.error === 'nothing-to-import') return scanFound(null, f.error)
+      render()
       return
     }
     const before = new Set(state.servers)

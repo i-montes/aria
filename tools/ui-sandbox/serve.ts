@@ -25,7 +25,7 @@ const sandbox = `<script>
   // Aria's mcp.json, and what the other apps have (an import adds to the first, and a scan hides what is there).
   const SERVERS = ['notion', 'tavily', 'rea']
   const FOUND = [
-    { id: 'claude-code:files', name: 'files', importAs: 'files', source: 'claude-code', kind: 'stdio', target: 'npx', secrets: [], importable: true, disabled: false },
+    { id: 'claude-code:files', name: 'files', importAs: 'files', source: 'claude-code', kind: 'stdio', target: 'npx', secrets: [], warnings: ['tilde-arg'], importable: true, disabled: false },
     { id: 'cursor:docs', name: 'my docs', importAs: 'my-docs', source: 'cursor', kind: 'http', target: 'docs.example.com', secrets: ['X-Api-Key'], importable: true, disabled: true },
     { id: 'cursor:feed', name: 'feed', importAs: 'feed', source: 'cursor', kind: 'sse', target: 'feed.example.com', secrets: [], importable: false, disabled: false },
   ]

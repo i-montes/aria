@@ -529,8 +529,8 @@ mod tests {
             vec![DockMessage::McpFound {
                 id: 1,
                 servers: serde_json::json!([
-                    {"id": "cursor:docs", "name": "docs", "importAs": "docs", "source": "cursor", "kind": "http", "target": "docs.example.com", "secrets": ["X-Api-Key"], "importable": true, "disabled": false},
-                    {"id": "cursor:feed", "name": "feed", "importAs": "feed", "source": "cursor", "kind": "sse", "target": "feed.example.com", "secrets": [], "importable": false, "disabled": false}
+                    {"id": "cursor:docs", "name": "docs", "importAs": "docs", "source": "cursor", "kind": "http", "target": "docs.example.com", "secrets": ["X-Api-Key"], "warnings": [], "importable": true, "disabled": false},
+                    {"id": "cursor:feed", "name": "feed", "importAs": "feed", "source": "cursor", "kind": "sse", "target": "feed.example.com", "secrets": [], "warnings": [], "importable": false, "disabled": false}
                 ]),
             }],
             "tavily is already in Aria's mcp.json, and no secret value reaches the page"
@@ -558,7 +558,7 @@ mod tests {
             run(&h, PageMessage::McpScan { id: 4 }),
             vec![DockMessage::McpFound {
                 id: 4,
-                servers: serde_json::json!([{"id": "cursor:feed", "name": "feed", "importAs": "feed", "source": "cursor", "kind": "sse", "target": "feed.example.com", "secrets": [], "importable": false, "disabled": false}])
+                servers: serde_json::json!([{"id": "cursor:feed", "name": "feed", "importAs": "feed", "source": "cursor", "kind": "sse", "target": "feed.example.com", "secrets": [], "warnings": [], "importable": false, "disabled": false}])
             }]
         );
         // SSE is listed but never imported.

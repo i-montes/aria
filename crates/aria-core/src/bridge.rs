@@ -160,8 +160,9 @@ pub enum DockMessage {
     },
     #[serde(rename = "saved")]
     Saved { id: u64 },
-    /// The answer to `mcpScan`: `[{ id, name, importAs, source, kind, target, secrets, importable, disabled }]` (`mcp_import::Found`),
-    /// never a secret's value, only the names of the variables and headers. `kind: "sse"` is `importable: false`.
+    /// The answer to `mcpScan`: `[{ id, name, importAs, source, kind, target, secrets, warnings, importable, disabled }]`
+    /// (`mcp_import::Found`), never a secret's value, only the names of the variables and headers. `kind: "sse"` is
+    /// `importable: false`; `warnings` name what may not work the same in Aria.
     #[serde(rename = "mcpFound")]
     McpFound { id: u64, servers: Value },
     /// `error` is a UI string key: `key-rejected`, `network-unavailable`, `auth-file-broken`.

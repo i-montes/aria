@@ -414,7 +414,14 @@
   "ob.integrations.found.sse": "Not supported (SSE)",
   "ob.integrations.found.import": "Import",
   "ob.integrations.found.importing": "Importing…",
-  "ob.integrations.found.imported": "Imported {n}: {names}",
+  "ob.integrations.found.imported.one": "Imported 1: {names}",
+  "ob.integrations.found.imported.many": "Imported {n}: {names}",
+  "ob.integrations.found.fileBroken": "Aria's mcp.json could not be read; nothing was imported.",
+  "ob.integrations.found.warn.expands": "fills in {names} in its command, arguments, folder or address, which Aria does not: check it after importing",
+  "ob.integrations.found.warn.default": "gives {names} a fallback value, which Aria does not: check it after importing",
+  "ob.integrations.found.warn.unsupported": "uses {names}, which Aria cannot fill in: check it after importing",
+  "ob.integrations.found.warn.tildeArg": "an argument starts with ~, which Aria reads as your home folder: check it after importing",
+  "ob.integrations.found.warn.envFile": "its env file is not imported: add those variables after importing",
   "ob.error.mcp-write-failed": "Aria could not write ~/.aria/mcp.json.",
   "ob.error.nothing-to-import": "None of the checked servers can be imported any more."
 }

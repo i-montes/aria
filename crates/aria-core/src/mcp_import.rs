@@ -3,10 +3,16 @@
 //! `env` or `headers` are copied as they are (`mcp.json` is mode 0600); the page only gets their names.
 //!
 //! Pi resolves the values of `env` and `headers` (Pi 1.3.0, `resolve-config-value.js`): `${NAME}` and `$NAME` are
-//! environment variables, `$$` is a `$`, `$!` is a `!`, and a value that starts with `!` runs as a shell command. So a
-//! value is translated on the way in: `${env:NAME}` (VS Code, Cursor) becomes `${NAME}`, a lone `$` becomes `$$` (the
-//! other apps only expand `${...}`), and a leading `!` becomes `$!`, so nothing the other app took as text ever runs.
+//! environment variables, `$$` is a `$`, `$!` is a `!`, a value that starts with `!` runs as a shell command, and a
+//! `${...}` that is not a variable name is kept as text. So a value is translated on the way in: `${env:NAME}` (VS
+//! Code, Cursor) becomes `${NAME}`, a lone `$` becomes `$$` (the other apps only expand `${...}`), and a leading `!`
+//! becomes `$!`, so nothing the other app took as text ever runs. `${userHome}` (VS Code, Cursor) becomes the home
+//! folder. A `${...}` Pi keeps as text is copied as it is; when the other app read it as something else
+//! (`${workspaceFolder}`, Claude Code's `${NAME:-default}`) the server gets a warning (see `Found::warnings`).
 //! `${input:<id>}` (VS Code prompts) is not a name Pi knows, so it stays as it is and is listed as the secret `input:<id>`.
+//!
+//! Pi expands nothing in `command`, `args`, `cwd` and `url` but a leading `~` (`~/…`) in the first three. The other apps
+//! expand their `${...}` there too, so those stay as they are and are warned about; a `~` argument is warned about too.
 //! Pi refuses the legacy SSE transport: SSE servers are listed (`importable: false`) but never written.
 
 use crate::json_file::{read_json, write_json_atomic, JsonFileError};
@@ -34,6 +40,12 @@ pub struct Found {
     /// The command's file name (stdio) or the URL's host (http, sse).
     pub target: String,
     pub secrets: Vec<String>,
+    /// What may not work the same in Aria, to check after importing, in order of appearance: `expands:<NAME>` (a
+    /// variable the other app fills in a command, argument, folder or URL, where Pi does not), `default:<NAME>` (Claude
+    /// Code's `${NAME:-default}`), `unsupported:<what>` (a `${what}` Pi keeps as text, such as `workspaceFolder`),
+    /// `tilde-arg` (an argument starting with `~`, which Pi reads as the home folder), `envFile` (VS Code's env file,
+    /// not imported).
+    pub warnings: Vec<String>,
     /// False for SSE, which Pi does not support: listed so the page can say so, never imported.
     pub importable: bool,
     /// Turned off in the other app; imported turned off too (Pi's `enabled: false`).
@@ -59,6 +71,7 @@ impl std::fmt::Debug for Found {
             .field("kind", &self.kind)
             .field("target", &self.target)
             .field("secrets", &self.secrets)
+            .field("warnings", &self.warnings)
             .field("importable", &self.importable)
             .field("disabled", &self.disabled)
             .finish_non_exhaustive()
@@ -124,7 +137,7 @@ pub fn find_in(home: &Path, config: &Path, existing: &[String]) -> Vec<Found> {
             if name == "engram" || import_as == "engram" || existing.contains(&import_as) {
                 continue;
             }
-            if let Some(server) = parse(source, name, entry) {
+            if let Some(server) = parse(home, source, name, entry) {
                 found.push(server);
             }
         }
@@ -132,15 +145,15 @@ pub fn find_in(home: &Path, config: &Path, existing: &[String]) -> Vec<Found> {
     found
 }
 
-/// A string-to-string object with its values translated for Pi (`pi_value`), or `None` when any value is not a
-/// string. Absent or empty is `Some(None)`.
-fn string_map(value: Option<&Value>) -> Option<Option<Map<String, Value>>> {
+/// A string-to-string object with its values translated for Pi (`Values::resolved`), or `None` when any value is not
+/// a string. Absent or empty is `Some(None)`.
+fn string_map(value: Option<&Value>, values: &mut Values) -> Option<Option<Map<String, Value>>> {
     match value {
         None | Some(Value::Null) => Some(None),
         Some(Value::Object(map)) => {
             let mut out = Map::new();
             for (key, value) in map {
-                out.insert(key.clone(), pi_value(value.as_str()?).into());
+                out.insert(key.clone(), values.resolved(value.as_str()?).into());
             }
             Some(if out.is_empty() { None } else { Some(out) })
         }
@@ -167,38 +180,117 @@ fn pi_name(name: &str) -> String {
     }
 }
 
-/// An `env` or `headers` value as Pi must read it to mean what the other app meant (see the module's doc).
-fn pi_value(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    let mut rest = value;
-    while let Some(at) = rest.find('$') {
-        out.push_str(&rest[..at]);
-        rest = &rest[at..];
-        if let Some(after) = rest.strip_prefix("${env:") {
-            if let Some(end) = after.find('}') {
-                out.push_str("${");
-                out.push_str(&after[..end]);
-                out.push('}');
-                rest = &after[end + 1..];
-                continue;
-            }
-        }
-        if rest.starts_with("${") {
-            out.push('$');
-        } else {
-            out.push_str("$$");
-        }
-        rest = &rest[1..];
-    }
-    out.push_str(rest);
-    if out.starts_with('!') {
-        out.insert(0, '$');
-    }
-    out
+/// Is `name` a variable name Pi expands in `${name}` (letters, digits and `_`, not starting with a digit)?
+fn is_variable(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn parse(source: &str, name: &str, entry: &Value) -> Option<Found> {
+/// VS Code's and Cursor's predefined variables (besides `userHome`): they name the editor's folders and files, not
+/// environment variables, and Aria has nothing to put in their place.
+const EDITOR_VARIABLES: &[&str] = &[
+    "workspaceFolder",
+    "workspaceFolderBasename",
+    "workspaceRoot",
+    "file",
+    "fileWorkspaceFolder",
+    "relativeFile",
+    "relativeFileDirname",
+    "fileBasename",
+    "fileBasenameNoExtension",
+    "fileExtname",
+    "fileDirname",
+    "fileDirnameBasename",
+    "cwd",
+    "lineNumber",
+    "selectedText",
+    "execPath",
+    "defaultBuildTask",
+    "pathSeparator",
+];
+
+/// Translates one server's strings for Pi (see the module's doc) and collects its warnings.
+struct Values<'a> {
+    home: &'a Path,
+    warnings: Vec<String>,
+}
+
+impl Values<'_> {
+    fn warn(&mut self, warning: String) {
+        if !self.warnings.contains(&warning) {
+            self.warnings.push(warning);
+        }
+    }
+
+    /// An `env` or `headers` value, which Pi resolves, as Pi must read it to mean what the other app meant.
+    fn resolved(&mut self, value: &str) -> String {
+        self.translate(value, true)
+    }
+
+    /// A `command`, an argument, a `cwd` or a `url`, which Pi takes as it is (but a leading `~`).
+    fn literal(&mut self, value: &str) -> String {
+        self.translate(value, false)
+    }
+
+    fn translate(&mut self, value: &str, resolved: bool) -> String {
+        let mut out = String::with_capacity(value.len() + 2);
+        let mut rest = value;
+        while let Some(at) = rest.find('$') {
+            out.push_str(&rest[..at]);
+            rest = &rest[at..];
+            if let Some(inner) = rest.strip_prefix("${").and_then(|after| after.find('}').map(|end| &after[..end])) {
+                let whole = &rest[..inner.len() + 3];
+                rest = &rest[whole.len()..];
+                out.push_str(&self.reference(whole, inner, resolved));
+                continue;
+            }
+            // A `$` Pi would read: `$$` in a value Pi resolves; elsewhere Pi reads nothing, so it stays.
+            out.push_str(if resolved && !rest.starts_with("${") { "$$" } else { "$" });
+            rest = &rest[1..];
+        }
+        out.push_str(rest);
+        if resolved && out.starts_with('!') {
+            out.insert(0, '$');
+        }
+        out
+    }
+
+    /// One `${inner}` (`whole`), as Pi must read it.
+    fn reference(&mut self, whole: &str, inner: &str, resolved: bool) -> String {
+        let variable = inner.strip_prefix("env:").unwrap_or(inner);
+        if inner == "userHome" {
+            let home = self.home.to_string_lossy();
+            return if resolved { home.replace('$', "$$") } else { home.into_owned() };
+        }
+        if inner.starts_with("input:") {
+            return whole.to_string(); // listed as a secret (`input_references`)
+        }
+        if EDITOR_VARIABLES.contains(&inner) {
+            // An editor's own variable: a name Pi would look up in the environment, so in a value Pi resolves it is
+            // written as text (`$${…}`).
+            self.warn(format!("unsupported:{inner}"));
+            return if resolved { format!("${whole}") } else { whole.to_string() };
+        }
+        if is_variable(variable) {
+            if resolved {
+                return format!("${{{variable}}}");
+            }
+            self.warn(format!("expands:{variable}"));
+            return whole.to_string();
+        }
+        match inner.split_once(":-") {
+            Some((name, _)) if is_variable(name) => self.warn(format!("default:{name}")),
+            _ => self.warn(format!("unsupported:{inner}")),
+        }
+        // Pi keeps a `${...}` that is not a variable name as text, every `$` in it included.
+        whole.to_string()
+    }
+}
+
+fn parse(home: &Path, source: &str, name: &str, entry: &Value) -> Option<Found> {
     let entry = entry.as_object()?;
+    let mut values = Values { home, warnings: Vec::new() };
     let kind = entry.get("type").map(|t| t.as_str()).unwrap_or(Some(""))?;
     let url = entry.get("url").or_else(|| entry.get("serverUrl"));
     let kind = match kind {
@@ -211,35 +303,45 @@ fn parse(source: &str, name: &str, entry: &Value) -> Option<Found> {
     };
     let mut config = Map::new();
     let (target, secret_map) = if kind == "stdio" {
-        let command = entry.get("command")?.as_str().filter(|c| !c.trim().is_empty())?;
-        config.insert("command".into(), command.into());
+        let command = values.literal(entry.get("command")?.as_str().filter(|c| !c.trim().is_empty())?);
+        config.insert("command".into(), command.as_str().into());
         match entry.get("args") {
             None | Some(Value::Null) => {}
             Some(Value::Array(args)) if args.iter().all(Value::is_string) => {
+                let args: Vec<Value> =
+                    args.iter().filter_map(Value::as_str).map(|a| values.literal(a).into()).collect();
+                // Pi reads a leading `~` as the home folder; the other apps passed it on as it is.
+                if args.iter().filter_map(Value::as_str).any(|a| a == "~" || a.starts_with("~/")) {
+                    values.warn("tilde-arg".into());
+                }
                 if !args.is_empty() {
-                    config.insert("args".into(), Value::Array(args.clone()));
+                    config.insert("args".into(), Value::Array(args));
                 }
             }
             Some(_) => return None,
         }
-        let env = string_map(entry.get("env"))?;
+        let env = string_map(entry.get("env"), &mut values)?;
         if let Some(env) = &env {
             config.insert("env".into(), Value::Object(env.clone()));
         }
         match entry.get("cwd") {
             None | Some(Value::Null) => {}
             Some(Value::String(cwd)) => {
-                config.insert("cwd".into(), cwd.as_str().into());
+                config.insert("cwd".into(), values.literal(cwd).into());
             }
             Some(_) => return None,
         }
-        let target = Path::new(command).file_name()?.to_string_lossy().into_owned();
+        // VS Code's file of variables: Pi has none, so its variables are not imported.
+        if entry.get("envFile").is_some_and(|file| !file.is_null()) {
+            values.warn("envFile".into());
+        }
+        let target = Path::new(&command).file_name()?.to_string_lossy().into_owned();
         (target, env)
     } else {
-        let url = url?.as_str()?;
-        let host = url::Url::parse(url).ok()?.host_str()?.to_string();
+        let url = values.literal(url?.as_str()?);
+        let host = url::Url::parse(&url).ok()?.host_str()?.to_string();
         config.insert("url".into(), url.into());
-        let headers = string_map(entry.get("headers"))?;
+        let headers = string_map(entry.get("headers"), &mut values)?;
         if let Some(headers) = &headers {
             config.insert("headers".into(), Value::Object(headers.clone()));
         }
@@ -265,6 +367,7 @@ fn parse(source: &str, name: &str, entry: &Value) -> Option<Found> {
         kind: kind.to_string(),
         target,
         secrets,
+        warnings: values.warnings,
         importable: kind != "sse",
         disabled,
         config,
@@ -466,7 +569,7 @@ mod tests {
         assert!(!text.contains("config"), "{text}");
         assert_eq!(
             serde_json::to_value(by_id(&found, "claude-code:weather")).unwrap(),
-            json!({"id": "claude-code:weather", "name": "weather", "source": "claude-code", "kind": "http", "target": "weather.example.com", "secrets": ["Authorization"], "importAs": "weather", "importable": true, "disabled": false})
+            json!({"id": "claude-code:weather", "name": "weather", "source": "claude-code", "kind": "http", "target": "weather.example.com", "secrets": ["Authorization"], "warnings": [], "importAs": "weather", "importable": true, "disabled": false})
         );
         let debug = format!("{found:?}");
         assert!(!debug.contains("secret-value") && !debug.contains("config"), "{debug}");
@@ -537,6 +640,103 @@ mod tests {
         let names = import(&paths, &found, &["claude-code:events".into(), "claude-code:weather".into()]).unwrap();
         assert_eq!(names, vec!["weather"]);
         assert_eq!(crate::mcp::servers(&paths), vec!["weather"]);
+    }
+
+    /// An `env` or `headers` value as it is written for Pi, for a person whose home is `/home/ana`.
+    fn pi_value(value: &str) -> String {
+        Values { home: Path::new("/home/ana"), warnings: Vec::new() }.resolved(value)
+    }
+
+    /// A value as it is written for Pi, and the warnings it raised: `resolved` for `env`/`headers`, else a command,
+    /// argument, `cwd` or `url`.
+    fn translated(value: &str, resolved: bool) -> (String, Vec<String>) {
+        let mut values = Values { home: Path::new("/home/ana"), warnings: Vec::new() };
+        let out = values.translate(value, resolved);
+        (out, values.warnings)
+    }
+
+    /// One Cursor server parsed, for a person whose home is `/home/ana` (`${userHome}`).
+    fn one(entry: Value) -> Found {
+        parse(Path::new("/home/ana"), "cursor", "x", &entry).expect("a server")
+    }
+
+    #[test]
+    fn a_dollar_inside_a_reference_pi_keeps_as_text_is_not_doubled() {
+        // Pi keeps `${A$B}` as text, its `$` included: doubling it would change the text.
+        assert_eq!(translated("${A$B}", true), ("${A$B}".into(), vec!["unsupported:A$B".into()]));
+        assert_eq!(translated("x ${A$B} $y", true).0, "x ${A$B} $$y");
+    }
+
+    #[test]
+    fn user_home_is_the_home_folder_and_what_pi_reads_differently_is_warned_about() {
+        // `${userHome}` is the person's home, everywhere.
+        assert_eq!(translated("${userHome}/notes", true), ("/home/ana/notes".into(), vec![]));
+        assert_eq!(translated("${userHome}/bin/tool", false), ("/home/ana/bin/tool".into(), vec![]));
+        // What Pi keeps as text but the other app filled in: kept, and warned about.
+        // An editor's variable is a name Pi would look up in the environment: written as text where Pi resolves.
+        assert_eq!(
+            translated("${workspaceFolder}/db", true),
+            ("$${workspaceFolder}/db".into(), vec!["unsupported:workspaceFolder".into()])
+        );
+        assert_eq!(
+            translated("${workspaceFolder}/db", false),
+            ("${workspaceFolder}/db".into(), vec!["unsupported:workspaceFolder".into()])
+        );
+        assert_eq!(translated("${TOKEN:-none}", true), ("${TOKEN:-none}".into(), vec!["default:TOKEN".into()]));
+        assert_eq!(translated("${a b}", false), ("${a b}".into(), vec!["unsupported:a b".into()]));
+        // The same warning once.
+        assert_eq!(translated("${X:-a}${X:-b}", true).1, vec!["default:X"]);
+        let server = one(json!({"command": "db", "env": {"ROOT": "${workspaceFolder}", "KEY": "${KEY:-dev}"}}));
+        // In the order read (`env` keys in order of name).
+        assert_eq!(server.warnings, vec!["default:KEY", "unsupported:workspaceFolder"]);
+        assert_eq!(server.config()["env"]["ROOT"], "$${workspaceFolder}");
+    }
+
+    #[test]
+    fn variables_in_a_command_its_arguments_folder_or_url_are_kept_and_warned_about() {
+        // Pi expands variables in `env` and `headers` only: elsewhere they stay as they are.
+        assert_eq!(translated("${env:TOOLS}/run", false), ("${env:TOOLS}/run".into(), vec!["expands:TOOLS".into()]));
+        assert_eq!(translated("--token=${TOKEN}", false), ("--token=${TOKEN}".into(), vec!["expands:TOKEN".into()]));
+        // A `$` Pi does not read there stays single.
+        assert_eq!(translated("costs $5", false), ("costs $5".into(), vec![]));
+        assert_eq!(translated("!x", false).0, "!x");
+        // `${input:…}` is a secret, not a warning.
+        assert_eq!(translated("${input:key}", false), ("${input:key}".into(), vec![]));
+        let server = one(json!({
+            "command": "${env:TOOLS}/run",
+            "args": ["--root", "${userHome}/notes", "--key=${KEY}"],
+            "cwd": "${HOME}/work",
+            "env": {"TOKEN": "${env:TOKEN}"}
+        }));
+        assert_eq!(server.warnings, vec!["expands:TOOLS", "expands:KEY", "expands:HOME"]);
+        assert_eq!(
+            server.config(),
+            &json!({
+                "command": "${env:TOOLS}/run",
+                "args": ["--root", "/home/ana/notes", "--key=${KEY}"],
+                "cwd": "${HOME}/work",
+                "env": {"TOKEN": "${TOKEN}"}
+            })
+        );
+        let http = one(
+            json!({"url": "https://api.example.com/${env:TEAM}/mcp", "headers": {"Authorization": "Bearer ${env:KEY}"}}),
+        );
+        assert_eq!(http.warnings, vec!["expands:TEAM"]);
+        assert_eq!(http.config()["url"], "https://api.example.com/${env:TEAM}/mcp");
+        assert_eq!(http.config()["headers"]["Authorization"], "Bearer ${KEY}");
+    }
+
+    #[test]
+    fn a_tilde_argument_and_an_env_file_are_warned_about() {
+        let tilde = one(json!({"command": "tool", "args": ["--config", "~/tool.json"]}));
+        assert_eq!(tilde.warnings, vec!["tilde-arg"]);
+        assert_eq!(tilde.config()["args"], json!(["--config", "~/tool.json"]), "kept as it is");
+        assert_eq!(one(json!({"command": "tool", "args": ["~"]})).warnings, vec!["tilde-arg"]);
+        assert!(one(json!({"command": "tool", "args": ["a~/b", "~user"]})).warnings.is_empty());
+        let env_file = one(json!({"type": "stdio", "command": "tool", "envFile": "${workspaceFolder}/.env"}));
+        assert_eq!(env_file.warnings, vec!["envFile"]);
+        assert!(env_file.config().get("envFile").is_none(), "dropped");
+        assert!(one(json!({"command": "tool"})).warnings.is_empty());
     }
 
     #[test]
