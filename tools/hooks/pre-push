@@ -1,0 +1,41 @@
+#!/bin/sh
+# Refuses a push of main that would publish what the rules of this public repository forbid. Turn it on once per clone:
+#   git config core.hooksPath tools/hooks
+# 1. Personal data: the outgoing diff may not contain this machine's home path, nor any line of the untracked pattern
+#    list in .git/info/personal-data (one extended regex per line; it lives outside the repository on purpose).
+# 2. The version: commits that call for a release (tools/release.sh --next prints a version) must be released first,
+#    and the tag pushed with main: `sh tools/release.sh`, then `git push origin main vX.Y.Z`.
+# `git push --no-verify` skips it.
+set -u
+root=$(git rev-parse --show-toplevel)
+patterns="$(git rev-parse --git-common-dir)/info/personal-data"
+zero=0000000000000000000000000000000000000000
+status=0
+
+while read -r _local_ref local_sha remote_ref remote_sha; do
+  [ "$remote_ref" = refs/heads/main ] || continue
+  [ "$local_sha" = "$zero" ] && continue
+  if [ "$remote_sha" = "$zero" ] || ! git cat-file -e "$remote_sha" 2>/dev/null; then range=$local_sha; else range=$remote_sha..$local_sha; fi
+
+  added=$(git log -p --format= "$range" | grep '^+' | grep -v '^+++')
+  hits=$(printf '%s\n' "$added" | grep -nF -- "$HOME/")
+  if [ -f "$patterns" ]; then
+    more=$(grep -v '^[[:space:]]*$' "$patterns" | grep -v '^#' | while IFS= read -r pattern; do
+      printf '%s\n' "$added" | grep -niE -- "$pattern"
+    done)
+    hits=$(printf '%s\n%s' "$hits" "$more" | grep -v '^$')
+  fi
+  if [ -n "$hits" ]; then
+    echo "pre-push: the push carries personal data; fix these lines first:" >&2
+    printf '%s\n' "$hits" | head -20 >&2
+    status=1
+  fi
+
+  # release.sh reads HEAD: a push of another commit than the checked-out one is left to its author.
+  next=$(cd "$root" && sh tools/release.sh --next)
+  if [ -n "$next" ] && [ "$local_sha" = "$(git rev-parse HEAD)" ]; then
+    echo "pre-push: these commits call for v$next; run \`sh tools/release.sh\`, then \`git push origin main v$next\`" >&2
+    status=1
+  fi
+done
+exit $status
