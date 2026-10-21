@@ -227,8 +227,10 @@ export function isAriaOwn(path: string, cwd: string, env: Record<string, string 
 
 export function isWritable(path: string, cwd: string, home = HOME, exists: (p: string) => boolean = existsSync): boolean {
   const { lexical, real } = resolvePath(path, cwd, home)
-  const roots = writableRoots(cwd, home, exists)
-  const locked = protectedPaths(cwd, home)
+  // Each root also by its real path: on macOS /tmp and /var are links into /private, and the real path of a file there
+  // is never under the root as written.
+  const roots = writableRoots(cwd, home, exists).flatMap((r) => [r, realish(r)])
+  const locked = protectedPaths(cwd, home).flatMap((l) => [l, realish(l)])
   return [lexical, real].every((p) => roots.some((r) => inside(p, r)) && !locked.some((l) => inside(p, l)))
 }
 
@@ -253,7 +255,7 @@ export function containsSecret(path: string, cwd: string, home = HOME, runtimeDi
  */
 export function subagentProblem(input: unknown, cwd: string, home = HOME, runtimeDir = RUNTIME): string | null {
   const project = projectRoot(cwd, home)
-  const allowed = [...(project ? [project] : []), '/tmp']
+  const allowed = [...(project ? [project] : []), '/tmp'].flatMap((a) => [a, realish(a)])
   const walk = (v: unknown): string | null => {
     if (Array.isArray(v)) {
       for (const x of v) {
