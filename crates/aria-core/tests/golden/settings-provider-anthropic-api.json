@@ -20,6 +20,7 @@
     "unaskedAsProposals": true
   },
   "integrations": {
+    "access": {},
     "packages": {
       "path": "",
       "source": "gallery",

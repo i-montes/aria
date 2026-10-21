@@ -15,6 +15,7 @@ const TODAY = {
   style: 'very-short',
   sandbox: { extraWritable: [], askToLeave: true, jevReview: true },
   subagents: { saveSessions: false, turnLimit: null, planExecute: true },
+  connectors: {},
 }
 
 let dir = ''
@@ -43,6 +44,17 @@ describe("the extensions' settings (aria.json)", () => {
     expect(config.subagents.turnLimit).toBe(12)
     expect(config.sandbox.extraWritable).toEqual(['/srv'])
     expect(config.compaction.percent).toBe(40)
+  })
+
+  test('connectors default to empty', () => {
+    expect(ariaConfig().connectors).toEqual({})
+    write({ connectors: 'all' })
+    expect(ariaConfig().connectors).toEqual({})
+  })
+
+  test('an unknown level reads as ask', () => {
+    write({ connectors: { notion: 'read', tavily: 'allow', rea: 'ask', figma: 'sometimes', other: 3 } })
+    expect(ariaConfig().connectors).toEqual({ notion: 'read', tavily: 'allow', rea: 'ask', figma: 'ask', other: 'ask' })
   })
 
   test('a file that does not parse is ignored', () => {

@@ -32,6 +32,8 @@ pub fn extension_config_with_home(settings: &Settings, home: &Path) -> Value {
             "turnLimit": settings.subagents.turn_limit,
             "planExecute": settings.subagents.plan_execute,
         },
+        // The access level per connector; one not listed (or with an unknown level) is "ask" in the extension.
+        "connectors": settings.integrations.access,
     });
     if let Some(plan) = settings.models.planning.as_deref().and_then(model) {
         config["models"]["plan"] = plan;
@@ -77,7 +79,8 @@ mod tests {
             "compaction": { "percent": 40 },
             "style": "very-short",
             "sandbox": { "extraWritable": [], "askToLeave": true, "jevReview": true },
-            "subagents": { "saveSessions": false, "turnLimit": null, "planExecute": true }
+            "subagents": { "saveSessions": false, "turnLimit": null, "planExecute": true },
+            "connectors": {}
         })
     }
 
@@ -107,6 +110,17 @@ mod tests {
         assert_eq!(
             extension_config_with_home(&settings, Path::new("/home/u"))["sandbox"]["extraWritable"],
             json!(["/home/u/notes", "/srv/data"])
+        );
+    }
+
+    #[test]
+    fn aria_json_carries_the_connectors() {
+        let mut settings = golden();
+        settings.integrations.access =
+            [("notion".to_string(), "read".to_string()), ("rea".to_string(), "allow".to_string())].into();
+        assert_eq!(
+            extension_config_with_home(&settings, Path::new("/home/u"))["connectors"],
+            json!({"notion": "read", "rea": "allow"})
         );
     }
 

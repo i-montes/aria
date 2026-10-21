@@ -21,7 +21,12 @@ export interface AriaConfig {
   style: string
   sandbox: { extraWritable: string[]; askToLeave: boolean; jevReview: boolean }
   subagents: { saveSessions: boolean; turnLimit: number | null; planExecute: boolean }
+  /** The access level per connector (MCP server name); a connector not listed is 'ask'. */
+  connectors: Record<string, AccessLevel>
 }
+
+export type AccessLevel = 'read' | 'ask' | 'allow'
+const LEVELS: readonly string[] = ['read', 'ask', 'allow']
 
 /** Today's values: the ones the extensions had in their code. */
 export const DEFAULTS: AriaConfig = {
@@ -34,6 +39,7 @@ export const DEFAULTS: AriaConfig = {
   style: 'very-short',
   sandbox: { extraWritable: [], askToLeave: true, jevReview: true },
   subagents: { saveSessions: false, turnLimit: null, planExecute: true },
+  connectors: {},
 }
 
 /** Fields that may also be null. */
@@ -42,6 +48,11 @@ const NULLABLE: Record<string, 'string' | 'number'> = { 'effort.fixedLevel': 'st
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 
 function merge(fallback: unknown, value: unknown, path: string): unknown {
+  // A map of any keys: every entry is kept, a value that is not a known level reads as 'ask'.
+  if (path === 'connectors') {
+    const source = isObject(value) ? value : {}
+    return Object.fromEntries(Object.entries(source).map(([key, level]) => [key, typeof level === 'string' && LEVELS.includes(level) ? level : 'ask']))
+  }
   if (path in NULLABLE) return value === null || typeof value === NULLABLE[path] ? value : fallback
   if (Array.isArray(fallback)) return Array.isArray(value) ? value.filter((item) => typeof item === 'string') : fallback
   if (isObject(fallback)) {

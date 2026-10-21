@@ -17,7 +17,7 @@ The model lives in `crates/aria-core/src/settings.rs`; the defaults are the owne
   "effort": { "mode": "auto", "fixedLevel": null, "maxOnFree": true },
   "compaction": { "percent": 40 },
   "memory": { "enabled": true, "project": "aria" },
-  "integrations": { "services": [], "packages": { "source": "gallery", "path": "", "thirdPartyTrusted": false } },
+  "integrations": { "services": [], "packages": { "source": "gallery", "path": "", "thirdPartyTrusted": false }, "access": {} },
   "sandbox": { "projectsDir": "~/Projects", "extraWritable": [], "askToLeave": true, "jevReview": true },
   "git": { "commitWithoutAsking": false, "pushOrMergeWithoutAsking": false, "askBeforeOthersChanges": true, "unaskedAsProposals": true },
   "subagents": {
@@ -50,6 +50,7 @@ The model lives in `crates/aria-core/src/settings.rs`; the defaults are the owne
 | `memory.*` | Engram on/off and its project name; before each Pi start, a project with no memory gets a first one, so Engram knows it | phase 2 |
 | `integrations.services` | MCP services you turned on: `{ id, name, auth }`; for now `notion` (`oauth`) and `tavily` (`key`). They are connected during setup; their credentials live in `~/.aria/mcp.json` and `mcp-auth.json`, never here | phase 1 (connected), phase 2 (used) |
 | `integrations.packages` | A local folder of extra Pi packages (`source: "local"`, `path`); the other sources and `thirdPartyTrusted` are not built | phase 2 |
+| `integrations.access` | Access level per connector, keyed by its MCP server name: `read` (read only: writes are refused), `ask` (each write asks first) or `allow` (no questions). A connector not listed, or with an unknown level, is `ask`; `engram` is never gated. Written into `~/.aria/agent/aria.json` as `connectors` | phase 2 |
 | `sandbox.*` | Projects folder, extra writable folders, ask before leaving the sandbox, let Jev review commands | phase 2 |
 | `git.*` | Commit/push/merge without asking, ask before touching other people's changes, deliver unrequested work as proposals | phase 2 |
 | `subagents.*` | Which experts are on and which are read-only, saving sessions, turn limit, `/plan` and `/execute`, automatic skills | phase 2 |

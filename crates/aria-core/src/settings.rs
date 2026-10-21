@@ -5,6 +5,7 @@ use crate::json_file::{merge_preserving, read_json, write_json_atomic, JsonFileE
 use crate::paths::AriaPaths;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 pub const SETTINGS_VERSION: u32 = 1;
 
@@ -120,6 +121,8 @@ pub struct Memory {
 pub struct Integrations {
     pub services: Vec<Service>,
     pub packages: Packages,
+    /// Access level per connector (MCP server name): "read" | "ask" | "allow". A connector not listed is "ask".
+    pub access: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -321,7 +324,7 @@ mod tests {
             "effort": { "mode": "auto", "fixedLevel": null, "maxOnFree": true },
             "compaction": { "percent": 40 },
             "memory": { "enabled": true, "project": "aria" },
-            "integrations": { "services": [], "packages": { "source": "gallery", "path": "", "thirdPartyTrusted": false } },
+            "integrations": { "services": [], "packages": { "source": "gallery", "path": "", "thirdPartyTrusted": false }, "access": {} },
             "sandbox": { "projectsDir": "~/Projects", "extraWritable": [], "askToLeave": true, "jevReview": true },
             "git": { "commitWithoutAsking": false, "pushOrMergeWithoutAsking": false, "askBeforeOthersChanges": true, "unaskedAsProposals": true },
             "subagents": {
@@ -354,6 +357,23 @@ mod tests {
         let golden: serde_json::Value =
             serde_json::from_str(include_str!("../tests/golden/settings-defaults-en.json")).unwrap();
         assert_eq!(serde_json::to_value(Settings::defaults("en")).unwrap(), golden);
+    }
+
+    #[test]
+    fn access_defaults_to_empty() {
+        assert!(Settings::defaults("en").integrations.access.is_empty());
+        let settings: Settings = serde_json::from_str(r#"{"integrations":{"services":[]}}"#).unwrap();
+        assert!(settings.integrations.access.is_empty());
+    }
+
+    #[test]
+    fn access_round_trips() {
+        let text = r#"{"integrations":{"access":{"notion":"read","tavily":"allow"}}}"#;
+        let settings: Settings = serde_json::from_str(text).unwrap();
+        assert_eq!(settings.integrations.access.get("notion").map(String::as_str), Some("read"));
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(value["integrations"]["access"], json!({"notion": "read", "tavily": "allow"}));
+        assert_eq!(serde_json::from_value::<Settings>(value).unwrap(), settings);
     }
 
     #[test]

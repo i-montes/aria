@@ -81,7 +81,7 @@ export function defaultSettings(language = 'en') {
     effort: { mode: 'auto', fixedLevel: null, maxOnFree: true },
     compaction: { percent: 40 },
     memory: { enabled: true, project: 'aria' },
-    integrations: { services: [], packages: { source: 'gallery', path: '', thirdPartyTrusted: false } },
+    integrations: { services: [], packages: { source: 'gallery', path: '', thirdPartyTrusted: false }, access: {} },
     sandbox: { projectsDir: '~/Projects', extraWritable: [], askToLeave: true, jevReview: true },
     git: { commitWithoutAsking: false, pushOrMergeWithoutAsking: false, askBeforeOthersChanges: true, unaskedAsProposals: true },
     subagents: {

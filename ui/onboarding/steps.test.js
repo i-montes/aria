@@ -14,6 +14,7 @@ describe('the JS defaults follow the Rust ones (golden files written by aria-cor
   for (const id of PROVIDER_IDS) {
     test(`after choosing ${id}`, () => expect(applyProvider(defaultSettings('en'), id)).toEqual(golden(`settings-provider-${id}`)))
   }
+  test('every connector starts at the default level (no access entries)', () => expect(defaultSettings('en').integrations.access).toEqual({}))
   test('the language is the only thing defaultSettings(language) changes', () => {
     expect(defaultSettings('es').assistant.language).toBe('es')
     expect({ ...defaultSettings('es'), assistant: null }).toEqual({ ...defaultSettings('en'), assistant: null })
