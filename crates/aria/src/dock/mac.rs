@@ -183,9 +183,7 @@ impl Dock {
 
     fn page_ready(self: &Rc<Self>) {
         self.ready.set(true);
-        if std::env::var_os("ARIA_DEBUG").is_some() {
-            eprintln!("aria: page ready");
-        }
+        crate::note("page ready");
         for json in self.queued.take() {
             self.deliver(&json);
         }
@@ -240,9 +238,7 @@ impl Dock {
         let (next, command) = visibility::step(previous, event);
         self.state.set(next);
         self.visible.store(next != State::Hidden, Ordering::SeqCst);
-        if std::env::var_os("ARIA_DEBUG").is_some() {
-            eprintln!("aria: {previous:?} + {event:?} -> {next:?} ({command:?})");
-        }
+        crate::note(&format!("{previous:?} + {event:?} -> {next:?} ({command:?})"));
         match command {
             Command::Show => {
                 self.generation.set(self.generation.get() + 1);
@@ -261,19 +257,21 @@ impl Dock {
                 app.activateIgnoringOtherApps(true);
                 self.panel.makeKeyAndOrderFront(None);
                 let _ = self.panel.makeFirstResponder(Some(&self.webview));
-                if std::env::var_os("ARIA_DEBUG").is_some() {
-                    eprintln!("aria: active={} key={}", app.isActive(), self.panel.isKeyWindow());
-                    let weak: Weak<Dock> = Rc::downgrade(self);
-                    after(Duration::from_millis(150), move || {
-                        if let Some(dock) = weak.upgrade() {
-                            eprintln!(
-                                "aria: after 150 ms active={} key={}",
-                                NSApplication::sharedApplication(dock.mtm).isActive(),
-                                dock.panel.isKeyWindow()
-                            );
-                        }
-                    });
-                }
+                // Whether the panel really is on screen with the keyboard a moment later (another app or a full-screen
+                // space can keep it from either).
+                let weak: Weak<Dock> = Rc::downgrade(self);
+                after(Duration::from_millis(150), move || {
+                    if let Some(dock) = weak.upgrade() {
+                        crate::note(&format!(
+                            "shown on {}: visible={} key={} active={} page ready={}",
+                            dock.panel.screen().map(|s| s.localizedName().to_string()).unwrap_or_default(),
+                            dock.panel.isVisible(),
+                            dock.panel.isKeyWindow(),
+                            NSApplication::sharedApplication(dock.mtm).isActive(),
+                            dock.ready.get()
+                        ));
+                    }
+                });
                 self.send(&DockMessage::Open { monitor });
                 // Always tell the page: an empty code clears a banner from an earlier open.
                 let code = self.problem.borrow().clone().unwrap_or_default();

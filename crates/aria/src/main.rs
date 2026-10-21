@@ -165,7 +165,7 @@ fn run_dock() {
     {
         let hotkey_sender = sender.clone();
         if let Err(error) = aria_mac::install_hotkey(move || {
-            let _ = hotkey_sender.send("toggle".to_string());
+            let _ = hotkey_sender.send("hotkey".to_string());
         }) {
             eprintln!("aria: could not register Option + Space: {error}");
             dock.set_problem("hotkey-unavailable");
@@ -196,7 +196,14 @@ fn run_dock() {
         was_visible = visible;
         while let Ok(command) = receiver.try_recv() {
             match command.as_str() {
-                "toggle" => dock.feed(Event::Toggle),
+                "hotkey" => {
+                    note("the shortcut was pressed");
+                    dock.feed(Event::Toggle)
+                }
+                "toggle" => {
+                    note("toggle from the socket");
+                    dock.feed(Event::Toggle)
+                }
                 "show" => dock.show(),
                 "update-ready" => {
                     eprintln!("aria: a new version is installed; restarting once the dock is hidden and idle");
@@ -229,6 +236,15 @@ fn run_dock() {
 
     eprintln!("aria: ready, press {HOTKEY_HINT}");
     ui::run();
+}
+
+/// A line in the dock's log with the time (UTC), for what happens between a keypress and the dock on screen: when the
+/// dock does not open, the log says whether the shortcut arrived, what state the dock was in and whether the page
+/// answered.
+pub(crate) fn note(message: &str) {
+    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let (h, m, s) = (seconds / 3600 % 24, seconds / 60 % 60, seconds % 60);
+    eprintln!("[{h:02}:{m:02}:{s:02} UTC] aria: {message}");
 }
 
 #[cfg(target_os = "linux")]
