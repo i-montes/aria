@@ -6,7 +6,7 @@
 //   hasText      the field holds text (trimmed, not empty): the stop button turns outlined and queue shows
 //   rows         visible rows of the textarea, clamped to 1..6 (the design grows it with its content)
 //   showHints    false hides the hints line (default true)
-//   placeholder  idle placeholder (default `chat.composer.placeholder`); busy always says "Queue a message…"
+//   placeholder  idle placeholder (default `chat.composer.placeholder`); busy always says "A message for the next step…"
 // ui: unused. t: translate(key, vars).
 // The controller owns the text: the textarea is `#chat-input` and carries no value here.
 //
@@ -20,27 +20,27 @@ export const TEXTS = {
   en: {
     'chat.composer.label': 'Message for Aria',
     'chat.composer.placeholder': 'Message Aria…',
-    'chat.composer.queuePlaceholder': 'Queue a message…',
+    'chat.composer.queuePlaceholder': 'A message for the next step…',
     'chat.composer.send': 'Send',
     'chat.composer.stop': 'Stop',
-    'chat.composer.queue': 'Queue message',
-    'chat.composer.queueTitle': 'Queue it for when Aria finishes',
+    'chat.composer.queue': 'Send at the next step',
+    'chat.composer.queueTitle': 'Aria reads it once the step going on ends (Alt+Enter keeps it for when Aria finishes)',
     'chat.composer.hint.commands': 'for commands',
     'chat.composer.hint.agents': 'subagents',
-    'chat.composer.hint.queue': 'queues your message',
+    'chat.composer.hint.queue': 'when Aria finishes',
     'chat.composer.hint.steer': 'at the next step',
   },
   es: {
     'chat.composer.label': 'Mensaje para Aria',
     'chat.composer.placeholder': 'Escríbele a Aria…',
-    'chat.composer.queuePlaceholder': 'Deja un mensaje en cola…',
+    'chat.composer.queuePlaceholder': 'Un mensaje para el próximo paso…',
     'chat.composer.send': 'Enviar',
     'chat.composer.stop': 'Detener',
-    'chat.composer.queue': 'Poner el mensaje en cola',
-    'chat.composer.queueTitle': 'Déjalo en cola para cuando Aria termine',
+    'chat.composer.queue': 'Enviar en el próximo paso',
+    'chat.composer.queueTitle': 'Aria lo lee cuando termine el paso en curso (Alt+Enter lo deja para cuando Aria termine)',
     'chat.composer.hint.commands': 'para comandos',
     'chat.composer.hint.agents': 'subagentes',
-    'chat.composer.hint.queue': 'encola tu mensaje',
+    'chat.composer.hint.queue': 'cuando Aria termine',
     'chat.composer.hint.steer': 'en el próximo paso',
   },
 }
@@ -67,8 +67,8 @@ export function renderComposer({ busy = false, hasText = false, rows = 1, showHi
   const send = busy
     ? ''
     : `<button type="button" id="chat-send" class="p-composer-btn p-composer-send" data-chat="send" aria-label="${esc(t('chat.composer.send'))}">${ICON.send}</button>`
-  // Under the input: the model (opens the picker), then the shortcuts (alt+a only when the session has subagents); while Aria works, that Enter queues
-  // the message and Alt+Enter puts it in at the run's next step.
+  // Under the input: the model (opens the picker), then the shortcuts (alt+a only when the session has subagents); while Aria works, that Enter puts the
+  // message in at the run's next step and Alt+Enter keeps it for when the run ends.
   const chip = model
     ? `<button type="button" class="p-composer-model" data-chat="open-models"${modelTitle ? ` title="${esc(modelTitle)}"` : ''}>${esc(model)}</button>`
     : ''
@@ -78,8 +78,8 @@ export function renderComposer({ busy = false, hasText = false, rows = 1, showHi
 ${
         busy
           ? `
-      <span>${key('enter')} ${esc(t('chat.composer.hint.queue'))}</span>
-      <span>${key('alt+enter')} ${esc(t('chat.composer.hint.steer'))}</span>`
+      <span>${key('enter')} ${esc(t('chat.composer.hint.steer'))}</span>
+      <span>${key('alt+enter')} ${esc(t('chat.composer.hint.queue'))}</span>`
           : `
       <span><kbd class="p-composer-kbd">/</kbd> ${esc(t('chat.composer.hint.commands'))}</span>${agents ? `
       <span>${key('alt+a')} ${esc(t('chat.composer.hint.agents'))}</span>` : ''}`

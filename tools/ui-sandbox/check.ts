@@ -107,26 +107,26 @@ const script = `(async () => {
   check('no "shift+enter" reminder is shown', !document.body.textContent.includes('shift+enter'))
   await reset()
 
-  // 2. queue: Enter during a run queues, and delivery (Pi's order) moves it into the thread
+  // 2. queue: Alt+Enter during a run queues it for the end, and delivery (Pi's order) moves it into the thread
   ev({ type: 'agent_start' }); await settle()
-  typeIn('do this later'); key($('#chat-input'), 'Enter'); await wait(60)
-  check('Enter during a run queues with followUp', sent().some((m) => m.type === 'chatSend' && m.behavior === 'followUp'))
+  typeIn('do this later'); key($('#chat-input'), 'Enter', { altKey: true }); await wait(60)
+  check('Alt+Enter during a run queues with followUp', sent().some((m) => m.type === 'chatSend' && m.behavior === 'followUp'))
   check('the queued bubble shows', $('.p-user.queued, .p-user-queued, [data-chat="cancel-queued"]'))
   ev({ type: 'queue_update', steering: [], followUp: [] }); ev({ type: 'message_start', message: { role: 'user', content: 'do this later' } }); await wait(80)
   check('a delivered message lands in the thread and leaves the queue', !$('[data-chat="cancel-queued"]') && $('#chat-list').textContent.includes('do this later'))
   await reset()
 
-  // 2b. Alt+Enter during a run puts the message in at the run's next step, and cancelling another keeps it there
+  // 2b. Enter during a run puts the message in at the run's next step, and cancelling another keeps it there
   const wasChatMode = document.body.classList.contains('mode-chat')
   document.body.classList.add('mode-chat') // the hints line needs its real width
   ev({ type: 'agent_start' }); await settle(); window.__sent.length = 0
   const hints = $('.p-composer-hints')
-  check('while Aria works the hints say what Enter and Alt+Enter do, and fit in their line', hints?.textContent.includes('alt+enter') && hints.scrollWidth <= hints.clientWidth + 1, hints?.textContent.replace(/\s+/g, ' ') + ' ' + hints?.scrollWidth + '/' + hints?.clientWidth)
+  check('while Aria works the hints say what Enter and Alt+Enter do, and fit in their line', hints?.textContent.includes('alt+enter') && hints.scrollWidth <= hints.clientWidth + 1 && hints.textContent.indexOf('next step') < hints.textContent.indexOf('alt+enter'), hints?.textContent.replace(/\s+/g, ' ') + ' ' + hints?.scrollWidth + '/' + hints?.clientWidth)
   document.body.classList.toggle('mode-chat', wasChatMode)
-  typeIn('look at the logs first'); key($('#chat-input'), 'Enter', { altKey: true }); await wait(60)
-  check('Alt+Enter during a run sends it as steering', sent().some((m) => m.type === 'chatSend' && m.behavior === 'steer' && m.text === 'look at the logs first'), JSON.stringify(sent().slice(-1)))
+  typeIn('look at the logs first'); key($('#chat-input'), 'Enter'); await wait(60)
+  check('Enter during a run sends it as steering', sent().some((m) => m.type === 'chatSend' && m.behavior === 'steer' && m.text === 'look at the logs first'), JSON.stringify(sent().slice(-1)))
   check('its bubble says it goes in at the next step', $('.p-user.is-steer')?.textContent.includes('step'), $('.p-user.is-queued')?.textContent)
-  typeIn('and then the tests'); key($('#chat-input'), 'Enter'); await wait(60)
+  typeIn('and then the tests'); key($('#chat-input'), 'Enter', { altKey: true }); await wait(60)
   window.__sent.length = 0
   const cancelSecond = $('[data-chat="cancel-queued"][data-id="1"]'); check('both queued messages show', cancelSecond, document.querySelectorAll('[data-chat="cancel-queued"]').length); cancelSecond?.click(); await wait(60)
   check('cancelling the other keeps the steering one as steering', sent().some((m) => m.type === 'chatClearQueue' && m.steer?.[0] === 'look at the logs first' && m.keep?.length === 0), JSON.stringify(sent().slice(-1)))
@@ -139,7 +139,7 @@ const script = `(async () => {
   check('each queued bubble has its own cancel', cancelButton, $('#chat-list').innerHTML.slice(-600))
   cancelButton?.click(); await wait(60)
   const cancel = sent().find((m) => m.type === 'chatClearQueue')
-  check('cancelling the first keeps the second', cancel && JSON.stringify(cancel.keep) === '["second"]', JSON.stringify(cancel))
+  check('cancelling the first keeps the second', cancel && JSON.stringify(cancel.steer) === '["second"]' && cancel.keep.length === 0, JSON.stringify(cancel))
   await reset()
 
   // 4. the question card: the free-text field keeps focus, enables Continue, Enter submits, the answers card has its header

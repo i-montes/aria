@@ -569,8 +569,10 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     composerKey = ''
   }
 
-  /** `steer`: while Aria works, the message goes in at the run's next step (after the tool calls going on), not at its end. */
-  function submit(steer = false) {
+  /** While Aria works a message goes in at the run's next step (after the tool calls going on); `atEnd` keeps it for when
+   * the run is over. */
+  function submit(atEnd = false) {
+    const steer = !atEnd
     const text = input.value.trim()
     if (!text) return
     if (/^\/memory(\s|$)/.test(text)) {
