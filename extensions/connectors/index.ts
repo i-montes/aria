@@ -18,8 +18,10 @@ interface ToolFacts {
   annotations?: Annotations
   /** The server's own name (Pi's namespace alias), which may hold a `-` the tool name turned into `_`. */
   server?: string
-  title?: string
 }
+
+/** How long a look at Pi's tool list holds: a server that reconnects may bring changed annotations. */
+const FACTS_TTL_MS = 60_000
 
 /** The name a server has in a tool name: anything outside `[A-Za-z0-9_]` becomes `_`. */
 const asInToolName = (server: string) => server.replace(/[^A-Za-z0-9_]/g, '_')
@@ -44,16 +46,20 @@ function levelOf(server: string): AccessLevel {
 
 export default function connectors(pi: ExtensionAPI) {
   let grants = new Set<string>()
-  const facts = new Map<string, ToolFacts>()
+  let facts = new Map<string, ToolFacts>()
+  let readAt = 0
 
-  /** What Pi knows of a tool, looked up once per name; a name not seen yet looks again (a server connected later).
-   * Null when Pi does not list it. */
+  /** What Pi knows of a tool. Pi's list is read again when the name is not in the last look (a server connected later)
+   * or that look is older than a minute (a server that reconnected re-registers its tools). Null when Pi does not list it. */
   const factsOf = (name: string): ToolFacts | null => {
-    if (!facts.has(name)) {
+    if (!facts.has(name) || Date.now() - readAt > FACTS_TTL_MS) {
       try {
+        const fresh = new Map<string, ToolFacts>()
         for (const tool of (pi as any).getAllTools?.() ?? []) {
-          facts.set(tool.name, { annotations: tool.annotations, server: tool.namespace?.aliases?.[0], title: tool.title ?? tool.annotations?.title })
+          fresh.set(tool.name, { annotations: tool.annotations, server: tool.namespace?.aliases?.[0] })
         }
+        facts = fresh
+        readAt = Date.now()
       } catch {
         // no tool list: the name decides
       }
@@ -77,7 +83,7 @@ export default function connectors(pi: ExtensionAPI) {
     if (level === 'allow') return
     const connector = known?.server || inName ? displayName(server) : server
     // A cut name has no readable tool part left: the action names the tool.
-    const action = inName || known?.title ? actionOf(name, known?.title) : `use ${name}`
+    const action = inName ? actionOf(name) : `use ${name}`
     if (level === 'read') return { block: true, reason: `${connector} is read only (the person set it so in Aria's settings): ${action} did not run.` }
     const grant = `${server}\0${name}`
     if (grants.has(grant)) return
@@ -87,15 +93,21 @@ export default function connectors(pi: ExtensionAPI) {
     const detail = preview(event.input)
     // In Aria's dock the question is the chat's permission card; in the terminal, the same words as text.
     const title = ctx.mode === 'rpc' ? connectorCard(connector, action, detail, options) : `${connector} wants to ${action}\n${detail}`
-    const pick = await ctx.ui.select(title, options, { signal: ctx.signal })
+    let pick: string | undefined
+    try {
+      pick = await ctx.ui.select(title, options, { signal: ctx.signal })
+    } catch {
+      pick = undefined // the question was closed (the run stopped, the dialog timed out)
+    }
     if (pick === forSession) grants.add(grant)
     if (pick === ONCE || pick === forSession) return
-    return { block: true, reason: `The person said no: ${connector} ${action} did not run.` }
+    if (pick === NO) return { block: true, reason: `The person said no: ${connector} ${action} did not run.` }
+    return { block: true, reason: `The question was closed without an answer: ${connector} ${action} did not run.` }
   })
 
   // A new session (startup, /new, /resume, fork) starts with no grants; a reconnected server may have new tools.
   pi.on('session_start', () => {
     grants = new Set()
-    facts.clear()
+    facts = new Map()
   })
 }

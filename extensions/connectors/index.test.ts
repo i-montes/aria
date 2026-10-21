@@ -1,6 +1,6 @@
 // Run: bun test extensions
 // The connectors extension with a fake `pi`: which MCP calls run, ask or are refused.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -115,8 +115,18 @@ describe('the connectors extension', () => {
       block: true,
       reason: 'The person said no: Notion create pages did not run.',
     })
-    // No answer (the run was stopped) is a no.
-    expect((await pi.fire('tool_call', call('mcp__notion__notion_create_pages'), dock(undefined).ctx))?.block).toBe(true)
+  })
+
+  test('a_question_closed_without_an_answer_says_so', async () => {
+    const pi = await started()
+    const closed = { block: true, reason: 'The question was closed without an answer: Notion create pages did not run.' }
+    // No answer (the run was stopped, the dialog timed out) is not the person's no.
+    expect(await pi.fire('tool_call', call('mcp__notion__notion_create_pages'), dock(undefined).ctx)).toEqual(closed)
+    const aborted = dock()
+    aborted.ctx.ui.select = async () => {
+      throw new Error('aborted')
+    }
+    expect(await pi.fire('tool_call', call('mcp__notion__notion_create_pages'), aborted.ctx)).toEqual(closed)
   })
 
   test('session_grant_skips_the_next_question', async () => {
@@ -205,6 +215,22 @@ describe('the connectors extension', () => {
     pi.tools = [...TOOLS, { name: 'mcp__notion__notion_delete_page', annotations: { readOnlyHint: true }, namespace: { name: 'mcp__notion', aliases: ['notion'] } }]
     expect(await pi.fire('tool_call', call('mcp__notion__notion_delete_page'), d.ctx)).toBeUndefined()
     expect(d.asked).toHaveLength(0)
+  })
+
+  test('changed_annotations_apply_after_a_minute', async () => {
+    const pi = await started()
+    try {
+      setSystemTime(new Date('2026-10-21T10:00:00Z'))
+      expect(await pi.fire('tool_call', call('mcp__notion__notion_search'), child)).toBeUndefined()
+      // The server reconnects and its search now says it writes.
+      pi.tools = TOOLS.map((t) => (t.name === 'mcp__notion__notion_search' ? { ...t, annotations: { readOnlyHint: false } } : t))
+      setSystemTime(new Date('2026-10-21T10:00:30Z'))
+      expect(await pi.fire('tool_call', call('mcp__notion__notion_search'), child)).toBeUndefined()
+      setSystemTime(new Date('2026-10-21T10:01:01Z'))
+      expect((await pi.fire('tool_call', call('mcp__notion__notion_search'), child))?.block).toBe(true)
+    } finally {
+      setSystemTime()
+    }
   })
 
   test('a_cut_name_is_still_gated', async () => {

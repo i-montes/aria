@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { bwrapArgs, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, shellQuote, subagentProblem, wrapCommand, writableRoots, isAgentCode } from './policy.ts'
+import { bwrapArgs, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, shellQuote, subagentProblem, wrapCommand, writableRoots, isAgentCode, isAriaOwn } from './policy.ts'
 
 const home = '/home/u'
 const all = () => true
@@ -297,5 +297,39 @@ describe('an Aria home outside ~/.aria', () => {
       expect(isSecret(`/srv/aria-copy/agent/${file}`, '/srv/app', home)).toBe(true)
     }
     expect(isSecret('/srv/aria-copy/settings.json', '/srv/app', home)).toBe(false)
+  })
+})
+
+// Final review (2026-10-21): the files that make aria.json, aria.json itself, and the attachments only the dock writes.
+describe("Aria's settings, aria.json and attachments", () => {
+  const env = { PI_CODING_AGENT_DIR: '/srv/aria-home/agent', ARIA_PROJECTS_DIR: '/srv/work', ARIA_SETTINGS: '/srv/aria-home/settings.json' }
+  test('none of them can be changed under Aria', () => {
+    for (const p of ['/srv/aria-home/agent/aria.json', '/srv/aria-home/settings.json', '/srv/aria-home/attachments/s1/2026-10-21/1-a.png', '/srv/aria-home/attachments']) {
+      expect(isAriaOwn(p, '/srv/work', env, home)).toBe(true)
+    }
+  })
+  test('the rest of the Aria home and the projects are not locked this way', () => {
+    expect(isAriaOwn('/srv/aria-home/agent/sessions/x.jsonl', '/srv/work', env, home)).toBe(false)
+    expect(isAriaOwn('/srv/work/settings.json', '/srv/work', env, home)).toBe(false)
+    expect(isAriaOwn('/srv/work/attachments/a.png', '/srv/work', env, home)).toBe(false)
+  })
+  test('a relative or ~ path is resolved first', () => {
+    expect(isAriaOwn('../aria-home/agent/aria.json', '/srv/work', env, home)).toBe(true)
+  })
+  test('the owner\'s own Pi (no ARIA_PROJECTS_DIR) locks nothing', () => {
+    expect(isAriaOwn('/srv/aria-home/settings.json', '/srv/work', { ...env, ARIA_PROJECTS_DIR: undefined }, home)).toBe(false)
+  })
+  test('a link to the attachments folder is the attachments folder', () => {
+    const root = realpathSync(mkdtempSync('/tmp/sbx-own-'))
+    mkdirSync(join(root, 'aria', 'agent'), { recursive: true })
+    mkdirSync(join(root, 'aria', 'attachments'))
+    mkdirSync(join(root, 'work'))
+    symlinkSync(join(root, 'aria', 'attachments'), join(root, 'work', 'files'))
+    const linked = { PI_CODING_AGENT_DIR: join(root, 'aria', 'agent'), ARIA_PROJECTS_DIR: join(root, 'work'), ARIA_SETTINGS: join(root, 'aria', 'settings.json') }
+    try {
+      expect(isAriaOwn('files/x.png', join(root, 'work'), linked, home)).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

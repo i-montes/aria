@@ -23,7 +23,7 @@ import { backgroundLine, bashRoute, refusalText, SAID_NO } from './route.ts'
 import { startProcess } from '../background/client.ts'
 import { object, prepareRun, RUN_DESCRIPTION, RUN_PROPERTIES } from '../background/run.ts'
 import { ariaConfig } from '../lib/config.ts'
-import { BLOCK_NOTE, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, resolvePath, secretDirs, secretFiles, subagentProblem, wrapCommand, writableRoots, isAgentCode } from './policy.ts'
+import { BLOCK_NOTE, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, resolvePath, secretDirs, secretFiles, subagentProblem, wrapCommand, writableRoots, isAriaOwn } from './policy.ts'
 
 const hasBwrap = (() => {
   try {
@@ -181,9 +181,9 @@ export default function sandbox(pi: ExtensionAPI) {
     const path = String(event.input?.path ?? '')
     if (!path || !['read', 'write', 'edit'].includes(name)) return
     if (isSecret(path, here)) return { block: true, reason: `${path} holds credentials: the sandbox does not allow reading or changing it.` }
-    // Aria's own files (its extensions, persona, settings): never by the model, whatever was granted.
-    const ariaAgent = process.env.PI_CODING_AGENT_DIR && process.env.ARIA_PROJECTS_DIR ? process.env.PI_CODING_AGENT_DIR : null
-    if (name !== 'read' && isAgentCode(resolvePath(path, here).real, ariaAgent)) {
+    // Aria's own files (its extensions, persona, settings, aria.json, the attachments): never by the model, whatever
+    // was granted, the sandbox switched off for the session included.
+    if (name !== 'read' && isAriaOwn(path, here)) {
       return { block: true, reason: `${path} is part of Aria itself: the sandbox does not allow changing it.` }
     }
     if (name === 'read' || isWritable(path, here)) return

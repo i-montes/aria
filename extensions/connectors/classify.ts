@@ -51,13 +51,8 @@ export function isWrite(toolName: string, annotations?: Annotations): boolean {
   return !first || !READ_WORDS.has(first)
 }
 
-/** The action in words: the tool's title, or its name made readable ("mcp__notion__notion_create_pages" → "create pages"). */
-export function actionOf(toolName: string, title?: string): string {
-  const t = title?.trim()
-  // "Create Pages" → "create Pages" (it follows "wants to"); "URL check" keeps its capitals.
-  if (t) return /^[A-Z][a-z]/.test(t) ? t[0].toLowerCase() + t.slice(1) : t
-  return words(toolPart(toolName))
-    .map((w) => (/^[A-Z][a-z]/.test(w) ? w.toLowerCase() : w))
-    .join(' ')
-    .toLowerCase()
+/** The action in words: the tool's name made readable ("mcp__notion__notion_create_pages" → "create pages"). Pi's tool
+ * list carries no MCP title, so the name is all there is. */
+export function actionOf(toolName: string): string {
+  return words(toolPart(toolName)).join(' ').toLowerCase()
 }

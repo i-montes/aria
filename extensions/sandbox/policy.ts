@@ -192,10 +192,37 @@ export const secretFiles = (home = HOME) => [...new Set([...SECRET_FILES.map((f)
 
 /** Aria's own Pi files: its extensions (this sandbox among them), persona, experts, settings and its record of them.
  * `agentDir` is Aria's agent folder, or null in the owner's own Pi. No grant opens them: a model that could edit them
- * could switch the sandbox off for every later session. */
-export function isAgentCode(path: string, agentDir: string | null): boolean {
+ * could switch the sandbox off for every later session. With `settings` (Aria's `settings.json`, `$ARIA_SETTINGS`) the
+ * Aria home's own files are locked too: the settings (they make `aria.json`, which gates connectors and sets the
+ * sandbox) and the attachments folder, which only the dock writes. */
+export function isAgentCode(path: string, agentDir: string | null, settings: string | null = null): boolean {
   if (!agentDir) return false
-  return ['extensions', 'agents', 'SYSTEM.md', 'settings.json', '.aria-files'].some((name) => inside(path, join(agentDir, name)))
+  const ariaHome = settings ? dirname(settings) : dirname(agentDir)
+  const locked = [
+    ...['extensions', 'agents', 'SYSTEM.md', 'settings.json', 'aria.json', '.aria-files'].map((name) => join(agentDir, name)),
+    ...(settings ? [settings] : []),
+    join(ariaHome, 'attachments'),
+  ]
+  return locked.some((root) => inside(path, root))
+}
+
+/** Aria's agent folder and settings file when this Pi is Aria's (both `PI_CODING_AGENT_DIR` and `ARIA_PROJECTS_DIR` set),
+ * else nulls: the owner's own Pi locks nothing this way. */
+export function ariaOwnPaths(env: Record<string, string | undefined> = process.env): { agent: string | null; settings: string | null } {
+  if (!env.PI_CODING_AGENT_DIR || !env.ARIA_PROJECTS_DIR) return { agent: null, settings: null }
+  return { agent: env.PI_CODING_AGENT_DIR, settings: env.ARIA_SETTINGS || null }
+}
+
+/** A path the model may never change, whatever the session granted: Aria's own files (see `isAgentCode`), as written
+ * and with links followed. */
+export function isAriaOwn(path: string, cwd: string, env: Record<string, string | undefined> = process.env, home = HOME): boolean {
+  const { agent, settings } = ariaOwnPaths(env)
+  if (!agent) return false
+  const { lexical, real } = resolvePath(path, cwd, home)
+  // Followed too: a link to the agent folder (or the Aria home) is that folder.
+  const realAgent = realish(agent)
+  const realSettings = settings ? realish(settings) : null
+  return [lexical, real].some((p) => isAgentCode(p, agent, settings) || isAgentCode(p, realAgent, realSettings))
 }
 
 export function isWritable(path: string, cwd: string, home = HOME, exists: (p: string) => boolean = existsSync): boolean {

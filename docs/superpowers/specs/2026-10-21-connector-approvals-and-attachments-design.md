@@ -48,8 +48,8 @@ connector is about to send or change before it happens, and choose how much each
   missing → `ask`). `engram` is always allowed.
 - **Asking:** with someone to ask (the dock or Pi's terminal, the sandbox's `canAsk`), `ctx.ui.select` with the card
   `{"aria":1,"kind":"connector", "summary", "detail", "options"}`:
-  - `summary`: "<Connector> wants to <action>", where the action is the tool's title or its name made readable
-    ("notion-create-pages" → "create pages"), in English (the card's chrome is translated by the page);
+  - `summary`: "<Connector> wants to <action>", where the action is the tool's name made readable
+    ("notion-create-pages" → "create pages"; Pi's tool list carries no MCP title), in English (the card's chrome is translated by the page);
   - `detail`: a readable preview of the arguments: top-level keys as `key: value` lines, strings cut to 300 characters,
     nested values as compact JSON cut to 300, at most 12 lines;
   - options, in this order: "Yes, just this once" (primary), "Yes, and don't ask again for <connector> <action> this

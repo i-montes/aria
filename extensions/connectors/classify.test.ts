@@ -40,13 +40,11 @@ describe('what a connector call does', () => {
     expect(serverOf('mcp__')).toBe(null)
   })
 
-  test('the action is the title or the name made readable', () => {
+  test('the action is the name made readable', () => {
     expect(actionOf('mcp__notion__notion_create_pages')).toBe('create pages')
     expect(actionOf('notion-create-pages')).toBe('notion create pages')
     expect(actionOf('mcp__pages__createPage')).toBe('create page')
     expect(actionOf('mcp__rea__open_binary')).toBe('open binary')
     expect(actionOf('mcp__notion__notion_fetch_1a2b3c4d')).toBe('fetch')
-    expect(actionOf('mcp__notion__notion_create_pages', 'Create Pages')).toBe('create Pages')
-    expect(actionOf('mcp__notion__notion_create_pages', 'URL check')).toBe('URL check')
   })
 })
