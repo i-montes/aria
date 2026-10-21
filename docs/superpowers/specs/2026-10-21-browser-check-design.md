@@ -29,12 +29,17 @@ the socket to its browser. A second call cannot find the first call's browser: i
 left running (found 2026-10-21). On macOS every command asks the user first. So one check is **one `bash` call**:
 
 ```sh
-s=check-$$; agent-browser --session "$s" batch --bail "open <url>" "…" ; st=$?; agent-browser --session "$s" close >/dev/null; exit $st
+s=check-$$; agent-browser --session "$s" --idle-timeout 2m batch --bail 'open <url>' '…' ; st=$?; agent-browser --session "$s" close >/dev/null; exit $st
 ```
 
 `batch` runs every step in one execution (fewer turns and tokens, which is also what lets a small model get through),
 `--bail` stops at the first failure, a session named after the shell's pid never meets another check, and `close` runs
 whatever happened, so no browser outlives the call.
+`--idle-timeout 2m` covers a check cut off before its `close` (an aborted call, a bash timeout): that browser is
+unreachable, its socket was in the box's own `$XDG_RUNTIME_DIR`, so it must stop by itself in minutes, not after
+agent-browser's default hour. `batch` splits each step like a shell line, so each step goes in single quotes for bash,
+an argument with spaces or quotes in double quotes inside it, and JavaScript strings as backticks
+(`` 'eval "document.querySelector(`#n`).value"' ``).
 
 ## What a check looks at
 
