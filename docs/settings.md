@@ -1,7 +1,11 @@
 # Settings
 
 Everything Aria can be configured to do lives in one file: `~/.aria/settings.json` (or `$ARIA_HOME/settings.json`).
-Secrets never go here; they go in `~/.aria/auth.json` (mode `600`, same format as Pi's `auth.json`), or for Notion and Tavily in `~/.aria/mcp.json` and `mcp-auth.json` (Pi's MCP formats, mode `600`).
+Secrets never go here. With `credentials.keyring` on (the default) they live in the system keyring (Keychain on macOS,
+the Secret Service on Omarchy): `~/.aria/auth.json` and `mcp.json` hold `!aria secret …` commands in their place, and
+`auth.json` and `mcp-auth.json` themselves are sealed in the keyring, with a live copy outside `~/.aria` while the dock
+runs ([design](superpowers/specs/2026-10-21-keyring-design.md)). With it off, or with no keyring available, they are plain
+files in `~/.aria` (Pi's formats, mode `600`).
 
 Aria keeps keys it does not know when it saves, and refuses to overwrite a file it cannot parse.
 The model lives in `crates/aria-core/src/settings.rs`; the defaults are the owner's own setup.
@@ -33,7 +37,8 @@ The model lives in `crates/aria-core/src/settings.rs`; the defaults are the owne
     "planExecute": true,
     "autoSkills": ["systematic-debugging", "verification-before-completion"]
   },
-  "shortcut": ""
+  "shortcut": "",
+  "credentials": { "keyring": true }
 }
 ```
 
@@ -57,5 +62,6 @@ The model lives in `crates/aria-core/src/settings.rs`; the defaults are the owne
 | `git.*` | Commit/push/merge without asking, ask before touching other people's changes, deliver unrequested work as proposals | phase 2 |
 | `subagents.*` | Which experts are on and which are read-only, saving sessions, turn limit, `/plan` and `/execute`, automatic skills | phase 2 |
 | `shortcut` | The dock's shortcut, modifiers then one key joined by ` + ` (`SUPER + SHIFT + A`): modifiers `SUPER`, `CTRL`, `ALT`, `SHIFT` on Linux, `Command`, `Control`, `Option`, `Shift` on macOS; the key a letter, a digit, `Space` or `F1`–`F12` (case and spaces do not matter). `""` (the default), or a value that does not parse, is the platform's default: `SUPER + A` on Omarchy, `Option + Space` on macOS. When the shortcut is taken (on Hyprland: another bind with the same modifiers and key in `hyprctl binds`; for a digit, any bind with the same modifiers that `hyprctl binds` lists with no key, since Omarchy's workspace binds by keycode show that way, so `SUPER + 1` counts as taken there), the dock tries the default, then `SUPER + SHIFT + A`, `SUPER + ALT + A` (macOS: `Control + Option + Space`, `Command + Option + Space`), and uses the first free one; with all of them taken it binds the first anyway on Hyprland, while on macOS a taken one (held by another app, or one of the system's own shortcuts such as Command + Space) is never registered, and with all of them taken the problem banner says so and the dock tries again every 10 s; while a fallback is in use it tries the chosen one (and the default) again every 10 s and switches back as soon as one is free; on Hyprland the row never lists the shortcut in use among the taken ones. A change applies within a second: the old bind goes and the new one comes (on macOS the new one is registered first, so a change with nothing free keeps the old one). The settings' Assistant section records it (press the keys; Esc cancels, Backspace goes back to the default), or takes it typed (for a combination the desktop takes before the page sees it) | the dock (Omarchy and macOS) |
+| `credentials.keyring` | Keep keys in the system keyring instead of plain files (on by default). `aria keyring off` writes them back into plain files and turns this off; `aria keyring on` turns it back on, and the dock moves the keys at its next start | the dock |
 
 Phase 1 asks and stores every key; phase 2 reads them.

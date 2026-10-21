@@ -37,6 +37,21 @@ pub struct Settings {
     pub subagents: Subagents,
     /// The dock's shortcut, `MOD + MOD + KEY` (see `shortcut`); `""` is the platform's default.
     pub shortcut: String,
+    pub credentials: Credentials,
+}
+
+/// Where keys live: in the system keyring (Keychain, Secret Service), or in plain files in `~/.aria` when `keyring` is
+/// off (docs/superpowers/specs/2026-10-21-keyring-design.md).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Credentials {
+    pub keyring: bool,
+}
+
+impl Default for Credentials {
+    fn default() -> Self {
+        Credentials { keyring: true }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -280,6 +295,7 @@ impl Default for Settings {
             git: Git::default(),
             subagents: Subagents::default(),
             shortcut: String::new(),
+            credentials: Credentials::default(),
         }
     }
 }
@@ -349,7 +365,8 @@ mod tests {
                 "saveSessions": false, "turnLimit": null, "planExecute": true,
                 "autoSkills": ["systematic-debugging", "verification-before-completion"]
             },
-            "shortcut": ""
+            "shortcut": "",
+            "credentials": { "keyring": true }
         })
     }
 
@@ -369,6 +386,20 @@ mod tests {
         let golden: serde_json::Value =
             serde_json::from_str(include_str!("../tests/golden/settings-defaults-en.json")).unwrap();
         assert_eq!(serde_json::to_value(Settings::defaults("en")).unwrap(), golden);
+    }
+
+    #[test]
+    fn a_file_without_credentials_keeps_the_keyring_on() {
+        let settings: Settings = serde_json::from_str(r#"{"models":{"daily":null}}"#).unwrap();
+        assert!(settings.credentials.keyring);
+        assert!(Settings::defaults("en").credentials.keyring);
+    }
+
+    #[test]
+    fn credentials_keyring_round_trips_false() {
+        let settings: Settings = serde_json::from_str(r#"{"credentials":{"keyring":false}}"#).unwrap();
+        assert!(!settings.credentials.keyring);
+        assert_eq!(serde_json::to_value(&settings).unwrap()["credentials"], serde_json::json!({"keyring": false}));
     }
 
     #[test]
