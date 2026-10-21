@@ -301,14 +301,19 @@ impl Vault {
             }
         }
         migrated.mcp_values = self.protect_mcp(root)?;
+        // Every file is sealed before any is removed: a half-sealed home would leave the dock with neither its plain files
+        // nor a complete vault.
+        let mut sealed = Vec::new();
         for name in SEALED {
-            let plain = root.join(name);
-            let Ok(bytes) = std::fs::read(&plain) else { continue };
-            let text = String::from_utf8_lossy(&bytes);
+            let Ok(bytes) = std::fs::read(root.join(name)) else { continue };
+            let text = String::from_utf8_lossy(&bytes).into_owned();
             self.store(&account(name), &text)?;
+            sealed.push((name, text));
+        }
+        for (name, text) in sealed {
             std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&self.live)?;
             write_private(&self.live.join(name), text.as_bytes())?;
-            std::fs::remove_file(&plain)?;
+            std::fs::remove_file(root.join(name))?;
             migrated.files += 1;
         }
         Ok(migrated)
@@ -630,6 +635,36 @@ mod tests {
         );
         assert_eq!(std::fs::read(root.join("mcp.json")).unwrap(), mcp);
         assert_eq!(std::fs::read(root.join("mcp-auth.json")).unwrap(), mcp_auth);
+    }
+
+    /// Refuses the sealed `mcp-auth.json`.
+    #[derive(Debug, Default)]
+    struct NoMcpAuth(MemoryBackend);
+
+    impl Backend for NoMcpAuth {
+        fn get(&self, account: &str) -> Result<Option<String>, KeyringError> {
+            self.0.get(account)
+        }
+        fn set(&self, account: &str, value: &str) -> Result<(), KeyringError> {
+            if account == "file:mcp-auth.json" {
+                return Err(KeyringError::Failed("no".into()));
+            }
+            self.0.set(account, value)
+        }
+        fn delete(&self, account: &str) -> Result<(), KeyringError> {
+            self.0.delete(account)
+        }
+    }
+
+    #[test]
+    fn a_failure_sealing_one_file_removes_neither() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = plain_home(dir.path());
+        let vault = vault_in(dir.path(), Arc::new(NoMcpAuth::default()));
+        assert!(vault.migrate(&root).is_err());
+        assert!(root.join("auth.json").exists(), "auth.json stays until both are sealed");
+        assert!(root.join("mcp-auth.json").exists());
+        assert!(!vault.live.join("auth.json").exists());
     }
 
     #[test]
