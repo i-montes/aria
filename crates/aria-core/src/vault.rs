@@ -5,7 +5,6 @@
 //! each sits in a private folder outside the home and outside backups, and every change to it is sealed again.
 
 use crate::keyring::{Backend, KeyringError};
-use crate::paths::AriaPaths;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Write;
@@ -239,6 +238,7 @@ impl Vault {
 mod tests {
     use super::*;
     use crate::keyring::{KeyringError, MemoryBackend};
+    use crate::paths::AriaPaths;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

@@ -37,6 +37,7 @@ version = "0.3.0"
 dependencies = [
  "base64",
  "include_dir",
+ "libc",
  "rand",
  "serde",
  "serde_json",
