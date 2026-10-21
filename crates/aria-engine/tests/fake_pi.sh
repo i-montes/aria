@@ -56,6 +56,12 @@ while IFS= read -r line; do
       printf '{"type":"answered","value":"%s"}\n' "$(field value "$line")" ;;
     start)
       printf '{"type":"agent_start"}\n' ;;
+    tool_start)
+      printf '{"type":"tool_execution_start","toolCallId":"t1","toolName":"bash","args":{"command":"cargo build"}}\n' ;;
+    tool_end)
+      printf '{"type":"tool_execution_end","toolCallId":"t1","toolName":"bash","result":{},"isError":false}\n' ;;
+    abort)
+      printf '{"type":"abort_seen"}\n' ;;
     settle)
       printf '{"type":"agent_settled","aborted":true}\n' ;;
     ask_card)

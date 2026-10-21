@@ -14,6 +14,7 @@ describe('the JS defaults follow the Rust ones (golden files written by aria-cor
   for (const id of PROVIDER_IDS) {
     test(`after choosing ${id}`, () => expect(applyProvider(defaultSettings('en'), id)).toEqual(golden(`settings-provider-${id}`)))
   }
+  test('the turn watchdog stops a silent run after ten minutes by default', () => expect(defaultSettings('en').models.turnTimeoutMinutes).toBe(10))
   test('every connector starts at the default level (no access entries)', () => expect(defaultSettings('en').integrations.access).toEqual({}))
   test('the language is the only thing defaultSettings(language) changes', () => {
     expect(defaultSettings('es').assistant.language).toBe('es')

@@ -36,7 +36,8 @@
     "allowPayPerUse": false,
     "daily": "claude-bridge/claude-sonnet-5-5",
     "planning": "claude-bridge/claude-opus-5-5",
-    "planningEffort": "high"
+    "planningEffort": "high",
+    "turnTimeoutMinutes": 10
   },
   "provider": {
     "id": "anthropic-oauth",

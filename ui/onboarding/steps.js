@@ -77,7 +77,7 @@ export function defaultSettings(language = 'en') {
     provider: { id: null, quota: null },
     router: { enabled: true, backend: 'opencode' },
     assistant: { userName: '', name: 'Aria', language, style: 'very-short' },
-    models: { daily: null, planning: null, planningEffort: 'high', allowPayPerUse: false },
+    models: { daily: null, planning: null, planningEffort: 'high', allowPayPerUse: false, turnTimeoutMinutes: 10 },
     effort: { mode: 'auto', fixedLevel: null, maxOnFree: true },
     compaction: { percent: 40 },
     memory: { enabled: true, project: 'aria' },

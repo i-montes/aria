@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub type Emit = Arc<dyn Fn(DockMessage) + Send + Sync>;
 
@@ -199,6 +199,13 @@ struct Inner {
     spawn_args: Vec<String>,
     /// The folder the running Pi was started in (what the header must show, whatever the settings say now).
     workdir: Option<PathBuf>,
+    /// When the current Pi last said anything (an event, a reply, a UI request): the turn watchdog's clock.
+    last_activity: Option<Instant>,
+    /// The tool executions under way (by `toolCallId`, nested ones too): while any is open the watchdog waits, since a
+    /// long build or test is silent and has its own timeouts.
+    tools: HashSet<String>,
+    /// The turn watchdog stopped this run already (it stops a run once; the next `agent_start` clears it).
+    watchdog_fired: bool,
 }
 
 /// What `get_state` tells about the model and thinking level. `running` is deliberately not taken from
@@ -370,6 +377,42 @@ impl Chat {
                     .into(),
             );
         }
+    }
+
+    /// A warning in the chat the page says in its own language: a translation key and its values.
+    fn notice_key(&self, key: &str, vars: Value) {
+        self.emit(DockMessage::ChatEvent {
+            event: json!({"type": "ui_notice", "request": {"method": "notify", "key": key, "vars": vars, "notifyType": "warning"}}),
+        });
+    }
+
+    /// The turn watchdog: it covers the model being silent. A run that got nothing from Pi (no event, reply or UI
+    /// request) for `limit` is stopped as the page's stop does (`clear_queue`, `abort`), once per run, and the chat says
+    /// why; the run then settles as usual. A dialog waiting for the person or a tool under way pauses it: its clock
+    /// starts again when the dialog closes or the last tool ends. A zero `limit` turns it off. True when it stopped the
+    /// run.
+    pub fn check_stalled(&self, now: Instant, limit: Duration) -> bool {
+        let engine = {
+            let mut inner = self.inner.lock().unwrap();
+            if limit.is_zero() || !inner.running || inner.watchdog_fired {
+                return false;
+            }
+            if !inner.dialogs.is_empty() || !inner.tools.is_empty() {
+                inner.last_activity = Some(now);
+                return false;
+            }
+            let last = *inner.last_activity.get_or_insert(now);
+            if now.saturating_duration_since(last) < limit {
+                return false;
+            }
+            let Some(engine) = inner.engine.clone() else { return false };
+            inner.watchdog_fired = true;
+            engine
+        };
+        let _ = engine.send("clear_queue", json!({}));
+        let _ = engine.send("abort", json!({}));
+        self.notice_key("chat.watchdog.stopped", json!({"minutes": limit.as_secs().div_ceil(60)}));
+        true
     }
 
     /// A warning in the chat, as an extension's `notify` shows.
@@ -593,6 +636,7 @@ impl Chat {
             inner.generation += 1;
             inner.engine = Some(engine.clone());
             inner.running = false;
+            inner.tools.clear();
             inner.workdir = Some(workdir);
             inner.spawn_args = spec_args.clone();
             inner.pending_prompts.clear();
@@ -767,6 +811,8 @@ impl Chat {
             if inner.dialogs.remove(id).is_none() {
                 return;
             }
+            // The watchdog was paused while the dialog waited: its clock starts now.
+            inner.last_activity = Some(Instant::now());
             inner.notified.remove(id) && inner.notified.is_empty()
         };
         if dismiss {
@@ -778,17 +824,39 @@ impl Chat {
     /// Consumes one Pi's events until it exits.
     fn pump(&self, events: Receiver<EngineEvent>, generation: u64) {
         for event in events {
-            let current = self.inner.lock().unwrap().generation == generation;
+            let current = {
+                let mut inner = self.inner.lock().unwrap();
+                let current = inner.generation == generation;
+                if current {
+                    inner.last_activity = Some(Instant::now()); // anything Pi says keeps the watchdog quiet
+                }
+                current
+            };
             if !current && !matches!(event, EngineEvent::Exited { .. }) {
                 continue; // a Pi that was replaced no longer speaks for the chat
             }
             match event {
                 EngineEvent::Event(raw) => {
                     match raw["type"].as_str() {
-                        Some("agent_start") => self.inner.lock().unwrap().running = true,
+                        Some("agent_start") => {
+                            let mut inner = self.inner.lock().unwrap();
+                            inner.running = true;
+                            inner.watchdog_fired = false;
+                            inner.tools.clear();
+                        }
+                        // The last tool ending restarts the watchdog's clock (this event already set it).
+                        Some("tool_execution_end") => {
+                            let id = raw["toolCallId"].as_str().unwrap_or_default();
+                            self.inner.lock().unwrap().tools.remove(id);
+                        }
                         // The tasks of a `parallel` call name the subagents that connect next.
-                        Some("tool_execution_start") if raw["toolName"] == "parallel" => {
-                            if let Some(watch) = self.inner.lock().unwrap().watch.clone() {
+                        Some("tool_execution_start") => {
+                            let watch = {
+                                let mut inner = self.inner.lock().unwrap();
+                                inner.tools.insert(raw["toolCallId"].as_str().unwrap_or_default().to_string());
+                                inner.watch.clone().filter(|_| raw["toolName"] == "parallel")
+                            };
+                            if let Some(watch) = watch {
                                 watch.expect_tasks(&raw["args"]);
                             }
                         }
@@ -797,6 +865,7 @@ impl Chat {
                             let (open, restart) = {
                                 let mut inner = self.inner.lock().unwrap();
                                 inner.running = false;
+                                inner.tools.clear();
                                 let restart = std::mem::take(&mut inner.restart_pending);
                                 (inner.dialogs.keys().cloned().collect::<Vec<_>>(), restart)
                             };
@@ -902,6 +971,7 @@ impl Chat {
             }
             inner.engine = None;
             inner.running = false;
+            inner.tools.clear();
             let open: Vec<String> = inner.dialogs.drain().map(|(id, _)| id).collect();
             let dismiss = !inner.notified.is_empty();
             inner.notified.clear();
@@ -962,6 +1032,7 @@ impl Chat {
             inner.generation += 1; // whatever the old Pi still says is ignored
             let engine = inner.engine.take();
             inner.running = false;
+            inner.tools.clear();
             inner.restart_pending = false;
             // A credential may have changed (that is why Pis restart): the quota is read afresh next time.
             inner.quota = None;
@@ -1290,6 +1361,28 @@ impl Sessions {
         }
     }
 
+    /// The turn watchdog's limit, read from the settings on every check (a change applies without a restart). Settings
+    /// that cannot be read keep the default.
+    fn limit(paths: &AriaPaths) -> Duration {
+        let minutes = settings::load(paths)
+            .ok()
+            .flatten()
+            .map(|s| s.models.turn_timeout_minutes)
+            .unwrap_or_else(|| aria_core::settings::Models::default().turn_timeout_minutes);
+        Duration::from_secs(u64::from(minutes) * 60)
+    }
+
+    /// Every 30 s: each session's run that got nothing from its Pi for the settings' limit is stopped (see
+    /// `Chat::check_stalled`). Returns how many were.
+    pub fn check_stalled(&self, now: Instant) -> usize {
+        let limit = Self::limit(&self.ctx.paths);
+        if limit.is_zero() {
+            return 0;
+        }
+        let chats: Vec<Chat> = self.chats.lock().unwrap().values().cloned().collect();
+        chats.iter().filter(|chat| chat.check_stalled(now, limit)).count()
+    }
+
     /// Every Pi stops, as for a restart (what they started keeps running), and this returns once they are gone, so the
     /// new dock does not open a session an old Pi still writes.
     pub fn stop_for_update(&self) {
@@ -1343,7 +1436,7 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::sync::mpsc::{self, Receiver};
     use std::sync::Mutex;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[derive(Default)]
     struct TestNotifier {
@@ -2410,6 +2503,132 @@ mod tests {
         send(h, "x");
         wait_for(h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         wait_for(h, "settled", |m| event_of(m, "agent_settled"));
+    }
+
+    /// A run started and left silent: `start` sends `agent_start` and nothing more.
+    fn silent_run(h: &Harness) {
+        ready(h);
+        drain(h);
+        h.chat.test_send_raw("start");
+        wait_for(h, "a run", |m| event_of(m, "agent_start"));
+    }
+
+    fn is_watchdog_notice(message: &DockMessage) -> bool {
+        matches!(message, DockMessage::ChatEvent { event }
+            if event["type"] == "ui_notice" && event["request"]["key"] == "chat.watchdog.stopped")
+    }
+
+    const LIMIT: Duration = Duration::from_secs(1);
+
+    #[test]
+    fn a_silent_run_is_stopped_once() {
+        let h = harness();
+        silent_run(&h);
+        assert!(!h.chat.check_stalled(Instant::now(), LIMIT), "a run that just spoke is left alone");
+        assert!(h.chat.check_stalled(Instant::now() + 2 * LIMIT, LIMIT));
+        wait_for(&h, "the abort reaching Pi", |m| event_of(m, "abort_seen"));
+        let notice = wait_for(&h, "the notice", is_watchdog_notice);
+        let DockMessage::ChatEvent { event } = notice else { unreachable!() };
+        assert_eq!(event["request"]["vars"]["minutes"], 1);
+        assert_eq!(event["request"]["notifyType"], "warning");
+        assert!(event["request"].get("message").is_none(), "the page says it in its language, from the key");
+        assert!(!h.chat.check_stalled(Instant::now() + Duration::from_secs(3600), LIMIT), "once per run");
+        std::thread::sleep(Duration::from_millis(200));
+        let later = drain(&h);
+        assert!(!later.iter().any(|m| event_of(m, "abort_seen") || is_watchdog_notice(m)), "{later:?}");
+        // The next run has its own watchdog.
+        h.chat.test_send_raw("settle");
+        wait_for(&h, "the settle", |m| event_of(m, "agent_settled"));
+        h.chat.test_send_raw("start");
+        wait_for(&h, "the next run", |m| event_of(m, "agent_start"));
+        assert!(h.chat.check_stalled(Instant::now() + 2 * LIMIT, LIMIT));
+    }
+
+    #[test]
+    fn a_waiting_dialog_pauses_the_watchdog() {
+        let h = harness();
+        silent_run(&h);
+        h.chat.test_send_raw("ask");
+        wait_for(&h, "the dialog", |m| matches!(m, DockMessage::ChatDialog { .. }));
+        let hour = Duration::from_secs(3600);
+        assert!(!h.chat.check_stalled(Instant::now() + hour, LIMIT), "an hour on a question is not a hang");
+        h.chat.handle(PageMessage::UiAnswer {
+            id: "u1".into(),
+            value: Some("Allow".into()),
+            confirmed: None,
+            cancelled: None,
+        });
+        wait_for(&h, "the answer reaching Pi", |m| event_of(m, "answered"));
+        assert!(!drain(&h).iter().any(|m| event_of(m, "abort_seen") || is_watchdog_notice(m)));
+        assert!(!h.chat.check_stalled(Instant::now(), LIMIT), "the clock starts again when the dialog closes");
+        assert!(h.chat.check_stalled(Instant::now() + 2 * LIMIT, LIMIT), "silence after the answer still counts");
+    }
+
+    #[test]
+    fn a_running_tool_pauses_the_watchdog() {
+        let h = harness();
+        silent_run(&h);
+        h.chat.test_send_raw("tool_start");
+        wait_for(&h, "the tool", |m| event_of(m, "tool_execution_start"));
+        let hour = Duration::from_secs(3600);
+        assert!(!h.chat.check_stalled(Instant::now() + hour, LIMIT), "a long silent build is not a hang");
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!drain(&h).iter().any(|m| event_of(m, "abort_seen") || is_watchdog_notice(m)));
+        h.chat.test_send_raw("tool_end");
+        wait_for(&h, "the tool's end", |m| event_of(m, "tool_execution_end"));
+        assert!(!h.chat.check_stalled(Instant::now(), LIMIT), "the clock starts again when the last tool ends");
+        assert!(h.chat.check_stalled(Instant::now() + 2 * LIMIT, LIMIT), "the model's silence after it counts");
+        wait_for(&h, "the abort reaching Pi", |m| event_of(m, "abort_seen"));
+        wait_for(&h, "the notice", is_watchdog_notice);
+    }
+
+    #[test]
+    fn zero_turns_it_off() {
+        let h = harness();
+        silent_run(&h);
+        assert!(!h.chat.check_stalled(Instant::now() + Duration::from_secs(36_000), Duration::ZERO));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!drain(&h).iter().any(|m| event_of(m, "abort_seen") || is_watchdog_notice(m)));
+    }
+
+    #[test]
+    fn events_keep_it_alive() {
+        let h = harness();
+        silent_run(&h);
+        let started = Instant::now();
+        std::thread::sleep(Duration::from_millis(300));
+        h.chat.test_send_raw("notify"); // a UI request
+        wait_for(&h, "the notice", |m| event_of(m, "ui_notice"));
+        assert!(!h.chat.check_stalled(started + LIMIT + Duration::from_millis(100), LIMIT));
+        std::thread::sleep(Duration::from_millis(300));
+        h.chat.test_send_raw("args"); // an event
+        wait_for(&h, "the event", |m| event_of(m, "args"));
+        assert!(!h.chat.check_stalled(started + LIMIT + Duration::from_millis(400), LIMIT));
+        std::thread::sleep(Duration::from_millis(300));
+        h.chat.test_send_raw("reject"); // a response
+        wait_for(&h, "the response", |m| event_of(m, "command_failed"));
+        assert!(!h.chat.check_stalled(started + LIMIT + Duration::from_millis(700), LIMIT));
+        assert!(h.chat.check_stalled(Instant::now() + 2 * LIMIT, LIMIT), "silence after them still counts");
+    }
+
+    #[test]
+    fn an_idle_chat_is_never_stopped() {
+        let h = harness();
+        ready(&h);
+        assert!(!h.chat.check_stalled(Instant::now() + Duration::from_secs(3600), LIMIT));
+    }
+
+    #[test]
+    fn sessions_read_the_limit_from_the_settings() {
+        let h = harness();
+        silent_run(&h);
+        let mut settings = settings::load(&h.paths).unwrap().unwrap();
+        settings.models.turn_timeout_minutes = 0;
+        settings::save(&h.paths, &settings).unwrap();
+        assert_eq!(Sessions::limit(&h.paths), Duration::ZERO);
+        settings.models.turn_timeout_minutes = 10;
+        settings::save(&h.paths, &settings).unwrap();
+        assert_eq!(Sessions::limit(&h.paths), Duration::from_secs(600));
     }
 
     #[test]

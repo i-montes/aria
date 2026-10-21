@@ -22,6 +22,8 @@ const SKILLS = ['brainstorming', 'writing-plans', 'test-driven-development', 'sy
 const STYLES = ['very-short', 'brief', 'detailed', 'technical', 'teaching']
 const LEVELS = ['low', 'medium', 'high']
 const DEFAULT_TURN_LIMIT = 30
+/** Minutes a run may get nothing from Pi before the dock stops it (`models.turnTimeoutMinutes`; 0 turns it off). */
+const DEFAULT_TURN_TIMEOUT = 10
 /** The settings screen: the setup's steps grouped by topic, in the order of its overview. A step the provider does not
  * have (the quota without OpenCode Go) is left out. */
 const SETTINGS_SECTIONS = [
@@ -340,6 +342,8 @@ export function createOnboarding(env) {
       c.section(t('ob.models.section.planning')) + modelField('planning') +
       c.segments('planningEffort', t('ob.models.planningEffort'), LEVELS.map((v) => ({ value: v, label: t(`ob.level.${v}`) })), state.settings.models.planningEffort)
     if (module().quota) html += c.toggle('payPerUse', t('ob.models.payPerUse'), t('ob.models.payPerUse.desc'), state.settings.models.allowPayPerUse)
+    const timeout = state.settings.models.turnTimeoutMinutes ?? DEFAULT_TURN_TIMEOUT
+    html += c.stepper('turnTimeoutMinutes', t('ob.models.turnTimeout'), t('ob.models.turnTimeout.desc'), timeout, 0, 60, 5, ` ${t('ob.models.minutes')}`)
     return html
   }
 
@@ -1168,7 +1172,10 @@ export function createOnboarding(env) {
     if (action === 'oauth-reopen') return post({ type: 'openUrl', url: state.ui.oauth.url })
     if (action === 'step') {
       update((s) => {
-        s.subagents.turnLimit = Math.max(5, Math.min(100, s.subagents.turnLimit + Number(value)))
+        if (field === 'turnTimeoutMinutes') {
+          const now = s.models.turnTimeoutMinutes ?? DEFAULT_TURN_TIMEOUT
+          s.models.turnTimeoutMinutes = Math.max(0, Math.min(60, now + Number(value)))
+        } else s.subagents.turnLimit = Math.max(5, Math.min(100, s.subagents.turnLimit + Number(value)))
       })
       return render()
     }

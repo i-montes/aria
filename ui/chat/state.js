@@ -330,7 +330,12 @@ function reduceEvent(state, event) {
     }
     case 'ui_notice': {
       const request = event.request ?? {}
-      if (request.method === 'notify') return push(state, notice(TONES[request.notifyType] ?? 'info', { text: request.message }))
+      if (request.method === 'notify') {
+        const tone = TONES[request.notifyType] ?? 'info'
+        // The dock's own notices (the turn watchdog) name a key, so the page says them in its language.
+        if (typeof request.key === 'string') return push(state, notice(tone, request.vars ? { key: request.key, vars: request.vars } : { key: request.key }))
+        return push(state, notice(tone, { text: request.message }))
+      }
       // The router's route line (jev-router sends it as the status `aria-jev`).
       if (request.method === 'setStatus' && request.statusKey === 'aria-jev') {
         let route = null

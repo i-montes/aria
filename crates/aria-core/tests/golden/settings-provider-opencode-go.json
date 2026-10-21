@@ -36,7 +36,8 @@
     "allowPayPerUse": false,
     "daily": "opencode-go/mimo-v2.6-flash",
     "planning": "opencode-go/mimo-v2.6-pro",
-    "planningEffort": "high"
+    "planningEffort": "high",
+    "turnTimeoutMinutes": 10
   },
   "provider": {
     "id": "opencode-go",

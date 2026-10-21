@@ -36,7 +36,8 @@
     "allowPayPerUse": false,
     "daily": null,
     "planning": null,
-    "planningEffort": "high"
+    "planningEffort": "high",
+    "turnTimeoutMinutes": 10
   },
   "provider": {
     "id": null,

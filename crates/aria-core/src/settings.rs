@@ -91,6 +91,8 @@ pub struct Models {
     pub planning: Option<String>,
     pub planning_effort: String,
     pub allow_pay_per_use: bool,
+    /// A run that gets nothing from Pi for this many minutes is stopped (0 turns the watchdog off).
+    pub turn_timeout_minutes: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -192,7 +194,13 @@ impl Default for Assistant {
 }
 impl Default for Models {
     fn default() -> Self {
-        Models { daily: None, planning: None, planning_effort: "high".into(), allow_pay_per_use: false }
+        Models {
+            daily: None,
+            planning: None,
+            planning_effort: "high".into(),
+            allow_pay_per_use: false,
+            turn_timeout_minutes: 10,
+        }
     }
 }
 impl Default for Effort {
@@ -320,7 +328,7 @@ mod tests {
             "provider": { "id": null, "quota": null },
             "router": { "enabled": true, "backend": "opencode" },
             "assistant": { "userName": "", "name": "Aria", "language": language, "style": "very-short" },
-            "models": { "daily": null, "planning": null, "planningEffort": "high", "allowPayPerUse": false },
+            "models": { "daily": null, "planning": null, "planningEffort": "high", "allowPayPerUse": false, "turnTimeoutMinutes": 10 },
             "effort": { "mode": "auto", "fixedLevel": null, "maxOnFree": true },
             "compaction": { "percent": 40 },
             "memory": { "enabled": true, "project": "aria" },
@@ -357,6 +365,15 @@ mod tests {
         let golden: serde_json::Value =
             serde_json::from_str(include_str!("../tests/golden/settings-defaults-en.json")).unwrap();
         assert_eq!(serde_json::to_value(Settings::defaults("en")).unwrap(), golden);
+    }
+
+    #[test]
+    fn turn_timeout_defaults_to_ten() {
+        assert_eq!(Settings::defaults("en").models.turn_timeout_minutes, 10);
+        let settings: Settings = serde_json::from_str(r#"{"models":{"daily":null}}"#).unwrap();
+        assert_eq!(settings.models.turn_timeout_minutes, 10, "an older file gets the default");
+        let settings: Settings = serde_json::from_str(r#"{"models":{"turnTimeoutMinutes":0}}"#).unwrap();
+        assert_eq!(settings.models.turn_timeout_minutes, 0);
     }
 
     #[test]

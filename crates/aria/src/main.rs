@@ -229,6 +229,12 @@ fn run_dock() {
             std::thread::spawn(move || sessions.settings_changed());
             dock.send(&DockMessage::SettingsChanged);
         }
+        // Every 30 s, the turn watchdog: a run that got nothing from its Pi for `models.turnTimeoutMinutes` is stopped,
+        // and the chat says so. Off the UI thread: it reads the settings.
+        if ticks.is_multiple_of(WATCHDOG_TICKS) {
+            let sessions = chat_for_settings.clone();
+            std::thread::spawn(move || sessions.check_stalled(Instant::now()));
+        }
         // A dock that just hid with a question still open needs its notification.
         let visible = visible_now.load(Ordering::SeqCst);
         if was_visible && !visible {
@@ -288,6 +294,9 @@ fn run_dock() {
     eprintln!("aria: ready, press {HOTKEY_HINT}");
     ui::run();
 }
+
+/// How often the turn watchdog looks, in UI ticks of 16 ms: every 30 s.
+const WATCHDOG_TICKS: u32 = 30_000 / 16;
 
 /// A line in the dock's log with the time (UTC), for what happens between a keypress and the dock on screen: when the
 /// dock does not open, the log says whether the shortcut arrived, what state the dock was in and whether the page

@@ -36,7 +36,8 @@
     "allowPayPerUse": false,
     "daily": "anthropic/claude-sonnet-5-5",
     "planning": "anthropic/claude-opus-5-5",
-    "planningEffort": "high"
+    "planningEffort": "high",
+    "turnTimeoutMinutes": 10
   },
   "provider": {
     "id": "anthropic-api",

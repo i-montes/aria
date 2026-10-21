@@ -664,6 +664,18 @@ describe('the model fields list what Pi offers for the connected provider', () =
     expect(h.root.innerHTML).toContain('GLM 5.3')
   })
 
+  test('the turn timeout stepper writes turnTimeoutMinutes, from 0 (off) to 60', () => {
+    const h = openModels()
+    expect(h.root.innerHTML).toContain('ob.models.turnTimeout')
+    expect(h.root.innerHTML).toContain('10 ob.models.minutes')
+    h.click('step', 'turnTimeoutMinutes', '-5')
+    expect(h.root.innerHTML).toContain('5 ob.models.minutes')
+    h.click('step', 'turnTimeoutMinutes', '-5')
+    h.click('step', 'turnTimeoutMinutes', '-5') // never below 0
+    h.click('settings-save')
+    expect(h.lastRequest().message.settings.models.turnTimeoutMinutes).toBe(0)
+  })
+
   test('another control closes the picker', async () => {
     const h = openModels()
     await h.answer()

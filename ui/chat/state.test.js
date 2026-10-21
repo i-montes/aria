@@ -133,6 +133,12 @@ describe('the engine and notices', () => {
     expect(state.messages).toHaveLength(1)
   })
 
+  test('a notice of the dock carries a translation key and its values, not English text', () => {
+    const request = { method: 'notify', key: 'chat.watchdog.stopped', vars: { minutes: 10 }, notifyType: 'warning' }
+    const state = run(createChat(), ev({ type: 'ui_notice', request }))
+    expect(state.messages.at(-1)).toEqual({ kind: 'notice', tone: 'warn', key: 'chat.watchdog.stopped', vars: { minutes: 10 } })
+  })
+
   test('chatState sets the folder, model, level, problem and running', () => {
     const state = reduce(createChat(), { type: 'chatState', workdir: '/home/u/Projects', running: true, model: 'opencode-go/glm-5.3', thinking: 'high', problem: 'pi-missing' })
     expect(state).toMatchObject({ workdir: '/home/u/Projects', running: true, model: 'opencode-go/glm-5.3', thinking: 'high', problem: 'pi-missing' })
