@@ -78,6 +78,43 @@ PATH="$dir/fakebin:$PATH" sh tools/release.sh 0.3.0 --skip-checks >/dev/null 2>&
 grep -q '^version = "0.2.0"' Cargo.toml && [ -z "$(git status --porcelain -- Cargo.toml RELEASES.md Cargo.lock)" ] && pass "and puts the files back" || fail "files left changed"
 git rev-parse -q --verify refs/tags/v0.3.0 >/dev/null && fail "tagged after a failure" || pass "nothing is tagged"
 cd / && rm -rf "$dir"
+# The next version, decided from the commits since the last tag.
+bare() {
+  dir=$(mktemp -d)
+  mkdir -p "$dir/tools"
+  cp "$here/release.sh" "$dir/tools/"
+  cd "$dir" || exit 1
+  git init -q -b main
+  git config user.email aria@localhost
+  git config user.name Aria
+  printf '[workspace]\nmembers = []\n\n[workspace.package]\nversion = "%s"\n' "$1" >Cargo.toml
+  printf '# Releases\n\nIntro.\n' >RELEASES.md
+  git add -A && git commit -q -m "start"
+  git tag -a "v$1" -m "Aria $1"
+  shift
+  for subject in "$@"; do
+    echo "$subject" >>log.txt && git add -A && git commit -q -m "$subject"
+  done
+}
+next_for() { # current version, then commit subjects; prints the next version
+  ( bare "$@" >/dev/null; sh tools/release.sh --next; cd / && rm -rf "$dir" )
+}
+[ "$(next_for 0.2.0 "fix: a" "docs: b")" = 0.2.1 ] && pass "only fixes: the patch" || fail "fixes did not give 0.2.1"
+[ "$(next_for 0.2.1 "fix: a" "feat(ui): b")" = 0.3.0 ] && pass "a feature: the minor" || fail "a feature did not give 0.3.0"
+[ "$(next_for 0.3.4 "feat!: a")" = 0.4.0 ] && pass "a breaking change before 1.0: the minor" || fail "breaking before 1.0"
+[ "$(next_for 1.3.4 "fix(x)!: a" "feat: b")" = 2.0.0 ] && pass "a breaking change after 1.0: the major" || fail "breaking after 1.0"
+[ -z "$(next_for 0.2.0 "docs: a" "style: b" "test: c")" ] && pass "docs, style and tests make no release" || fail "a release for docs"
+( bare 1.0.0 "feat: a" >/dev/null; printf 'x\n\nBREAKING CHANGE: the old flag is gone\n' >msg; echo y >>log.txt; git add log.txt; git commit -q -F msg; sh tools/release.sh --next >"$here/.next.$$"; cd / && rm -rf "$dir" )
+[ "$(cat "$here/.next.$$")" = 2.0.0 ] && pass "BREAKING CHANGE in a body counts" || fail "BREAKING CHANGE body ignored"
+rm -f "$here/.next.$$"
+bare 0.2.0 "fix: a broken thing"
+sh tools/release.sh --skip-checks >/dev/null 2>&1 && pass "a release without a version" || fail "the automatic release failed"
+git rev-parse -q --verify refs/tags/v0.2.1 >/dev/null && grep -q '^version = "0.2.1"' Cargo.toml && pass "it took the version it decided" || fail "wrong automatic version"
+cd / && rm -rf "$dir"
+bare 0.2.0 "docs: words"
+sh tools/release.sh --skip-checks >/dev/null 2>&1 && fail "a release with nothing to release" || pass "nothing to release is refused"
+cd / && rm -rf "$dir"
+
 [ "$failures" -eq 0 ] && echo "all checks passed" || {
   echo "$failures check(s) failed"
   exit 1

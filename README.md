@@ -87,7 +87,7 @@ ARIA_HOME=$(mktemp -d) target/release/aria   # try a first run without touching 
 ```
 
 Versions follow SemVer and are git tags (`vX.Y.Z`); what each one changed is in [RELEASES.md](RELEASES.md), and
-`sh tools/release.sh X.Y.Z` makes the next one. `aria --version` says which one is installed.
+`sh tools/release.sh` makes the next one (it decides the version from the commits). `aria --version` says which one is installed.
 
 ## Contributing a provider or a platform
 

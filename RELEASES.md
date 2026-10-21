@@ -35,10 +35,17 @@ The first tagged version: everything since the project started.
 ## Making a release
 
 ```sh
-sh tools/release.sh 0.3.0     # checks, bumps the version, writes the notes, commits "release: 0.3.0", tags v0.3.0
-git push origin main v0.3.0   # when the notes read right
+sh tools/release.sh --next    # which version the commits since the last tag call for (nothing: no release needed)
+sh tools/release.sh           # checks, bumps to that version, writes the notes, commits "release: X.Y.Z", tags vX.Y.Z
+git push origin main vX.Y.Z   # when the notes read right
 ```
 
-The script stops on a dirty tree or a branch other than `main`. When `RELEASES.md` has no section for the version yet,
-it writes one from the `feat` and `fix` commits since the last tag (edit it before pushing); a section written by hand
-is kept as it is. `--skip-checks` leaves out the test suites.
+The version is decided from the commit subjects since the last tag, by SemVer: a breaking change (`feat!:`, `fix!:`,
+or `BREAKING CHANGE:` in a commit body) raises the major number, or the middle one while Aria is `0.x`; a `feat`
+raises the middle one; a `fix` the last one. Commits of other kinds (`docs`, `style`, `test`, `chore`, `perf`…) make no
+release on their own. `sh tools/release.sh X.Y.Z` picks a version by hand instead.
+
+The script stops on a dirty tree, a branch other than `main`, a version that is already tagged or comes before the
+current one. When `RELEASES.md` has no section for the version yet, it writes one from the `feat` and `fix` commits
+(edit it before pushing); a section written by hand is kept as it is. A failure puts the files back.
+`--skip-checks` leaves out the test suites.

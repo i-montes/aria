@@ -1,7 +1,13 @@
 #!/bin/sh
 # Makes a release of Aria: the version in the workspace's Cargo.toml, its notes in RELEASES.md, a commit and a tag.
 # Nothing is pushed or published.
-#   sh tools/release.sh X.Y.Z [--skip-checks]
+#   sh tools/release.sh                 the next version, decided from the commits since the last tag
+#   sh tools/release.sh --next          only print that version (nothing when there is nothing to release)
+#   sh tools/release.sh X.Y.Z           a version chosen by hand
+#   --skip-checks                       leave out the test suites
+# The next version, by SemVer from the commit subjects since the last tag: a breaking change (`feat!:`, `fix!:`, or
+# `BREAKING CHANGE:` in a body) raises the major number, or the minor one while the major is 0; a `feat` the minor; a
+# `fix` the patch. Commits of other kinds (docs, style, test, chore…) make no release.
 set -e
 cd "$(dirname "$0")/.."
 
@@ -12,21 +18,57 @@ die() {
 
 version=
 checks=1
+next_only=0
 for arg in "$@"; do
   case "$arg" in
     --skip-checks) checks=0 ;;
+    --next) next_only=1 ;;
     -*) die "unknown option $arg" ;;
     *) version=$arg ;;
   esac
 done
-echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || die "usage: sh tools/release.sh X.Y.Z [--skip-checks]"
+
+current=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+[ -n "$current" ] || die "no version in Cargo.toml's [workspace.package]"
+last=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+range=${last:+$last..}HEAD
+
+# The version the commits since the last tag call for, from the current one; empty when nothing needs a release.
+next_version() {
+  if [ -z "$last" ]; then
+    echo "$current" # never tagged: the current version is the first release
+    return
+  fi
+  subjects=$(git log --no-merges --format='%s' "$range")
+  bodies=$(git log --no-merges --format='%b' "$range")
+  major=${current%%.*}
+  rest=${current#*.}
+  minor=${rest%%.*}
+  patch=${rest#*.}
+  if echo "$subjects" | grep -Eq '^(feat|fix)(\([^)]*\))?!:' || echo "$bodies" | grep -q '^BREAKING CHANGE:'; then
+    if [ "$major" = 0 ]; then echo "0.$((minor + 1)).0"; else echo "$((major + 1)).0.0"; fi
+  elif echo "$subjects" | grep -Eq '^feat(\([^)]*\))?:'; then
+    echo "$major.$((minor + 1)).0"
+  elif echo "$subjects" | grep -Eq '^fix(\([^)]*\))?:'; then
+    echo "$major.$minor.$((patch + 1))"
+  fi
+}
+
+if [ "$next_only" = 1 ]; then
+  next_version
+  exit 0
+fi
+if [ -z "$version" ]; then
+  version=$(next_version)
+  [ -n "$version" ] || die "nothing to release: no feat or fix commits since ${last:-the start}"
+  echo "release: the commits since ${last:-the start} call for $version"
+fi
+echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || die "usage: sh tools/release.sh [X.Y.Z] [--next] [--skip-checks]"
 
 [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || die "releases are made on main"
 [ -z "$(git status --porcelain)" ] || die "the working tree has changes: commit or stash them first"
 git rev-parse -q --verify "refs/tags/v$version" >/dev/null && die "v$version already exists"
 
-current=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
-[ -n "$current" ] || die "no version in Cargo.toml's [workspace.package]"
 # Never backwards; the current version itself only while it was never tagged (the first release).
 newest=$(printf '%s\n%s\n' "$current" "$version" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
 [ "$newest" = "$version" ] || die "$version is before $current"
@@ -49,8 +91,6 @@ fi
 
 # The notes: a section written by hand stays; otherwise one from the feat and fix commits since the last tag.
 if ! grep -Eq "^## $version( |$)" RELEASES.md; then
-  last=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
-  range=${last:+$last..}HEAD
   # `feat: x`, `feat(scope): x`; with `!` before the colon, a breaking change.
   subjects() { git log --no-merges --format='%s' "$range" | sed -n "s/^$1\(([^)]*)\)\{0,1\}$2: /- /p"; }
   section=$(mktemp)
