@@ -6,7 +6,8 @@
 // Exit code 1 when any check fails.
 const url = process.env.URL ?? 'http://127.0.0.1:8770/'
 const port = 9338
-const chrome = Bun.spawn(['google-chrome-stable', '--headless=new', '--disable-gpu', '--no-sandbox', `--user-data-dir=/tmp/aria-check-${process.pid}`, `--remote-debugging-port=${port}`, '--window-size=940,940', 'about:blank'], { stderr: 'ignore', stdout: 'ignore' })
+const browser = process.env.CHROME ?? (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'google-chrome-stable')
+const chrome = Bun.spawn([browser, '--headless=new', '--disable-gpu', '--no-sandbox', `--user-data-dir=/tmp/aria-check-${process.pid}`, `--remote-debugging-port=${port}`, '--window-size=940,940', 'about:blank'], { stderr: 'ignore', stdout: 'ignore' })
 let target: any
 for (let i = 0; i < 50 && !target; i++) {
   await Bun.sleep(200)
@@ -348,6 +349,38 @@ const script = `(async () => {
   check('a streamed delta keeps the earlier messages as the same elements', firstItem?.textContent.includes('An earlier answer') && firstItem.isConnected && $('#chat-list .thread-item') === firstItem, firstItem?.textContent)
   check('a tool call being written never shows its JSON', !$('#chat-list').textContent.includes('"command"'), $('#chat-list').textContent.slice(-120))
   on({ type: 'agent_settled', aborted: false })
+
+  // 8c. while Aria thinks, the working line is not redrawn per streamed token and the reader can scroll up
+  await reset()
+  const wasChat = document.body.classList.contains('mode-chat')
+  document.body.classList.add('mode-chat') // the thread needs its real height to scroll
+  for (let i = 0; i < 30; i++) on({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Line ' + i + ' of an earlier answer.' }] } })
+  on({ type: 'agent_start' })
+  on({ type: 'message_start', message: { role: 'assistant', content: [] } })
+  on({ type: 'message_update', assistantMessageEvent: { type: 'thinking_start', contentIndex: 0 } })
+  await settle(); await wait(40)
+  const grid = $('#chat-list .p-working-grid')
+  const list = $('#chat-list')
+  list.scrollTop = list.scrollHeight
+  await wait(40)
+  list.scrollTop -= 30 // the first frames of a wheel or trackpad scroll move only a little
+  await wait(40)
+  const scrolled = list.scrollTop
+  for (let i = 0; i < 5; i++) {
+    on({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: ' token' + i } })
+    await wait(250) // longer than a tenth of a second: the elapsed time has changed
+  }
+  check('a thinking token keeps the working line (its animation does not restart)', grid && grid.isConnected && $('#chat-list .p-working-grid') === grid)
+  check('a thinking token does not pull a reader who scrolled up back to the bottom', scrolled > 0 && Math.abs(list.scrollTop - scrolled) < 2, scrolled + ' -> ' + list.scrollTop + ' of ' + list.scrollHeight + '/' + list.clientHeight)
+  list.scrollTop = list.scrollHeight // back at the end: it follows again
+  await wait(40)
+  for (let i = 0; i < 30; i++) on({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 1, delta: ' more words of the answer that make the thread grow' } })
+  await wait(80)
+  check('a reader back at the end follows the answer again', list.scrollHeight - list.scrollTop - list.clientHeight < 2, list.scrollHeight - list.scrollTop - list.clientHeight)
+  const shown = parseFloat($('#chat-list .p-working-time')?.textContent ?? '0')
+  check('the working line still counts the time', shown >= 1, $('#chat-list .p-working-time')?.textContent)
+  on({ type: 'agent_settled', aborted: false })
+  document.body.classList.toggle('mode-chat', wasChat)
 
   // 9. the settings: a control redraws the section through its components, keeping the scroll and the focus
   $('[data-chat="settings"]').click(); await wait(200)

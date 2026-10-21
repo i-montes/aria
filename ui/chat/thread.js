@@ -78,12 +78,15 @@ export function threadItems(state, ui = {}, t) {
   const entries = state.messages.map((entry, index) => renderEntry(state, entry, index, ui, t))
   const cards = state.dialogs.filter((d) => d.card && INLINE_CARDS.includes(d.card.kind)).map((d) => `<div class="thread-item">${renderCard(d, t)}</div>`)
   const queued = state.queue.map((q, i) => `<div class="thread-item">${renderUser({ text: q.text, queued: true, id: String(i) }, {}, t)}</div>`)
-  const working = state.running ? `<div class="thread-item thread-working">${renderWorking({ phase: state.phase, startedAt: state.startedAt }, { now: ui.now ?? Date.now() }, t)}</div>` : ''
+  // The working line's markup stays the same while it runs (the view ticks its elapsed time in place): markup that
+  // changed with the clock rebuilt the line on every streamed token, which restarted its animation.
+  const steady = (startedAt) => ({ now: Number.isFinite(startedAt) ? startedAt : (ui.now ?? Date.now()) })
+  const working = state.running ? `<div class="thread-item thread-working">${renderWorking({ phase: state.phase, startedAt: state.startedAt }, steady(state.startedAt), t)}</div>` : ''
   const blank = !state.messages.length && !state.running && !state.queue.length && !cards.length
   // A session whose history has not arrived yet is loading, not new (unless its Pi cannot start: the problem shows).
   const loading = blank && state.loaded === false && !state.problem
   const empty = blank && !loading ? renderEmptyThread(t) : ''
-  const loader = loading ? `<div class="thread-item thread-working">${renderWorking({ label: t('chat.loading'), startedAt: state.loadingSince }, { now: ui.now ?? Date.now() }, t)}</div>` : ''
+  const loader = loading ? `<div class="thread-item thread-working">${renderWorking({ label: t('chat.loading'), startedAt: state.loadingSince }, steady(state.loadingSince), t)}</div>` : ''
   return [empty, loader, ...entries, ...cards, working, ...queued].filter(Boolean)
 }
 

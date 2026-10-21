@@ -173,6 +173,10 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   let indexKey = ''
   let questionKey = ''
   let input = null
+  // The thread follows what Aria writes while the reader is at its end. Only the reader changes that, by scrolling: a
+  // redraw cannot, or a stream of tokens (one redraw a frame) pulls back the first pixels of every scroll up.
+  let following = true
+  let listTop = 0
   let banner = ''
 
   const chatOf = (id) => chats.get(id) ?? createChat()
@@ -219,6 +223,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     </div>
     <div id="chat-toast"></div>`
     input = null
+    following = true
+    listTop = 0
     composerKey = ''
     headerKey = ''
     indexKey = ''
@@ -270,14 +276,14 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   function drawThread() {
     const state = current()
     const list = $('chat-list')
-    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80
     const ex = expanded()
     const connectHtml = ui.connect ? `<div class="thread-item" id="chat-connect">${renderConnect(ui.connect, {}, t)}</div>` : ''
     keepingFocus(list, () => {
       const items = threadItems(state, { expanded: ex.open, collapsed: ex.closed, openRows: ex.rows, moreOpen: ex.more, now: Date.now() }, t)
       patchItems(list, connectHtml ? [...items, connectHtml] : items)
     })
-    if (nearBottom || (ui.connect && ui.connect.justOpened)) list.scrollTop = list.scrollHeight
+    tickElapsed() // a working line drawn just now shows its start time until the timer reaches it
+    if (following || (ui.connect && ui.connect.justOpened)) list.scrollTop = list.scrollHeight
     if (ui.connect) ui.connect.justOpened = false
   }
 
@@ -597,6 +603,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     clearDraft()
     render()
     const list = $('chat-list')
+    following = true
     list.scrollTop = list.scrollHeight
   }
 
@@ -906,8 +913,19 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   }
 
   root.addEventListener('scroll', (event) => {
-    if (event.target?.id === 'chat-list') updateActive()
+    if (event.target?.id !== 'chat-list') return
+    updateActive()
+    const list = event.target
+    const fromEnd = list.scrollHeight - list.scrollTop - list.clientHeight
+    if (list.scrollTop < listTop && fromEnd > 1) following = false // moved up (a shorter thread clamping it stays at the end)
+    else if (fromEnd < 80) following = true
+    listTop = list.scrollTop
   }, true)
+
+  // A wheel or trackpad turned up stops following before its scroll lands, so the next frame's redraw cannot undo it.
+  root.addEventListener('wheel', (event) => {
+    if (event.deltaY < 0 && event.target?.closest?.('#chat-list')) following = false
+  }, { capture: true, passive: true })
 
   const indexGeometry = () => indexLayout(indexItems(current().messages).length, { ...ui.index, expanded: true })
 
