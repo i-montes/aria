@@ -2,7 +2,7 @@
 // The jobs socket client against a fake dock: hello, answers by id, pushed events, reconnecting, and no dock.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { JobsClient } from './client.ts'
-import { fakeDock, socketPath, type FakeDock } from './fake-dock.ts'
+import { fakeDock, socketPath, type FakeDock } from './fake-dock.test.ts'
 
 let client: JobsClient | null = null
 let dock: FakeDock | null = null

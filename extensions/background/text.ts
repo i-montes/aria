@@ -46,8 +46,13 @@ function activeEntry(j: Job, now: number): string {
   return `${name(j)} (${parts.join(', ')})`
 }
 
+/** A subagent that wrote straight into its folder: its edits are already there. */
+const wroteInFolder = (j: Job) => j.kind === 'agent' && j.writes !== false && j.isolation === 'folder'
+const editsSoFar = (j: Job) => `The edits it made so far are in ${j.folder} (not committed).`
+
 /** Where a finished subagent's changes are. */
 function changes(j: Job): string | null {
+  if (wroteInFolder(j)) return j.state === 'done' ? 'changes in the folder, not committed' : 'edits so far in the folder, not committed'
   if (j.kind !== 'agent' || j.isolation !== 'worktree') return null
   if (j.conflict && j.worktree) return `conflict: kept in ${j.worktree}`
   if (j.worktree) return `worktree kept in ${j.worktree}`
@@ -88,7 +93,13 @@ const lastLines = (lines: unknown): string => (Array.isArray(lines) && lines.len
 export function endedMessage(e: any): { text: string; triggerTurn: boolean } {
   if (e?.event === 'cut') {
     const jobs: Job[] = Array.isArray(e.jobs) ? e.jobs : []
-    const entries = jobs.map((j) => (j.worktree ? `${name(j)} (its worktree is kept in ${j.worktree})` : name(j)))
+    const entries = jobs.map((j) =>
+      j.worktree
+        ? `${name(j)} (its worktree is kept in ${j.worktree})`
+        : wroteInFolder(j)
+          ? `${name(j)} (the edits it made so far are in ${j.folder}, not committed)`
+          : name(j),
+    )
     return {
       text: `Aria's dock stopped, so this background work was cut and is no longer running: ${entries.join('; ') || 'none'}.`,
       triggerTurn: false,
@@ -102,14 +113,15 @@ export function endedMessage(e: any): { text: string; triggerTurn: boolean } {
     const how = j.state === 'failed' ? 'failed' : `ended by itself${j.exit !== null && j.exit !== undefined ? ` (exit ${j.exit})` : ''}`
     return { text: `Background ${label} ${how}.${lastLines(e?.lastLines)}\nTell the person what happened.`, triggerTurn: true }
   }
-  const kept = j.worktree ? ` Its worktree is kept in ${j.worktree}.` : ''
+  const kept = j.worktree ? ` Its worktree is kept in ${j.worktree}.` : wroteInFolder(j) ? ` ${editsSoFar(j)}` : ''
   if (by === 'stop') return { text: `Background ${label} was stopped.${kept}`, triggerTurn: false }
   if (j.state !== 'done') {
     const result = j.result ? `\nWhat it said:\n${j.result}` : ''
     return { text: `Background ${label} failed.${kept}${result}${lastLines(e?.lastLines)}\nTell the person what happened.`, triggerTurn: true }
   }
   let where = ''
-  if (j.isolation === 'worktree') {
+  if (wroteInFolder(j)) where = ` Its changes are in ${j.folder} (not committed).`
+  else if (j.isolation === 'worktree') {
     where = j.conflict
       ? ` Its changes could not be applied to ${j.folder} cleanly; they are kept in the worktree ${j.worktree}. Ask the person how to merge them.`
       : j.worktree

@@ -5,7 +5,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { jobsClient } from './client.ts'
-import { fakeDock, job, socketPath, type FakeDock } from './fake-dock.ts'
+import { fakeDock, job, socketPath, type FakeDock } from './fake-dock.test.ts'
 import background from './index.ts'
 
 const DOCK_REFUSAL = "Background work needs Aria's dock."
@@ -220,5 +220,57 @@ describe('the background extension', () => {
     expect(text(await pi.run('background_stop', { job: '#3' }, rpc))).toContain('already ended')
     expect(await dock!.waitFor((l) => l.op === 'stop')).toMatchObject({ job: 'j3' })
     expect(text(await pi.run('background_output', { job: 'j3', lines: 900 }, rpc))).toContain('lines 400')
+  })
+  test('background_run refuses a folder outside the projects folder', async () => {
+    process.env.PI_SANDBOX = '0'
+    const pi = await withDock()
+    const out = await pi.run('background_run', { command: 'bun dev', title: 'Dev', folder: '/usr/share' }, rpc)
+    expect(out.isError).toBe(true)
+    expect(text(out)).toContain('outside')
+    await Bun.sleep(30)
+    expect(dock!.lines.some((l) => l.op === 'start')).toBe(false)
+  })
+
+  test('background_run waits at most about 3 s even when the dock stops answering', async () => {
+    process.env.PI_SANDBOX = '0'
+    const pi = await withDock((req) => (req.op === 'start' ? { ok: true, job: job() } : req.op === 'hello' ? undefined : null))
+    const started = Date.now()
+    const out = await pi.run('background_run', { command: 'bun dev', title: 'Dev server' }, rpc)
+    expect(Date.now() - started).toBeLessThan(3300)
+    expect(text(out)).toContain('Started in the background as #3')
+  }, 8000)
+
+  test('a second instance without a shutdown (a reload) takes over the events: an end is told once', async () => {
+    const first = await withDock()
+    const second = fakePi()
+    second.dock = dock
+    background(second as any)
+    await second.fire('session_start', { type: 'session_start' }, rpc)
+    await dock!.waitFor((l) => l.op === 'hello')
+    await Bun.sleep(20)
+    dock!.push({ event: 'ended', seq: 11, by: 'self', job: job({ state: 'exited', endedAt: 11 }), lastLines: [] })
+    await dock!.waitFor((l) => l.op === 'ack' && l.event === 11)
+    await Bun.sleep(30)
+    expect(first.messages.length + second.messages.length).toBe(1)
+    expect(second.messages.length).toBe(1)
+    expect(dock!.lines.filter((l) => l.op === 'ack' && l.event === 11).length).toBe(1)
+  })
+
+  test('when the dock socket changes, the next message listens on the new client', async () => {
+    const pi = await withDock()
+    const other = await fakeDock(socketPath())
+    try {
+      process.env.ARIA_JOBS_SOCK = other.path
+      pi.dock = other
+      await pi.fire('before_agent_start', { type: 'before_agent_start', messageType: 'user', prompt: 'hi' }, rpc)
+      await other.waitFor((l) => l.op === 'hello')
+      await Bun.sleep(20)
+      other.push({ event: 'ended', seq: 1, by: 'stop', job: job({ id: 'j8', number: 8, state: 'stopped', endedAt: 1 }), lastLines: [] })
+      await other.waitFor((l) => l.op === 'ack' && l.event === 1)
+      expect(pi.messages.map((m) => m.message.details.job.id)).toEqual(['j8'])
+    } finally {
+      jobsClient()?.close()
+      await other.stop()
+    }
   })
 })

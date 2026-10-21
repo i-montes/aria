@@ -1,7 +1,7 @@
 // Run: bun test extensions
 // What Aria reads about its background work: the hidden `[background]` line and the message when a job ends.
 import { describe, expect, test } from 'bun:test'
-import { job } from './fake-dock.ts'
+import { job } from './fake-dock.test.ts'
 import { endedMessage, listText, nowLine } from './text.ts'
 
 const NOW = Date.UTC(2026, 9, 21, 12, 0)
@@ -99,5 +99,29 @@ describe('the message when a job ends', () => {
     expect(m.text).toContain('#3 process "Dev server"')
     expect(m.text).toContain('#4 subagent "refactor"')
     expect(m.text).toContain('/p/.aria-worktrees/j4')
+  })
+  const inFolder = (fields: Record<string, unknown>) => job({ kind: 'agent', isolation: 'folder', writes: true, folder: '~/Projects/api', ...fields })
+
+  test('a done writer in folder mode says its changes are in the folder', () => {
+    const m = endedMessage({ event: 'ended', seq: 1, by: 'self', job: inFolder({ state: 'done', result: 'Done.' }), lastLines: [] })
+    expect(m.text).toContain('Its changes are in ~/Projects/api (not committed).')
+    expect(m.text.endsWith('Tell the person what it did, and save its Learnings to memory.')).toBe(true)
+  })
+
+  test('a stopped or failed writer in folder mode says its edits so far are in the folder', () => {
+    for (const [by, state] of [['stop', 'stopped'], ['self', 'failed']]) {
+      const m = endedMessage({ event: 'ended', seq: 1, by, job: inFolder({ state }), lastLines: [] })
+      expect(m.text).toContain('The edits it made so far are in ~/Projects/api (not committed).')
+    }
+    const reader = endedMessage({ event: 'ended', seq: 1, by: 'stop', job: inFolder({ state: 'stopped', writes: false }), lastLines: [] })
+    expect(reader.text).not.toContain('edits')
+  })
+
+  test('a cut writer in folder mode says its edits so far are in the folder, in the message and the list', () => {
+    const m = endedMessage({ event: 'cut', seq: 1, jobs: [inFolder({ state: 'cut' })] })
+    expect(m.text).toContain('the edits it made so far are in ~/Projects/api, not committed')
+    expect(listText([inFolder({ state: 'cut' }), inFolder({ id: 'j9', number: 9, state: 'done' })], NOW)).toContain(
+      '#3 subagent "Dev server" (cut, edits so far in the folder, not committed, ~/Projects/api); #9 subagent "Dev server" (done, changes in the folder, not committed, ~/Projects/api)',
+    )
   })
 })

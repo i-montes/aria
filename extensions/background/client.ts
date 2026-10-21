@@ -197,7 +197,7 @@ export const jobsClient = (): JobsClient | null => {
   return client
 }
 
-const textResult = (text: string, isError = false, details: any = undefined) => ({
+export const textResult = (text: string, isError = false, details: any = undefined) => ({
   content: [{ type: 'text' as const, text }],
   ...(isError ? { isError: true } : {}),
   details,
@@ -217,7 +217,7 @@ const SHOWN_LINES = 30
  * started.
  */
 export async function startProcess(o: { command: string; line: string; title: string; folder: string }): Promise<{ content: any[]; isError?: boolean; details?: any }> {
-  const client = process.env.ARIA_JOBS_SOCK ? jobsClient() : null
+  const client = jobsClient()
   if (!client) return refusal(DOCK_REFUSAL)
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) if (typeof v === 'string') env[k] = v
@@ -235,12 +235,15 @@ export async function startProcess(o: { command: string; line: string; title: st
   const end = Date.now() + WAIT_MS
   while (Date.now() < end && !url && !ended) {
     await new Promise((r) => setTimeout(r, Math.min(POLL_MS, Math.max(0, end - Date.now()))))
+    // Each request gets only the time left, so the whole wait stays within the 3 s.
+    const left = () => Math.max(1, end - Date.now())
     try {
-      const out = await client.request('output', { job: job.id, lines: SHOWN_LINES }, 1000)
+      const out = await client.request('output', { job: job.id, lines: SHOWN_LINES }, left())
       if (out?.ok && Array.isArray(out.lines)) lines = out.lines
       const found = lines.map((l) => l.match(URL_RE)?.[0]).find(Boolean)
       if (found) url = found
-      const list = await client.request('list', {}, 1000)
+      if (url || Date.now() >= end) break
+      const list = await client.request('list', {}, left())
       const now = Array.isArray(list?.jobs) ? list.jobs.find((j: any) => j.id === job.id) : null
       if (now?.url) url = now.url
       if (now && now.state !== 'running' && now.state !== 'queued') ended = now

@@ -1,5 +1,6 @@
-// A fake of Aria's dock for the background extension's tests: a Unix socket server that speaks the jobs protocol
-// (one JSON object per line), records every line it gets, answers with `handle` (or a plain `ok`), and can push events.
+// Not tests: a helper shared by the background tests (named `.test.ts` so the installer never ships it). A fake of Aria's
+// dock: a Unix socket server that speaks the jobs protocol (one JSON object per line), records every line it gets,
+// answers with `handle` (or a plain `ok`), and can push events.
 import { mkdtempSync } from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -46,7 +47,9 @@ export async function fakeDock(path = socketPath(), handle?: (req: any, dock: Fa
             const req = JSON.parse(line)
             dock.lines.push(req)
             if (req.op === 'ack') continue
-            const answer = handle?.(req, dock) ?? (req.op === 'list' ? { ok: true, jobs: dock.jobs } : { ok: true })
+            // `undefined`: the default answer; `null`: no answer at all.
+            const given = handle?.(req, dock)
+            const answer = given === undefined ? (req.op === 'list' ? { ok: true, jobs: dock.jobs } : { ok: true }) : given
             if (answer === null) continue
             sock.write(`${JSON.stringify({ re: req.id, ...answer })}\n`)
           }

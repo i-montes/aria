@@ -8,7 +8,7 @@
 // In a subagent (`ctx.mode === 'json'`) nothing is opened and every tool refuses.
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { resolvePath, subagentProblem } from '../sandbox/policy.ts'
-import { DOCK_REFUSAL, jobsClient, refusal, startProcess, type JobsClient } from './client.ts'
+import { DOCK_REFUSAL, jobsClient, refusal, startProcess, textResult, type JobsClient } from './client.ts'
 import { endedMessage, listText, nowLine } from './text.ts'
 
 export const SUBAGENT_REFUSAL = 'Background work is not available inside a subagent.'
@@ -42,7 +42,7 @@ const RUN_DESCRIPTION = [
 const str = (description: string) => ({ type: 'string', description })
 const object = (properties: Record<string, any>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false })
 
-const text = (t: string, details: any = undefined) => ({ content: [{ type: 'text' as const, text: t }], details })
+const text = (t: string, details: any = undefined) => textResult(t, false, details)
 const isChild = (ctx: any) => ctx?.mode === 'json'
 
 /** The client for a tool call, or the refusal to return. */
@@ -74,14 +74,20 @@ async function jobId(client: JobsClient, ref: unknown): Promise<string> {
 
 const failure = (what: string, e: any) => refusal(`${what}: ${e?.message ?? e}`)
 
-export default function background(pi: ExtensionAPI) {
-  const told = new Set<string>()
-  let unsubscribe: (() => void) | null = null
+// Per process, on globalThis: the one listener on the jobs client (a reloaded or second instance of this extension
+// replaces it, so an end is never told twice) and the ends already told (an event given again after a lost ack).
+type Listener = { client: JobsClient; owner: object; unsubscribe: () => void }
+const LISTENER = Symbol.for('aria.background.listener')
+const TOLD = Symbol.for('aria.background.told')
+const shared = globalThis as unknown as { [LISTENER]?: Listener; [TOLD]?: Set<string> }
+const told = (shared[TOLD] ??= new Set<string>())
 
-  const onEvent = (e: any) => {
+export default function background(pi: ExtensionAPI) {
+  const me = {}
+
+  const onEvent = (client: JobsClient, e: any) => {
     try {
       if (!e || typeof e.seq !== 'number') return
-      const client = jobsClient()
       const key =
         e.event === 'cut'
           ? `cut:${(e.jobs ?? []).map((j: any) => `${j.id}@${j.startedAt}`).join(',')}`
@@ -95,18 +101,33 @@ export default function background(pi: ExtensionAPI) {
         told.add(key)
         if (told.size > MAX_REMEMBERED) told.delete(told.values().next().value as string)
       }
-      client?.ack(e.seq)
+      client.ack(e.seq)
     } catch {
       // not acked: the dock gives it again on the next hello
     }
   }
 
+  /** Makes this instance the one listening on the current client (again, if the client changed). */
+  const listen = (client: JobsClient | null) => {
+    if (!client) return
+    const current = shared[LISTENER]
+    if (current && current.client === client && current.owner === me) return
+    try {
+      current?.unsubscribe()
+    } catch {}
+    shared[LISTENER] = { client, owner: me, unsubscribe: client.onEvent((e) => onEvent(client, e)) }
+  }
+
+  /** The client for a tool call (listening on it), or the refusal. */
+  const use = (ctx: any) => {
+    const got = clientFor(ctx)
+    if ('client' in got) listen(got.client)
+    return got
+  }
+
   pi.on('session_start', (_event: any, ctx: any) => {
     try {
-      if (isChild(ctx)) return
-      const client = jobsClient()
-      if (!client || unsubscribe) return
-      unsubscribe = client.onEvent(onEvent)
+      if (!isChild(ctx)) listen(jobsClient())
     } catch {
       // no background events this session
     }
@@ -114,9 +135,12 @@ export default function background(pi: ExtensionAPI) {
 
   pi.on('session_shutdown', () => {
     try {
-      unsubscribe?.()
+      const current = shared[LISTENER]
+      if (current?.owner === me) {
+        current.unsubscribe()
+        delete shared[LISTENER]
+      }
     } catch {}
-    unsubscribe = null
   })
 
   pi.on('before_agent_start', async (event: any, ctx: any) => {
@@ -124,6 +148,7 @@ export default function background(pi: ExtensionAPI) {
       if (event?.messageType !== 'user' || isChild(ctx)) return
       const client = jobsClient()
       if (!client) return
+      listen(client)
       const answer = await client.request('list', {}, LIST_TIMEOUT_MS)
       const line = answer?.ok ? nowLine(answer.jobs ?? []) : null
       if (line) return { message: { customType: 'aria-background-now', content: line, display: false } }
@@ -148,7 +173,7 @@ export default function background(pi: ExtensionAPI) {
       ['task', 'title'],
     ),
     async execute(_id: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
-      const got = clientFor(ctx)
+      const got = use(ctx)
       if ('refused' in got) return got.refused
       const folder = folderOf(params.folder, ctx)
       const problem = subagentProblem({ cwd: folder }, ctx?.cwd ?? process.cwd())
@@ -184,7 +209,7 @@ export default function background(pi: ExtensionAPI) {
     description: "List this session's background work: what runs (processes, subagents) and what finished.",
     parameters: object({}),
     async execute(_id: string, _params: any, _signal: any, _onUpdate: any, ctx: any) {
-      const got = clientFor(ctx)
+      const got = use(ctx)
       if ('refused' in got) return got.refused
       try {
         const answer = await got.client.request('list')
@@ -202,7 +227,7 @@ export default function background(pi: ExtensionAPI) {
     description: "The last output lines of a background job (a process's output, or what a subagent did).",
     parameters: object({ job: str('The job: its id (j3) or number (#3).'), lines: { type: 'number', description: 'How many of the last lines: default 60, at most 400.' } }, ['job']),
     async execute(_id: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
-      const got = clientFor(ctx)
+      const got = use(ctx)
       if ('refused' in got) return got.refused
       try {
         const id = await jobId(got.client, params.job)
@@ -223,7 +248,7 @@ export default function background(pi: ExtensionAPI) {
     description: 'Stop a background job (a process and everything it started, or a subagent). Only when the person asks, or the job is no longer needed.',
     parameters: object({ job: str('The job: its id (j3) or number (#3).') }, ['job']),
     async execute(_id: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
-      const got = clientFor(ctx)
+      const got = use(ctx)
       if ('refused' in got) return got.refused
       try {
         const id = await jobId(got.client, params.job)
@@ -251,9 +276,12 @@ export default function background(pi: ExtensionAPI) {
         ['command', 'title'],
       ),
       async execute(_id: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
-        const got = clientFor(ctx)
+        const got = use(ctx)
         if ('refused' in got) return got.refused
-        return startProcess({ command: params.command, line: params.command, title: params.title, folder: folderOf(params.folder, ctx) })
+        const folder = folderOf(params.folder, ctx)
+        const problem = subagentProblem({ cwd: folder }, ctx?.cwd ?? process.cwd())
+        if (problem) return refusal(`Refused: ${problem}. A background command runs inside the projects folder.`)
+        return startProcess({ command: params.command, line: params.command, title: params.title, folder })
       },
     } as any)
   }
