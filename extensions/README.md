@@ -45,6 +45,14 @@ Tests: `bun test extensions`.
     a skill asks one at a time (the dock shows them as one card; the owner asked for it).
   - `ask-user/questions.ts`: `questionCard`, `parseCardAnswers` and `TALK_LABEL`. `ask-user/dock.ts` (new) asks with
     the card through `ui.input` with the abort signal; `index.ts` calls it in RPC.
+- **The sandbox's `background_run`** (new): a command that never ends (a dev server, a watcher) starts in Aria's dock
+  instead of holding up the conversation. It takes exactly bash's route (`routeOf` in `sandbox/index.ts`): a boxed
+  command goes to the dock already wrapped in bwrap (`backgroundLine` in `sandbox/route.ts`), leaving the sandbox asks
+  first on the same card, and the refusals are bash's own texts (`refusalText`); a session grant covers both tools. A
+  subagent, a missing dock or a folder outside the project (or `/tmp`) is refused before anything is asked. The description,
+  parameters and those checks are shared with `background` (`background/run.ts`); without the sandbox (`PI_SANDBOX=0`)
+  `background` registers the tool itself and runs the command as it is. Outside Aria's dock it refuses with
+  "Background work needs Aria's dock."
 - **Without bwrap** (macOS has none) the sandbox no longer refuses every command: each one asks first, with the same
   permission card and choices (`sandbox/route.ts`). Nothing runs unconfined without the user. On Linux nothing
   changes: without bwrap commands are still refused.

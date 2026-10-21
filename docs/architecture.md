@@ -40,7 +40,7 @@ Aria is a small Rust program that hosts a web page. The page is the interface; R
   - `quota` — the quota windows of the model's provider (OpenCode Go, a Claude plan).
 - **`aria-hyprland`** is the Hyprland adapter: it registers the hotkey at run time, asks which monitor has the focus, and reports config reloads. On macOS, **`aria-mac`** sits next to it with the same two jobs: `Option + Space` through Carbon (no Accessibility permission, no config to reload) and the screen under the pointer (macOS has no focused monitor that survives app switches).
 - **`aria-engine`** speaks Pi's RPC protocol: strict JSONL framing, commands and their responses, events, extension dialogs, and one supervised child (`Engine::close` stops it: stdin closed, killed after three seconds).
-- **`aria`** is the binary. `main.rs` wires things, `ui.rs` is the platform event loop (GTK/glib or `NSApplication`/`NSTimer`), `control.rs` keeps one instance, `visibility.rs` decides when the dock is shown or closing (a pure state machine), `dock/{gtk,mac}.rs` is the window (the same `Dock` API on both platforms), `handlers.rs` answers the page's setup messages, `chat.rs` owns the sessions: one Pi per tab, started when the tab is shown, restarted when a credential or a setting changes (a busy one when its run settles; `main.rs` watches `settings.json` once a second), with desktop notifications for a prompt nobody can see.
+- **`aria`** is the binary. `main.rs` wires things, `ui.rs` is the platform event loop (GTK/glib or `NSApplication`/`NSTimer`), `control.rs` keeps one instance, `visibility.rs` decides when the dock is shown or closing (a pure state machine), `dock/{gtk,mac}.rs` is the window (the same `Dock` API on both platforms), `handlers.rs` answers the page's setup messages, `chat.rs` owns the sessions: one Pi per tab, started when the tab is shown, restarted when a credential or a setting changes (a busy one when its run settles; `main.rs` watches `settings.json` once a second), with desktop notifications for a prompt nobody can see. `watch.rs` is each tab's subagent socket; `jobs.rs`, `jobs_socket.rs` and `worktree.rs` are background work (below); `lines.rs` reads a child's or a peer's lines up to a limit.
 
 ## The hotkey, without touching Hyprland's config
 
@@ -76,6 +76,24 @@ On macOS the dock is an `NSPanel` (borderless, nonactivating, status level, all 
 
 The defaults and the provider catalog exist in Rust and in JS; both are tested against the golden JSON in `crates/aria-core/tests/golden/` so they cannot drift (`cargo test -p aria-core regenerate_golden -- --ignored` rewrites them after an intended change).
 
+## Background work
+
+A command that never ends (a dev server) or a long job given to a subagent runs in the background while the conversation goes on. It belongs to the dock, not to Pi: a Pi restarts on a credential or settings change, and only the dock sees every session.
+
+- **`jobs.rs`** — one `Jobs` manager for the dock's whole life, shared by every `Chat`. A job is a process or a subagent, with a state (`queued`, `running`, `exited`, `failed`, `stopped`, `done`, `cut`). Every child is spawned from one long-lived spawner thread, as the leader of its own process group (on Linux with `PR_SET_PDEATHSIG(SIGTERM)`, which follows the thread that forked). A process is `bash -c <the sandbox's command line>` with stdin from `/dev/null` and stdout and stderr in one pipe; the dock keeps its last 1000 lines (2000 characters each, ANSI codes removed) in memory and takes the first local URL in them as the job's URL. Stop is SIGTERM to the group, SIGKILL after 3 s. The ends are events (`ended`, `cut`) kept per session until the extension acknowledges them. The limits are constants here: 10 processes, 3 running subagents (more wait, queued, in order), 20 finished jobs kept, an 8000-character result.
+- **`jobs/agent.rs`** — the subagents: `pi --mode json -p --no-session [--model …] [--thinking …]` through the session's `pi` shim, with the session's env minus `ARIA_JOBS_SOCK`, so there is no background work inside background work. The session's watch is told the job's title and task before the spawn, so the child shows up named. The result is the last assistant message, and an API error or a non-zero exit is `failed`. One writer per folder: a second writer in a git repository gets a worktree (`isolation: auto`, or `worktree` when asked), and outside git it waits.
+- **`worktree.rs`** — a worktree at `<repo>/.aria-worktrees/<job>`, made from `git stash create` (the person's uncommitted tracked changes, their folder untouched) or `HEAD`; `.aria-worktrees/` is appended once to `<git common dir>/info/exclude`, never to `.gitignore`. When the subagent is done, its changes come back as a binary patch applied with plain `git apply`: working tree only, nothing staged, nothing committed. A patch that does not apply, or a subagent that was stopped, failed or cut, keeps the worktree, and its path is named; nothing is removed without the person.
+- **`jobs_socket.rs`** — one socket per session, `$XDG_RUNTIME_DIR/aria/jobs-<session>.sock` beside the watch socket (`j-<16 hex>.sock` when the path is long), mode `600`. Pi gets it as `ARIA_JOBS_SOCK` and the `background` extension speaks JSON lines on it: `hello` (answered with every event not acknowledged yet), `start` (a process or an agent), `list`, `output`, `stop`, `ack`. The sandbox hides `$XDG_RUNTIME_DIR` from boxed commands, so a boxed command cannot reach it.
+
+Lifetimes:
+
+- Hiding the dock stops nothing, and neither does a Pi restart: the extension connects again and gets the events it missed.
+- Closing a tab stops that tab's jobs and drops its queued subagents.
+- An update waits while any job runs or is queued. After 30 minutes of waiting for background work alone, the sessions with that work get one notice saying how to update now; the update never cuts the work by itself. Right before the dock execs the new version it stops every job anyway.
+- The dock quitting stops every job. `~/.aria/jobs.json` records the jobs' state (never their output) on every change; at the next start the ones still running or queued become `cut`, and their sessions are told.
+
+The page gets every session's jobs as one `jobs` message, at most every 250 ms, and when a session loads. It shows the active session's as pills above the composer and all of them in the background list (Alt+A), with a job's output, its URL and a way to stop it.
+
 ## The messages
 
 One JSON object per message with a `type`, defined in `crates/aria-core/src/bridge.rs`. Requests that expect an answer carry an `id` that the answer repeats.
@@ -90,6 +108,8 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 | `installClaudeBridge`, `enginesRestart` | install the Claude provider; restart every Pi after a credential changed |
 | `sessionsLoad`, `sessionsSave`, `sessionClose`, `chatShown` | the tabs; is the chat on screen (not the settings) |
 | `session` (wrapping `chatSend`, `chatAbort`, `chatLoad`, `chatClearQueue`, `uiAnswer`, `listCommands`, `listModels`, `setModel`, `listFiles`) | everything about one tab's conversation |
+| `jobStop`, `jobDismiss` | stop a background job; take a failed one off the strip (no answer: the next `jobs` shows it) |
+| `jobOutput` | a job's last lines (80 unless `lines` says otherwise) |
 
 | Dock → page | Meaning |
 |---|---|
@@ -98,10 +118,12 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 | `problem` | something prevents Aria from working (for example `hyprland-classic-config`) |
 | `sessions` | the saved tabs |
 | `session` (wrapping `chatState`, `chatEvent`, `chatDialog`, `chatDialogClosed`, `chatEngine`, `chatQuota`, and the replies `commands`, `models`, `files`, `saved`, `error`) | what one tab's Pi says |
+| `jobs` | every session's background jobs, dismissed ones included (not wrapped in a session) |
+| `jobOutput` | the answer to `jobOutput`: the lines (none for a subagent, which keeps no output) |
 
 ## Data and safety
 
-- Everything Aria stores is under `~/.aria/`. `settings.json` never holds a secret; `auth.json`, `mcp.json` and `mcp-auth.json` are mode `600`.
+- Everything Aria stores is under `~/.aria/`. `settings.json` never holds a secret; `auth.json`, `mcp.json` and `mcp-auth.json` are mode `600`, and so is `jobs.json`, which holds no output. The one exception is a background subagent's worktree, inside the person's repository (`<repo>/.aria-worktrees/`).
 - Files are written atomically (a unique temp file and rename), and a file that cannot be parsed is reported, never overwritten (a broken `sessions.json` is moved to `sessions.json.broken`).
 - A key is validated against its provider before it is stored, and a rejected or unreachable check writes nothing.
 - The installer never edits `~/.config/hypr/`.

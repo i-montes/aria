@@ -113,6 +113,34 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
   conversation". Closing a tab stops its Pi and everything in that Pi's process group; a program that leaves the group
   on purpose (`setsid`, a daemon) is not followed.
 
+## Background work
+
+Processes and subagents run in the dock while the conversation goes on (`crates/aria/src/jobs.rs`, the `background`
+extension, the strip and the Alt+A list; see the [architecture](architecture.md#background-work)). Left:
+
+- A background subagent cannot be steered: its Session view shows its steps, but has no composer. Stopping it and
+  starting another is the only way to change its course.
+- macOS has no `PR_SET_PDEATHSIG`: if the dock crashes (rather than quits), the processes it started keep running and
+  nothing stops them; the next start marks them `cut` without killing them. On Linux the signal reaches only the job's
+  own leader, so a child it forked outlives a crash unless systemd's cgroup takes it (the installed service does).
+- The limits (3 subagents at once, 10 processes, 1000 lines of output, 30 minutes before the update notice) are
+  constants in `jobs.rs`, not settings.
+- A worktree has the person's committed and uncommitted tracked changes, not their untracked files: a subagent that
+  needs a new file the person has not added yet will not see it.
+- When a worktree's changes cannot come back because git itself failed (not a clash), it is reported as a clash, the
+  worktree is kept, and git's message is only in the log.
+- If the dock dies between making a worktree and recording it, the worktree stays in `<repo>/.aria-worktrees/` without
+  a job naming it; `git worktree list` shows it. An empty `.aria-worktrees/` folder is left behind after the last one
+  is removed (it is excluded from git).
+- A subagent stopped while it is still starting is shown as failed, not stopped.
+- The "update is waiting" notice is in English only, and reaches only the tabs whose Pi is running.
+- A broken `sessions.json` (moved aside at start) makes the dock forget every session's pending end notes.
+- If the dock never answers a `jobOutput`, that row's output stops refreshing until the page is loaded again.
+- Two background subagents in one session with the same title and task share one watch agent in the list.
+- A jobs socket that fails to open is not logged.
+- The browser check (`tools/ui-sandbox/check.ts`) prints `PAGE ERROR ReferenceError: process is not defined` a few
+  times; it happens on `main` too, and every check still passes.
+
 ## Known limits of the page (from the review, deferred)
 
 - The thread is redrawn on every streamed fragment, so text cannot be selected or copied while a run streams; the other regions only redraw when they change.

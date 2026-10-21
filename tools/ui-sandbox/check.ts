@@ -74,6 +74,26 @@ const script = `(async () => {
   check('at the bottom, the session follows what the agent writes', pane().scrollHeight - pane().scrollTop - pane().clientHeight < 4, [pane().scrollTop, pane().scrollHeight, pane().clientHeight].join(' '))
   window.aria.chat.toggleAgents(); await wait(40)
 
+  // 8c. background work: the strip above the composer, Stop on a pill, a pill opening the list, a job's output
+  {
+    window.sim.outputs = 0
+    ;[...document.querySelectorAll('nav button')].find((b) => b.textContent === 'Background work').click(); await wait(80)
+    const pills = () => [...document.querySelectorAll('#chat-background [data-chat="bg-open"]')].map((b) => b.dataset.id)
+    check('the strip shows the session’s background work', $('.chat-bg')?.classList.contains('is-on') && pills().join() === 'j1,j2,j3', pills().join())
+    $('#chat-background [data-chat="bg-stop"][data-id="j1"]').click(); await wait(80)
+    const stops = window.__sent.filter((m) => m.type === 'jobStop')
+    check('stop sends jobStop with the job id', stops.length === 1 && stops[0].job === 'j1' && pills().join() === 'j2,j3', JSON.stringify(stops) + ' ' + pills().join())
+    $('#chat-background [data-chat="bg-open"][data-id="j2"]').click(); await wait(80)
+    const list = $('#view-agents')
+    check('a pill opens the background list on that job', !list.hidden && list.querySelector('[data-job="j2"]')?.classList.contains('is-target'), list.innerHTML.slice(0, 120))
+    list.querySelector('[data-chat="bg-output"][data-id="j1"]').click(); await wait(120)
+    const out = list.querySelector('[data-job="j1"] .p-bg-output')?.textContent ?? ''
+    check('Output shows the job’s lines', ['$ bun dev', 'ready on http://localhost:3000', 'GET / 200 in 4 ms'].every((l) => out.includes(l)), out)
+    list.querySelector('[data-chat="bg-output"][data-id="j1"]').click(); await wait(40)
+    window.aria.chat.toggleAgents(); await wait(40)
+    window.aria.receive({ type: 'jobs', jobs: [] }); window.sim.jobs = []; await wait(40)
+  }
+
   // 8d. the background list (Alt+A): every session's jobs, the output polled while a row is open, a failed pill dismissed
   {
     const now = Date.now()
@@ -100,8 +120,8 @@ const script = `(async () => {
     check('a focused Stop keeps the focus while the output is polled', document.activeElement === stopB1() && document.activeElement?.dataset.id === 'b1', document.activeElement?.outerHTML?.slice(0, 80))
     const ob = outBlock()
     check('the output block shows its newest line after new lines arrive', ob && ob.textContent.length > linesBefore && ob.scrollHeight > ob.clientHeight && ob.scrollHeight - ob.scrollTop - ob.clientHeight < 4, ob && [ob.scrollTop, ob.scrollHeight, ob.clientHeight].join(' '))
-    const polled = window.__sent.filter((m) => m.type === 'jobOutput')
-    check('the output is asked again every second while the row is open, top level, 80 lines', polled.length - outputsBefore >= 3 && polled.every((m) => m.job === 'b1' && m.lines === 80 && typeof m.id === 'number'), polled.length - outputsBefore)
+    const polled = window.__sent.filter((m) => m.type === 'jobOutput').slice(outputsBefore)
+    check('the output is asked again every second while the row is open, top level, 80 lines', polled.length >= 3 && polled.every((m) => m.job === 'b1' && m.lines === 80 && typeof m.id === 'number'), polled.length)
     list.querySelector('[data-chat="bg-output"][data-id="b1"]').click(); await wait(40)
     const folded = window.__sent.filter((m) => m.type === 'jobOutput').length
     await wait(1200)

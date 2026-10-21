@@ -91,3 +91,12 @@ Notes: the desktop notification for a prompt that nobody can see is sent with `o
 | File | What | Backup | Revert |
 |---|---|---|---|
 | `~/.config/mise/config.toml` | `shellcheck = "0.11.0"` (mise's static release binary; pacman's package failed on a mirror signature) so `install/install*.test.sh` lint `install.sh` | none, one line added | `mise unuse -g shellcheck` |
+
+## 2026-10-21 — background work
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| `~/.aria/jobs.json` | the background jobs' state (no output), mode 600, written by the dock on every change; jobs still running at the next start become `cut` (new) | none, new | `rm ~/.aria/jobs.json` while the dock is stopped (the Finished list and any end note not yet told are forgotten) |
+| `$XDG_RUNTIME_DIR/aria/jobs-<session>.sock` (in `~/.aria/run/` on macOS; `j-<hash>.sock` when the usual name would be too long) | one socket per open tab for its background work, mode 600, removed when the tab closes (new) | none | stopping the dock removes them |
+| `<repo>/.aria-worktrees/<job>` | a git worktree for a background subagent that writes while another writer holds the same repository (or that asked for one); removed once its changes are back in the folder, kept when they clash or the subagent was stopped, failed or cut (new, in the person's repositories) | none, new; the person's own files are not touched | `git worktree remove --force .aria-worktrees/<job>` in the repository (after taking what you want from it), then `rmdir .aria-worktrees` |
+| `<git common dir>/info/exclude` (usually `<repo>/.git/info/exclude`) | one line, `.aria-worktrees/`, appended the first time a worktree is made in that repository, so git ignores the folder; never `.gitignore` | none, one line added | delete the `.aria-worktrees/` line |
