@@ -21,7 +21,12 @@ use std::path::{Path, PathBuf};
 pub struct Found {
     /// `source:name`.
     pub id: String,
+    /// The name in the other app, for display.
     pub name: String,
+    /// The name it is written under: `name` with what Pi refuses replaced (`pi_name`). A name already taken in Aria's
+    /// `mcp.json` still gets `-2`, `-3`… when it is imported.
+    #[serde(rename = "importAs")]
+    pub import_as: String,
     /// `claude-code` | `claude-desktop` | `cursor` | `vscode`.
     pub source: String,
     /// `stdio` | `http` | `sse`.
@@ -49,6 +54,7 @@ impl std::fmt::Debug for Found {
         f.debug_struct("Found")
             .field("id", &self.id)
             .field("name", &self.name)
+            .field("import_as", &self.import_as)
             .field("source", &self.source)
             .field("kind", &self.kind)
             .field("target", &self.target)
@@ -114,7 +120,8 @@ pub fn find_in(home: &Path, config: &Path, existing: &[String]) -> Vec<Found> {
         let Ok(Some(file)) = read_json(&path) else { continue };
         let Some(servers) = file.get(key).and_then(Value::as_object) else { continue };
         for (name, entry) in servers {
-            if name == "engram" || existing.iter().any(|e| e == name) {
+            let import_as = pi_name(name);
+            if name == "engram" || import_as == "engram" || existing.contains(&import_as) {
                 continue;
             }
             if let Some(server) = parse(source, name, entry) {
@@ -138,6 +145,25 @@ fn string_map(value: Option<&Value>) -> Option<Option<Map<String, Value>>> {
             Some(if out.is_empty() { None } else { Some(out) })
         }
         Some(_) => None,
+    }
+}
+
+/// A server name Pi accepts (letters, digits, `_` and `-`): every run of other characters becomes one `-`, a `-` at
+/// either end goes, and nothing left is `server`.
+fn pi_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let out = out.trim_matches('-');
+    if out.is_empty() {
+        "server".to_string()
+    } else {
+        out.to_string()
     }
 }
 
@@ -234,6 +260,7 @@ fn parse(source: &str, name: &str, entry: &Value) -> Option<Found> {
     Some(Found {
         id: format!("{source}:{name}"),
         name: name.to_string(),
+        import_as: pi_name(name),
         source: source.to_string(),
         kind: kind.to_string(),
         target,
@@ -294,10 +321,10 @@ pub fn import(paths: &AriaPaths, found: &[Found], ids: &[String]) -> Result<Vec<
     };
     let mut written = Vec::new();
     for server in chosen {
-        let mut name = server.name.clone();
+        let mut name = server.import_as.clone();
         let mut n = 2;
         while servers.contains_key(&name) {
-            name = format!("{}-{n}", server.name);
+            name = format!("{}-{n}", server.import_as);
             n += 1;
         }
         servers.insert(name.clone(), server.config.clone());
@@ -439,7 +466,7 @@ mod tests {
         assert!(!text.contains("config"), "{text}");
         assert_eq!(
             serde_json::to_value(by_id(&found, "claude-code:weather")).unwrap(),
-            json!({"id": "claude-code:weather", "name": "weather", "source": "claude-code", "kind": "http", "target": "weather.example.com", "secrets": ["Authorization"], "importable": true, "disabled": false})
+            json!({"id": "claude-code:weather", "name": "weather", "source": "claude-code", "kind": "http", "target": "weather.example.com", "secrets": ["Authorization"], "importAs": "weather", "importable": true, "disabled": false})
         );
         let debug = format!("{found:?}");
         assert!(!debug.contains("secret-value") && !debug.contains("config"), "{debug}");
@@ -556,5 +583,31 @@ mod tests {
         assert!(found.iter().any(|f| f.id == "vscode:tracker"));
         assert!(found.iter().any(|f| f.id == "claude-desktop:calendar"));
         assert!(find_in(&home, &home.join(".config"), &[]).is_empty());
+    }
+
+    #[test]
+    fn names_pi_refuses_are_written_under_a_valid_one() {
+        assert_eq!(pi_name("my docs.v2"), "my-docs-v2");
+        assert_eq!(pi_name("a  . b"), "a-b");
+        assert_eq!(pi_name(".hidden."), "hidden");
+        assert_eq!(pi_name("ok_name-1"), "ok_name-1");
+        assert_eq!(pi_name("día"), "d-a");
+        assert_eq!(pi_name("..."), "server");
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        put(
+            home,
+            PathBuf::from(".cursor/mcp.json"),
+            r#"{"mcpServers": {"my docs.v2": {"command": "docs"}, "my-docs-v2": {"command": "other"}}}"#,
+        );
+        let (_aria, paths) = aria();
+        let found = find_in(home, &home.join(".config"), &[]);
+        let spaced = by_id(&found, "cursor:my docs.v2");
+        assert_eq!((spaced.name.as_str(), spaced.import_as.as_str()), ("my docs.v2", "my-docs-v2"));
+        let names = import(&paths, &found, &["cursor:my docs.v2".into(), "cursor:my-docs-v2".into()]).unwrap();
+        // In the order found: the first takes the name, the one already called that gets `-2`.
+        assert_eq!(names, vec!["my-docs-v2", "my-docs-v2-2"]);
+        // Already in Aria's mcp.json under its written name: no longer offered.
+        assert!(find_in(home, &home.join(".config"), &crate::mcp::servers(&paths)).is_empty());
     }
 }
