@@ -1,0 +1,7 @@
+{
+  "globalShortcut": "",
+  "mcpServers": {
+    "calendar": { "command": "npx", "args": ["-y", "calendar-mcp"], "env": { "CALENDAR_KEY": "calendar-secret-value" } },
+    "files": { "command": "files-mcp" }
+  }
+}

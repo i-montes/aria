@@ -7,11 +7,13 @@ use aria_core::auth::{AuthStore, Credential};
 use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::json_file::JsonFileError;
 use aria_core::mcp::{self, McpError};
+use aria_core::mcp_import::{self, ImportError};
 use aria_core::oauth::{self, OAuthError};
 use aria_core::paths::AriaPaths;
 use aria_core::providers;
 use aria_core::settings::{self, Settings, SettingsError};
 use aria_core::validate::{check_key, KeyCheck, KeyKind, ProbeRequest};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,6 +45,10 @@ pub struct Ctx {
     pub installer: Installer,
     /// The `PATH` Pi would inherit (to find Claude Code and Node).
     pub path_var: String,
+    /// The person's home, where the other apps keep their MCP servers.
+    pub home: PathBuf,
+    /// Every session's Pi starts again when its run settles (`enginesRestart`); the dock wires it to the chat.
+    pub restart_engines: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl Ctx {
@@ -76,6 +82,8 @@ impl Ctx {
                     .is_ok_and(|status| status.success())
             }),
             path_var: std::env::var("PATH").unwrap_or_default(),
+            home: std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
+            restart_engines: Arc::new(|| {}),
         }
     }
 }
@@ -89,6 +97,8 @@ pub fn is_blocking(message: &PageMessage) -> bool {
             | PageMessage::StartOAuth { .. }
             | PageMessage::StartMcpOAuth { .. }
             | PageMessage::InstallClaudeBridge { .. }
+            | PageMessage::McpScan { .. }
+            | PageMessage::McpImport { .. }
     )
 }
 
@@ -140,6 +150,11 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
             let _ = ctx.paths.ensure_root();
             emit(install_claude_bridge(id, ctx));
         }
+        PageMessage::McpScan { id } => emit(mcp_scan(id, ctx)),
+        PageMessage::McpImport { id, ids } => {
+            let _ = ctx.paths.ensure_root();
+            emit(mcp_import(id, &ids, ctx));
+        }
         PageMessage::OpenUrl { url } => {
             if url.starts_with("https://") {
                 (ctx.opener)(&url);
@@ -166,6 +181,27 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         | PageMessage::JobStop { .. }
         | PageMessage::JobOutput { .. }
         | PageMessage::JobDismiss { .. } => {}
+    }
+}
+
+/// The servers the other apps configure that Aria's `mcp.json` does not have yet (names, kinds, targets and the names of
+/// their secrets; never a value).
+fn mcp_scan(id: u64, ctx: &Ctx) -> DockMessage {
+    let found = mcp_import::find(&ctx.home, &mcp::servers(&ctx.paths));
+    DockMessage::McpFound { id, servers: serde_json::to_value(found).unwrap_or_default() }
+}
+
+/// Finds the servers again (the page never holds their configuration) and copies the chosen ones; on success every Pi
+/// restarts when its run settles, so it sees them.
+fn mcp_import(id: u64, ids: &[String], ctx: &Ctx) -> DockMessage {
+    let found = mcp_import::find(&ctx.home, &mcp::servers(&ctx.paths));
+    match mcp_import::import(&ctx.paths, &found, ids) {
+        Ok(_) => {
+            (ctx.restart_engines)();
+            DockMessage::Saved { id }
+        }
+        Err(ImportError::NothingToImport) => DockMessage::Error { id, code: "nothing-to-import".into() },
+        Err(ImportError::File(_) | ImportError::Write(_)) => DockMessage::Error { id, code: "mcp-file-broken".into() },
     }
 }
 
@@ -420,6 +456,7 @@ mod tests {
         opened: Arc<Mutex<Vec<String>>>,
         seen_keys: Arc<Mutex<Vec<(KeyKind, String)>>>,
         checked_oauth: Arc<Mutex<Vec<String>>>,
+        restarts: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     fn harness(verdict: KeyCheck) -> Harness {
@@ -428,6 +465,8 @@ mod tests {
         let seen_keys = Arc::new(Mutex::new(Vec::new()));
         let checked_oauth = Arc::new(Mutex::new(Vec::new()));
         let (o, s, c) = (opened.clone(), seen_keys.clone(), checked_oauth.clone());
+        let restarts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let r = restarts.clone();
         let key_verdict = verdict.clone();
         let ctx = Ctx {
             paths: AriaPaths { root: dir.path().to_path_buf() },
@@ -444,8 +483,12 @@ mod tests {
             notion_url: "http://127.0.0.1:9/mcp".into(),
             installer: Arc::new(|_| false),
             path_var: String::new(),
+            home: dir.path().join("home"),
+            restart_engines: Arc::new(move || {
+                r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }),
         };
-        Harness { dir, ctx, opened, seen_keys, checked_oauth }
+        Harness { dir, ctx, opened, seen_keys, checked_oauth, restarts }
     }
 
     fn run(h: &Harness, message: PageMessage) -> Vec<DockMessage> {
@@ -456,6 +499,69 @@ mod tests {
 
     fn auth(h: &Harness) -> AuthStore {
         AuthStore::new(h.ctx.paths.auth())
+    }
+
+    // ---- importing other apps' MCP servers -------------------------------------------------------------
+
+    #[test]
+    fn scan_then_import_writes_mcp_json() {
+        use std::sync::atomic::Ordering;
+        let h = harness(KeyCheck::Valid);
+        let cursor = h.ctx.home.join(".cursor/mcp.json");
+        std::fs::create_dir_all(cursor.parent().unwrap()).unwrap();
+        std::fs::write(
+            &cursor,
+            r#"{"mcpServers": {"docs": {"url": "https://docs.example.com/mcp", "headers": {"X-Api-Key": "docs-secret-value"}}, "tavily": {"command": "tavily-mcp"}}}"#,
+        )
+        .unwrap();
+        mcp::add_notion_server(&h.ctx.paths).unwrap();
+        mcp::set_tavily_key(&h.ctx.paths, "tvly-key").unwrap();
+
+        let replies = run(&h, PageMessage::McpScan { id: 1 });
+        assert_eq!(
+            replies,
+            vec![DockMessage::McpFound {
+                id: 1,
+                servers: serde_json::json!([{"id": "cursor:docs", "name": "docs", "source": "cursor", "kind": "http", "target": "docs.example.com", "secrets": ["X-Api-Key"]}]),
+            }],
+            "tavily is already in Aria's mcp.json, and no secret value reaches the page"
+        );
+
+        assert_eq!(
+            run(&h, PageMessage::McpImport { id: 2, ids: vec![] }),
+            vec![DockMessage::Error { id: 2, code: "nothing-to-import".into() }]
+        );
+        assert_eq!(h.restarts.load(Ordering::SeqCst), 0);
+
+        assert_eq!(
+            run(&h, PageMessage::McpImport { id: 3, ids: vec!["cursor:docs".into()] }),
+            vec![DockMessage::Saved { id: 3 }]
+        );
+        assert_eq!(h.restarts.load(Ordering::SeqCst), 1, "every Pi restarts to see the new server");
+        assert_eq!(mcp::servers(&h.ctx.paths), vec!["docs", "notion", "tavily"]);
+        let file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(h.ctx.paths.mcp()).unwrap()).unwrap();
+        assert_eq!(file["mcpServers"]["docs"]["headers"]["X-Api-Key"], "docs-secret-value");
+        assert_eq!(std::fs::metadata(h.ctx.paths.mcp()).unwrap().permissions().mode() & 0o777, 0o600);
+
+        // Imported: no longer offered.
+        assert_eq!(
+            run(&h, PageMessage::McpScan { id: 4 }),
+            vec![DockMessage::McpFound { id: 4, servers: serde_json::json!([]) }]
+        );
+
+        std::fs::write(h.ctx.paths.mcp(), "{ broken").unwrap();
+        assert_eq!(
+            run(&h, PageMessage::McpImport { id: 5, ids: vec!["cursor:docs".into()] }),
+            vec![DockMessage::Error { id: 5, code: "mcp-file-broken".into() }]
+        );
+        assert_eq!(h.restarts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn scan_and_import_run_off_the_ui_thread() {
+        assert!(is_blocking(&PageMessage::McpScan { id: 1 }));
+        assert!(is_blocking(&PageMessage::McpImport { id: 1, ids: vec![] }));
     }
 
     // ---- the Claude provider -----------------------------------------------------------------------

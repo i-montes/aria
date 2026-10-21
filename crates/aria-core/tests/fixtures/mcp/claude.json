@@ -1,0 +1,31 @@
+{
+  "numStartups": 42,
+  "installMethod": "native",
+  "autoUpdates": true,
+  "theme": "dark",
+  "tipsHistory": { "new-user-warmup": 1, "memory-command": 3 },
+  "oauthAccount": { "accountUuid": "00000000-0000-0000-0000-000000000000", "emailAddress": "ana@example.com" },
+  "cachedStatsigGates": { "some_gate": true },
+  "projects": {
+    "/home/ana/code/shop": {
+      "allowedTools": [],
+      "mcpServers": { "project-db": { "command": "/usr/bin/db-mcp", "args": ["--local"] } }
+    }
+  },
+  "mcpServers": {
+    "files": {
+      "type": "stdio",
+      "command": "/home/ana/.local/bin/files-mcp",
+      "args": ["--root", "/home/ana/notes"],
+      "env": { "FILES_TOKEN": "files-secret-value" }
+    },
+    "weather": { "type": "http", "url": "https://weather.example.com/mcp", "headers": { "Authorization": "Bearer weather-secret-value" } },
+    "events": { "type": "sse", "url": "https://events.example.com:8443/sse" },
+    "engram": { "command": "engram", "args": ["mcp"] },
+    "broken-args": { "command": "tool", "args": "not-a-list" },
+    "no-command": { "args": ["x"] },
+    "a-string": "npx something",
+    "websocket": { "type": "ws", "url": "wss://ws.example.com" },
+    "numbers": { "command": 7 }
+  }
+}

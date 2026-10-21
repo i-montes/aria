@@ -1,0 +1,6 @@
+{
+  "mcpServers": {
+    "docs": { "serverUrl": "https://docs.example.com/mcp", "headers": { "X-Api-Key": "docs-secret-value" } },
+    "files": { "command": "uvx", "args": ["files-mcp"] }
+  }
+}

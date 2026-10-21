@@ -87,6 +87,13 @@ pub enum PageMessage {
     /// A credential or package changed: every session's Pi stops and starts again when next used, so it sees the change.
     #[serde(rename = "enginesRestart")]
     EnginesRestart,
+    /// Find the MCP servers other apps configure (Claude Code, Claude Desktop, Cursor, VS Code); replies `mcpFound`.
+    #[serde(rename = "mcpScan")]
+    McpScan { id: u64 },
+    /// Copy the found servers with these ids (`source:name`) into Aria's `mcp.json`; replies `saved` (and every Pi
+    /// restarts when its run settles), or an `error` whose `code` is `mcp-file-broken` or `nothing-to-import`.
+    #[serde(rename = "mcpImport")]
+    McpImport { id: u64, ids: Vec<String> },
     /// Is the chat on screen (false while the settings are open)? A prompt nobody sees gets a notification.
     #[serde(rename = "chatShown")]
     ChatShown { shown: bool },
@@ -148,6 +155,10 @@ pub enum DockMessage {
     },
     #[serde(rename = "saved")]
     Saved { id: u64 },
+    /// The answer to `mcpScan`: `[{ id, name, source, kind, target, secrets }]` (`mcp_import::Found`), never a secret's
+    /// value, only the names of the variables and headers.
+    #[serde(rename = "mcpFound")]
+    McpFound { id: u64, servers: Value },
     /// `error` is a UI string key: `key-rejected`, `network-unavailable`, `auth-file-broken`.
     #[serde(rename = "keyResult")]
     KeyResult { id: u64, ok: bool, error: Option<String> },
@@ -296,6 +307,11 @@ mod tests {
         assert_eq!(page(r#"{"type":"chatLoad"}"#), PageMessage::ChatLoad);
         assert_eq!(page(r#"{"type":"installClaudeBridge","id":12}"#), PageMessage::InstallClaudeBridge { id: 12 });
         assert_eq!(page(r#"{"type":"enginesRestart"}"#), PageMessage::EnginesRestart);
+        assert_eq!(page(r#"{"type":"mcpScan","id":7}"#), PageMessage::McpScan { id: 7 });
+        assert_eq!(
+            page(r#"{"type":"mcpImport","id":8,"ids":["cursor:docs","vscode:tracker"]}"#),
+            PageMessage::McpImport { id: 8, ids: vec!["cursor:docs".into(), "vscode:tracker".into()] }
+        );
         assert_eq!(page(r#"{"type":"chatShown","shown":false}"#), PageMessage::ChatShown { shown: false });
         assert_eq!(page(r#"{"type":"chatClearQueue"}"#), PageMessage::ChatClearQueue { steer: vec![], keep: vec![] });
         assert_eq!(
@@ -490,6 +506,10 @@ mod tests {
             json!({"type": "settings", "id": 1, "settings": null, "exists": false, "problem": null, "connected": ["mcp:tavily"], "servers": ["rea", "tavily"]})
         );
         assert_eq!(value(DockMessage::Saved { id: 2 }), json!({"type": "saved", "id": 2}));
+        assert_eq!(
+            value(DockMessage::McpFound { id: 7, servers: json!([{"id": "cursor:docs"}]) }),
+            json!({"type": "mcpFound", "id": 7, "servers": [{"id": "cursor:docs"}]})
+        );
         assert_eq!(
             value(DockMessage::OAuthUrl { id: 4, url: "https://x".into() }),
             json!({"type": "oauthUrl", "id": 4, "url": "https://x"})

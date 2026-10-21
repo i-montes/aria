@@ -7,6 +7,7 @@ pub mod bridge;
 pub mod files;
 pub mod json_file;
 pub mod mcp;
+pub mod mcp_import;
 pub mod oauth;
 pub mod paths;
 pub mod persona;

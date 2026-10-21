@@ -74,7 +74,18 @@ fn run_dock() {
     let paths = AriaPaths::from_env();
     let first_run = !paths.settings().exists();
     let mut settings_watch = chat::SettingsWatch::new(paths.settings());
-    let ctx = Arc::new(handlers::Ctx::real(paths.clone()));
+    // The chat's messages go through one worker thread (below); the handlers reach it too, to restart every Pi after an
+    // MCP import.
+    let (chat_sender, chat_receiver) = mpsc::channel::<PageMessage>();
+    let ctx = {
+        let chat_sender = chat_sender.clone();
+        Arc::new(handlers::Ctx {
+            restart_engines: Arc::new(move || {
+                let _ = chat_sender.send(PageMessage::EnginesRestart);
+            }),
+            ..handlers::Ctx::real(paths.clone())
+        })
+    };
 
     // The background work of every session, one for the dock's whole life: its spawner thread is what every job is tied
     // to, so it must outlive them all. The page hears of every change (at most four times a second).
@@ -125,7 +136,6 @@ fn run_dock() {
         )
     };
     chat.forget_gone_sessions();
-    let (chat_sender, chat_receiver) = mpsc::channel::<PageMessage>();
     let chat_for_visibility = chat.clone();
     let chat_for_settings = chat.clone();
     std::thread::spawn(move || {

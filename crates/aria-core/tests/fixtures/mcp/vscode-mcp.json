@@ -1,0 +1,13 @@
+{
+  "inputs": [ { "type": "promptString", "id": "tracker-token", "description": "Tracker token", "password": true } ],
+  "servers": {
+    "tracker": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/home/ana/tools/tracker/index.js"],
+      "env": { "TRACKER_TOKEN": "${input:tracker-token}" }
+    },
+    "search": { "type": "http", "url": "https://search.example.com/mcp", "headers": { "Authorization": "Bearer ${input:search-key}" } }
+  },
+  "mcpServers": { "ignored": { "command": "should-not-be-read" } }
+}
