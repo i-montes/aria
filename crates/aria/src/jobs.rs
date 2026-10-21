@@ -23,7 +23,8 @@ const MAX_PROCESSES: usize = 10;
 const OUTPUT_LINES: usize = 1000;
 /// Characters kept of one line of output.
 const LINE_CHARS: usize = 2000;
-/// Finished jobs kept; older ones are forgotten once their end has been acknowledged.
+/// Finished jobs kept with their output. An older one loses its output, and is forgotten once its end has been
+/// acknowledged.
 const FINISHED_KEPT: usize = 20;
 /// Lines of output an end event carries.
 const LAST_LINES: usize = 20;
@@ -126,13 +127,15 @@ impl JobEvent {
     }
 }
 
-/// What `jobs.json` holds: the jobs as they were, never their output.
+/// What `jobs.json` holds: the jobs as they were and each session's unacknowledged events. No output beyond an end
+/// event's own `last_lines`.
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct Store {
     next_seq: u64,
     next_number: u64,
     jobs: Vec<Job>,
+    events: BTreeMap<String, Vec<JobEvent>>,
 }
 
 /// A process to start: `line` is what `bash -c` runs, `command` what the model asked for.
@@ -172,32 +175,35 @@ impl State {
         self.entries.iter_mut().find(|e| e.job.id == id)
     }
 
-    /// Forgets the oldest finished jobs beyond `FINISHED_KEPT`, so a long day of jobs keeps the dock's memory bounded.
-    /// A job whose end is still waiting for its Pi is kept. True when something was forgotten.
+    /// Lets go of the oldest finished jobs beyond `FINISHED_KEPT`, so a long day of jobs keeps the dock's memory
+    /// bounded: each is forgotten, or, while its end still waits for its Pi, keeps only its `Job` (the event has its last
+    /// lines). True when a job was forgotten.
     fn prune(&mut self) -> bool {
-        let finished = self.entries.iter().filter(|e| !e.job.state.active()).count();
-        if finished <= FINISHED_KEPT {
-            return false;
-        }
-        let pending = |id: &str| self.events.get(&self.session_of(id)).is_some_and(|q| q.iter().any(|ev| ev.about(id)));
-        let mut forgettable: Vec<(i64, u64)> = self
+        let mut finished: Vec<(i64, u64)> = self
             .entries
             .iter()
-            .filter(|e| !e.job.state.active() && !pending(&e.job.id))
+            .filter(|e| !e.job.state.active())
             .map(|e| (e.job.ended_at.unwrap_or(0), e.job.number))
             .collect();
-        forgettable.sort();
-        forgettable.truncate(finished - FINISHED_KEPT);
-        if forgettable.is_empty() {
+        if finished.len() <= FINISHED_KEPT {
             return false;
         }
-        let gone: Vec<u64> = forgettable.iter().map(|(_, n)| *n).collect();
-        self.entries.retain(|e| e.job.state.active() || !gone.contains(&e.job.number));
-        true
-    }
-
-    fn session_of(&self, id: &str) -> String {
-        self.entries.iter().find(|e| e.job.id == id).map(|e| e.job.session.clone()).unwrap_or_default()
+        finished.sort();
+        let old: Vec<u64> = finished[..finished.len() - FINISHED_KEPT].iter().map(|(_, n)| *n).collect();
+        let events = &self.events;
+        let held = |job: &Job| events.get(&job.session).is_some_and(|q| q.iter().any(|ev| ev.about(&job.id)));
+        let before = self.entries.len();
+        self.entries.retain_mut(|e| {
+            if e.job.state.active() || !old.contains(&e.job.number) {
+                return true;
+            }
+            if held(&e.job) {
+                e.output = VecDeque::new();
+                return true;
+            }
+            false
+        });
+        self.entries.len() < before
     }
 
     /// Queues an event for its session and pushes it to the session's subscriber, if one listens.
@@ -213,12 +219,13 @@ impl State {
         self.dirty = true;
     }
 
-    /// Rewrites the store. Called on every change of a job's state, never for a line of output.
+    /// Rewrites the store. Called on every change of a job's state or of the events, never for a line of output.
     fn save(&self) {
         let store = Store {
             next_seq: self.next_seq,
             next_number: self.next_number,
             jobs: self.entries.iter().map(|e| e.job.clone()).collect(),
+            events: self.events.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         };
         let written = serde_json::to_value(&store)
             .map_err(std::io::Error::other)
@@ -243,7 +250,15 @@ impl State {
         };
         let highest = stored.jobs.iter().map(|j| j.number).max().unwrap_or(0);
         self.next_number = stored.next_number.max(highest + 1).max(self.next_number);
-        self.next_seq = stored.next_seq.max(self.next_seq);
+        let last_seq = stored.events.values().flatten().map(JobEvent::seq).max().unwrap_or(0);
+        self.next_seq = stored.next_seq.max(last_seq + 1).max(self.next_seq);
+        // Events the previous dock's Pis had not acknowledged come first; any cut follows them.
+        for (session, mut queue) in stored.events {
+            queue.sort_by_key(JobEvent::seq);
+            if !queue.is_empty() {
+                self.events.insert(session, queue);
+            }
+        }
         let ended_at = now_ms();
         let mut cut: BTreeMap<String, Vec<Job>> = BTreeMap::new();
         for mut job in stored.jobs {
@@ -698,7 +713,8 @@ impl Jobs {
         self.state.lock().unwrap().events.get(session).cloned().unwrap_or_default()
     }
 
-    /// The session's Pi has this event: it is not given again, and its jobs may now be forgotten.
+    /// The session's Pi has this event: it is not given again (not even after a restart), and its jobs may now be
+    /// forgotten.
     pub fn ack(&self, session: &str, seq: u64) {
         let mut s = self.state.lock().unwrap();
         let Some(queue) = s.events.get_mut(session) else { return };
@@ -706,7 +722,18 @@ impl Jobs {
         if queue.is_empty() {
             s.events.remove(session);
         }
-        if s.prune() {
+        s.prune();
+        s.dirty = true;
+        s.save();
+    }
+
+    /// The session is gone (its tab closed): its events are dropped unread, its subscriber with them, and the jobs they
+    /// held may be forgotten.
+    pub fn forget_session(&self, session: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.subscribers.remove(session);
+        if s.events.remove(session).is_some() {
+            s.prune();
             s.dirty = true;
             s.save();
         }
@@ -1082,10 +1109,11 @@ mod tests {
         let events = jobs.events("s1");
         assert_eq!(events, vec![JobEvent::Cut { seq: 7, jobs: vec![cut.clone()] }]);
 
-        // The cut is written back: a second load cuts nothing again, and the numbers go on.
+        // The cut is written back: a second load cuts nothing again (the unacknowledged cut is still the only event),
+        // and the numbers go on.
         drop(jobs);
         let again = jobs_at(&store);
-        assert!(again.events("s1").is_empty());
+        assert_eq!(again.events("s1"), events);
         assert_eq!(again.get("j4").unwrap().state, JobState::Cut);
         let text = std::fs::read_to_string(&store).unwrap();
         let saved: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -1116,6 +1144,9 @@ mod tests {
         let job = start(&jobs, dir.path(), "echo secret-$((6 * 7))-ish");
         eventually("ended", Duration::from_secs(2), || !jobs.events("s1").is_empty());
         assert_eq!(jobs.output(&job.id, 1), Some(vec!["secret-42-ish".to_string()]));
+        // An unacknowledged end keeps its own last lines in the store; once acknowledged, nothing of the output is left.
+        let seq = jobs.events("s1")[0].seq();
+        jobs.ack("s1", seq);
         let store = std::fs::read_to_string(dir.path().join("jobs.json")).unwrap();
         assert!(store.contains(&job.id), "the job is stored");
         assert!(!store.contains("secret-42-ish"), "{store}");
@@ -1148,5 +1179,84 @@ mod tests {
             jobs.ack("s1", event.seq());
         }
         assert_eq!(jobs.list(None).len(), FINISHED_KEPT);
+    }
+
+    /// Runs `line` in `session` and waits for its end event.
+    fn run_to_end(jobs: &Jobs, session: &str, folder: &Path, line: &str) -> Job {
+        let job = start_in(jobs, session, folder, line);
+        eventually("its end", Duration::from_secs(3), || {
+            jobs.events(session).iter().any(|e| matches!(e, JobEvent::Ended { job: j, .. } if j.id == job.id))
+        });
+        job
+    }
+
+    #[test]
+    fn ends_held_for_their_pi_keep_their_job_but_not_their_output() {
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, jobs, _) = jobs();
+        let ran: Vec<Job> = (0..FINISHED_KEPT + 3).map(|_| run_to_end(&jobs, "s1", dir.path(), "echo x")).collect();
+        assert_eq!(jobs.list(None).len(), FINISHED_KEPT + 3);
+        for (i, job) in ran.iter().enumerate() {
+            let expected: Vec<String> = if i < 3 { Vec::new() } else { vec!["x".into()] };
+            assert_eq!(jobs.output(&job.id, 10), Some(expected), "{}", job.id);
+        }
+        let first = &jobs.events("s1")[0];
+        assert_eq!(ended(first).2, ["x".to_string()], "the event keeps its own last lines");
+    }
+
+    #[test]
+    fn a_forgotten_session_loses_its_events_and_subscriber() {
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, jobs, _) = jobs();
+        let (tx, rx) = mpsc::channel();
+        jobs.subscribe("s1", tx);
+        for _ in 0..FINISHED_KEPT + 3 {
+            run_to_end(&jobs, "s1", dir.path(), "true");
+        }
+        let other = run_to_end(&jobs, "s2", dir.path(), "true");
+        while rx.try_recv().is_ok() {}
+        jobs.forget_session("s1");
+        assert!(jobs.events("s1").is_empty());
+        assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected), "the subscriber is dropped");
+        assert_eq!(jobs.list(None).len(), FINISHED_KEPT, "the jobs it held may be forgotten");
+        assert!(jobs.get(&other.id).is_some(), "the other session's held job stays");
+        assert_eq!(jobs.events("s2").len(), 1);
+    }
+
+    #[test]
+    fn unacked_events_survive_a_restart() {
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("jobs.json");
+        let jobs = jobs_at(&store);
+        let done = run_to_end(&jobs, "s1", dir.path(), "echo bye");
+        let running = start_in(&jobs, "s1", dir.path(), "sleep 30");
+        let before = jobs.events("s1");
+        // The store as a dock that crashed now leaves it; this dock's own waiters would record the sleep's end.
+        let crashed = std::fs::read(&store).unwrap();
+        jobs.stop_all();
+        drop(jobs);
+        std::fs::write(&store, crashed).unwrap();
+
+        // The old dock went away with `running` still going: its end is kept, and the cut comes after it.
+        let again = jobs_at(&store);
+        let events = again.events("s1");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0], before[0]);
+        assert_eq!(ended(&events[0]).0.id, done.id);
+        assert_eq!(ended(&events[0]).2, ["bye".to_string()]);
+        match &events[1] {
+            JobEvent::Cut { seq, jobs } => {
+                assert!(*seq > events[0].seq());
+                assert_eq!(jobs.iter().map(|j| j.id.clone()).collect::<Vec<_>>(), vec![running.id.clone()]);
+            }
+            other => panic!("not a cut: {other:?}"),
+        }
+        again.ack("s1", events[0].seq());
+        drop(again);
+
+        let third = jobs_at(&store);
+        let left: Vec<u64> = third.events("s1").iter().map(JobEvent::seq).collect();
+        assert_eq!(left, vec![events[1].seq()], "only the unacknowledged cut is left");
     }
 }
