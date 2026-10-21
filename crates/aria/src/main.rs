@@ -14,6 +14,7 @@ mod jobs;
 // Wired into the chat in a later step of background work; until then only its tests use it.
 #[allow(dead_code)]
 mod jobs_socket;
+mod lines;
 mod ui;
 mod visibility;
 mod watch;

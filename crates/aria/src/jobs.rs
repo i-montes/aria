@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::BufReader;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -20,6 +20,8 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod agent;
+
+use crate::lines::read_line;
 
 // The dock starts subagents from Task 6's wiring on; until then only the tests do.
 #[allow(unused_imports)]
@@ -486,26 +488,6 @@ fn clean(bytes: &[u8]) -> String {
     let text = text.trim_end_matches(['\n', '\r']);
     let text = text.rsplit('\r').next().unwrap_or_default();
     strip_ansi(text).chars().take(LINE_CHARS).collect()
-}
-
-/// Reads one line, at most `limit` bytes of it, into `bytes`; the rest of a longer line is skipped, a bounded chunk at a
-/// time. False at the end of the input.
-fn read_line(reader: &mut impl BufRead, limit: u64, bytes: &mut Vec<u8>) -> bool {
-    match reader.by_ref().take(limit).read_until(b'\n', bytes) {
-        Ok(0) | Err(_) => return false,
-        Ok(_) => {}
-    }
-    if bytes.last() != Some(&b'\n') && bytes.len() as u64 >= limit {
-        loop {
-            let mut rest = Vec::new();
-            match reader.by_ref().take(limit).read_until(b'\n', &mut rest) {
-                Ok(0) | Err(_) => break,
-                Ok(_) if rest.last() == Some(&b'\n') => break,
-                Ok(_) => {}
-            }
-        }
-    }
-    true
 }
 
 /// Reads a job's output until every process holding the pipe has closed it. `_drained` drops at the end, which tells the

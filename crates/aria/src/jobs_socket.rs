@@ -9,9 +9,10 @@
 //! requests.
 
 use crate::jobs::{AgentStart, Job, JobEvent, Jobs, ProcessStart};
+use crate::lines::read_bounded_line;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -87,8 +88,9 @@ impl Writer {
 impl JobsSocket {
     /// Listens on `path` (mode 0600, replacing a stale file) for `session`'s Pi.
     pub fn bind(path: &Path, session: String, jobs: Jobs, launcher: Arc<dyn Launcher>) -> std::io::Result<JobsSocket> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
+        if let Some(dir) = path.parent().filter(|dir| !dir.exists()) {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
         }
         let _ = std::fs::remove_file(path);
         let listener = UnixListener::bind(path)?;
@@ -151,19 +153,11 @@ fn serve(stream: UnixStream, session: &Session) {
     let mut reader = BufReader::new(stream);
     loop {
         // One line at a time, at most MAX_LINE bytes: a client that never sends a newline cannot grow the dock's memory.
-        let mut bytes = Vec::new();
-        match (&mut reader).take(MAX_LINE).read_until(b'\n', &mut bytes) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
-        if bytes.last() != Some(&b'\n') && bytes.len() as u64 >= MAX_LINE {
-            // too long: skip the rest of it
-            let mut rest = Vec::new();
-            if reader.read_until(b'\n', &mut rest).unwrap_or(0) == 0 {
-                break;
-            }
-            continue;
-        }
+        let bytes = match read_bounded_line(&mut reader, MAX_LINE) {
+            None => break,
+            Some(None) => continue,
+            Some(Some(bytes)) => bytes,
+        };
         let Ok(request) = serde_json::from_slice::<Value>(&bytes) else { continue };
         if !request.is_object() {
             continue;
@@ -204,7 +198,7 @@ fn hello(session: &Session, re: Value, writer: &Arc<Mutex<Writer>>, closed: &Arc
     let mut w = writer.lock().unwrap();
     // First subscribed, then read: an event that ends in between is both queued and pushed, never neither.
     session.jobs.subscribe(&session.name, tx);
-    w.written = 0;
+    // Never lowered: an event the old forwarder still holds was given (maybe acked) and stays given.
     w.line(&json!({"re": re, "ok": true}))?;
     for event in session.jobs.events(&session.name) {
         w.line(&serde_json::to_value(&event)?)?;
@@ -266,10 +260,11 @@ fn answer(session: &Session, op: Option<&str>, request: &Value) -> Result<Fields
         }
         Some("stop") => {
             let id = own_job(session, request)?;
+            // A job that already ended needs no stop; the client hears so rather than an error.
             if jobs.stop(&id) {
                 Ok(Fields::new())
             } else {
-                Err(format!("job {id} is not running"))
+                Ok(fields(json!({"already": true})))
             }
         }
         _ => Err("unknown op".into()),
@@ -316,8 +311,11 @@ fn text<'a>(request: &'a Value, key: &str, default: Option<&'a str>) -> Result<&
 
 fn start_process(session: &Session, request: &Value) -> Result<Job, String> {
     let command = text(request, "command", None)?;
-    // What actually runs (the sandbox's line); without one, the command as given.
-    let line = text(request, "line", Some(command))?;
+    // What actually runs: the line the sandbox decided. Never the command itself, which would run it unboxed.
+    let line = match &request["line"] {
+        Value::String(line) => line.as_str(),
+        _ => return Err("line is required".into()),
+    };
     let title = text(request, "title", Some(command))?;
     let folder = folder(request)?;
     let env = match &request["env"] {
@@ -383,7 +381,7 @@ fn start_agent(session: &Session, request: &Value) -> Result<Job, String> {
 mod tests {
     use super::*;
     use crate::jobs::ProcessStart;
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
@@ -648,6 +646,135 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
         let path = socket.path().to_path_buf();
         drop(socket);
         assert!(!path.exists(), "dropping the socket removes its file");
+    }
+
+    #[test]
+    fn a_folder_it_makes_for_the_socket_is_private_too() {
+        let s = setup(false);
+        let path = s.dir.path().join("run").join("aria").join("j.sock");
+        let socket = JobsSocket::bind(&path, "s1".into(), s.jobs.clone(), s.launcher.clone()).unwrap();
+        for dir in [s.dir.path().join("run"), s.dir.path().join("run").join("aria")] {
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{}", dir.display());
+        }
+        drop(socket);
+    }
+
+    #[test]
+    fn a_line_past_the_limit_is_skipped_and_the_next_request_answered() {
+        let s = setup(false);
+        let socket = bind(&s, "s1");
+        let mut c = Client::connect(&socket);
+        // 3 MiB without a newline, written from another thread (the dock reads while it is written), then a newline.
+        let mut writer = c.writer.try_clone().unwrap();
+        let sent = std::thread::spawn(move || {
+            let chunk = vec![b'x'; 64 * 1024];
+            for _ in 0..48 {
+                writer.write_all(&chunk).unwrap();
+            }
+            writer.write_all(b"\n").unwrap();
+        });
+        sent.join().unwrap();
+        assert_eq!(c.ask(json!({"id": 1, "op": "list"})), json!({"re": 1, "ok": true, "jobs": []}));
+    }
+
+    #[test]
+    fn a_process_without_its_line_is_refused() {
+        let s = setup(false);
+        let socket = bind(&s, "s1");
+        let mut c = Client::connect(&socket);
+        let folder = s.dir.path().to_str().unwrap();
+        let refused = c.ask(json!({"id": 1, "op": "start", "kind": "process", "command": "true", "title": "t",
+            "folder": folder}));
+        assert_eq!(refused, json!({"re": 1, "ok": false, "error": "line is required"}));
+        assert!(s.jobs.list(None).is_empty(), "nothing ran unsandboxed");
+    }
+
+    #[test]
+    fn stopping_a_job_that_ended_says_so() {
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let s = setup(false);
+        let job = start_process(&s.jobs, "s1", s.dir.path(), "true");
+        eventually("it ends", || s.jobs.get(&job.id).is_some_and(|j| j.ended_at.is_some()));
+        let socket = bind(&s, "s1");
+        let mut c = Client::connect(&socket);
+        assert_eq!(c.ask(json!({"id": 1, "op": "stop", "job": job.id})), json!({"re": 1, "ok": true, "already": true}));
+    }
+
+    #[test]
+    fn an_ack_only_reaches_its_own_session() {
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let s = setup(false);
+        start_process(&s.jobs, "s2", s.dir.path(), "true");
+        eventually("s2 has an end", || !s.jobs.events("s2").is_empty());
+        let seq = s.jobs.events("s2")[0].seq();
+        let socket = bind(&s, "s1");
+        let mut c = Client::connect(&socket);
+        c.send(json!({"op": "ack", "event": seq}));
+        // Answered in order: once list is answered, the ack has been handled.
+        assert_eq!(c.ask(json!({"id": 1, "op": "list"}))["ok"], true);
+        assert_eq!(s.jobs.events("s2").len(), 1, "s1 cannot ack s2's event");
+    }
+
+    fn cut(seq: u64) -> JobEvent {
+        JobEvent::Cut { seq, jobs: Vec::new() }
+    }
+
+    #[test]
+    fn a_pushed_event_already_given_goes_out_once() {
+        // An event that ends between `subscribe` and `events` is both queued (given by hello) and pushed.
+        let (dock, peer) = UnixStream::pair().unwrap();
+        let writer = Mutex::new(Writer { stream: dock, written: 5 });
+        let (tx, rx) = mpsc::channel();
+        for seq in [4, 5, 6] {
+            tx.send(cut(seq)).unwrap();
+        }
+        drop(tx);
+        forward(rx, &writer, &AtomicBool::new(false));
+        drop(writer);
+        let mut got = String::new();
+        BufReader::new(peer).read_to_string(&mut got).unwrap();
+        let seqs: Vec<u64> =
+            got.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()["seq"].as_u64().unwrap()).collect();
+        assert_eq!(seqs, vec![6]);
+    }
+
+    #[test]
+    fn every_end_reaches_a_hello_exactly_once() {
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let s = setup(false);
+        let socket = bind(&s, "s1");
+        // Ends spread around the hello, so some land while it subscribes and reads the queue.
+        let ids: Vec<String> =
+            (0..8).map(|i| start_process(&s.jobs, "s1", s.dir.path(), &format!("sleep 0.{i:02}")).id).collect();
+        let mut c = Client::connect(&socket);
+        assert_eq!(c.ask(json!({"id": 1, "op": "hello"}))["ok"], true);
+        let mut seen = Vec::new();
+        while seen.len() < ids.len() {
+            let event = c.read();
+            assert_eq!(event["event"], "ended", "{event}");
+            seen.push(event["job"]["id"].as_str().unwrap().to_string());
+        }
+        seen.sort();
+        let mut want = ids.clone();
+        want.sort();
+        assert_eq!(seen, want, "each end once");
+        c.reader.get_ref().set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+        let mut more = String::new();
+        assert!(c.reader.read_line(&mut more).is_err() || more.is_empty(), "no repeat: {more}");
+    }
+
+    #[test]
+    fn a_second_hello_on_one_connection_keeps_what_it_already_gave() {
+        // An acked event still buffered for the old forwarder must not go out again after the new hello.
+        let s = setup(false);
+        let session = Session { name: "s1".into(), jobs: s.jobs.clone(), launcher: s.launcher.clone() };
+        let (dock, _peer) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(Writer { stream: dock, written: 9 }));
+        let closed = Arc::new(AtomicBool::new(false));
+        hello(&session, json!(2), &writer, &closed).unwrap();
+        assert_eq!(writer.lock().unwrap().written, 9);
+        closed.store(true, Ordering::SeqCst);
     }
 
     #[test]

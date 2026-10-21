@@ -5,7 +5,7 @@
 
 use serde_json::{json, Value};
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Read};
+use std::io::BufReader;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -248,19 +248,11 @@ fn serve(stream: UnixStream, state: Arc<Mutex<State>>) {
     let mut reader = BufReader::new(stream);
     loop {
         // One line at a time, at most MAX_LINE bytes: a child that never sends a newline cannot grow the dock's memory.
-        let mut bytes = Vec::new();
-        match (&mut reader).take(MAX_LINE).read_until(b'\n', &mut bytes) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
-        if bytes.last() != Some(&b'\n') && bytes.len() as u64 >= MAX_LINE {
-            // too long: skip the rest of it
-            let mut rest = Vec::new();
-            if reader.read_until(b'\n', &mut rest).unwrap_or(0) == 0 {
-                break;
-            }
-            continue;
-        }
+        let bytes = match crate::lines::read_bounded_line(&mut reader, MAX_LINE) {
+            None => break,
+            Some(None) => continue,
+            Some(Some(bytes)) => bytes,
+        };
         let line = String::from_utf8_lossy(&bytes);
         let Ok(message) = serde_json::from_str::<Value>(line.trim_end()) else { continue };
         let mut s = state.lock().unwrap();
