@@ -155,6 +155,12 @@ Connector approvals (the `connectors` extension, the access rows in Settings →
 paperclip, drop and paste; `~/.aria/attachments/`). Left:
 
 - Nothing removes old attachments: every file sent stays under `~/.aria/attachments/` until the person deletes it.
+- Pi's write and edit can never touch `aria.json`, the settings file or the attachments folder, whatever was granted;
+  a bash command the person let run outside the sandbox still can (as before this branch).
+- The macOS dock has no navigation guard yet (GTK refuses anything outside `aria://`); the page stops file drops on
+  both platforms.
+- A message with files that the dock refuses right after a run settled can come back without its files (the page
+  lets the data go when a run settles, and keeps at most three messages' data).
 - The thread shows an attached image as a chip (name and kind), never as a preview: the page never receives image data.
 - A connector card's preview shows the arguments as they are, not redacted; a secret in them is on the card.
 - Paste and drop were checked in headless Chrome only, not on the real dock (WebKitGTK): whether it hands files from
