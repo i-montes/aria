@@ -45,9 +45,12 @@ pub enum PageMessage {
     /// The dock opened: tell the page where Aria works and how it is doing.
     #[serde(rename = "chatLoad")]
     ChatLoad,
-    /// Cancel a queued message: Pi can only empty its queue, so the messages in `keep` are queued again, in order.
+    /// Cancel a queued message: Pi can only empty its queue, so the others are queued again, in order: those in `steer`
+    /// for the next gap between steps, those in `keep` for when the run ends.
     #[serde(rename = "chatClearQueue")]
     ChatClearQueue {
+        #[serde(default)]
+        steer: Vec<String>,
         #[serde(default)]
         keep: Vec<String>,
     },
@@ -237,10 +240,14 @@ mod tests {
         assert_eq!(page(r#"{"type":"installClaudeBridge","id":12}"#), PageMessage::InstallClaudeBridge { id: 12 });
         assert_eq!(page(r#"{"type":"enginesRestart"}"#), PageMessage::EnginesRestart);
         assert_eq!(page(r#"{"type":"chatShown","shown":false}"#), PageMessage::ChatShown { shown: false });
-        assert_eq!(page(r#"{"type":"chatClearQueue"}"#), PageMessage::ChatClearQueue { keep: vec![] });
+        assert_eq!(page(r#"{"type":"chatClearQueue"}"#), PageMessage::ChatClearQueue { steer: vec![], keep: vec![] });
         assert_eq!(
             page(r#"{"type":"chatClearQueue","keep":["a","b"]}"#),
-            PageMessage::ChatClearQueue { keep: vec!["a".into(), "b".into()] }
+            PageMessage::ChatClearQueue { steer: vec![], keep: vec!["a".into(), "b".into()] }
+        );
+        assert_eq!(
+            page(r#"{"type":"chatClearQueue","steer":["now"],"keep":["later"]}"#),
+            PageMessage::ChatClearQueue { steer: vec!["now".into()], keep: vec!["later".into()] }
         );
         assert_eq!(
             page(r#"{"type":"uiAnswer","id":"u1","value":"Allow"}"#),

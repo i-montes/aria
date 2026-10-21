@@ -77,7 +77,7 @@ function renderEntry(state, entry, index, ui, t) {
 export function threadItems(state, ui = {}, t) {
   const entries = state.messages.map((entry, index) => renderEntry(state, entry, index, ui, t))
   const cards = state.dialogs.filter((d) => d.card && INLINE_CARDS.includes(d.card.kind)).map((d) => `<div class="thread-item">${renderCard(d, t)}</div>`)
-  const queued = state.queue.map((q, i) => `<div class="thread-item">${renderUser({ text: q.text, queued: true, id: String(i) }, {}, t)}</div>`)
+  const queued = state.queue.map((q, i) => `<div class="thread-item">${renderUser({ text: q.text, queued: true, steer: q.steer, id: String(i) }, {}, t)}</div>`)
   // The working line's markup stays the same while it runs (the view ticks its elapsed time in place): markup that
   // changed with the clock rebuilt the line on every streamed token, which restarted its animation.
   const steady = (startedAt) => ({ now: Number.isFinite(startedAt) ? startedAt : (ui.now ?? Date.now()) })

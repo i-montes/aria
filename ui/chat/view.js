@@ -569,7 +569,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     composerKey = ''
   }
 
-  function submit() {
+  /** `steer`: while Aria works, the message goes in at the run's next step (after the tool calls going on), not at its end. */
+  function submit(steer = false) {
     const text = input.value.trim()
     if (!text) return
     if (/^\/memory(\s|$)/.test(text)) {
@@ -597,8 +598,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const command = name !== null ? commandsBy.get(session)?.find((c) => c.name === name) : null
     const immediate = name !== null && (!command || command.source === 'extension' || command.source === 'aria')
     if (chat.running && !immediate) {
-      post({ type: 'chatSend', text: toInvocation(text, commandsBy.get(session) ?? []), behavior: 'followUp' }, session)
-      chats.set(session, addQueued(chat, text))
+      post({ type: 'chatSend', text: toInvocation(text, commandsBy.get(session) ?? []), behavior: steer ? 'steer' : 'followUp' }, session)
+      chats.set(session, addQueued(chat, text, steer))
     } else {
       post({ type: 'chatSend', text: toInvocation(text, commandsBy.get(session) ?? []), behavior: null }, session)
       chats.set(session, addUser(chat, text))
@@ -809,7 +810,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
-      submit()
+      submit(event.altKey)
     } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.stopPropagation() // the arrows move the caret here, not focus between controls
     }
@@ -1226,8 +1227,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       case 'cancel-queued': {
         // Pi can only empty its queue: the other queued messages go back in, in order.
         const at = Number(id)
-        const keep = current().queue.filter((_, i) => i !== at).map((q) => q.text)
-        post({ type: 'chatClearQueue', keep })
+        const rest = current().queue.filter((_, i) => i !== at)
+        post({ type: 'chatClearQueue', steer: rest.filter((q) => q.steer).map((q) => q.text), keep: rest.filter((q) => !q.steer).map((q) => q.text) })
         chats.set(tabs.active, clearQueue(current(), at))
         return render()
       }

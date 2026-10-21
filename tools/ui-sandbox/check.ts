@@ -39,7 +39,7 @@ const script = `(async () => {
   const results = []
   const check = (name, ok, detail = '') => results.push([name, !!ok, String(detail)])
   const settle = () => wait(30) // the page applies session messages one microtask later
-  const reset = async () => { window.sim.queue = []; ev({ type: 'agent_settled', aborted: false }); ev({ type: 'session_reset' }); const i = $('#chat-input'); if (i) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })) }; await wait(50) }
+  const reset = async () => { window.sim.queue = []; window.sim.steering = []; ev({ type: 'agent_settled', aborted: false }); ev({ type: 'session_reset' }); const i = $('#chat-input'); if (i) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })) }; await wait(50) }
 
   await wait(300)
 
@@ -114,6 +114,22 @@ const script = `(async () => {
   check('the queued bubble shows', $('.p-user.queued, .p-user-queued, [data-chat="cancel-queued"]'))
   ev({ type: 'queue_update', steering: [], followUp: [] }); ev({ type: 'message_start', message: { role: 'user', content: 'do this later' } }); await wait(80)
   check('a delivered message lands in the thread and leaves the queue', !$('[data-chat="cancel-queued"]') && $('#chat-list').textContent.includes('do this later'))
+  await reset()
+
+  // 2b. Alt+Enter during a run puts the message in at the run's next step, and cancelling another keeps it there
+  const wasChatMode = document.body.classList.contains('mode-chat')
+  document.body.classList.add('mode-chat') // the hints line needs its real width
+  ev({ type: 'agent_start' }); await settle(); window.__sent.length = 0
+  const hints = $('.p-composer-hints')
+  check('while Aria works the hints say what Enter and Alt+Enter do, and fit in their line', hints?.textContent.includes('alt+enter') && hints.scrollWidth <= hints.clientWidth + 1, hints?.textContent.replace(/\s+/g, ' ') + ' ' + hints?.scrollWidth + '/' + hints?.clientWidth)
+  document.body.classList.toggle('mode-chat', wasChatMode)
+  typeIn('look at the logs first'); key($('#chat-input'), 'Enter', { altKey: true }); await wait(60)
+  check('Alt+Enter during a run sends it as steering', sent().some((m) => m.type === 'chatSend' && m.behavior === 'steer' && m.text === 'look at the logs first'), JSON.stringify(sent().slice(-1)))
+  check('its bubble says it goes in at the next step', $('.p-user.is-steer')?.textContent.includes('step'), $('.p-user.is-queued')?.textContent)
+  typeIn('and then the tests'); key($('#chat-input'), 'Enter'); await wait(60)
+  window.__sent.length = 0
+  const cancelSecond = $('[data-chat="cancel-queued"][data-id="1"]'); check('both queued messages show', cancelSecond, document.querySelectorAll('[data-chat="cancel-queued"]').length); cancelSecond?.click(); await wait(60)
+  check('cancelling the other keeps the steering one as steering', sent().some((m) => m.type === 'chatClearQueue' && m.steer?.[0] === 'look at the logs first' && m.keep?.length === 0), JSON.stringify(sent().slice(-1)))
   await reset()
 
   // 3. cancelling one of two queued messages re-queues the other

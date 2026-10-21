@@ -28,6 +28,7 @@ export const TEXTS = {
     'chat.composer.hint.commands': 'for commands',
     'chat.composer.hint.agents': 'subagents',
     'chat.composer.hint.queue': 'queues your message',
+    'chat.composer.hint.steer': 'at the next step',
   },
   es: {
     'chat.composer.label': 'Mensaje para Aria',
@@ -40,6 +41,7 @@ export const TEXTS = {
     'chat.composer.hint.commands': 'para comandos',
     'chat.composer.hint.agents': 'subagentes',
     'chat.composer.hint.queue': 'encola tu mensaje',
+    'chat.composer.hint.steer': 'en el próximo paso',
   },
 }
 
@@ -65,8 +67,8 @@ export function renderComposer({ busy = false, hasText = false, rows = 1, showHi
   const send = busy
     ? ''
     : `<button type="button" id="chat-send" class="p-composer-btn p-composer-send" data-chat="send" aria-label="${esc(t('chat.composer.send'))}">${ICON.send}</button>`
-  // Under the input: the model (opens the picker), then the shortcuts (alt+a only when the session has subagents); while Aria works, only that Enter queues the message
-  // (the line has room for one hint next to the model).
+  // Under the input: the model (opens the picker), then the shortcuts (alt+a only when the session has subagents); while Aria works, that Enter queues
+  // the message and Alt+Enter puts it in at the run's next step.
   const chip = model
     ? `<button type="button" class="p-composer-model" data-chat="open-models"${modelTitle ? ` title="${esc(modelTitle)}"` : ''}>${esc(model)}</button>`
     : ''
@@ -76,7 +78,8 @@ export function renderComposer({ busy = false, hasText = false, rows = 1, showHi
 ${
         busy
           ? `
-      <span>${key('enter')} ${esc(t('chat.composer.hint.queue'))}</span>`
+      <span>${key('enter')} ${esc(t('chat.composer.hint.queue'))}</span>
+      <span>${key('alt+enter')} ${esc(t('chat.composer.hint.steer'))}</span>`
           : `
       <span><kbd class="p-composer-kbd">/</kbd> ${esc(t('chat.composer.hint.commands'))}</span>${agents ? `
       <span>${key('alt+a')} ${esc(t('chat.composer.hint.agents'))}</span>` : ''}`

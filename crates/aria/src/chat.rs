@@ -264,13 +264,18 @@ impl Chat {
         match message {
             PageMessage::ChatLoad => self.load(),
             PageMessage::ChatSend { text, behavior } => self.send_prompt(&text, behavior.as_deref()),
-            PageMessage::ChatClearQueue { keep } => {
+            PageMessage::ChatClearQueue { steer, keep } => {
                 if let Some(engine) = self.current_engine() {
-                    // Pi can only empty its queue; the messages that stay are queued again, in their order.
+                    // Pi can only empty its queue; the messages that stay are queued again, each where it was (Pi takes
+                    // the steering ones before any follow-up, so that order is kept too).
                     std::thread::spawn(move || {
                         let _ = engine.request("clear_queue", json!({}), REQUEST_TIMEOUT);
-                        for text in keep {
-                            let _ = engine.send("prompt", json!({"message": text, "streamingBehavior": "followUp"}));
+                        let again = steer
+                            .into_iter()
+                            .map(|text| (text, "steer"))
+                            .chain(keep.into_iter().map(|text| (text, "followUp")));
+                        for (text, behavior) in again {
+                            let _ = engine.send("prompt", json!({"message": text, "streamingBehavior": behavior}));
                         }
                     });
                 }
@@ -2016,11 +2021,11 @@ mod tests {
     #[test]
     fn clearing_the_queue_reaches_pi_and_is_ignored_without_one() {
         let h = harness();
-        h.chat.handle(PageMessage::ChatClearQueue { keep: vec![] });
+        h.chat.handle(PageMessage::ChatClearQueue { steer: vec![], keep: vec![] });
         assert!(drain(&h).is_empty());
         send(&h, "x");
         wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
-        h.chat.handle(PageMessage::ChatClearQueue { keep: vec![] });
+        h.chat.handle(PageMessage::ChatClearQueue { steer: vec![], keep: vec![] });
         wait_for(&h, "Pi's queue update", |m| event_of(m, "queue_update"));
     }
 
@@ -2030,9 +2035,25 @@ mod tests {
         send(&h, "x");
         wait_for(&h, "first settle", |m| event_of(m, "agent_settled"));
         drain(&h); // forget the first run's events: only the resend may satisfy the wait below
-        h.chat.handle(PageMessage::ChatClearQueue { keep: vec!["the one that stays".into()] });
+        h.chat.handle(PageMessage::ChatClearQueue { steer: vec![], keep: vec!["the one that stays".into()] });
         // the fake Pi answers a prompt with agent_start: it was sent again after the queue was emptied
         wait_for(&h, "the kept message sent again", |m| event_of(m, "agent_start"));
+    }
+
+    #[test]
+    fn the_messages_kept_in_the_queue_keep_their_place_in_the_gap_or_at_the_end() {
+        let h = harness();
+        send(&h, "x");
+        wait_for(&h, "first settle", |m| event_of(m, "agent_settled"));
+        drain(&h);
+        h.chat.handle(PageMessage::ChatClearQueue { steer: vec!["now".into()], keep: vec!["later".into()] });
+        let queued = |m: &DockMessage| event_of(m, "queued_as");
+        let behavior = |m: DockMessage| match m {
+            DockMessage::ChatEvent { event } => (event["behavior"].clone(), event["message"].clone()),
+            _ => unreachable!(),
+        };
+        assert_eq!(behavior(wait_for(&h, "the steering one", queued)), (json!("steer"), json!("now")));
+        assert_eq!(behavior(wait_for(&h, "the follow-up", queued)), (json!("followUp"), json!("later")));
     }
 
     #[test]

@@ -1,9 +1,10 @@
 // The user's message (design/components/user-message.dc.html).
 //
-// Props: { text, command?, queued?, id? }
+// Props: { text, command?, queued?, steer?, id? }
 //   text     the message, in markdown (markdown.js); "@path" mentions become chips
 //   command  true when the text is a slash command (mono font, smaller)
 //   queued   true while the message waits for the run to finish (dashed, "Queued" line + Cancel)
+//   steer    a queued message that goes in at the run's next step, not when it ends (its own line, accent border)
 //   id       the queued message's id, sent back by Cancel
 // ui: unused. t(key) translates.
 // Emits: data-chat="cancel-queued" data-id="<id>", data-chat="open-link" on links (markdown.js)
@@ -35,7 +36,7 @@ export const splitMentions = (text) => {
 const CLOCK =
   '<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="7"></circle><path d="M12 10v3l2 1.5M9.5 3h5"></path></svg>'
 
-export const renderUser = ({ text, command, queued, id }, ui, t) => {
+export const renderUser = ({ text, command, queued, steer, id }, ui, t) => {
   // A slash command is shown as typed; a message is markdown with its mentions as chips.
   const parts = command
     ? splitMentions(text)
@@ -43,18 +44,20 @@ export const renderUser = ({ text, command, queued, id }, ui, t) => {
         .join('')
     : renderMarkdown(text, { mentions: true })
   const queue = queued
-    ? `<div class="p-user-queue">${CLOCK}<span>${esc(t('chat.user.queued'))}</span><button type="button" class="p-user-cancel" data-chat="cancel-queued" data-id="${esc(id)}">${esc(t('chat.user.cancel'))}</button></div>`
+    ? `<div class="p-user-queue">${CLOCK}<span>${esc(t(steer ? 'chat.user.steer' : 'chat.user.queued'))}</span><button type="button" class="p-user-cancel" data-chat="cancel-queued" data-id="${esc(id)}">${esc(t('chat.user.cancel'))}</button></div>`
     : ''
-  return `<div class="p-user${queued ? ' is-queued' : ''}"><div class="p-user-bubble p-md${command ? ' is-command' : ''}">${parts}</div>${queue}</div>`
+  return `<div class="p-user${queued ? ' is-queued' : ''}${queued && steer ? ' is-steer' : ''}"><div class="p-user-bubble p-md${command ? ' is-command' : ''}">${parts}</div>${queue}</div>`
 }
 
 export const TEXTS = {
   en: {
     'chat.user.queued': 'Queued · sends when Aria finishes',
+    'chat.user.steer': 'Next · goes in when the current step ends',
     'chat.user.cancel': 'Cancel',
   },
   es: {
     'chat.user.queued': 'En cola · se envía cuando Aria termine',
+    'chat.user.steer': 'Siguiente · entra cuando termine el paso en curso',
     'chat.user.cancel': 'Cancelar',
   },
 }

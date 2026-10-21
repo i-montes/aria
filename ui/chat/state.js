@@ -225,7 +225,7 @@ function reduceEvent(state, event) {
       }
       return state
     case 'queue_update': {
-      const queue = [...(event.steering ?? []), ...(event.followUp ?? [])].map((text) => ({ text }))
+      const queue = [...(event.steering ?? []).map((text) => ({ text, steer: true })), ...(event.followUp ?? []).map((text) => ({ text }))]
       // What was queued and no longer is has been taken by the run (or cancelled by us, which `clearQueue` handles first).
       const remaining = [...queue]
       const gone = []
@@ -363,7 +363,8 @@ export function reduce(state, message) {
 export const addUser = (state, text) => push(state, { kind: 'user', text })
 /** A one-line fact in the thread that did not come from Pi (a provider was connected). */
 export const addNote = (state, label, text) => push(state, { kind: 'note', label, text })
-export const addQueued = (state, text) => ({ ...state, queue: [...state.queue, { text }] })
+/** `steer`: the message goes in at the next gap between the run's steps (Pi's steering), not when the run ends. */
+export const addQueued = (state, text, steer = false) => ({ ...state, queue: [...state.queue, steer ? { text, steer } : { text }] })
 /** The composer took back a refused message's text. */
 export const tookBack = (state) => ({ ...state, giveBack: null })
 export const clearQueue = (state, at) => ({ ...state, queue: at === undefined ? [] : state.queue.filter((_, i) => i !== at) })

@@ -46,6 +46,13 @@ describe('renderUser', () => {
     expect(html).toContain('data-chat="cancel-queued"')
     expect(html).toContain('data-id="&quot;&gt;&lt;script&gt;"')
   })
+  test('a message waiting for the next gap says so instead of waiting for the end', () => {
+    const html = renderUser({ text: 'hi', queued: true, steer: true, id: '0' }, {}, t)
+    expect(html).toContain('chat.user.steer')
+    expect(html).not.toContain('chat.user.queued')
+    expect(html).toContain('is-steer')
+    expect(html).toContain('data-chat="cancel-queued"')
+  })
   test('a sent message has no queue line and no animation class', () => {
     const html = renderUser({ text: 'hi' }, {}, t)
     expect(html).not.toContain('cancel-queued')

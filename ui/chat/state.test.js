@@ -213,6 +213,13 @@ describe('queued messages', () => {
     expect(state.messages).toEqual([])
   })
 
+  test('a message for the next gap is marked so, and Pi\'s steering list keeps the mark', () => {
+    let state = addQueued(run(createChat(), ev({ type: 'agent_start' })), 'stop and look at the logs', true)
+    expect(state.queue).toEqual([{ text: 'stop and look at the logs', steer: true }])
+    state = reduce(state, ev({ type: 'queue_update', steering: ['stop and look at the logs'], followUp: ['later'] }))
+    expect(state.queue).toEqual([{ text: 'stop and look at the logs', steer: true }, { text: 'later' }])
+  })
+
   test('queue_update replaces the queue with what Pi reports', () => {
     const state = run(addQueued(createChat(), 'a'), ev({ type: 'queue_update', steering: [], followUp: ['a', 'b'] }))
     expect(state.queue).toEqual([{ text: 'a' }, { text: 'b' }])

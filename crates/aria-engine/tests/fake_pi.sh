@@ -12,6 +12,8 @@ while IFS= read -r line; do
         printf '{"type":"response","id":"%s","command":"prompt","success":false,"error":"Cannot submit a prompt while compaction is in progress"}\n' "$id"
         continue
       fi
+      behavior=$(field streamingBehavior "$line")
+      [ -n "$behavior" ] && printf '{"type":"queued_as","behavior":"%s","message":"%s"}\n' "$behavior" "$(field message "$line")"
       printf '{"type":"response","id":"%s","command":"prompt","success":true,"data":{"disposition":"started"}}\n' "$id"
       printf '{"type":"agent_start"}\n'
       printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"hi"}}\n'

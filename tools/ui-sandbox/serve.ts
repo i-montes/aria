@@ -62,8 +62,9 @@ const sandbox = `<script>
         // ARIA_SANDBOX_HISTORY_DELAY=<ms> holds it back, to see the loading state.
         if (inner.type === 'chatLoad') setTimeout(() => sim.sess(m.session, { type: 'chatEvent', event: { type: 'history', messages: [] } }), Number(process.env.ARIA_SANDBOX_HISTORY_DELAY ?? 0))
         else if (inner.type === 'chatSend' && inner.text === 'REFUSE') sim.sess(m.session, { type: 'chatEvent', event: { type: 'command_failed', command: 'prompt', error: 'Cannot submit a prompt while compaction is in progress', text: 'REFUSE' } })
-        else if (inner.type === 'chatSend' && inner.behavior === 'followUp') { sim.queue.push(inner.text); sim.ev({ type: 'queue_update', steering: [], followUp: [...sim.queue] }, m.session) }
-        else if (inner.type === 'chatClearQueue') { sim.queue = [...(inner.keep ?? [])]; sim.ev({ type: 'queue_update', steering: [], followUp: [...sim.queue] }, m.session) }
+        else if (inner.type === 'chatSend' && inner.behavior === 'followUp') { sim.queue.push(inner.text); sim.ev({ type: 'queue_update', steering: [...sim.steering], followUp: [...sim.queue] }, m.session) }
+        else if (inner.type === 'chatSend' && inner.behavior === 'steer') { sim.steering.push(inner.text); sim.ev({ type: 'queue_update', steering: [...sim.steering], followUp: [...sim.queue] }, m.session) }
+        else if (inner.type === 'chatClearQueue') { sim.steering = [...(inner.steer ?? [])]; sim.queue = [...(inner.keep ?? [])]; sim.ev({ type: 'queue_update', steering: [...sim.steering], followUp: [...sim.queue] }, m.session) }
         else if (inner.type === 'chatSend') sim.reply(m.session, inner.text)
         else if (inner.type === 'chatAbort') { sim.stopRun(m.session) }
       }
@@ -72,7 +73,7 @@ const sandbox = `<script>
 
   const card = (c) => JSON.stringify({ aria: 1, ...c })
   const sim = {
-    model: 'opencode-go/deepseek-v4.1-flash', context: 18, n: 0, timer: null, active: 's1', queue: [],
+    model: 'opencode-go/deepseek-v4.1-flash', context: 18, n: 0, timer: null, active: 's1', queue: [], steering: [],
     sess: (session, message) => window.aria.receive({ type: 'session', session, message }),
     ev: (event, session) => sim.sess(session ?? sim.active, { type: 'chatEvent', event }),
     state: (extra = {}, session) => sim.sess(session ?? sim.active, { type: 'chatState', workdir: '/home/ana/Projects/aria', running: false, model: sim.model, thinking: 'medium', context: sim.context, problem: null, ...extra }),

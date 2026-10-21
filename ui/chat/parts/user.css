@@ -6,6 +6,7 @@
 .p-user-bubble { margin: 0; max-width: 82%; background: #2A2A31; color: #F4F4F5; border-radius: 16px 16px 4px 16px; padding: 11px 15px; line-height: 1.5; overflow-wrap: anywhere; font-family: Geist, ui-sans-serif, system-ui, sans-serif; font-size: 14.5px; transition: background-color 200ms ease, color 200ms ease; }
 .p-user-bubble.is-command { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13.5px; white-space: pre-line; }
 .p-user.is-queued .p-user-bubble { background: #212127; color: #B3B3B5; outline: 1px dashed rgba(255, 255, 255, 0.28); outline-offset: -1px; }
+.p-user.is-steer .p-user-bubble { outline-color: rgba(185, 168, 255, 0.6); }
 .p-user-chip { display: inline-block; margin: 0 1px; padding: 0 6px; border-radius: 6px; background: #3F3F46; color: #F4F4F5; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; line-height: 20px; overflow-wrap: anywhere; }
 .p-user-queue { display: flex; align-items: center; gap: 8px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 16px; color: #9A9AA3; }
 .p-user-queue svg { flex: 0 0 12px; }
