@@ -52,7 +52,7 @@ pub trait Backend: Send + Sync {
   would ask "aria wants to use your confidential information" after every update (a new binary is a new app to it);
   items created and read by Apple's signed `/usr/bin/security` never ask. Writing goes through `security -i` with the
   command on **stdin**, so the secret is never in a process's arguments (`ps`):
-  `add-generic-password -U -s <service> -a <account> -l <label> -T /usr/bin/security -w <base64>`. Reading:
+  `add-generic-password -U -s <service> -a <account> -l <label> -w <base64>`, with no `-T`: on an item that already exists `-T` changes its access list, which macOS confirms with a password dialog on every update (found live on 2026-10-21); the creator, `security`, is trusted without it. Reading:
   `security find-generic-password -s <service> -a <account> -w`; exit 44 is "not there". Verified on the owner's Mac
   (2026-10-21): no dialog, values round-trip.
 - **Linux — `secret-tool` (libsecret)**, talking to the Secret Service (gnome-keyring on Omarchy). `store` reads the

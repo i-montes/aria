@@ -88,7 +88,8 @@ impl Backend for MemoryBackend {
 }
 
 /// The login keychain through `security`. A write goes through `security -i` with the command on stdin, so the secret is
-/// never in a process's arguments; items trust `/usr/bin/security`, which reads them back without a dialog.
+/// never in a process's arguments. Items carry no access list of their own: their creator, `security`, reads, updates and
+/// deletes them without a dialog, while `-T` on an update would ask macOS to change the list and raise one each time.
 #[derive(Debug)]
 pub struct MacBackend {
     pub program: PathBuf,
@@ -122,7 +123,7 @@ impl Backend for MacBackend {
         let (service, quoted) = self.quoted(account)?;
         let label = format!("\"{}:{account}\"", self.service);
         let line = format!(
-            "add-generic-password -U -s {service} -a {quoted} -l {label} -T /usr/bin/security -w {}\n",
+            "add-generic-password -U -s {service} -a {quoted} -l {label} -w {}\n",
             encode(value)
         );
         let output = run(&self.program, &["-i"], Some(&line))?;
@@ -263,7 +264,9 @@ mod tests {
         assert!(!argv.contains("s3cr3t"));
         let stdin = log(dir.path(), "stdin.log");
         assert!(stdin.contains(r#"add-generic-password -U -s "aria:/t" -a "key:x""#), "{stdin}");
-        assert!(stdin.contains("-T /usr/bin/security"), "{stdin}");
+        // No access list: a `-T` on an item that already exists asks macOS to change its list, which raises a password
+        // dialog on every update (found live, 2026-10-21); the creator (`security`) is trusted without it.
+        assert!(!stdin.contains("-T"), "{stdin}");
         assert!(stdin.contains(&format!("-w {}", b64("s3cr3t'"))), "{stdin}");
         assert!(!stdin.contains("s3cr3t'"));
     }
