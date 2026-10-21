@@ -85,3 +85,9 @@ Notes: the desktop notification for a prompt that nobody can see is sent with `o
 |---|---|---|---|
 | system packages (pacman) | `install.sh` also installs `bubblewrap` and `iproute2` on Omarchy, at the next install (both were already on the owner's machine) | none | `sudo pacman -R bubblewrap iproute2`, if nothing else needs them |
 | `/tmp/tmp.*` | `tools/parity/scratch-home.sh` makes a scratch copy of `~/.aria` (settings, credentials at mode 600, MCP list) for each live check and deletes it when the check ends; `~/.aria` is only read | none | none needed: removed on exit |
+
+## 2026-10-21 — shellcheck for the installer tests (Omarchy machine)
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| `~/.config/mise/config.toml` | `shellcheck = "0.11.0"` (mise's static release binary; pacman's package failed on a mirror signature) so `install/install*.test.sh` lint `install.sh` | none, one line added | `mise unuse -g shellcheck` |

@@ -28,6 +28,8 @@ if [ "$(uname -s)" != Darwin ]; then
   printf '#!/bin/sh\nexit 1\n' > "$tmp/node/launchctl"
   chmod +x "$tmp/node/uname" "$tmp/node/sw_vers" "$tmp/node/launchctl"
 fi
+# Found before PATH is narrowed: mise and Homebrew put shellcheck outside the system directories.
+shellcheck=$(command -v shellcheck || true)
 # The installer is a plain sh script; keep the real system tools and fake Node/npm.
 export PATH="$tmp/node:/usr/bin:/bin:/usr/sbin:/sbin"
 
@@ -114,6 +116,6 @@ pinned=$(tr -d '[:space:]' < "$here/../pi-version")
 
 # syntax, and shellcheck when it is installed
 sh -n "$installer" && pass "install.sh parses" || fail "install.sh has a syntax error"
-if command -v shellcheck >/dev/null 2>&1; then shellcheck "$installer" && pass "shellcheck is clean" || fail "shellcheck found problems"; else echo "skip: shellcheck is not installed"; fi
+if [ -n "$shellcheck" ]; then "$shellcheck" "$installer" && pass "shellcheck is clean" || fail "shellcheck found problems"; else echo "skip: shellcheck is not installed"; fi
 
 [ "$failures" -eq 0 ] && echo "all checks passed" || { echo "$failures check(s) failed"; exit 1; }
