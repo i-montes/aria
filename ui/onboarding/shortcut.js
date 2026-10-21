@@ -10,7 +10,16 @@ const MODIFIERS = {
 const DEFAULTS = { linux: 'SUPER + A', mac: 'Option + Space' }
 /** A KeyboardEvent's flag for each modifier, in the canonical order of both platforms (Super is Meta on Linux). */
 const FLAGS = ['metaKey', 'ctrlKey', 'altKey', 'shiftKey']
-const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 'Super', 'Hyper'])
+/** A modifier pressed alone (the key is still to come), by the names engines give it: WebKitGTK may say `Super_L`. */
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 'Super', 'Super_L', 'Super_R', 'Hyper'])
+
+/** Whether a flag is held. Super (Command on a Mac) is `metaKey` in most engines, but some report it only through
+ * `getModifierState` as `Super`, `OS` or `Meta`. */
+function held(event, flag) {
+  if (event[flag]) return true
+  if (flag !== 'metaKey' || typeof event.getModifierState !== 'function') return false
+  return ['Super', 'OS', 'Meta'].some((name) => event.getModifierState(name))
+}
 
 const platform = (os) => (os === 'mac' ? 'mac' : 'linux')
 
@@ -56,7 +65,7 @@ export function fromKeyEvent(event, os) {
   const name = fromCode ? fromCode.slice(1).find(Boolean) : event.code ? '' : event.key === ' ' ? 'Space' : (event.key ?? '')
   const key = name ? canonicalKey(name) : null
   const names = MODIFIERS[platform(os)].map((m) => m[0])
-  const mods = FLAGS.map((flag, i) => (event[flag] ? names[i] : null)).filter(Boolean)
+  const mods = FLAGS.map((flag, i) => (held(event, flag) ? names[i] : null)).filter(Boolean)
   if (!key) return { error: mods.length ? 'unsupported' : 'needsModifier' }
   if (!mods.length) return { error: 'needsModifier' }
   return { label: label({ mods, key }) }

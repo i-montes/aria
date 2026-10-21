@@ -36,7 +36,9 @@ type EventHandlerProc = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_vo
 const EVENT_CLASS_KEYBOARD: u32 = 0x6B65_7962;
 /// `kEventHotKeyPressed`.
 const EVENT_HOTKEY_PRESSED: u32 = 5;
-const HOTKEY_NO_OPTIONS: u32 = 0;
+/// `kEventHotKeyExclusive`: a combination another app registered exclusively is refused (`eventHotKeyExistsErr`),
+/// and once Aria holds one, nobody else can take it. Without it Carbon accepts a combination someone else holds.
+const HOTKEY_EXCLUSIVE: u32 = 1;
 /// `'ARIA'`.
 const HOTKEY_SIGNATURE: u32 = 0x4152_4941;
 
@@ -60,6 +62,34 @@ extern "C" {
         out_ref: *mut *mut c_void,
     ) -> OSStatus;
     fn UnregisterEventHotKey(hotkey: *mut c_void) -> OSStatus;
+    fn CopySymbolicHotKeys(out_array: *mut CFTypeRef) -> OSStatus;
+}
+
+type CFTypeRef = *const c_void;
+/// `kCFNumberSInt64Type`.
+const CF_NUMBER_SINT64: isize = 4;
+/// `kCFStringEncodingUTF8`.
+const CF_STRING_UTF8: u32 = 0x0800_0100;
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFArrayGetCount(array: CFTypeRef) -> isize;
+    fn CFArrayGetValueAtIndex(array: CFTypeRef, index: isize) -> CFTypeRef;
+    fn CFDictionaryGetValue(dictionary: CFTypeRef, key: CFTypeRef) -> CFTypeRef;
+    fn CFStringCreateWithBytes(
+        allocator: CFTypeRef,
+        bytes: *const u8,
+        length: isize,
+        encoding: u32,
+        external: u8,
+    ) -> CFTypeRef;
+    fn CFNumberGetValue(number: CFTypeRef, number_type: isize, out: *mut c_void) -> u8;
+    fn CFBooleanGetValue(boolean: CFTypeRef) -> u8;
+    fn CFGetTypeID(value: CFTypeRef) -> usize;
+    fn CFNumberGetTypeID() -> usize;
+    fn CFBooleanGetTypeID() -> usize;
+    fn CFDictionaryGetTypeID() -> usize;
+    fn CFRelease(value: CFTypeRef);
 }
 
 type Callback = Box<dyn Fn() + Send>;
@@ -135,15 +165,25 @@ pub fn install_hotkey(chosen: &str, on_pressed: impl Fn() + Send + 'static) -> R
 /// Main thread only, after `install_hotkey`.
 pub fn change_hotkey(chosen: &str) -> Result<InUse, String> {
     on_main_thread()?;
+    if !REGISTERED.with_borrow(|r| r.handler) {
+        return Err("the hotkey handler is not installed".into());
+    }
     let list = candidates(chosen, Platform::Mac);
+    // The system's own shortcuts (Spotlight, input sources…): Carbon would accept them, the system would keep them.
+    let system = system_hotkeys();
     let current = REGISTERED.with_borrow(|r| r.hotkey.as_ref().map(|(shortcut, _)| shortcut.clone()));
     let mut new_ref: *mut c_void = std::ptr::null_mut();
-    let outcome = carbon::choose(&list, current.as_ref(), |shortcut| match register(shortcut) {
-        Some(hotkey) => {
-            new_ref = hotkey;
-            true
+    let outcome = carbon::choose(&list, current.as_ref(), |shortcut| {
+        if carbon::held_by_system(&system, shortcut) {
+            return false;
         }
-        None => false,
+        match register(shortcut) {
+            Some(hotkey) => {
+                new_ref = hotkey;
+                true
+            }
+            None => false,
+        }
     });
     match outcome {
         Outcome::Registered(in_use) => {
@@ -161,7 +201,7 @@ pub fn change_hotkey(chosen: &str) -> Result<InUse, String> {
         Outcome::Kept(in_use) => Ok(in_use),
         Outcome::Nothing { taken } => {
             let tried: Vec<String> = taken.iter().map(Shortcut::label).collect();
-            Err(format!("RegisterEventHotKey refused {}; other apps probably hold them", tried.join(", ")))
+            Err(format!("{} are taken (by the system or other apps)", tried.join(", ")))
         }
     }
 }
@@ -178,11 +218,61 @@ fn register(shortcut: &Shortcut) -> Option<*mut c_void> {
             modifiers,
             EventHotKeyID { signature: HOTKEY_SIGNATURE, id: 1 },
             GetApplicationEventTarget(),
-            HOTKEY_NO_OPTIONS,
+            HOTKEY_EXCLUSIVE,
             &mut hotkey,
         )
     };
     (status == 0).then_some(hotkey)
+}
+
+/// The system's shortcuts, from `CopySymbolicHotKeys`; empty when Carbon gives none.
+fn system_hotkeys() -> Vec<carbon::SymbolicHotKey> {
+    let mut array: CFTypeRef = std::ptr::null();
+    // SAFETY: main thread (callers check); `array` outlives the call, which stores a +1 reference (Copy rule) in it.
+    let status = unsafe { CopySymbolicHotKeys(&mut array) };
+    if status != 0 || array.is_null() {
+        return Vec::new();
+    }
+    let keys = ["kHISymbolicHotKeyCode", "kHISymbolicHotKeyModifiers", "kHISymbolicHotKeyEnabled"].map(|name| {
+        // SAFETY: `name` is valid UTF-8 for the given length and outlives the call, which copies it; the result is a
+        // +1 string (Create rule) released below.
+        unsafe { CFStringCreateWithBytes(std::ptr::null(), name.as_ptr(), name.len() as isize, CF_STRING_UTF8, 0) }
+    });
+    let mut list = Vec::new();
+    if keys.iter().all(|key| !key.is_null()) {
+        // SAFETY: `array` is the CFArray Carbon returned and stays alive until released below; each value is checked
+        // to be a dictionary before it is read; the values read from it are borrowed (Get rule), used at once, and
+        // checked for their type before `CFNumberGetValue`/`CFBooleanGetValue`.
+        unsafe {
+            for index in 0..CFArrayGetCount(array) {
+                let entry = CFArrayGetValueAtIndex(array, index);
+                if entry.is_null() || CFGetTypeID(entry) != CFDictionaryGetTypeID() {
+                    continue;
+                }
+                let number = |key: CFTypeRef| {
+                    let value = CFDictionaryGetValue(entry, key);
+                    let mut out: i64 = 0;
+                    (!value.is_null()
+                        && CFGetTypeID(value) == CFNumberGetTypeID()
+                        && CFNumberGetValue(value, CF_NUMBER_SINT64, (&mut out as *mut i64).cast()) != 0)
+                        .then_some(out)
+                };
+                let enabled = {
+                    let value = CFDictionaryGetValue(entry, keys[2]);
+                    !value.is_null() && CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue(value) != 0
+                };
+                list.push(carbon::SymbolicHotKey { code: number(keys[0]), modifiers: number(keys[1]), enabled });
+            }
+        }
+    }
+    // SAFETY: each non-null key and the array are +1 references this function owns, released exactly once.
+    unsafe {
+        for key in keys.into_iter().filter(|key| !key.is_null()) {
+            CFRelease(key);
+        }
+        CFRelease(array);
+    }
+    list
 }
 
 #[cfg(test)]

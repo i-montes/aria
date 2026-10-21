@@ -80,6 +80,31 @@ pub fn carbon_codes(shortcut: &Shortcut) -> Option<(u32, u32)> {
     (modifiers != 0).then_some((key, modifiers))
 }
 
+/// The four modifier flags; a symbolic hotkey's modifiers may carry other bits (the function key, caps lock).
+const MODIFIER_MASK: u32 = CMD_KEY | SHIFT_KEY | OPTION_KEY | CONTROL_KEY;
+
+/// One entry of Carbon's `CopySymbolicHotKeys` (the system's own shortcuts: Spotlight's Command + Space, the input
+/// sources' Control + Space, Mission Control…), as read from its dictionary: `kHISymbolicHotKeyCode`,
+/// `kHISymbolicHotKeyModifiers` (Carbon modifier flags) and `kHISymbolicHotKeyEnabled`. A value missing from the
+/// dictionary is `None` (an entry without a key, like a mouse button, never matches).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SymbolicHotKey {
+    pub code: Option<i64>,
+    pub modifiers: Option<i64>,
+    pub enabled: bool,
+}
+
+/// Whether one of the system's enabled shortcuts is `shortcut`. `RegisterEventHotKey` accepts those, and then the
+/// system keeps the keys (Command + Space opens Spotlight, not Aria), so the dock counts them as taken.
+pub fn held_by_system(system: &[SymbolicHotKey], shortcut: &Shortcut) -> bool {
+    let Some((code, modifiers)) = carbon_codes(shortcut) else { return false };
+    system.iter().any(|hotkey| {
+        hotkey.enabled
+            && hotkey.code == Some(i64::from(code))
+            && hotkey.modifiers.is_some_and(|m| (m as u32) & MODIFIER_MASK == modifiers)
+    })
+}
+
 /// What a registration pass ends with.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -161,6 +186,28 @@ mod tests {
         codes.sort_unstable();
         codes.dedup();
         assert_eq!(codes.len(), count, "no two keys share a code");
+    }
+
+    #[test]
+    fn the_system_s_enabled_shortcuts_are_taken() {
+        let entry = |code, modifiers, enabled| SymbolicHotKey { code: Some(code), modifiers: Some(modifiers), enabled };
+        // The shape `CopySymbolicHotKeys` gives: Spotlight, the input sources, a disabled one, extra flag bits, an
+        // entry with no key code.
+        let system = [
+            entry(49, 1 << 8, true),                 // Command + Space (Spotlight)
+            entry(49, 1 << 12, true),                // Control + Space (previous input source)
+            entry(49, (1 << 12) | (1 << 11), false), // Control + Option + Space, turned off
+            entry(0x11, (1 << 8) | (1 << 17), true), // Command + T with the function-key bit
+            SymbolicHotKey { code: None, modifiers: Some(1 << 8), enabled: true },
+            entry(65535, 0, true), // no key
+        ];
+        assert!(held_by_system(&system, &mac("Command + Space")));
+        assert!(held_by_system(&system, &mac("Control + Space")));
+        assert!(!held_by_system(&system, &mac("Control + Option + Space")), "a disabled one is free");
+        assert!(held_by_system(&system, &mac("Command + T")), "other flag bits do not matter");
+        assert!(!held_by_system(&system, &mac("Command + Shift + T")), "the modifiers must match exactly");
+        assert!(!held_by_system(&system, &mac("Option + Space")));
+        assert!(!held_by_system(&[], &mac("Command + Space")));
     }
 
     #[test]

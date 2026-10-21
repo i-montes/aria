@@ -24,6 +24,11 @@ describe('the shortcut, as the page reads and records it', () => {
     expect(fromKeyEvent({ key: 'F12', code: 'F12', ctrlKey: true, metaKey: true }, 'mac')).toEqual({ label: 'Command + Control + F12' })
     expect(fromKeyEvent({ key: 'x', ctrlKey: true }, 'linux')).toEqual({ label: 'CTRL + X' }) // no code: the key itself
     expect(fromKeyEvent({ key: 'Control', code: 'ControlLeft', ctrlKey: true }, 'linux')).toEqual({ pending: true })
+    for (const key of ['Super_L', 'Super_R', 'Meta', 'OS', 'Super']) expect(fromKeyEvent({ key, code: 'MetaLeft' }, 'linux')).toEqual({ pending: true })
+    const superBy = (name) => ({ key: 'a', code: 'KeyA', getModifierState: (m) => m === name })
+    for (const name of ['Super', 'OS', 'Meta']) expect(fromKeyEvent(superBy(name), 'linux')).toEqual({ label: 'SUPER + A' })
+    expect(fromKeyEvent(superBy('Super'), 'mac')).toEqual({ label: 'Command + A' })
+    expect(fromKeyEvent(superBy('CapsLock'), 'linux')).toEqual({ error: 'needsModifier' })
     expect(fromKeyEvent({ key: 'k', code: 'KeyK' }, 'linux')).toEqual({ error: 'needsModifier' })
     expect(fromKeyEvent({ key: 'Tab', code: 'Tab', altKey: true }, 'linux')).toEqual({ error: 'unsupported' })
     expect(fromKeyEvent({ key: 'F13', code: 'F13', altKey: true }, 'linux')).toEqual({ error: 'unsupported' })

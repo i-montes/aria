@@ -142,7 +142,8 @@ pub enum DockMessage {
     Notice,
     /// The host's shortcut in use, for the notice, the hints and the settings' Shortcut row (`Super + A`,
     /// `Option + Space`); `taken` the ones tried before it that something else holds (the chosen one, the default), in
-    /// the same form; `os` (`linux`, `mac`) which modifier names the settings row records.
+    /// the same form; `os` (`linux`, `mac`) which modifier names the settings row records. An empty `hotkey` means none
+    /// could be registered (macOS, every candidate taken; `taken` lists them all).
     #[serde(rename = "platform")]
     Platform { hotkey: String, taken: Vec<String>, os: String },
     /// `connected` names what is really set up, never a secret: `provider:type` for each credential in

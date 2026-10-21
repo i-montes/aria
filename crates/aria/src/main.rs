@@ -207,7 +207,8 @@ fn run_dock() {
             let _ = registration_sender.send(state);
         })
     };
-    // The setting the Mac's shortcut was registered for: a change of the settings file re-registers only when it moved.
+    // The setting the Mac's shortcut was registered for (`None` while nothing could be): a change of the settings file
+    // re-registers only when it moved, and a failed registration is tried again every few seconds.
     #[cfg(target_os = "macos")]
     let mut mac_shortcut = {
         let chosen = shortcut_setting(&AriaPaths::from_env());
@@ -215,8 +216,7 @@ fn run_dock() {
         let registered = aria_mac::install_hotkey(&chosen, move || {
             let _ = hotkey_sender.send("hotkey".to_string());
         });
-        report_mac_hotkey(&dock, registered);
-        chosen
+        report_mac_hotkey(&dock, &chosen, registered, true).then_some(chosen)
     };
 
     // Stopping the dock (systemd, launchd, a terminal's Ctrl+C) ends its background work and Pis, never leaves them.
@@ -236,20 +236,27 @@ fn run_dock() {
         // About once a second: a settings change (the settings screen, `/effort`, `/autocompact`, an editor) reaches
         // every session's Pi when its run settles, and the page reads the settings again.
         ticks = ticks.wrapping_add(1);
-        if ticks.is_multiple_of(60) && settings_watch.changed() {
+        let settings_changed = ticks.is_multiple_of(60) && settings_watch.changed();
+        if settings_changed {
             // Off the UI thread: preparing the agent directory reads and writes files.
             let sessions = chat_for_settings.clone();
             std::thread::spawn(move || sessions.settings_changed());
             dock.send(&DockMessage::SettingsChanged);
             #[cfg(target_os = "linux")]
             hotkey.settings_changed();
-            // On the main thread, as Carbon wants.
-            #[cfg(target_os = "macos")]
-            {
+        }
+        // On the main thread, as Carbon wants: after a change of the setting, and while nothing is registered (the
+        // retries are quiet until one works).
+        #[cfg(target_os = "macos")]
+        {
+            let retry = mac_shortcut.is_none() && ticks.is_multiple_of(MAC_HOTKEY_RETRY_TICKS);
+            if settings_changed || retry {
                 let chosen = shortcut_setting(&AriaPaths::from_env());
-                if chosen != mac_shortcut {
-                    report_mac_hotkey(&dock, aria_mac::change_hotkey(&chosen));
-                    mac_shortcut = chosen;
+                if mac_shortcut.as_deref() != Some(chosen.as_str()) {
+                    let registered = aria_mac::change_hotkey(&chosen);
+                    let worked = report_mac_hotkey(&dock, &chosen, registered, settings_changed);
+                    // A failure keeps the previous value away, so the next pass tries again.
+                    mac_shortcut = worked.then_some(chosen);
                 }
             }
         }
@@ -338,21 +345,37 @@ fn ready_line(in_use: &InUse) -> String {
     }
 }
 
-/// A Carbon registration's result reaches the log, the problem banner and the page (which shortcut is in use).
+/// A Carbon registration's result reaches the log, the problem banner and the page (which shortcut is in use, or none:
+/// an empty `hotkey` with every candidate taken). `loud`: a failure is logged and reported (a quiet retry only reports
+/// a success). Whether a shortcut is registered.
 #[cfg(target_os = "macos")]
-fn report_mac_hotkey(dock: &Dock, registered: Result<InUse, String>) {
+fn report_mac_hotkey(dock: &Dock, chosen: &str, registered: Result<InUse, String>, loud: bool) -> bool {
     match registered {
         Ok(in_use) => {
             eprintln!("{}", ready_line(&in_use));
             dock.clear_problem();
             dock.send(&DockMessage::platform(&in_use, ShortcutPlatform::Mac));
+            true
         }
         Err(error) => {
-            eprintln!("aria: could not register the shortcut: {error}");
-            dock.set_problem("hotkey-unavailable");
+            if loud {
+                eprintln!("aria: could not register the shortcut: {error}");
+                dock.set_problem("hotkey-unavailable");
+                let taken = aria_core::shortcut::candidates(chosen, ShortcutPlatform::Mac);
+                dock.send(&DockMessage::Platform {
+                    hotkey: String::new(),
+                    taken: taken.iter().map(|s| s.display()).collect(),
+                    os: ShortcutPlatform::Mac.name().into(),
+                });
+            }
+            false
         }
     }
 }
+
+/// How often a Mac whose shortcut could not be registered tries again, in UI ticks of 16 ms: every 10 s.
+#[cfg(target_os = "macos")]
+const MAC_HOTKEY_RETRY_TICKS: u32 = 10_000 / 16;
 
 /// How often the turn watchdog looks, in UI ticks of 16 ms: every 30 s.
 const WATCHDOG_TICKS: u32 = 30_000 / 16;

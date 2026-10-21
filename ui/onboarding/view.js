@@ -2,7 +2,7 @@
 // the settings object (see steps.js); this file turns it into HTML, handles every interaction in one
 // delegated listener, and talks to the dock through `env.request`. Widgets live in components.js.
 import * as c from './components.js'
-import { defaultShortcut, display, fromKeyEvent, parseShortcut } from './shortcut.js'
+import { defaultShortcut, display, fromKeyEvent, label as shortcutLabel, parseShortcut } from './shortcut.js'
 import { renderPanelHead } from '../chat/parts/panelhead.js'
 import { orderedModels, renderModelPicker } from '../chat/parts/models.js'
 import {
@@ -85,7 +85,8 @@ export function createOnboarding(env) {
       signedIn: false,
       typesafeSaved: false,
       reveal: {},
-      shortcut: { recording: false, note: null }, // the Shortcut row: listening for keys, and why the last press did not count
+      // The Shortcut row: listening for keys, why the last press (or the typed one) did not count, and the typed text.
+      shortcut: { recording: false, note: null, draft: '' },
       drafts: { key: '', typesafeKey: '', extraWritable: '' },
       key: { status: 'idle', error: null, requested: false },
       typesafe: { status: 'idle', error: null },
@@ -192,7 +193,7 @@ export function createOnboarding(env) {
     return `
       <span class="dot"></span>
       <h1>${c.esc(t('ob.done.title', { name }))}</h1>
-      <p class="intro">${c.esc(t('ob.done.desc', { name, hotkey: hotkey() }))}</p>
+      <p class="intro">${c.esc(t('ob.done.desc', { name, hotkey: hotkey() ? keysText(hotkey()) : t('ob.shortcut.noneShort') }))}</p>
       <button class="primary" data-nav data-action="close">${c.esc(t('ob.done.close'))}</button>`
   }
 
@@ -358,45 +359,80 @@ export function createOnboarding(env) {
     const row = state.ui.shortcut
     let note = ''
     let tone = ''
-    if (row.recording && row.note) {
+    if (row.note) {
       note = t(row.note === 'needsModifier' ? `ob.shortcut.needsModifier.${os === 'mac' ? 'mac' : 'linux'}` : `ob.shortcut.${row.note}`)
       tone = 'error'
+    } else if (!inUse && taken?.length) {
+      note = t('ob.shortcut.none', { taken: taken.map(keysText).join(', ') })
+      tone = 'error'
     } else if (taken?.length) {
-      note = t(taken.length === 1 ? 'ob.shortcut.inUse.one' : 'ob.shortcut.inUse.many', { hotkey: inUse, taken: taken.join(', ') })
+      note = t(taken.length === 1 ? 'ob.shortcut.inUse.one' : 'ob.shortcut.inUse.many', { hotkey: keysText(inUse), taken: taken.map(keysText).join(', ') })
     }
-    return c.keyCapture('shortcut', t('ob.shortcut.label'), t('ob.shortcut.desc'), display(shown).split(' + '), {
-      recording: row.recording,
-      recordingText: t('ob.shortcut.recording'),
-      meta: chosen ? '' : t('ob.shortcut.default'),
-      note,
-      tone,
-    })
+    // A shortcut the desktop takes before the page sees it (one already bound, Aria's own) can only be typed.
+    const example = os === 'mac' ? 'Command + Shift + A' : 'SUPER + SHIFT + A'
+    return (
+      c.keyCapture('shortcut', t('ob.shortcut.label'), t('ob.shortcut.desc'), display(shown).split(' + ').map(keyName), {
+        recording: row.recording,
+        recordingText: t('ob.shortcut.recording'),
+        meta: chosen ? '' : t('ob.shortcut.default'),
+        note,
+        tone,
+      }) +
+      c.textField('shortcutText', '', row.draft, {
+        placeholder: t('ob.shortcut.type', { example }),
+        mono: true,
+        indent: true,
+        button: { action: 'shortcut-apply', text: t('ob.shortcut.apply') },
+      })
+    )
+  }
+
+  /** A key's name on the page: `Space` in the reader's language, the others as they are. */
+  const keyName = (key) => (key === 'Space' ? t('key.space') : key)
+  const keysText = (text) => String(text).split(' + ').map(keyName).join(' + ')
+
+  /** Recording ends. The press that ended it (if one did) is still down: its release is the row's too (see keyup). */
+  function stopRecording(event) {
+    state.ui.shortcut = { ...state.ui.shortcut, recording: false, note: null }
+    heldKeys.clear()
+    if (event) heldKeys.add(event.code)
+  }
+
+  /** The typed shortcut, applied (Enter or the button): canonical when it parses, a note when it does not. */
+  function applyTypedShortcut() {
+    const parsed = parseShortcut(state.ui.shortcut.draft, platform().os)
+    if (!parsed) {
+      state.ui.shortcut = { ...state.ui.shortcut, recording: false, note: 'typedInvalid' }
+      return render()
+    }
+    update((s) => (s.shortcut = shortcutLabel(parsed)))
+    state.ui.shortcut = { recording: false, note: null, draft: '' }
+    render()
   }
 
   /** A key pressed while the Shortcut row records. Every key is the row's (the dock's own Esc included); Tab stops
    * recording and moves on. */
   function recordKey(event) {
-    const row = state.ui.shortcut
     if (event.key === 'Tab') {
-      row.recording = false
+      stopRecording()
       return render()
     }
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
     heldKeys.add(event.code)
-    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.getModifierState?.('Super')
     if (event.key === 'Escape' || (plain && event.key === 'Backspace')) {
       if (event.key === 'Backspace') update((s) => (s.shortcut = ''))
-      state.ui.shortcut = { recording: false, note: null }
+      stopRecording(event)
       return render()
     }
     const pressed = fromKeyEvent(event, platform().os)
     if (pressed.pending) return
-    if (pressed.error) state.ui.shortcut = { recording: true, note: pressed.error }
+    if (pressed.error) state.ui.shortcut = { ...state.ui.shortcut, recording: true, note: pressed.error }
     else {
       update((s) => (s.shortcut = pressed.label))
-      state.ui.shortcut = { recording: false, note: null }
+      stopRecording(event)
     }
     render()
   }
@@ -1019,6 +1055,10 @@ export function createOnboarding(env) {
       if (button) button.disabled = !value.trim()
       return
     }
+    if (field === 'shortcutText') {
+      state.ui.shortcut.draft = value
+      return
+    }
     if (field === 'key' || field === 'typesafeKey') {
       state.ui.drafts[field] = value
       const status = field === 'key' ? state.ui.key : state.ui.typesafe
@@ -1299,7 +1339,8 @@ export function createOnboarding(env) {
     const { action, field, value } = el.dataset
     // Any other control closes an open model picker, and stops a recording shortcut.
     if (state.picker && action !== 'model-open') state.picker = null
-    if (action !== 'key-capture') state.ui.shortcut = { recording: false, note: null }
+    if (action !== 'key-capture' && action !== 'shortcut-apply' && state.ui.shortcut.recording) stopRecording()
+    if (action !== 'key-capture' && action !== 'shortcut-apply') state.ui.shortcut.note = null
     // WebKit does not focus a button on click; remember the widget so the redraw can focus it again.
     focusAfterRender = el.dataset.key ?? el.closest?.('[data-key]')?.dataset.key ?? ''
     if (action === 'choose') return value === 'skip' ? skipSetup() : startFlow(value)
@@ -1312,9 +1353,14 @@ export function createOnboarding(env) {
     if (action === 'model-open') return toggleModelPicker(field)
     if (action === 'key-capture') {
       // A click (or Enter, or Space) starts listening; a second one stops.
-      state.ui.shortcut = { recording: !state.ui.shortcut.recording, note: null }
+      if (state.ui.shortcut.recording) stopRecording()
+      else {
+        heldKeys.clear()
+        state.ui.shortcut = { ...state.ui.shortcut, recording: true, note: null }
+      }
       return render()
     }
+    if (action === 'shortcut-apply') return applyTypedShortcut()
     if (action === 'settings-home') {
       state.section = null
       state.picker = null
@@ -1435,6 +1481,7 @@ export function createOnboarding(env) {
     event.preventDefault()
     const { action, field } = event.target.dataset
     if (action === 'input' && (field === 'key' || field === 'typesafeKey')) return saveKey(field)
+    if (action === 'input' && field === 'shortcutText') return applyTypedShortcut()
     if (action === 'chip-draft') return root.querySelector('[data-action="add-chip"]')?.click()
     const items = [...root.querySelectorAll('[data-nav]:not(:disabled)')]
     items[items.indexOf(event.target) + 1]?.focus()

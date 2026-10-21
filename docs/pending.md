@@ -87,9 +87,11 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
   `Option + Space`, `Control + Option + Space`, `Command + Option + Space` when `RegisterEventHotKey` refuses one, and
   registers again (new first, then the old one unregistered) when the setting changes. The key codes and the order are
   tested on Linux (`aria-mac/src/carbon.rs`) and the Carbon calls type-check (`tools/check-macos.sh`), but nothing of it
-  has run on a Mac yet: to try there, a shortcut another app holds (it should fall back and the settings row say
-  "In use: …"), a change in the settings (the new one works at once, the old one no longer opens the dock), and a
-  letter on a non-US layout (Carbon codes are key positions).
+  has run on a Mac yet. Registration is exclusive, and the system's enabled shortcuts (`CopySymbolicHotKeys`) count as
+  taken. To try there: Command + Space (Spotlight: it should fall back, the row saying "In use: …"), Control + Space
+  (input sources), a combination another app holds (another hotkey app, or a second Aria-like registration), a change
+  in the settings (the new one works at once, the old one no longer opens the dock), every candidate taken (the banner,
+  "None available", a retry once one is freed), and a letter on a non-US layout (Carbon codes are key positions).
   - The installer gives up waiting for the old agent after 5 s, and `bootstrap` then fails after the binary was
     replaced.
 - `crates/aria/src/dock/mac.rs` repeats the page queue, the open/close generations and the notice timing of `dock/gtk.rs`; they can be shared now that the Mac build is at hand.

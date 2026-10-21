@@ -49,7 +49,8 @@ export const toggle = (field, text, description, on, indent = false) => `
     <span class="track${on ? ' on' : ''}"><span class="knob"></span></span>
   </button>`
 
-/** `secret`: password field with Show/Hide. `revealed`, `showText` and `hideText` only matter then. */
+/** `secret`: password field with Show/Hide. `revealed`, `showText` and `hideText` only matter then. `button`:
+ * { action, text }, a link beside the field that acts on it (the Shortcut row's Use). */
 export const textField = (field, text, value, o = {}) => `
   <div class="group${indentClass(o.indent)}">
     ${label(text, o.description, false)}
@@ -57,6 +58,7 @@ export const textField = (field, text, value, o = {}) => `
       <input data-nav data-action="input" data-field="${esc(field)}" ${key('input', field)} type="${o.secret && !o.revealed ? 'password' : 'text'}"
         class="${o.mono || o.secret ? 'mono' : ''}" value="${esc(value)}" placeholder="${esc(o.placeholder ?? '')}" spellcheck="false" autocomplete="off">
       ${o.secret ? `<button type="button" class="link" data-nav data-action="reveal" data-field="${esc(field)}" ${key('reveal', field)}>${esc(o.revealed ? o.hideText : o.showText)}</button>` : ''}
+      ${o.button ? `<button type="button" class="link" data-nav data-action="${esc(o.button.action)}" data-field="${esc(field)}" ${key(o.button.action, field)}>${esc(o.button.text)}</button>` : ''}
     </div>
   </div>`
 

@@ -63,7 +63,15 @@ function harness(extra = {}) {
     }
     return event
   }
-  return { ob, click, clickChat, search, type, press, pending, sent, lastRequest, root }
+  /** A key let go of; whether the page took the release. */
+  const release = (init) => {
+    const event = { target: { dataset: {} }, defaultPrevented: false, ...init }
+    event.preventDefault = () => (event.defaultPrevented = true)
+    event.stopPropagation = () => {}
+    for (const fn of listeners.keyup ?? []) fn(event)
+    return event.defaultPrevented
+  }
+  return { ob, click, clickChat, search, type, press, release, pending, sent, lastRequest, root }
 }
 
 const oauthOk = { type: 'oauthResult', ok: true, error: null }
@@ -906,7 +914,7 @@ describe('the shortcut row', () => {
 
   test('on a Mac the modifiers have their Mac names, and Option does not change the letter', () => {
     const h = open({ hotkey: 'Option + Space', taken: [], os: 'mac' })
-    expect(kbds(h.root.innerHTML)).toEqual(['Option', 'Space'])
+    expect(kbds(h.root.innerHTML)).toEqual(['Option', 'key.space']) // Space in the reader's language
     h.click('key-capture', 'shortcut')
     h.press({ key: 'å', code: 'KeyA', altKey: true, metaKey: true })
     expect(kbds(h.root.innerHTML)).toEqual(['Command', 'Option', 'A'])
@@ -952,6 +960,72 @@ describe('the shortcut row', () => {
     Object.assign(platform, { hotkey: 'Super + A', taken: ['Super + Shift + A'] })
     h.ob.platformChanged()
     expect(h.root.innerHTML.replaceAll('&quot;', '"')).toContain('ob.shortcut.inUse.one{"hotkey":"Super + A","taken":"Super + Shift + A"}')
+  })
+
+  test('Super is recognized however the engine reports it', () => {
+    const shapes = [
+      { metaKey: true },
+      { getModifierState: (name) => name === 'Super' },
+      { getModifierState: (name) => name === 'OS' },
+      { getModifierState: (name) => name === 'Meta' },
+    ]
+    for (const shape of shapes) {
+      const h = open()
+      h.click('key-capture', 'shortcut')
+      // the modifier alone, under each name WebKitGTK and others give it, waits for the key
+      for (const key of ['Super_L', 'Super_R', 'Meta', 'OS', 'Super']) {
+        h.press({ key, code: 'MetaLeft', ...shape })
+        expect(h.root.innerHTML).toContain('ob.shortcut.recording')
+      }
+      h.press({ key: 'j', code: 'KeyJ', ...shape })
+      expect(saved(h)).toBe('SUPER + J')
+    }
+  })
+
+  test('a shortcut can be typed instead', () => {
+    const h = open()
+    expect(h.root.innerHTML).toContain('data-field="shortcutText"')
+    h.type('shortcutText', 'super + shift + 1') // one the desktop would take before the page sees it
+    h.click('shortcut-apply', 'shortcutText')
+    expect(kbds(h.root.innerHTML)).toEqual(['Super', 'Shift', '1'])
+    expect(saved(h)).toBe('SUPER + SHIFT + 1')
+    h.type('shortcutText', 'super + return')
+    h.click('shortcut-apply', 'shortcutText')
+    expect(h.root.innerHTML).toContain('ob.shortcut.typedInvalid')
+    expect(kbds(h.root.innerHTML)).toEqual(['Super', 'Shift', '1']) // nothing changed
+    // Enter in the field applies it too
+    h.type('shortcutText', 'ctrl+alt+space')
+    const enter = { key: 'Enter', code: 'Enter', target: Object.assign(new HTMLInputElement(), { dataset: { action: 'input', field: 'shortcutText' }, type: 'text' }) }
+    h.press(enter)
+    expect(kbds(h.root.innerHTML)).toEqual(['Ctrl', 'Alt', 'key.space'])
+    expect(h.root.innerHTML).not.toContain('ob.shortcut.typedInvalid')
+    // on a Mac the names are the Mac ones
+    const m = open({ hotkey: 'Option + Space', taken: [], os: 'mac' })
+    m.type('shortcutText', 'cmd + shift + k')
+    m.click('shortcut-apply', 'shortcutText')
+    expect(saved(m)).toBe('Command + Shift + K')
+  })
+
+  test('none available says so', () => {
+    const h = open({ hotkey: '', taken: ['Option + Space', 'Control + Option + Space', 'Command + Option + Space'], os: 'mac' })
+    const html = h.root.innerHTML.replaceAll('&quot;', '"')
+    expect(html).toContain('ob.shortcut.none{"taken":"Option + key.space, Control + Option + key.space, Command + Option + key.space"}')
+    expect(html).not.toContain('ob.shortcut.inUse')
+  })
+
+  test('only the release of the key that ended a recording is taken', () => {
+    const h = open()
+    h.click('key-capture', 'shortcut')
+    h.press({ key: 'Shift', code: 'ShiftLeft', shiftKey: true })
+    h.press({ key: ' ', code: 'Space', shiftKey: true, ctrlKey: true })
+    expect(h.release({ key: ' ', code: 'Space' })).toBe(true) // it would click the row again
+    expect(h.release({ key: 'Shift', code: 'ShiftLeft' })).toBe(false) // cleared when recording stopped
+    expect(h.release({ key: ' ', code: 'Space' })).toBe(false) // once
+    // a recording stopped by a click leaves nothing behind
+    h.click('key-capture', 'shortcut')
+    h.press({ key: 'Control', code: 'ControlLeft', ctrlKey: true })
+    h.click('key-capture', 'shortcut')
+    expect(h.release({ key: 'Control', code: 'ControlLeft' })).toBe(false)
   })
 
   test('the row is in the settings only, not in the setup', () => {

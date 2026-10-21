@@ -68,7 +68,8 @@ const handlers = {
   // The shortcut in use (`Super + A` on Omarchy, `Option + Space` on macOS, or what the settings chose), sent again
   // whenever it changes; `taken`, the ones tried before it; `os`, which modifier names the Shortcut row records.
   platform: (message) => {
-    if (message.hotkey) state.hotkey = message.hotkey
+    // An empty hotkey: none could be registered (every candidate is in `taken`).
+    if (typeof message.hotkey === 'string') state.hotkey = message.hotkey
     state.taken = Array.isArray(message.taken) ? message.taken : []
     if (message.os) state.os = message.os
     onboarding.platformChanged()
@@ -139,13 +140,17 @@ function setMode(mode) {
 
 const NOTICE_MS = 8000
 
+/** A key's name as the page shows it: `Space` in the reader's language. */
+const keyName = (key) => (key === 'Space' ? t('key.space') : key)
+
 /** The hotkey as the design shows it: one key per `<kbd>`. */
-const hotkeyHtml = () => state.hotkey.split(' + ').map((key) => `<kbd>${key}</kbd>`).join(' ')
+const hotkeyHtml = () => state.hotkey.split(' + ').map((key) => `<kbd>${keyName(key)}</kbd>`).join(' ')
 
 function showNotice() {
+  const line = state.hotkey ? `${t('notice.press')} ${hotkeyHtml()} ${t('notice.toSetUp')}` : t('notice.noHotkey')
   document.getElementById('notice').innerHTML = `
     <span class="dot"></span>
-    <div><b>${t('notice.title')}</b><span class="line">${t('notice.press')} ${hotkeyHtml()} ${t('notice.toSetUp')}</span></div>`
+    <div><b>${t('notice.title')}</b><span class="line">${line}</span></div>`
   document.body.classList.add('show-notice')
   setTimeout(() => document.body.classList.remove('show-notice'), NOTICE_MS)
 }
