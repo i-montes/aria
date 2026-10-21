@@ -23,6 +23,14 @@ impl Platform {
         }
     }
 
+    /// The name the page knows the platform by (`DockMessage::Platform`'s `os`): `linux` or `mac`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Platform::Linux => "linux",
+            Platform::Mac => "mac",
+        }
+    }
+
     /// The modifiers in their canonical spelling and order.
     pub fn modifiers(self) -> &'static [&'static str] {
         match self {
@@ -109,6 +117,14 @@ pub fn parse(text: &str, platform: Platform) -> Option<Shortcut> {
         return None;
     }
     Some(Shortcut { mods, key })
+}
+
+/// The shortcut the dock uses and the ones it tried first, which something else holds (another app's shortcut, a
+/// Hyprland bind that is not Aria's).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InUse {
+    pub shortcut: Shortcut,
+    pub taken: Vec<Shortcut>,
 }
 
 /// The platform's default: `SUPER + A` on Omarchy, `Option + Space` on macOS (what an empty setting means).

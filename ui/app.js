@@ -8,7 +8,8 @@ import { createOnboarding } from './onboarding/view.js'
 
 let i18n = createI18n({})
 const t = (key, vars) => i18n.t(key, vars)
-const state = { problem: null, mode: 'setup', hotkey: 'Super + A' } // mode: `setup` (the onboarding) or `chat`
+// mode: `setup` (the onboarding) or `chat`. `hotkey`, `taken` and `os` are the dock's last `platform` message.
+const state = { problem: null, mode: 'setup', hotkey: 'Super + A', taken: [], os: 'linux' }
 
 // ---- bridge ----------------------------------------------------------------------------------
 
@@ -64,9 +65,13 @@ const handlers = {
   session: (message) => booted.then(() => chat.receive(message.session, message.message)),
   // Every session's background jobs (top level, like the dock's own messages): the strip and the list.
   jobs: (message) => booted.then(() => chat.setJobs(message.jobs)),
-  // The host's shortcut: `Super + A` on Omarchy, `Option + Space` on macOS.
+  // The shortcut in use (`Super + A` on Omarchy, `Option + Space` on macOS, or what the settings chose), sent again
+  // whenever it changes; `taken`, the ones tried before it; `os`, which modifier names the Shortcut row records.
   platform: (message) => {
     if (message.hotkey) state.hotkey = message.hotkey
+    state.taken = Array.isArray(message.taken) ? message.taken : []
+    if (message.os) state.os = message.os
+    onboarding.platformChanged()
   },
   // settings.json changed outside the page (/effort or /autocompact in a session, an editor): read it again. An open
   // settings screen shows it unless the reader has changes of their own on it (onboarding.refreshSettings).
@@ -154,6 +159,7 @@ const onboarding = createOnboarding({
   post,
   browserLanguage: () => normalizeLanguage(navigator.language),
   hotkey: () => state.hotkey,
+  platform: () => ({ hotkey: state.hotkey, taken: state.taken, os: state.os }),
   // The settings' model fields list what Pi really offers (the chat's own `listModels`).
   listModels: () => chat.listModels(),
   // "Start using Aria" / "Close" on the last screen: on to the chat.

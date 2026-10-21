@@ -178,6 +178,31 @@ const script = `(async () => {
     const sentImport = window.__sent.filter((m) => m.type === 'mcpImport').at(-1)
     check('importing a found server', JSON.stringify(sentImport?.ids) === '["claude-code:files"]' && !box('claude-code:files') && box('cursor:docs') && $('#flow').textContent.includes('Imported 1: files') && !!$('#flow [data-field="access:files"][data-value="ask"].selected'), $('#flow').textContent.slice(-400))
   }
+  // recording a shortcut: the row in the first section listens, saves through the bar, and says which one the dock
+  // really uses when the chosen one is taken (the sandbox's dock holds SUPER + T)
+  {
+    $('#flow [data-action="settings-home"]')?.click(); await wait(80)
+    $('#flow [data-action="settings-open"][data-value="assistant"]')?.click(); await wait(120)
+    const capture = () => $('#flow [data-action="key-capture"]')
+    const keysShown = () => [...(capture()?.querySelectorAll('kbd') ?? [])].map((k) => k.textContent).join(' + ')
+    check('recording a shortcut: the row shows the default', keysShown() === 'Super + A' && capture().textContent.includes('Default'), capture()?.textContent)
+    const press = (init) => { const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }); document.activeElement.dispatchEvent(e); return e }
+    const record = async (init) => { capture().click(); await wait(40); capture().focus(); const e = press(init); await wait(40); return e }
+    await record({ key: 'K', code: 'KeyK', shiftKey: true, metaKey: true })
+    check('recording a shortcut: a press becomes its keys, and the save bar shows', keysShown() === 'Super + Shift + K' && !!$('#flow [data-action="settings-save"]:not(:disabled)'), keysShown())
+    $('#flow [data-action="settings-save"]')?.click(); await wait(250)
+    check('recording a shortcut: it is saved in the form of the setting', window.__sent.filter((m) => m.type === 'saveSettings').at(-1)?.settings?.shortcut === 'SUPER + SHIFT + K')
+    await record({ key: 't', code: 'KeyT', metaKey: true })
+    $('#flow [data-action="settings-save"]')?.click(); await wait(300)
+    check('recording a shortcut: a taken one says which is in use', $('#flow').textContent.includes('In use: Super + A (Super + T was taken)'), $('#flow .key-capture')?.parentElement?.textContent.replace(/\s+/g, ' '))
+    await record({ key: 'k', code: 'KeyK' })
+    check('recording a shortcut: a key without a modifier is refused with a note', capture().classList.contains('recording') && $('#flow').textContent.includes('Add a modifier'), capture()?.parentElement?.textContent.replace(/\s+/g, ' '))
+    const esc = press({ key: 'Escape', code: 'Escape' }); await wait(40)
+    check('recording a shortcut: Esc cancels and leaves the dock open', !capture().classList.contains('recording') && document.body.classList.contains('open') && esc.defaultPrevented && keysShown() === 'Super + T')
+    await record({ key: 'Backspace', code: 'Backspace' })
+    check('recording a shortcut: Backspace goes back to the default', keysShown() === 'Super + A' && capture().textContent.includes('Default'), keysShown())
+    $('#flow [data-action="settings-save"]')?.click(); await wait(250)
+  }
   $('#flow [data-action="settings-home"]')?.click(); await wait(80)
   $('#flow [data-action="settings-exit"]')?.click(); await wait(150)
   check('leaving the settings goes back to the chat', document.body.classList.contains('mode-chat'))
@@ -659,13 +684,36 @@ const script = `(async () => {
   function sim_ask() { window.sim.sess('s1', { type: 'chatDialog', id: 'ask1', method: 'input', request: { title: JSON.stringify({ aria: 1, kind: 'question', questions: [{ question: 'Which fallback?', header: 'Fallback', options: [{ label: 'Git hash' }, { label: 'Version' }] }, { question: 'Which checks?', header: 'Checks', options: [{ label: 'Unit' }, { label: 'Lint' }] }] }) }, hidden: false }) }
 })()`
 const reply = await send('Runtime.evaluate', { expression: script, awaitPromise: true, returnByValue: true })
+
+// Real key presses (the browser's own button activation, which page events cannot reach): Enter starts recording the
+// shortcut, Alt + Space records it without its release clicking the row again, Esc cancels without closing the dock.
+const evaluate = async (expression: string) => (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }))?.result?.value
+const KEYS: Record<string, [string, number]> = { Enter: ['Enter', 13], Escape: ['Escape', 27], ' ': ['Space', 32], Alt: ['AltLeft', 18] }
+const realKey = async (type: 'keyDown' | 'keyUp', key: string, modifiers = 0) => {
+  const [code, vk] = KEYS[key]
+  const text = type === 'keyDown' && (key === 'Enter' ? '\r' : key === ' ' ? ' ' : '')
+  await send('Input.dispatchKeyEvent', { type: text ? 'keyDown' : type === 'keyDown' ? 'rawKeyDown' : 'keyUp', key, code, modifiers, windowsVirtualKeyCode: vk, ...(text ? { text, unmodifiedText: text } : {}) })
+}
+const tap = async (key: string, modifiers = 0) => { await realKey('keyDown', key, modifiers); await realKey('keyUp', key, modifiers); await Bun.sleep(60) }
+const row = () => evaluate(`(() => { const b = document.querySelector('#flow [data-action="key-capture"]'); return b && { recording: b.classList.contains('recording'), keys: [...b.querySelectorAll('kbd')].map((k) => k.textContent).join(' + '), open: document.body.classList.contains('open') } })()`)
+await evaluate(`(async () => { const w = (ms) => new Promise((r) => setTimeout(r, ms)); document.querySelector('#flow [data-action="settings-home"]')?.click(); await w(80); document.querySelector('#flow [data-action="settings-open"][data-value="assistant"]')?.click(); await w(120); document.querySelector('#flow [data-action="key-capture"]')?.focus() })()`)
+const realChecks: [string, boolean, string][] = []
+await tap('Enter')
+const started = await row()
+realChecks.push(['real keys: Enter on the row starts recording', !!started?.recording, JSON.stringify(started)])
+await realKey('keyDown', 'Alt', 1); await realKey('keyDown', ' ', 1); await realKey('keyUp', ' ', 1); await realKey('keyUp', 'Alt'); await Bun.sleep(80)
+const recorded = await row()
+realChecks.push(['real keys: Alt + Space is recorded, and its release does not start recording again', recorded?.keys === 'Alt + Space' && !recorded.recording, JSON.stringify(recorded)])
+await tap('Enter'); await tap('Escape')
+const cancelled = await row()
+realChecks.push(['real keys: Esc cancels the recording and leaves the dock open', !!cancelled && !cancelled.recording && cancelled.open && cancelled.keys === 'Alt + Space', JSON.stringify(cancelled)])
 chrome.kill()
 if (!Array.isArray(reply?.result?.value)) {
   console.error('the checks did not run:', JSON.stringify(reply.exceptionDetails ?? reply).slice(0, 600))
   process.exit(1)
 }
 let failed = 0
-for (const [name, ok, detail] of reply.result.value as [string, boolean, string][]) {
+for (const [name, ok, detail] of [...(reply.result.value as [string, boolean, string][]), ...realChecks]) {
   console.log(`${ok ? 'ok:  ' : 'FAIL:'} ${name}${ok || !detail ? '' : `  (${detail})`}`)
   if (!ok) failed++
 }

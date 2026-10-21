@@ -174,12 +174,8 @@ fn hyprctl_eval(lua: &str) -> Result<String, HyprError> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// The shortcut the dock uses and the ones it tried first, which something else binds.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InUse {
-    pub shortcut: Shortcut,
-    pub taken: Vec<Shortcut>,
-}
+/// The shortcut the dock uses and the ones it tried first, which something else binds (shared with macOS).
+pub use aria_core::shortcut::InUse;
 
 /// Aria's bind, as it stands: what it bound last (so a change unbinds it).
 #[derive(Debug, Clone)]

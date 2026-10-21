@@ -70,6 +70,7 @@ dependencies = [
 name = "aria-mac"
 version = "0.1.0"
 dependencies = [
+ "aria-core",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

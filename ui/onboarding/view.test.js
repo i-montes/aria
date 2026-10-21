@@ -18,7 +18,7 @@ function harness(extra = {}) {
     querySelector: () => null,
     querySelectorAll: () => [],
     addEventListener: (type, fn) => {
-      listeners[type] = fn
+      ;(listeners[type] ??= []).push(fn)
     },
   }
   const pending = []
@@ -36,20 +36,34 @@ function harness(extra = {}) {
   const click = (action, field, value) => {
     const el = { dataset: { action, field, value }, disabled: false }
     el.closest = () => null
-    listeners.click({ target: { closest: (selector) => (selector === '[data-action]' ? el : null) } })
+    for (const fn of listeners.click) fn({ target: { closest: (selector) => (selector === '[data-action]' ? el : null) } })
   }
   const type = (field, value) => {
     const input = Object.assign(new HTMLInputElement(), { dataset: { action: 'input', field }, value })
-    listeners.input({ target: input })
+    for (const fn of listeners.input) fn({ target: input })
   }
   const lastRequest = () => pending.at(-1)
   /** A click on an element that carries `data-chat` (the chat's model picker rows) instead of `data-action`. */
   const clickChat = (chat, index) => {
     const el = { dataset: { chat, index: String(index) } }
-    listeners.click({ target: { closest: (selector) => (selector === `[data-chat="${chat}"]` ? el : null) } })
+    for (const fn of listeners.click) fn({ target: { closest: (selector) => (selector === `[data-chat="${chat}"]` ? el : null) } })
   }
-  const search = (value) => listeners.input({ target: { value, dataset: { chatField: 'model-search' } } })
-  return { ob, click, clickChat, search, type, pending, sent, lastRequest, root }
+  const search = (value) => {
+    for (const fn of listeners.input) fn({ target: { value, dataset: { chatField: 'model-search' } } })
+  }
+  /** A key pressed on the focused control (`init` as a KeyboardEvent's: key, code, the modifier flags). The result
+   * says whether the page took it (its default prevented, kept from the dock's own Esc). */
+  const press = (init) => {
+    const event = { target: { dataset: {} }, defaultPrevented: false, stopped: false, ...init }
+    event.preventDefault = () => (event.defaultPrevented = true)
+    event.stopPropagation = event.stopImmediatePropagation = () => (event.stopped = true)
+    for (const fn of listeners.keydown) {
+      if (event.stopped) break
+      fn(event)
+    }
+    return event
+  }
+  return { ob, click, clickChat, search, type, press, pending, sent, lastRequest, root }
 }
 
 const oauthOk = { type: 'oauthResult', ok: true, error: null }
@@ -845,5 +859,106 @@ describe('the MCP servers the person already has', () => {
     expect(html).not.toContain('data-value="claude-code:files"')
     expect(html).toContain('ob.integrations.found.imported{&quot;n&quot;:1,&quot;names&quot;:&quot;files&quot;}')
     expect(h.ob.snapshot().dirty).toBe(false)
+  })
+})
+
+describe('the shortcut row', () => {
+  // The texts with their placeholders, so the values that fill them can be seen.
+  const t = (key, vars) => (vars ? `${key}${JSON.stringify(vars)}` : key)
+  const open = (platform = { hotkey: 'Super + A', taken: [], os: 'linux' }, settings = completed) => {
+    const h = harness({ t, platform: () => platform })
+    h.ob.start(settings, ['opencode-go:api_key'])
+    h.click('settings-open', undefined, 'assistant')
+    return h
+  }
+  const kbds = (html) => [...html.matchAll(/<kbd>([^<]*)<\/kbd>/g)].map((m) => m[1])
+  const saved = (h) => {
+    h.click('settings-save')
+    return h.lastRequest().message.settings.shortcut
+  }
+
+  test('the shortcut row records keys', () => {
+    const h = open()
+    expect(h.root.innerHTML).toContain('ob.shortcut.label')
+    expect(kbds(h.root.innerHTML)).toEqual(['Super', 'A']) // the default, while the setting is empty
+    expect(h.root.innerHTML).toContain('ob.shortcut.default')
+    h.click('key-capture', 'shortcut')
+    expect(h.root.innerHTML).toContain('ob.shortcut.recording')
+    // a modifier alone waits for the key
+    expect(h.press({ key: 'Shift', code: 'ShiftLeft', shiftKey: true }).defaultPrevented).toBe(true)
+    expect(h.root.innerHTML).toContain('ob.shortcut.recording')
+    // a key without a modifier, or one the dock cannot bind, says so and keeps recording
+    h.press({ key: 'k', code: 'KeyK' })
+    expect(h.root.innerHTML).toContain('ob.shortcut.needsModifier.linux')
+    h.press({ key: 'Enter', code: 'Enter', ctrlKey: true })
+    expect(h.root.innerHTML).toContain('ob.shortcut.unsupported')
+    expect(h.ob.snapshot().dirty).toBe(false)
+    // the key by its position (event.code), the modifiers in their canonical order
+    const taken = h.press({ key: 'K', code: 'KeyK', shiftKey: true, metaKey: true })
+    expect(taken.defaultPrevented && taken.stopped).toBe(true)
+    expect(h.root.innerHTML).not.toContain('ob.shortcut.recording')
+    expect(kbds(h.root.innerHTML)).toEqual(['Super', 'Shift', 'K'])
+    expect(h.ob.snapshot().dirty).toBe(true)
+    expect(saved(h)).toBe('SUPER + SHIFT + K')
+    // keys outside a recording are not taken
+    expect(h.press({ key: 'k', code: 'KeyK', ctrlKey: true }).defaultPrevented).toBe(false)
+  })
+
+  test('on a Mac the modifiers have their Mac names, and Option does not change the letter', () => {
+    const h = open({ hotkey: 'Option + Space', taken: [], os: 'mac' })
+    expect(kbds(h.root.innerHTML)).toEqual(['Option', 'Space'])
+    h.click('key-capture', 'shortcut')
+    h.press({ key: 'å', code: 'KeyA', altKey: true, metaKey: true })
+    expect(kbds(h.root.innerHTML)).toEqual(['Command', 'Option', 'A'])
+    h.click('key-capture', 'shortcut')
+    h.press({ key: 'F5', code: 'F5', ctrlKey: true })
+    expect(saved(h)).toBe('Control + F5')
+  })
+
+  test('escape cancels', () => {
+    const h = open()
+    h.click('key-capture', 'shortcut')
+    const esc = h.press({ key: 'Escape', code: 'Escape' })
+    expect(esc.stopped).toBe(true) // the dock does not close
+    expect(h.root.innerHTML).not.toContain('ob.shortcut.recording')
+    expect(kbds(h.root.innerHTML)).toEqual(['Super', 'A'])
+    expect(h.ob.snapshot().dirty).toBe(false)
+    // a click elsewhere cancels too
+    h.click('key-capture', 'shortcut')
+    h.click('pick', 'style', 'brief')
+    expect(h.root.innerHTML).not.toContain('ob.shortcut.recording')
+  })
+
+  test('backspace resets to the default', () => {
+    const h = open({ hotkey: 'Ctrl + Alt + K', taken: [], os: 'linux' }, { ...completed, shortcut: 'CTRL + ALT + K' })
+    expect(kbds(h.root.innerHTML)).toEqual(['Ctrl', 'Alt', 'K'])
+    expect(h.root.innerHTML).not.toContain('ob.shortcut.default')
+    h.click('key-capture', 'shortcut')
+    h.press({ key: 'Backspace', code: 'Backspace' })
+    expect(kbds(h.root.innerHTML)).toEqual(['Super', 'A'])
+    expect(h.root.innerHTML).toContain('ob.shortcut.default')
+    expect(saved(h)).toBe('')
+  })
+
+  test('in use shows a fallback', () => {
+    const platform = { hotkey: 'Super + A', taken: [], os: 'linux' }
+    const h = open(platform, { ...completed, shortcut: 'super + shift + a' })
+    expect(kbds(h.root.innerHTML)).toEqual(['Super', 'Shift', 'A']) // a hand-written setting, shown canonical
+    expect(h.root.innerHTML).not.toContain('ob.shortcut.inUse')
+    // the dock says the chosen one is taken: the row says which one works
+    Object.assign(platform, { hotkey: 'Super + Alt + A', taken: ['Super + Shift + A', 'Super + A'] })
+    h.ob.platformChanged()
+    expect(h.root.innerHTML.replaceAll('&quot;', '"')).toContain('ob.shortcut.inUse.many{"hotkey":"Super + Alt + A","taken":"Super + Shift + A, Super + A"}')
+    Object.assign(platform, { hotkey: 'Super + A', taken: ['Super + Shift + A'] })
+    h.ob.platformChanged()
+    expect(h.root.innerHTML.replaceAll('&quot;', '"')).toContain('ob.shortcut.inUse.one{"hotkey":"Super + A","taken":"Super + Shift + A"}')
+  })
+
+  test('the row is in the settings only, not in the setup', () => {
+    const h = harness({ t })
+    h.ob.start(null)
+    h.click('choose', undefined, 'full')
+    h.click('edit', undefined, 'assistant')
+    expect(h.root.innerHTML).not.toContain('ob.shortcut.label')
   })
 })

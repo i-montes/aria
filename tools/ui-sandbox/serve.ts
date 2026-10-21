@@ -3,7 +3,7 @@
 //
 //   bun tools/ui-sandbox/serve.ts [port]        then open http://127.0.0.1:8770/
 //
-// Query: ?lang=es   ?first-run   (the onboarding instead of the chat)
+// Query: ?lang=es   ?first-run   (the onboarding instead of the chat)   ?mac   (macOS's shortcut names)
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -52,7 +52,7 @@ const sandbox = `<script>
       else if (m.type === 'mcpScan') r({ type: 'mcpFound', servers: FOUND.filter((f) => !SERVERS.includes(f.importAs)) })
       else if (m.type === 'mcpImport') { const picked = FOUND.filter((f) => m.ids.includes(f.id) && f.importable); if (!picked.length) r({ type: 'error', code: 'nothing-to-import' }); else { SERVERS.push(...picked.map((f) => f.importAs)); r({ type: 'saved' }) } }
       else if (m.type === 'sessionsLoad') r({ type: 'sessions', sessions: [{ id: 's1', title: 'Fix the failing build' }], active: 's1' })
-      else if (m.type === 'saveSettings') { settings = m.settings; r({ type: 'saved' }) }
+      else if (m.type === 'saveSettings') { settings = m.settings; r({ type: 'saved' }); setTimeout(platform, 30) }
       else if (m.type === 'checkKey') r({ type: 'keyResult', ok: true, error: null })
       else if (m.type === 'saveKey') r({ type: 'keyResult', ok: m.key !== 'bad', error: m.key === 'bad' ? 'key-rejected' : null })
       else if (m.type === 'startOauth') { r({ type: 'oauthUrl', url: 'https://claude.ai/oauth/authorize?x=1' }); setTimeout(() => r({ type: 'oauthResult', ok: true, error: null }), 300) }
@@ -83,6 +83,17 @@ const sandbox = `<script>
     }, 15)
   } } } }
 
+  // Like the dock: the shortcut in use goes to the page at start and after a change; the sandbox's other apps hold
+  // SUPER + T (Command + T on a Mac), so choosing it falls back to the default.
+  const OS = params.has('mac') ? 'mac' : 'linux'
+  const DEFAULT = OS === 'mac' ? 'Option + Space' : 'SUPER + A'
+  const TAKEN = ['SUPER + T', 'Command + T']
+  const shown = (text) => text.split(' + ').map((p, i, all) => (i < all.length - 1 ? p.charAt(0) + p.slice(1).toLowerCase() : p)).join(' + ')
+  const platform = () => {
+    const chosen = settings?.shortcut || DEFAULT
+    const taken = TAKEN.includes(chosen) ? [shown(chosen)] : []
+    window.aria.receive({ type: 'platform', hotkey: shown(taken.length ? DEFAULT : chosen), taken, os: OS })
+  }
   const card = (c) => JSON.stringify({ aria: 1, ...c })
   const sim = {
     model: 'opencode-go/deepseek-v4.1-flash', context: 18, n: 0, timer: null, active: 's1', queue: [], steering: [],
@@ -155,7 +166,7 @@ const sandbox = `<script>
     const b = document.createElement('button'); b.textContent = label; b.style.cssText = 'text-align:left;padding:5px 8px;border-radius:6px;border:1px solid #333;background:#16161a;color:#ddd;cursor:pointer'
     b.onclick = fn; nav.appendChild(b)
   }
-  addEventListener('DOMContentLoaded', () => { document.body.appendChild(nav); document.documentElement.style.background = '#0b0b0d'; setTimeout(() => window.aria.receive({ type: 'open', monitor: 'DP-1' }), 600) })
+  addEventListener('DOMContentLoaded', () => { document.body.appendChild(nav); document.documentElement.style.background = '#0b0b0d'; platform(); setTimeout(() => window.aria.receive({ type: 'open', monitor: 'DP-1' }), 600) })
 })()
 </script>`
 

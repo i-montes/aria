@@ -126,3 +126,14 @@ export const summary = (rows) => `
       <span class="summary-value">${esc(r.value)}</span>
       <button type="button" class="link" data-nav data-action="edit" data-value="${esc(r.id)}" ${key('edit', r.id)}>${esc(r.editLabel)}</button>
     </div>`).join('')}</div>`
+
+/** A field that records a key combination: the keys as `<kbd>`s (`keys`, e.g. ['Super', 'A']) and `meta` beside them,
+ * or `recordingText` while it listens; a line of state under it (`note`, `tone` as the action rows' states). */
+export const keyCapture = (field, text, description, keys, o = {}) => `
+  <div class="group">
+    ${label(text, description)}
+    <button type="button" class="key-capture${o.recording ? ' recording' : ''}" data-nav data-action="key-capture" data-field="${esc(field)}" ${key('key-capture', field)} aria-pressed="${!!o.recording}">
+      ${o.recording ? `<span class="hint">${esc(o.recordingText)}</span>` : `${keys.map((k) => `<kbd>${esc(k)}</kbd>`).join(' ')}${o.meta ? `<span class="hint">${esc(o.meta)}</span>` : ''}`}
+    </button>
+    ${o.note ? `<span class="state ${o.tone ?? ''}" role="status">${esc(o.note)}</span>` : ''}
+  </div>`

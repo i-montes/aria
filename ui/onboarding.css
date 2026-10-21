@@ -74,6 +74,14 @@ input[type="text"], input[type="password"] {
 input.mono { font-family: "Geist Mono", ui-monospace, monospace; }
 input[type="text"]:focus, input[type="password"]:focus { outline: none; border-color: var(--accent-border); }
 input::placeholder { color: #5d5d66; }
+/* The Shortcut row: a text field's box holding <kbd>s; recording, only its border takes the accent. */
+.key-capture {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-height: 38px; padding: 8px 12px; border-radius: 8px;
+  text-align: left; cursor: pointer; background: var(--field); border: 1px solid var(--line-strong);
+}
+.key-capture .hint { margin-left: auto; }
+.key-capture.recording .hint { margin-left: 0; }
+.key-capture:hover, .key-capture:focus-visible, .key-capture.recording { border-color: var(--accent-border); outline: none; }
 input[type="range"] { width: 100%; accent-color: var(--accent); }
 .slider-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .readout { font: 13px ui-monospace, "Geist Mono", monospace; color: var(--accent); white-space: nowrap; }

@@ -19,7 +19,7 @@ mod worktree;
 
 use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::paths::AriaPaths;
-use aria_core::shortcut::{default_shortcut, Platform as ShortcutPlatform};
+use aria_core::shortcut::{default_shortcut, InUse, Platform as ShortcutPlatform};
 #[cfg(target_os = "linux")]
 use aria_hyprland::Registration;
 use chat::{ChatCtx, PlatformNotifier, Sessions};
@@ -168,8 +168,8 @@ fn run_dock() {
     };
     // The page needs the shortcut for its notice and its "you are set up" screen: the default (Super + A on Omarchy,
     // Option + Space on macOS) until the one in use is known, and again whenever it changes.
-    let default_hotkey = default_shortcut(ShortcutPlatform::current());
-    dock.send(&DockMessage::Platform { hotkey: default_hotkey.display() });
+    let default_hotkey = InUse { shortcut: default_shortcut(ShortcutPlatform::current()), taken: Vec::new() };
+    dock.send(&DockMessage::platform(&default_hotkey, ShortcutPlatform::current()));
     if first_run {
         dock.show_notice();
     }
@@ -194,33 +194,30 @@ fn run_dock() {
     // The hotkey. On Linux it is registered as soon as Hyprland can take it (it may not be up when a
     // service starts), and again after every config reload and every change of the `shortcut` setting (a taken one
     // falls back); the thread reports how it is going, the problem banner follows it and the page hears which shortcut
-    // is in use. On Mac Carbon registers it once, without permissions, for the life of
-    // the app; a shortcut another app already owns is reported the same way.
+    // is in use. On Mac Carbon registers it without permissions (the chosen one or the first free fallback), and again
+    // when the `shortcut` setting changes; when another app holds every candidate the problem banner says so.
     #[cfg(target_os = "linux")]
     let (registration_sender, registration_receiver) = mpsc::channel::<Registration>();
     #[cfg(target_os = "linux")]
     let hotkey = {
         let exe = std::env::current_exe().expect("own path");
         let paths = AriaPaths::from_env();
-        // An unreadable settings file means the default, as an empty setting does.
-        let source = move || aria_core::settings::load(&paths).ok().flatten().map(|s| s.shortcut).unwrap_or_default();
+        let source = move || shortcut_setting(&paths);
         aria_hyprland::keep_hotkey_registered(exe, source, Duration::from_secs(2), move |state| {
             let _ = registration_sender.send(state);
         })
     };
+    // The setting the Mac's shortcut was registered for: a change of the settings file re-registers only when it moved.
     #[cfg(target_os = "macos")]
-    {
+    let mut mac_shortcut = {
+        let chosen = shortcut_setting(&AriaPaths::from_env());
         let hotkey_sender = sender.clone();
-        if let Err(error) = aria_mac::install_hotkey(move || {
+        let registered = aria_mac::install_hotkey(&chosen, move || {
             let _ = hotkey_sender.send("hotkey".to_string());
-        }) {
-            eprintln!("aria: could not register Option + Space: {error}");
-            dock.set_problem("hotkey-unavailable");
-        } else {
-            eprintln!("aria: registered Option + Space");
-            dock.clear_problem();
-        }
-    }
+        });
+        report_mac_hotkey(&dock, registered);
+        chosen
+    };
 
     // Stopping the dock (systemd, launchd, a terminal's Ctrl+C) ends its background work and Pis, never leaves them.
     install_quit_handlers();
@@ -246,6 +243,15 @@ fn run_dock() {
             dock.send(&DockMessage::SettingsChanged);
             #[cfg(target_os = "linux")]
             hotkey.settings_changed();
+            // On the main thread, as Carbon wants.
+            #[cfg(target_os = "macos")]
+            {
+                let chosen = shortcut_setting(&AriaPaths::from_env());
+                if chosen != mac_shortcut {
+                    report_mac_hotkey(&dock, aria_mac::change_hotkey(&chosen));
+                    mac_shortcut = chosen;
+                }
+            }
         }
         // Every 30 s, the turn watchdog: a run that got nothing from its Pi for `models.turnTimeoutMinutes` is stopped,
         // and the chat says so. Off the UI thread: it reads the settings.
@@ -304,13 +310,8 @@ fn run_dock() {
             match state {
                 Registration::Registered(in_use) => {
                     dock.clear_problem();
-                    let taken: Vec<String> = in_use.taken.iter().map(|s| s.label()).collect();
-                    if taken.is_empty() {
-                        eprintln!("aria: ready, press {}", in_use.shortcut.label());
-                    } else {
-                        eprintln!("aria: ready, press {} ({} taken)", in_use.shortcut.label(), taken.join(", "));
-                    }
-                    dock.send(&DockMessage::Platform { hotkey: in_use.shortcut.display() });
+                    eprintln!("{}", ready_line(&in_use));
+                    dock.send(&DockMessage::platform(&in_use, ShortcutPlatform::Linux));
                 }
                 Registration::WaitingForHyprland => dock.set_problem("hyprland-not-running"),
                 Registration::ClassicConfig => dock.set_problem("hyprland-classic-config"),
@@ -318,10 +319,39 @@ fn run_dock() {
         }
     });
 
-    // On Linux the shortcut in use is logged once it is bound (above).
-    #[cfg(target_os = "macos")]
-    eprintln!("aria: ready, press {}", default_hotkey.label());
+    // The shortcut in use is logged once it is bound (above).
     ui::run();
+}
+
+/// The `shortcut` setting; an unreadable settings file means the default, as an empty setting does.
+fn shortcut_setting(paths: &AriaPaths) -> String {
+    aria_core::settings::load(paths).ok().flatten().map(|s| s.shortcut).unwrap_or_default()
+}
+
+/// The log's line once the shortcut is registered: `aria: ready, press SUPER + SHIFT + A (SUPER + A taken)`.
+fn ready_line(in_use: &InUse) -> String {
+    let taken: Vec<String> = in_use.taken.iter().map(|s| s.label()).collect();
+    if taken.is_empty() {
+        format!("aria: ready, press {}", in_use.shortcut.label())
+    } else {
+        format!("aria: ready, press {} ({} taken)", in_use.shortcut.label(), taken.join(", "))
+    }
+}
+
+/// A Carbon registration's result reaches the log, the problem banner and the page (which shortcut is in use).
+#[cfg(target_os = "macos")]
+fn report_mac_hotkey(dock: &Dock, registered: Result<InUse, String>) {
+    match registered {
+        Ok(in_use) => {
+            eprintln!("{}", ready_line(&in_use));
+            dock.clear_problem();
+            dock.send(&DockMessage::platform(&in_use, ShortcutPlatform::Mac));
+        }
+        Err(error) => {
+            eprintln!("aria: could not register the shortcut: {error}");
+            dock.set_problem("hotkey-unavailable");
+        }
+    }
 }
 
 /// How often the turn watchdog looks, in UI ticks of 16 ms: every 30 s.

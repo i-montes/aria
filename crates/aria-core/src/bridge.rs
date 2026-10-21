@@ -4,6 +4,7 @@
 
 use crate::quota::Window as QuotaWindow;
 use crate::sessions::SessionEntry;
+use crate::shortcut::{InUse, Platform, Shortcut};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -139,9 +140,11 @@ pub enum DockMessage {
     /// Show the corner notice ("Aria is installed — press Super A to set it up").
     #[serde(rename = "notice")]
     Notice,
-    /// The host's shortcut, for the notice and hints (`Super + A`, `Option + Space`).
+    /// The host's shortcut in use, for the notice, the hints and the settings' Shortcut row (`Super + A`,
+    /// `Option + Space`); `taken` the ones tried before it that something else holds (the chosen one, the default), in
+    /// the same form; `os` (`linux`, `mac`) which modifier names the settings row records.
     #[serde(rename = "platform")]
-    Platform { hotkey: String },
+    Platform { hotkey: String, taken: Vec<String>, os: String },
     /// `connected` names what is really set up, never a secret: `provider:type` for each credential in
     /// `auth.json` (`anthropic:oauth`) and `mcp:<service>` for each configured MCP service. `servers` names every server
     /// in Aria's `mcp.json` except `engram` (connected or not): the connectors whose access level the settings show.
@@ -224,6 +227,17 @@ pub enum DockMessage {
     /// The answer to a `jobOutput`: empty when the job is unknown or keeps no output (a subagent).
     #[serde(rename = "jobOutput")]
     JobOutput { id: u64, lines: Vec<String> },
+}
+
+impl DockMessage {
+    /// The `platform` message for the shortcut in use (`taken`: the ones tried before it), in the page's form.
+    pub fn platform(in_use: &InUse, platform: Platform) -> DockMessage {
+        DockMessage::Platform {
+            hotkey: in_use.shortcut.display(),
+            taken: in_use.taken.iter().map(Shortcut::display).collect(),
+            os: platform.name().into(),
+        }
+    }
 }
 
 impl PageMessage {
@@ -492,8 +506,20 @@ mod tests {
         assert_eq!(value(DockMessage::Close), json!({"type": "close"}));
         assert_eq!(value(DockMessage::Notice), json!({"type": "notice"}));
         assert_eq!(
-            value(DockMessage::Platform { hotkey: "Option + Space".into() }),
-            json!({"type": "platform", "hotkey": "Option + Space"})
+            value(DockMessage::Platform {
+                hotkey: "Control + Option + Space".into(),
+                taken: vec!["Option + Space".into()],
+                os: "mac".into()
+            }),
+            json!({"type": "platform", "hotkey": "Control + Option + Space", "taken": ["Option + Space"], "os": "mac"})
+        );
+        let linux = |text| crate::shortcut::parse(text, Platform::Linux).unwrap();
+        let in_use =
+            InUse { shortcut: linux("SUPER + SHIFT + A"), taken: vec![linux("CTRL + ALT + K"), linux("SUPER + A")] };
+        assert_eq!(
+            value(DockMessage::platform(&in_use, Platform::Linux)),
+            json!({"type": "platform", "hotkey": "Super + Shift + A", "taken": ["Ctrl + Alt + K", "Super + A"], "os": "linux"}),
+            "the shortcut in use and the taken ones, in the page's form"
         );
         assert_eq!(
             value(DockMessage::Settings {

@@ -2,6 +2,7 @@
 // the settings object (see steps.js); this file turns it into HTML, handles every interaction in one
 // delegated listener, and talks to the dock through `env.request`. Widgets live in components.js.
 import * as c from './components.js'
+import { defaultShortcut, display, fromKeyEvent, parseShortcut } from './shortcut.js'
 import { renderPanelHead } from '../chat/parts/panelhead.js'
 import { orderedModels, renderModelPicker } from '../chat/parts/models.js'
 import {
@@ -40,13 +41,15 @@ const SAVED_FLASH_MS = 2500
 /** The provider Pi files each setup provider's models under. */
 const PI_PROVIDER = { 'opencode-go': 'opencode-go', 'anthropic-api': 'anthropic', 'anthropic-oauth': 'claude-bridge' }
 
-/** `env`: { root, t, request, post, setLanguage, browserLanguage, hotkey?, onDone?, listModels? }. `listModels` returns
+/** `env`: { root, t, request, post, setLanguage, browserLanguage, hotkey?, platform?, onDone?, listModels? }. `platform`
+ * returns the dock's last `platform` message ({ hotkey, taken, os }): the Shortcut row's names and its "In use". `listModels` returns
  * the models Pi can use; the settings' model fields list them (without it, the provider's catalog in steps.js). `onDone` runs when the user
  * presses the button of the "set up" screen or leaves the settings (the dock goes to the chat); without it the dock
  * closes. */
 export function createOnboarding(env) {
   const { root, t, request, post } = env
   const hotkey = () => env.hotkey?.() ?? 'Super + A'
+  const platform = () => ({ hotkey: hotkey(), taken: [], os: 'linux', ...env.platform?.() })
   const state = {
     view: 'welcome', // welcome | step | done | settings
     section: null, // settings: the open section, or null for the overview
@@ -82,6 +85,7 @@ export function createOnboarding(env) {
       signedIn: false,
       typesafeSaved: false,
       reveal: {},
+      shortcut: { recording: false, note: null }, // the Shortcut row: listening for keys, and why the last press did not count
       drafts: { key: '', typesafeKey: '', extraWritable: '' },
       key: { status: 'idle', error: null, requested: false },
       typesafe: { status: 'idle', error: null },
@@ -339,7 +343,67 @@ export function createOnboarding(env) {
     const choice = languageChoice(a.language)
     html += c.segments('language', t('ob.assistant.language'), ['es', 'en', 'pt', 'other'].map((v) => ({ value: v, label: t(`ob.assistant.language.${v}`) })), choice)
     if (choice === 'other') html += c.textField('languageOther', t('ob.assistant.languageOther'), a.language, { placeholder: t('ob.assistant.languageOther.placeholder'), indent: true })
-    return html + c.choice('style', t('ob.assistant.style'), STYLES.map((v) => ({ value: v, label: t(`ob.style.${v}`), description: i18nHas(`ob.style.${v}.desc`) ? t(`ob.style.${v}.desc`) : '' })), a.style)
+    html += c.choice('style', t('ob.assistant.style'), STYLES.map((v) => ({ value: v, label: t(`ob.style.${v}`), description: i18nHas(`ob.style.${v}.desc`) ? t(`ob.style.${v}.desc`) : '' })), a.style)
+    // The shortcut is a setting, not a setup question: the dock works with its default from the first run.
+    return state.view === 'settings' ? html + shortcutRow() : html
+  }
+
+  /** The Shortcut row: the chosen one (or the default, while the setting is empty or unreadable), recorded by
+   * pressing it; under it why a press did not count, or which shortcut the dock really uses when the chosen one is
+   * taken. */
+  function shortcutRow() {
+    const { os, hotkey: inUse, taken } = platform()
+    const chosen = parseShortcut(state.settings.shortcut, os)
+    const shown = chosen ?? defaultShortcut(os)
+    const row = state.ui.shortcut
+    let note = ''
+    let tone = ''
+    if (row.recording && row.note) {
+      note = t(row.note === 'needsModifier' ? `ob.shortcut.needsModifier.${os === 'mac' ? 'mac' : 'linux'}` : `ob.shortcut.${row.note}`)
+      tone = 'error'
+    } else if (taken?.length) {
+      note = t(taken.length === 1 ? 'ob.shortcut.inUse.one' : 'ob.shortcut.inUse.many', { hotkey: inUse, taken: taken.join(', ') })
+    }
+    return c.keyCapture('shortcut', t('ob.shortcut.label'), t('ob.shortcut.desc'), display(shown).split(' + '), {
+      recording: row.recording,
+      recordingText: t('ob.shortcut.recording'),
+      meta: chosen ? '' : t('ob.shortcut.default'),
+      note,
+      tone,
+    })
+  }
+
+  /** A key pressed while the Shortcut row records. Every key is the row's (the dock's own Esc included); Tab stops
+   * recording and moves on. */
+  function recordKey(event) {
+    const row = state.ui.shortcut
+    if (event.key === 'Tab') {
+      row.recording = false
+      return render()
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    heldKeys.add(event.code)
+    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+    if (event.key === 'Escape' || (plain && event.key === 'Backspace')) {
+      if (event.key === 'Backspace') update((s) => (s.shortcut = ''))
+      state.ui.shortcut = { recording: false, note: null }
+      return render()
+    }
+    const pressed = fromKeyEvent(event, platform().os)
+    if (pressed.pending) return
+    if (pressed.error) state.ui.shortcut = { recording: true, note: pressed.error }
+    else {
+      update((s) => (s.shortcut = pressed.label))
+      state.ui.shortcut = { recording: false, note: null }
+    }
+    render()
+  }
+
+  /** The dock sent another `platform` message (the shortcut in use changed): the Shortcut row says so at once. */
+  function platformChanged() {
+    if (state.view === 'settings' && state.section === 'assistant') render()
   }
   const i18nHas = (key) => t(key) !== key
 
@@ -1233,8 +1297,9 @@ export function createOnboarding(env) {
     const el = event.target.closest('[data-action]')
     if (!el || el.disabled) return
     const { action, field, value } = el.dataset
-    // Any other control closes an open model picker.
+    // Any other control closes an open model picker, and stops a recording shortcut.
     if (state.picker && action !== 'model-open') state.picker = null
+    if (action !== 'key-capture') state.ui.shortcut = { recording: false, note: null }
     // WebKit does not focus a button on click; remember the widget so the redraw can focus it again.
     focusAfterRender = el.dataset.key ?? el.closest?.('[data-key]')?.dataset.key ?? ''
     if (action === 'choose') return value === 'skip' ? skipSetup() : startFlow(value)
@@ -1245,6 +1310,11 @@ export function createOnboarding(env) {
     if (action === 'close') return env.onDone ? env.onDone() : post({ type: 'closeRequest' })
     if (action === 'settings-open') return openSection(value)
     if (action === 'model-open') return toggleModelPicker(field)
+    if (action === 'key-capture') {
+      // A click (or Enter, or Space) starts listening; a second one stops.
+      state.ui.shortcut = { recording: !state.ui.shortcut.recording, note: null }
+      return render()
+    }
     if (action === 'settings-home') {
       state.section = null
       state.picker = null
@@ -1321,6 +1391,18 @@ export function createOnboarding(env) {
     else if (action === 'chip-draft') state.ui.drafts.extraWritable = el.value
   })
 
+  // The Shortcut row, while it records, takes every key first. The keys it took are let go of on the row's button, and
+  // an engine that activates a button on release (Space) would click it again: those releases are the row's too.
+  const heldKeys = new Set()
+  root.addEventListener('keydown', (event) => {
+    if (state.ui.shortcut.recording) recordKey(event)
+  })
+  root.addEventListener('keyup', (event) => {
+    if (!heldKeys.delete(event.code)) return
+    event.preventDefault()
+    event.stopPropagation()
+  })
+
   // The model picker's search: the arrows move its mark, Enter picks, Esc closes the picker (not the dock).
   root.addEventListener('keydown', (event) => {
     if (!state.picker || event.target.dataset?.chatField !== 'model-search') return
@@ -1375,5 +1457,5 @@ export function createOnboarding(env) {
     key: state.ui.key.status,
   })
 
-  return { start, render, snapshot, onOpen, refreshSettings }
+  return { start, render, snapshot, onOpen, refreshSettings, platformChanged }
 }

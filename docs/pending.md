@@ -83,6 +83,13 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
   - A missing page file is served as an empty 200 (`dock/mac.rs`, logged as "missing page asset"); GTK answers
     NotFound.
   - The `aria-mac` hotkey test checks its own constants; the screen tests check the geometry only.
+- The chosen shortcut on macOS (2026-10-21): `aria-mac` registers the `shortcut` setting with Carbon, falls back to
+  `Option + Space`, `Control + Option + Space`, `Command + Option + Space` when `RegisterEventHotKey` refuses one, and
+  registers again (new first, then the old one unregistered) when the setting changes. The key codes and the order are
+  tested on Linux (`aria-mac/src/carbon.rs`) and the Carbon calls type-check (`tools/check-macos.sh`), but nothing of it
+  has run on a Mac yet: to try there, a shortcut another app holds (it should fall back and the settings row say
+  "In use: …"), a change in the settings (the new one works at once, the old one no longer opens the dock), and a
+  letter on a non-US layout (Carbon codes are key positions).
   - The installer gives up waiting for the old agent after 5 s, and `bootstrap` then fails after the binary was
     replaced.
 - `crates/aria/src/dock/mac.rs` repeats the page queue, the open/close generations and the notice timing of `dock/gtk.rs`; they can be shared now that the Mac build is at hand.
