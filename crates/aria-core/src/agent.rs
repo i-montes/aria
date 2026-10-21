@@ -622,6 +622,17 @@ mod tests {
     }
 
     #[test]
+    fn the_browser_skill_is_written_into_pis_skills() {
+        let (_dir, paths) = paths();
+        prepare(&paths, None).unwrap();
+        let skill = paths.agent().join("skills/verify-in-browser/SKILL.md");
+        assert_eq!(
+            std::fs::read_to_string(skill).unwrap(),
+            include_str!("../../../agent-files/skills/verify-in-browser/SKILL.md")
+        );
+    }
+
+    #[test]
     fn a_file_nobody_edited_follows_a_new_version_of_aria() {
         let (_dir, paths) = paths();
         std::fs::create_dir_all(paths.agent().join("agents")).unwrap();

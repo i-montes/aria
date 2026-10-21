@@ -45,6 +45,7 @@ TMP=""
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'aria installer: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'aria installer: warning: %s\n' "$*" >&2; }
 
 # Runs a command, or only prints it in a dry run.
 run() {
@@ -318,6 +319,48 @@ install_engram() {
   say "Installed Engram $version"
 }
 
+# agent-browser, the browser the agents check the pages they build with (the verify-in-browser skill): the version
+# pinned in agent-browser-version, installed with npm under ~/.aria/agent-browser/<version> and linked into ~/.aria/bin,
+# then its Chrome (in ~/.agent-browser/browsers). Aria works without it, so a failure here only warns.
+install_agent_browser() {
+  detect_platform
+  if [ -n "${ARIA_AGENT_BROWSER_VERSION:-}" ]; then
+    version=$ARIA_AGENT_BROWSER_VERSION
+  elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../agent-browser-version" ]; then
+    version=$(tr -d '[:space:]' < "$SCRIPT_DIR/../agent-browser-version")
+  elif [ "$DRY_RUN" = 1 ]; then
+    say "would: download ${DOWNLOAD_URL%/*}/agent-browser-version"
+    version=PINNED
+  else
+    version=$(curl -fsSL "${DOWNLOAD_URL%/*}/agent-browser-version") || {
+      warn "could not download the pinned agent-browser version; the agents cannot check pages in a browser"
+      return 0
+    }
+    version=$(printf '%s' "$version" | tr -d '[:space:]')
+  fi
+  if [ "$version" != PINNED ] || [ "$DRY_RUN" != 1 ]; then
+    case "$version" in *[!0-9.]* | "")
+      warn "the pinned agent-browser version is not a version number: '$version'; agent-browser was not installed"
+      return 0
+      ;;
+    esac
+  fi
+  prefix="$DATA_DIR/agent-browser/$version"
+  if [ -x "$prefix/node_modules/.bin/agent-browser" ]; then
+    say "agent-browser $version is already installed"
+  else
+    run npm install --prefix "$prefix" --no-audit --no-fund "agent-browser@$version" || {
+      warn "could not install agent-browser $version; the agents cannot check pages in a browser"
+      return 0
+    }
+  fi
+  { run install -d -m 700 "$DATA_DIR/bin" && run ln -sf "$prefix/node_modules/.bin/agent-browser" "$DATA_DIR/bin/agent-browser"; } || {
+    warn "could not link agent-browser into $DATA_DIR/bin"
+    return 0
+  }
+  run "$DATA_DIR/bin/agent-browser" install || warn "could not install agent-browser's browser; the browser check will not work until it is installed (run: ~/.aria/bin/agent-browser install)"
+}
+
 # sha256sum is Linux's; macOS has shasum.
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -411,6 +454,7 @@ do_install() {
   install_pi
   install_pi_packages
   install_engram
+  install_agent_browser
   install_binary
   write_unit
   restart_dock "$was_active"
@@ -484,6 +528,7 @@ while [ $# -gt 0 ]; do
     --print-pi-version) MODE=print-pi-version ;;
     --link-node) MODE=link-node ;;
     --install-engram) MODE=install-engram ;; # test hook
+    --install-agent-browser) MODE=install-agent-browser ;; # test hook
     --restart-dock) # test hook: the last step of an install; $2 is 1 when a dock was running, $3 when the service file changed
       [ $# -ge 3 ] || die "--restart-dock needs two values"
       SERVICE_CHANGED=$3
@@ -509,4 +554,5 @@ case "$MODE" in
   print-pi-version) read_pi_version; printf '%s\n' "$PI_VERSION" ;;
   link-node) link_node ;;
   install-engram) install_engram ;;
+  install-agent-browser) install_agent_browser ;;
 esac
