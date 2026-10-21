@@ -112,6 +112,7 @@
   "ob.error.key-missing": "No hay una clave guardada para revisar.",
   "ob.error.network-unavailable": "No se pudo contactar con el servicio. Revisa tu conexión e inténtalo de nuevo.",
   "ob.error.auth-file-broken": "Aria no pudo escribir ~/.aria/auth.json.",
+  "ob.error.keyring-failed": "Aria no pudo guardar la llave en el llavero del sistema. Desbloquéalo y vuelve a intentar (o ejecuta aria keyring off).",
   "ob.error.oauth-denied": "Se canceló el inicio de sesión.",
   "ob.error.oauth-timeout": "El inicio de sesión tardó demasiado. Inténtalo de nuevo.",
   "ob.error.oauth-state": "El inicio de sesión no coincide con esta solicitud. Inténtalo de nuevo.",

@@ -18,6 +18,8 @@ pub enum McpError {
     File(#[from] JsonFileError),
     #[error("could not write the MCP file: {0}")]
     Write(#[from] std::io::Error),
+    #[error(transparent)]
+    Vault(#[from] crate::vault::VaultError),
 }
 
 /// How Pi keys a server's OAuth record: `mcp__<name>|<url>`.
@@ -44,6 +46,10 @@ fn update_servers(paths: &AriaPaths, change: impl FnOnce(&mut Map<String, Value>
     };
     change(&mut servers);
     file.insert("mcpServers".into(), Value::Object(servers));
+    // With the keyring, keys leave for it before the file is written: they never reach the disk.
+    if let Some(vault) = &paths.vault {
+        vault.protect_servers(&paths.root, &mut file)?;
+    }
     write_json_atomic(&paths.mcp(), &Value::Object(file), 0o600)?;
     Ok(())
 }
@@ -225,12 +231,29 @@ mod tests {
 
     fn paths() -> (tempfile::TempDir, AriaPaths) {
         let dir = tempfile::tempdir().unwrap();
-        let paths = AriaPaths { root: dir.path().to_path_buf() };
+        let paths = AriaPaths::new(dir.path().to_path_buf());
         (dir, paths)
     }
 
     fn read(path: &std::path::Path) -> serde_json::Value {
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn with_a_vault_tavilys_key_is_a_command() {
+        use crate::keyring::Backend;
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, keyring) = crate::testing::vault_paths(dir.path());
+        set_tavily_key(&paths, "tvly-secret").unwrap();
+        let text = std::fs::read_to_string(paths.mcp()).unwrap();
+        assert!(!text.contains("tvly-secret"));
+        let account = "mcp:tavily:header:Authorization";
+        assert_eq!(
+            read(&paths.mcp())["mcpServers"]["tavily"]["headers"]["Authorization"],
+            json!(crate::vault::command_for(std::path::Path::new("/bin/aria"), dir.path(), account))
+        );
+        assert_eq!(keyring.get(account).unwrap().as_deref(), Some("Bearer tvly-secret"));
+        assert_eq!(connected(&paths), vec!["mcp:tavily".to_string()]);
     }
 
     #[test]

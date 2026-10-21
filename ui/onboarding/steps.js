@@ -92,6 +92,7 @@ export function defaultSettings(language = 'en') {
       autoSkills: ['systematic-debugging', 'verification-before-completion'],
     },
     shortcut: '',
+    credentials: { keyring: true },
   }
 }
 

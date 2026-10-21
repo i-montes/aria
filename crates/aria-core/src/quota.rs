@@ -33,7 +33,8 @@ pub fn source_for(model: &str, auth: &AuthStore, now_ms: i64) -> Option<Source> 
     let provider = model.split('/').next().unwrap_or_default();
     match provider {
         "opencode-go" => match auth.get("opencode-go").ok().flatten()? {
-            Credential::ApiKey { key } if !key.trim().is_empty() => {
+            // A key the keyring could not give back is still its command: no reading then.
+            Credential::ApiKey { key } if !key.trim().is_empty() && !key.starts_with('!') => {
                 Some(Source::OpenCodeGo { key: key.trim().to_string() })
             }
             _ => None,
@@ -148,10 +149,19 @@ mod tests {
 
     fn auth_with(entries: Value) -> (tempfile::TempDir, AuthStore) {
         let dir = tempfile::tempdir().unwrap();
-        let paths = AriaPaths { root: dir.path().to_path_buf() };
+        let paths = AriaPaths::new(dir.path().to_path_buf());
         std::fs::write(paths.auth(), entries.to_string()).unwrap();
         let store = AuthStore::new(paths.auth());
         (dir, store)
+    }
+
+    #[test]
+    fn the_go_source_reads_the_real_key_through_the_keyring() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _keyring) = crate::testing::vault_paths(dir.path());
+        let store = AuthStore::for_paths(&paths);
+        store.set("opencode-go", &Credential::ApiKey { key: "real-key".into() }).unwrap();
+        assert_eq!(source_for("opencode-go/glm", &store, 0), Some(Source::OpenCodeGo { key: "real-key".into() }));
     }
 
     #[test]

@@ -18,7 +18,7 @@ export const PROVIDERS = [
   { id: 'opencode-go', label: 'OpenCode Go' },
 ]
 
-const CODES = ['key-rejected', 'network-unavailable', 'auth-file-broken', 'oauth-denied', 'oauth-timeout', 'oauth-state', 'oauth-failed', 'pi-missing', 'claude-code-missing', 'claude-bridge-install-failed', 'unknown-provider']
+const CODES = ['key-rejected', 'network-unavailable', 'auth-file-broken', 'keyring-failed', 'oauth-denied', 'oauth-timeout', 'oauth-state', 'oauth-failed', 'pi-missing', 'claude-code-missing', 'claude-bridge-install-failed', 'unknown-provider']
 
 /** The text key for an error code (a generic one for a code nobody knows), or null when there is no error. */
 export const errorKey = (code) => (code ? `chat.connect.error.${CODES.includes(code) ? code : 'generic'}` : null)
@@ -50,6 +50,7 @@ export const TEXTS = {
     'chat.connect.error.key-rejected': 'That key was not accepted. Check it and try again.',
     'chat.connect.error.network-unavailable': 'Could not reach the provider to check the key. Check your connection.',
     'chat.connect.error.auth-file-broken': 'Aria could not write its credentials file (~/.aria/auth.json). Check its permissions.',
+    'chat.connect.error.keyring-failed': 'Aria could not keep the key in the system keyring. Unlock it and try again (or run aria keyring off).',
     'chat.connect.error.oauth-denied': 'The sign-in was denied.',
     'chat.connect.error.oauth-timeout': 'The sign-in took too long. Try again.',
     'chat.connect.error.oauth-state': 'The sign-in did not match this request. Try again.',
@@ -85,6 +86,7 @@ export const TEXTS = {
     'chat.connect.error.key-rejected': 'Esa clave no fue aceptada. Revísala e inténtalo otra vez.',
     'chat.connect.error.network-unavailable': 'No se pudo contactar al proveedor para comprobar la clave. Revisa tu conexión.',
     'chat.connect.error.auth-file-broken': 'Aria no pudo escribir su archivo de credenciales (~/.aria/auth.json). Revisa sus permisos.',
+    'chat.connect.error.keyring-failed': 'Aria no pudo guardar la llave en el llavero del sistema. Desbloquéalo y vuelve a intentar (o ejecuta aria keyring off).',
     'chat.connect.error.oauth-denied': 'Se denegó el inicio de sesión.',
     'chat.connect.error.oauth-timeout': 'El inicio de sesión tardó demasiado. Inténtalo otra vez.',
     'chat.connect.error.oauth-state': 'El inicio de sesión no coincidió con esta solicitud. Inténtalo otra vez.',

@@ -14,7 +14,7 @@ fn the_pinned_pi_answers_a_prompt_through_the_engine() {
     let real = AriaPaths::from_env();
     // A scratch Aria home that shares the real Pi install and borrows the real credentials.
     let dir = tempfile::tempdir().unwrap();
-    let paths = AriaPaths { root: dir.path().to_path_buf() };
+    let paths = AriaPaths::new(dir.path().to_path_buf());
     std::os::unix::fs::symlink(real.pi_root(), paths.pi_root()).unwrap();
     std::fs::copy(real.auth(), paths.auth()).expect("run the Aria setup first (auth.json)");
     let loaded = settings::load(&real).ok().flatten();
@@ -74,7 +74,7 @@ fn the_claude_provider_installs_with_arias_command_and_its_models_show_up() {
     use aria_core::agent::{claude_bridge_install_command, claude_bridge_installed};
     let real = AriaPaths::from_env();
     let dir = tempfile::tempdir().unwrap();
-    let paths = AriaPaths { root: dir.path().to_path_buf() };
+    let paths = AriaPaths::new(dir.path().to_path_buf());
     std::os::unix::fs::symlink(real.pi_root(), paths.pi_root()).unwrap();
     // a stand-in credential: Pi lists a provider's models once it has one (the key is never used)
     std::fs::write(paths.auth(), r#"{"anthropic":{"type":"api_key","key":"sk-ant-listing-only"}}"#).unwrap();

@@ -24,15 +24,28 @@ pub enum AuthError {
     Write(#[from] std::io::Error),
     #[error("credential for {provider} is not in a known format")]
     BadCredential { provider: String },
+    #[error(transparent)]
+    Vault(#[from] crate::vault::VaultError),
 }
 
+/// `auth.json`. With a vault (the dock holds the keyring) an API key goes to the keyring and the file keeps the command
+/// Pi runs to read it; `get` gives the real key back.
 pub struct AuthStore {
     path: PathBuf,
+    root: PathBuf,
+    vault: Option<crate::vault::Vault>,
 }
 
 impl AuthStore {
+    /// The plain file at `path`.
     pub fn new(path: PathBuf) -> AuthStore {
-        AuthStore { path }
+        let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        AuthStore { path, root, vault: None }
+    }
+
+    /// The home's `auth.json`, through its vault when the dock opened one.
+    pub fn for_paths(paths: &crate::paths::AriaPaths) -> AuthStore {
+        AuthStore { path: paths.auth(), root: paths.root.clone(), vault: paths.vault.clone() }
     }
 
     pub fn path(&self) -> &Path {
@@ -41,7 +54,14 @@ impl AuthStore {
 
     pub fn get(&self, provider: &str) -> Result<Option<Credential>, JsonFileError> {
         let Some(Value::Object(map)) = read_json(&self.path)? else { return Ok(None) };
-        Ok(map.get(provider).and_then(|v| serde_json::from_value(v.clone()).ok()))
+        let credential = map.get(provider).and_then(|v| serde_json::from_value(v.clone()).ok());
+        // A key kept in the keyring is read from it; one that cannot be read stays the command (still "there").
+        Ok(credential.map(|credential| match credential {
+            Credential::ApiKey { key } => {
+                Credential::ApiKey { key: crate::vault::resolve(self.vault.as_ref(), &key).unwrap_or(key) }
+            }
+            other => other,
+        }))
     }
 
     /// `provider:type` for every credential that is really there (`anthropic:oauth`,
@@ -81,8 +101,16 @@ impl AuthStore {
                 .into());
             }
         };
+        let stored = match (&self.vault, credential) {
+            (Some(vault), Credential::ApiKey { key }) => {
+                let account = format!("key:{provider}");
+                vault.store(&account, key)?;
+                Credential::ApiKey { key: crate::vault::command_for(&vault.exe, &self.root, &account) }
+            }
+            _ => credential.clone(),
+        };
         let value =
-            serde_json::to_value(credential).map_err(|_| AuthError::BadCredential { provider: provider.into() })?;
+            serde_json::to_value(&stored).map_err(|_| AuthError::BadCredential { provider: provider.into() })?;
         providers.insert(provider.to_string(), value);
         write_json_atomic(&self.path, &Value::Object(providers), 0o600)?;
         Ok(())
@@ -99,6 +127,35 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = AuthStore::new(dir.path().join("auth.json"));
         (dir, store)
+    }
+
+    #[test]
+    fn with_a_vault_an_api_key_is_a_command_on_disk_and_real_in_get() {
+        use crate::keyring::Backend;
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, keyring) = crate::testing::vault_paths(dir.path());
+        let store = AuthStore::for_paths(&paths);
+        store.set("opencode-go", &Credential::ApiKey { key: "k1".into() }).unwrap();
+        let on_disk: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(paths.auth()).unwrap()).unwrap();
+        let command = crate::vault::command_for(std::path::Path::new("/bin/aria"), dir.path(), "key:opencode-go");
+        assert_eq!(on_disk["opencode-go"], json!({"type": "api_key", "key": command}));
+        assert_eq!(keyring.get("key:opencode-go").unwrap().as_deref(), Some("k1"));
+        assert_eq!(store.get("opencode-go").unwrap(), Some(Credential::ApiKey { key: "k1".into() }));
+        assert_eq!(store.summary(), vec!["opencode-go:api_key".to_string()]);
+    }
+
+    #[test]
+    fn with_a_vault_oauth_goes_to_the_live_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, _keyring) = crate::testing::vault_paths(dir.path());
+        let store = AuthStore::for_paths(&paths);
+        store.set("anthropic", &Credential::OAuth { access: "a".into(), refresh: "r".into(), expires: 5 }).unwrap();
+        assert!(paths.auth().starts_with(dir.path().join("live")));
+        assert!(!dir.path().join("auth.json").exists());
+        assert_eq!(
+            store.get("anthropic").unwrap(),
+            Some(Credential::OAuth { access: "a".into(), refresh: "r".into(), expires: 5 })
+        );
     }
 
     #[test]

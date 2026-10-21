@@ -687,7 +687,7 @@ impl Chat {
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
         let source =
-            aria_core::quota::source_for(&model, &aria_core::auth::AuthStore::new(self.ctx.paths.auth()), now_ms);
+            aria_core::quota::source_for(&model, &aria_core::auth::AuthStore::for_paths(&self.ctx.paths), now_ms);
         self.inner.lock().unwrap().quota_at = Some(std::time::Instant::now());
         let chat = self.clone();
         std::thread::spawn(move || {
@@ -1497,7 +1497,7 @@ mod tests {
     fn harness_with(install_pi: bool) -> Harness {
         let turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
-        let paths = AriaPaths { root: dir.path().join(".aria") };
+        let paths = AriaPaths::new(dir.path().join(".aria"));
         paths.ensure_root().unwrap();
         if install_pi {
             let binary = paths.pi_install(aria_core::pi::pinned_version()).join("node_modules/.bin/pi");

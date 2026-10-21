@@ -8,6 +8,9 @@
   "compaction": {
     "percent": 40
   },
+  "credentials": {
+    "keyring": true
+  },
   "effort": {
     "fixedLevel": "medium",
     "maxOnFree": true,

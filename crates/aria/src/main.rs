@@ -12,6 +12,7 @@ mod dock;
 mod handlers;
 mod jobs;
 mod jobs_socket;
+mod keyring_cli;
 mod lines;
 mod ui;
 mod visibility;
@@ -61,10 +62,15 @@ fn main() {
             }
         },
         Some("start") => start_service(),
+        Some("secret") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            std::process::exit(keyring_cli::secret_command(&args));
+        }
+        Some("keyring") => std::process::exit(keyring_cli::keyring_command(std::env::args().nth(2).as_deref())),
         Some("--version" | "-V" | "version") => println!("aria {}", env!("CARGO_PKG_VERSION")),
         None => run_dock(),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show|start|quit|update-ready|--version]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show|start|quit|keyring|secret|update-ready|--version]");
             std::process::exit(2);
         }
     }
@@ -90,6 +96,12 @@ fn run_dock() {
     let (reply_sender, reply_receiver) = mpsc::channel::<DockMessage>();
     let paths = AriaPaths::from_env();
     let first_run = !paths.settings().exists();
+    // The keys: in the keyring, with the sealed files written live, before anything below reads a credential (the paths
+    // are cloned into the handlers, the chat and the jobs).
+    let initial = aria_core::settings::load(&paths).ok().flatten();
+    let (paths, vault) = keyring_cli::open_for_dock(paths, initial.as_ref());
+    let vault: keyring_cli::Shared = Arc::new(std::sync::Mutex::new(vault));
+    keyring_cli::spawn_sync(vault.clone());
     let mut settings_watch = chat::SettingsWatch::new(paths.settings());
     // The chat's messages go through one worker thread (below); the handlers reach it too, to restart every Pi after an
     // MCP import.
@@ -245,11 +257,12 @@ fn run_dock() {
     // live on unseen (macOS has no PR_SET_PDEATHSIG to end it with the dock).
     #[cfg(target_os = "macos")]
     {
-        let (jobs, chat) = (jobs.clone(), chat_for_visibility.clone());
+        let (jobs, chat, vault) = (jobs.clone(), chat_for_visibility.clone(), vault.clone());
         ui::on_terminate(move || {
             eprintln!("aria: stopping");
             jobs.stop_all();
             chat.stop_for_update();
+            keyring_cli::close(&vault);
         });
     }
     let mut was_visible = false;
@@ -261,6 +274,7 @@ fn run_dock() {
             eprintln!("aria: stopping");
             jobs.stop_all();
             chat_for_visibility.stop_for_update();
+            keyring_cli::close(&vault);
         }) {
             std::process::exit(0);
         }
@@ -340,6 +354,8 @@ fn run_dock() {
             chat_for_visibility.stop_for_update();
             // Nothing should be running (`busy` said so), but a job started since must not outlive this dock unseen.
             jobs.stop_all();
+            // The live copies stay for the new process, which seals them when it opens the vault.
+            keyring_cli::sync_now(&vault);
             let error = control::reexec();
             eprintln!("aria: could not start the new version: {error}");
             std::process::exit(75); // not a clean exit: systemd and launchd start the dock again

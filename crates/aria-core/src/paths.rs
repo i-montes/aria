@@ -7,24 +7,39 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct AriaPaths {
     pub root: PathBuf,
+    /// The keyring and the live copies of the sealed credential files, once the dock has opened them
+    /// (`crate::vault`); None everywhere else, where the credentials are the plain files in `root`.
+    pub vault: Option<crate::vault::Vault>,
 }
 
 impl AriaPaths {
+    pub fn new(root: PathBuf) -> AriaPaths {
+        AriaPaths { root, vault: None }
+    }
+
     /// `$ARIA_HOME` when set, otherwise `$HOME/.aria`.
     pub fn from_env() -> AriaPaths {
         let root = match std::env::var_os("ARIA_HOME") {
             Some(dir) => PathBuf::from(dir),
             None => PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".aria"),
         };
-        AriaPaths { root }
+        AriaPaths::new(root)
     }
 
     pub fn settings(&self) -> PathBuf {
         self.root.join("settings.json")
     }
 
+    /// Pi's `auth.json`: the live copy while the dock holds the keyring, else the plain file.
     pub fn auth(&self) -> PathBuf {
-        self.root.join("auth.json")
+        self.credential("auth.json")
+    }
+
+    fn credential(&self, name: &str) -> PathBuf {
+        match &self.vault {
+            Some(vault) => vault.live.join(name),
+            None => self.root.join(name),
+        }
     }
 
     /// MCP servers, in Pi's `mcp.json` format (it holds Tavily's key, so mode 600).
@@ -34,7 +49,7 @@ impl AriaPaths {
 
     /// MCP OAuth state (registered client, tokens), in Pi's `mcp-auth.json` format.
     pub fn mcp_auth(&self) -> PathBuf {
-        self.root.join("mcp-auth.json")
+        self.credential("mcp-auth.json")
     }
 
     /// The open sessions (the dock's tabs): ids, titles and which one is active.
@@ -99,7 +114,7 @@ mod tests {
 
     #[test]
     fn agent_and_pi_paths() {
-        let paths = AriaPaths { root: PathBuf::from("/r") };
+        let paths = AriaPaths::new(PathBuf::from("/r"));
         assert_eq!(paths.agent(), PathBuf::from("/r/agent"));
         assert_eq!(paths.jobs(), PathBuf::from("/r/jobs.json"));
         assert_eq!(paths.attachments(), PathBuf::from("/r/attachments"));
@@ -112,7 +127,7 @@ mod tests {
     fn ensure_root_creates_private_dir() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let paths = AriaPaths { root: dir.path().join(".aria") };
+        let paths = AriaPaths::new(dir.path().join(".aria"));
         paths.ensure_root().unwrap();
         let mode = std::fs::metadata(&paths.root).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
