@@ -227,6 +227,17 @@ fn run_dock() {
 
     // Stopping the dock (systemd, launchd, a terminal's Ctrl+C) ends its background work and Pis, never leaves them.
     install_quit_handlers();
+    // Quit Aria (Cmd+Q) exits through AppKit without a signal: the same stop runs first, or a dev server Aria started would
+    // live on unseen (macOS has no PR_SET_PDEATHSIG to end it with the dock).
+    #[cfg(target_os = "macos")]
+    {
+        let (jobs, chat) = (jobs.clone(), chat_for_visibility.clone());
+        ui::on_terminate(move || {
+            eprintln!("aria: stopping");
+            jobs.stop_all();
+            chat.stop_for_update();
+        });
+    }
     let mut was_visible = false;
     let mut update_ready = false;
     let mut jobs_wait = JobsWait::default();

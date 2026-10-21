@@ -102,6 +102,26 @@ pub fn every(ms: u64, tick: impl FnMut() + 'static) {
     unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(ms as f64 / 1000.0, true, &block) };
 }
 
+/// Calls `stop` when AppKit is about to exit (Quit Aria, Cmd+Q): that exit sends no signal, so the quit handlers never see it.
+#[cfg(target_os = "macos")]
+pub fn on_terminate(stop: impl Fn() + 'static) {
+    use block2::RcBlock;
+    use objc2_app_kit::NSApplicationWillTerminateNotification;
+    use objc2_foundation::{NSNotification, NSNotificationCenter};
+
+    let block = RcBlock::new(move |_: std::ptr::NonNull<NSNotification>| stop());
+    // SAFETY: with no queue the block runs on the thread that posts, AppKit's main thread, where `stop` belongs.
+    let observer = unsafe {
+        NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+            Some(NSApplicationWillTerminateNotification),
+            None,
+            None,
+            &block,
+        )
+    };
+    std::mem::forget(observer); // for the life of the app
+}
+
 #[cfg(target_os = "macos")]
 pub fn run() {
     use objc2_app_kit::NSApplication;
