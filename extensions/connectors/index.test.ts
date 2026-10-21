@@ -16,7 +16,14 @@ const TOOLS = [
   { name: 'mcp__notion__notion_update_page', annotations: { readOnlyHint: false }, namespace: { name: 'mcp__notion', aliases: ['notion'] } },
   { name: 'mcp__engram__mem_save', namespace: { name: 'mcp__engram', aliases: ['engram'] } },
   { name: 'mcp__my_docs__createDoc', namespace: { name: 'mcp__my_docs', aliases: ['my-docs'] } },
+  { name: 'mcp__my_docs__getDoc', namespace: { name: 'mcp__my_docs', aliases: ['my-docs'] } },
+  { name: 'mcp__my_doc__createDoc', namespace: { name: 'mcp__my_doc', aliases: ['my_doc'] } },
 ]
+
+// Pi 1.3.0's own name for `createMcpToolName('x'.repeat(50), 'delete_page')` (extensions/mcp/tools.js, computed in a
+// scratch run): longer than 64, so the name is cut before its `__` and ends in a hash.
+const LONG_SERVER = 'x'.repeat(50)
+const CUT_NAME = `mcp__${LONG_SERVER}_316906ee`
 
 function fakePi(tools: any[] = TOOLS) {
   const pi = {
@@ -198,6 +205,56 @@ describe('the connectors extension', () => {
     pi.tools = [...TOOLS, { name: 'mcp__notion__notion_delete_page', annotations: { readOnlyHint: true }, namespace: { name: 'mcp__notion', aliases: ['notion'] } }]
     expect(await pi.fire('tool_call', call('mcp__notion__notion_delete_page'), d.ctx)).toBeUndefined()
     expect(d.asked).toHaveLength(0)
+  })
+
+  test('a_cut_name_is_still_gated', async () => {
+    setLevels({ [LONG_SERVER]: 'allow' })
+    const pi = fakePi([])
+    connectors(pi as any)
+    await pi.fire('session_start', { type: 'session_start' }, dock().ctx)
+    // Pi does not list it and the name holds no server: a write on Ask, whatever the settings say.
+    const d = dock(NO)
+    expect((await pi.fire('tool_call', call(CUT_NAME), d.ctx))?.block).toBe(true)
+    expect(d.asked).toHaveLength(1)
+    expect(JSON.parse(d.asked[0].title).summary).toBe(`${LONG_SERVER}_316906ee wants to use ${CUT_NAME}`)
+    expect((await pi.fire('tool_call', call(CUT_NAME), child))?.block).toBe(true)
+    // Listed with its namespace, it is that server's tool, at that server's level.
+    pi.tools = [{ name: CUT_NAME, namespace: { name: `mcp__${LONG_SERVER}`, aliases: [LONG_SERVER] } }]
+    await pi.fire('session_start', { type: 'session_start' }, dock().ctx)
+    expect(await pi.fire('tool_call', call(CUT_NAME), child)).toBeUndefined()
+  })
+
+  test('a_tool_pi_does_not_list_is_a_write', async () => {
+    const pi = await started()
+    expect((await pi.fire('tool_call', call('mcp__notion__notion_search_all'), child))?.block).toBe(true)
+    expect(await pi.fire('tool_call', call('mcp__my_docs__getDoc'), child)).toBeUndefined()
+  })
+
+  test('a_level_is_never_taken_from_another_server', async () => {
+    setLevels({ 'my-docs': 'allow', 'my-doc': 'read', my_dox: 'read' })
+    const pi = await started()
+    expect((await pi.fire('tool_call', call('mcp__my_docs__createDoc'), child))).toBeUndefined()
+    setLevels({ 'my-docs': 'allow' })
+    // `my_doc` is not `my-docs`, even though one starts the other.
+    expect((await pi.fire('tool_call', call('mcp__my_doc__createDoc'), child))?.block).toBe(true)
+    setLevels({ 'my-doc': 'allow', my_doc_x: 'allow' })
+    expect(await pi.fire('tool_call', call('mcp__my_doc__createDoc'), child)).toBeUndefined()
+    // Not listed by Pi, the server comes from the name: an exact key wins, two keys that read the same are Ask.
+    setLevels({ 'other-srv': 'read', other_srv: 'allow' })
+    expect(await pi.fire('tool_call', call('mcp__other_srv__doThing'), child)).toBeUndefined()
+    setLevels({ 'other-srv': 'allow', 'other.srv': 'allow' })
+    expect((await pi.fire('tool_call', call('mcp__other_srv__doThing'), child))?.block).toBe(true)
+    setLevels({ 'other-srv': 'allow' })
+    expect(await pi.fire('tool_call', call('mcp__other_srv__doThing'), child)).toBeUndefined()
+    setLevels({ other: 'allow' })
+    expect((await pi.fire('tool_call', call('mcp__other_srv__doThing'), child))?.block).toBe(true)
+  })
+
+  test('the connector name is in words', async () => {
+    const pi = await started()
+    const d = dock(ONCE)
+    await pi.fire('tool_call', call('mcp__my_docs__createDoc'), d.ctx)
+    expect(JSON.parse(d.asked[0].title).summary).toBe('My Docs wants to create doc')
   })
 
   test('the terminal gets plain text', async () => {

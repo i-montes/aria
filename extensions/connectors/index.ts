@@ -8,7 +8,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { ariaConfig, type AccessLevel } from '../lib/config.ts'
 import { canAsk } from '../sandbox/card.ts'
 import { connectorCard, preview } from './card.ts'
-import { actionOf, isWrite, serverOf, type Annotations } from './classify.ts'
+import { actionOf, isMcpTool, isWrite, serverOf, type Annotations } from './classify.ts'
 
 const ONCE = 'Yes, just this once'
 const NO = 'No'
@@ -24,23 +24,30 @@ interface ToolFacts {
 /** The name a server has in a tool name: anything outside `[A-Za-z0-9_]` becomes `_`. */
 const asInToolName = (server: string) => server.replace(/[^A-Za-z0-9_]/g, '_')
 
-/** "notion" → "Notion". */
-const displayName = (server: string) => server.charAt(0).toUpperCase() + server.slice(1)
+/** "notion" → "Notion", "my-docs" → "My Docs". */
+const displayName = (server: string) =>
+  server
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ') || server
 
-/** The level set for this server: by its own name, or by a name that reads the same in a tool name. */
+/** The level set for this server: by its exact name, else by the one key that reads the same in a tool name; none,
+ * or more than one such key, is 'ask'. */
 function levelOf(server: string): AccessLevel {
   const levels = ariaConfig().connectors
-  if (levels[server]) return levels[server]
-  const key = Object.keys(levels).find((k) => asInToolName(k) === asInToolName(server))
-  return key ? levels[key] : 'ask'
+  if (Object.hasOwn(levels, server)) return levels[server]
+  const keys = Object.keys(levels).filter((k) => asInToolName(k) === asInToolName(server))
+  return keys.length === 1 ? levels[keys[0]] : 'ask'
 }
 
 export default function connectors(pi: ExtensionAPI) {
   let grants = new Set<string>()
   const facts = new Map<string, ToolFacts>()
 
-  /** What Pi knows of a tool, looked up once per name; a name not seen yet looks again (a server connected later). */
-  const factsOf = (name: string): ToolFacts => {
+  /** What Pi knows of a tool, looked up once per name; a name not seen yet looks again (a server connected later).
+   * Null when Pi does not list it. */
+  const factsOf = (name: string): ToolFacts | null => {
     if (!facts.has(name)) {
       try {
         for (const tool of (pi as any).getAllTools?.() ?? []) {
@@ -50,21 +57,26 @@ export default function connectors(pi: ExtensionAPI) {
         // no tool list: the name decides
       }
     }
-    return facts.get(name) ?? {}
+    return facts.get(name) ?? null
   }
 
   pi.on('tool_call', async (event: any, ctx: any) => {
     const name = String(event?.toolName ?? '')
+    if (!isMcpTool(name)) return
     const inName = serverOf(name)
-    if (!inName || inName === '*') return // not an MCP tool, or a resource tool (they only read)
+    if (inName === '*') return // a resource tool: they only read
     const known = factsOf(name)
-    const server = known.server ?? inName
-    if (NEVER_GATED.has(server) || NEVER_GATED.has(inName)) return
-    if (!isWrite(name, known.annotations)) return
-    const level = levelOf(server)
+    // The server's own name; else the one in the tool name; else (Pi cut the name before its `__`) the part after
+    // `mcp__`, gated on Ask whatever the settings say.
+    const server = known?.server ?? inName ?? name.slice('mcp__'.length)
+    if (NEVER_GATED.has(server) || (inName && NEVER_GATED.has(inName))) return
+    // A tool Pi does not list is a write, whatever its name says.
+    if (known && !isWrite(name, known.annotations)) return
+    const level = known?.server || inName ? levelOf(server) : 'ask'
     if (level === 'allow') return
-    const connector = displayName(server)
-    const action = actionOf(name, known.title)
+    const connector = known?.server || inName ? displayName(server) : server
+    // A cut name has no readable tool part left: the action names the tool.
+    const action = inName || known?.title ? actionOf(name, known?.title) : `use ${name}`
     if (level === 'read') return { block: true, reason: `${connector} is read only (the person set it so in Aria's settings): ${action} did not run.` }
     const grant = `${server}\0${name}`
     if (grants.has(grant)) return

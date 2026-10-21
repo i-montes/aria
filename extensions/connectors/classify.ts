@@ -13,7 +13,11 @@ export interface Annotations {
   destructiveHint?: boolean
 }
 
-/** The server of an MCP tool (as it is in the tool name), `'*'` for a resource tool, null for any other tool. */
+/** Is this an MCP tool (Pi's `isMcpToolName`)? Every `mcp__` name is, even one whose `__` separator Pi cut off. */
+export const isMcpTool = (toolName: string): boolean => toolName.startsWith('mcp__') || RESOURCE_TOOLS.has(toolName)
+
+/** The server of an MCP tool (as it is in the tool name), `'*'` for a resource tool, null for any other tool and for an
+ * `mcp__` name Pi cut so short that its `__` separator is gone (a server name of 50 characters or more). */
 export function serverOf(toolName: string): string | null {
   if (RESOURCE_TOOLS.has(toolName)) return '*'
   const m = /^mcp__(.+?)__(.+)$/.exec(toolName)
