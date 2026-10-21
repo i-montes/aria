@@ -44,7 +44,7 @@ Aria is a small Rust program that hosts a web page. The page is the interface; R
 
 ## The hotkey, without touching Hyprland's config
 
-At start, and again after every `configreloaded>>` event, Aria runs `hyprctl eval` with Lua that unbinds and rebinds `SUPER + A` to `aria toggle`, and adds the layer rule for the dock. Nothing is written to disk; a reload drops runtime binds, which is why Aria listens for it. If `$HYPRLAND_INSTANCE_SIGNATURE` is missing or stale (a service that outlives its Hyprland), the live instance is found under `$XDG_RUNTIME_DIR/hypr/`.
+At start, again after every `configreloaded>>` event, and when the `shortcut` setting changes, Aria runs `hyprctl eval` with Lua that unbinds its previous shortcut, binds the chosen one (`SUPER + A` by default; see `shortcut` in [settings](settings.md)) to `aria toggle` with the description `Toggle Aria`, and adds the layer rule for the dock. Before binding it reads `j/binds` on the request socket: a bind with the same modifiers and key that is not Aria's own (told by that description) makes it fall back to the next shortcut, and the page hears the one in use through `DockMessage::Platform`. Nothing is written to disk; a reload drops runtime binds, which is why Aria listens for it. If `$HYPRLAND_INSTANCE_SIGNATURE` is missing or stale (a service that outlives its Hyprland), the live instance is found under `$XDG_RUNTIME_DIR/hypr/`.
 
 On macOS the shortcut is `Option + Space`, registered with Carbon (`RegisterEventHotKey`) on the application event target. It is global without the Accessibility permission, and there is no config to reload, so it is registered once when the app starts. The trade-off: while Aria runs, Option + Space no longer types a non-breaking space anywhere.
 

@@ -32,7 +32,8 @@ The model lives in `crates/aria-core/src/settings.rs`; the defaults are the owne
     "turnLimit": null,
     "planExecute": true,
     "autoSkills": ["systematic-debugging", "verification-before-completion"]
-  }
+  },
+  "shortcut": ""
 }
 ```
 
@@ -55,5 +56,6 @@ The model lives in `crates/aria-core/src/settings.rs`; the defaults are the owne
 | `sandbox.*` | Projects folder, extra writable folders, ask before leaving the sandbox, let Jev review commands | phase 2 |
 | `git.*` | Commit/push/merge without asking, ask before touching other people's changes, deliver unrequested work as proposals | phase 2 |
 | `subagents.*` | Which experts are on and which are read-only, saving sessions, turn limit, `/plan` and `/execute`, automatic skills | phase 2 |
+| `shortcut` | The dock's shortcut, modifiers then one key joined by ` + ` (`SUPER + SHIFT + A`): modifiers `SUPER`, `CTRL`, `ALT`, `SHIFT` on Linux, `Command`, `Control`, `Option`, `Shift` on macOS; the key a letter, a digit, `Space` or `F1`–`F12` (case and spaces do not matter). `""` (the default), or a value that does not parse, is the platform's default: `SUPER + A` on Omarchy, `Option + Space` on macOS. When the shortcut is taken (on Hyprland: another bind with the same modifiers and key in `hyprctl binds`), the dock tries the default, then `SUPER + SHIFT + A`, `SUPER + ALT + A` (macOS: `Control + Option + Space`, `Command + Option + Space`), and uses the first free one; with all of them taken it binds the first anyway. A change applies within a second: the old bind goes and the new one comes | the dock (Omarchy; macOS in the next step) |
 
 Phase 1 asks and stores every key; phase 2 reads them.

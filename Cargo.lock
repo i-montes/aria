@@ -60,6 +60,7 @@ dependencies = [
 name = "aria-hyprland"
 version = "0.1.0"
 dependencies = [
+ "aria-core",
  "serde_json",
  "tempfile",
  "thiserror",

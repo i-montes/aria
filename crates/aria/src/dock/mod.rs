@@ -17,12 +17,6 @@ mod mac;
 #[cfg(target_os = "macos")]
 pub use mac::Dock;
 
-/// The shortcut the interface should show in hints and the first-run notice.
-#[cfg(target_os = "linux")]
-pub(crate) const HOTKEY_LABEL: &str = "Super + A";
-#[cfg(target_os = "macos")]
-pub(crate) const HOTKEY_LABEL: &str = "Option + Space";
-
 use include_dir::{include_dir, Dir};
 
 /// The page, embedded in the binary and served as `aria://app/<path>`.

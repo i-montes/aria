@@ -6,8 +6,12 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
+
+use aria_core::shortcut::{self, Platform, Shortcut};
+use serde_json::Value;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HyprError {
@@ -38,13 +42,95 @@ fn lua_string(text: &str) -> String {
     text.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// The Lua that binds `SUPER + A` to `<exe> toggle` and adds the dock's layer rule. It unbinds first,
-/// so registering twice never leaves two binds that would toggle twice.
-pub fn registration_lua(exe: &Path) -> String {
+/// What Aria's bind says in `hyprctl binds` (`description`), which is how its own bind is told from someone else's:
+/// with the Lua config every bind's dispatcher is `__lua`.
+pub const BIND_DESCRIPTION: &str = "Toggle Aria";
+
+/// A shortcut as Hyprland's Lua `hl.bind` takes it: `SUPER + SHIFT + A`, `SUPER + SPACE`.
+pub fn hypr_combo(shortcut: &Shortcut) -> String {
+    shortcut.mods.iter().cloned().chain([shortcut.key.to_ascii_uppercase()]).collect::<Vec<_>>().join(" + ")
+}
+
+/// The Lua that binds `shortcut` to `<exe> toggle` and adds the dock's layer rule. It unbinds `previous` (the
+/// shortcuts Aria bound before) and the new one first, so a change leaves no old bind behind and registering twice
+/// never leaves two binds that would toggle twice.
+pub fn registration_lua(exe: &Path, shortcut: &Shortcut, previous: &[Shortcut]) -> String {
+    let combo = hypr_combo(shortcut);
+    let mut unbind: Vec<String> = Vec::new();
+    for old in previous.iter().map(hypr_combo).filter(|old| *old != combo).chain([combo.clone()]) {
+        if !unbind.contains(&old) {
+            unbind.push(old);
+        }
+    }
+    let unbinds: String = unbind.iter().map(|c| format!(r#"hl.unbind("{}"); "#, lua_string(c))).collect();
     format!(
-        r#"hl.unbind("SUPER + A"); hl.bind("SUPER + A", hl.dsp.exec_cmd("{} toggle"), {{ description = "Toggle Aria" }}); hl.layer_rule({{ name = "aria-dock", match = {{ namespace = "^aria-dock$" }}, blur = false, no_anim = true }})"#,
+        r#"{unbinds}hl.bind("{}", hl.dsp.exec_cmd("{} toggle"), {{ description = "{BIND_DESCRIPTION}" }}); hl.layer_rule({{ name = "aria-dock", match = {{ namespace = "^aria-dock$" }}, blur = false, no_anim = true }})"#,
+        lua_string(&combo),
         lua_string(&exe.to_string_lossy())
     )
+}
+
+/// Hyprland's modifier mask for a shortcut (SHIFT 1, CTRL 4, ALT 8, SUPER 64).
+pub fn modmask(shortcut: &Shortcut) -> u64 {
+    shortcut
+        .mods
+        .iter()
+        .map(|m| match m.as_str() {
+            "SHIFT" => 1,
+            "CTRL" => 4,
+            "ALT" => 8,
+            "SUPER" => 64,
+            _ => 0,
+        })
+        .sum()
+}
+
+/// The X keycode of a digit key (`code:10` is `1`, … `code:19` is `0`), which is how Omarchy binds digits: those
+/// binds have no key name in `hyprctl binds`.
+fn digit_keycode(key: &str) -> Option<u64> {
+    let digit: u64 = key.parse().ok()?;
+    Some(if digit == 0 { 19 } else { 9 + digit })
+}
+
+/// Whether one entry of `hyprctl -j binds` is Aria's own: its description, or (a bind made outside the Lua config)
+/// `exec <exe> toggle`.
+fn is_own(bind: &Value, exe: &Path) -> bool {
+    bind["description"].as_str() == Some(BIND_DESCRIPTION)
+        || (bind["dispatcher"].as_str() == Some("exec")
+            && bind["arg"].as_str() == Some(format!("{} toggle", exe.to_string_lossy()).as_str()))
+}
+
+fn same_keys(bind: &Value, shortcut: &Shortcut) -> bool {
+    let key_matches = bind["key"].as_str().is_some_and(|key| key.eq_ignore_ascii_case(&shortcut.key))
+        || bind["keycode"].as_u64().is_some_and(|code| code != 0 && Some(code) == digit_keycode(&shortcut.key));
+    bind["modmask"].as_u64() == Some(modmask(shortcut))
+        && key_matches
+        && bind["submap"].as_str().unwrap_or("").is_empty()
+        && bind["mouse"].as_bool() != Some(true)
+}
+
+/// Whether something other than Aria binds `shortcut`, from the output of `hyprctl -j binds`: a bind outside any
+/// submap with the same modifiers and key that is not Aria's own.
+pub fn taken(binds_json: &Value, shortcut: &Shortcut, exe: &Path) -> bool {
+    binds_json.as_array().is_some_and(|binds| binds.iter().any(|b| same_keys(b, shortcut) && !is_own(b, exe)))
+}
+
+/// The shortcuts Aria's own binds use right now (left by an earlier dock, say), from `hyprctl -j binds`.
+pub fn own_binds(binds_json: &Value, exe: &Path) -> Vec<Shortcut> {
+    let Some(binds) = binds_json.as_array() else { return Vec::new() };
+    binds
+        .iter()
+        .filter(|b| is_own(b, exe) && b["submap"].as_str().unwrap_or("").is_empty())
+        .filter_map(|b| {
+            let mask = b["modmask"].as_u64()?;
+            let mods: Vec<&str> = [(64, "SUPER"), (4, "CTRL"), (8, "ALT"), (1, "SHIFT")]
+                .iter()
+                .filter(|(bit, _)| mask & bit != 0)
+                .map(|(_, m)| *m)
+                .collect();
+            shortcut::parse(&format!("{} + {}", mods.join(" + "), b["key"].as_str()?), Platform::Linux)
+        })
+        .collect()
 }
 
 fn runtime_dir() -> PathBuf {
@@ -86,11 +172,63 @@ fn hyprctl_eval(lua: &str) -> Result<String, HyprError> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub fn register_hotkey(exe: &Path) -> Result<(), HyprError> {
-    match hyprctl_eval(&registration_lua(exe))?.as_str() {
-        "ok" => Ok(()),
-        other => Err(HyprError::Eval(other.to_string())),
+/// The shortcut the dock uses and the ones it tried first, which something else binds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InUse {
+    pub shortcut: Shortcut,
+    pub taken: Vec<Shortcut>,
+}
+
+/// Aria's bind, as it stands: what it bound last (so a change unbinds it).
+#[derive(Debug, Clone)]
+pub struct Hotkey {
+    exe: PathBuf,
+    bound: Option<Shortcut>,
+}
+
+impl Hotkey {
+    pub fn new(exe: PathBuf) -> Hotkey {
+        Hotkey { exe, bound: None }
     }
+
+    /// The Lua for the first free one of `candidates` (by `binds_json`, the output of `hyprctl -j binds`) and what it
+    /// would use. It unbinds Aria's previous shortcut and Aria's own binds listed in `binds_json`. When every candidate
+    /// is taken, the first is bound anyway, as before shortcuts could be chosen.
+    pub fn plan(&self, binds_json: &Value, candidates: &[Shortcut]) -> (String, InUse) {
+        let (chosen, skipped) = shortcut::first_free(candidates, |s| taken(binds_json, s, &self.exe));
+        let previous: Vec<Shortcut> = self.bound.iter().cloned().chain(own_binds(binds_json, &self.exe)).collect();
+        (registration_lua(&self.exe, &chosen, &previous), InUse { shortcut: chosen, taken: skipped })
+    }
+
+    /// Binds the first free one of `candidates`, asking Hyprland for its binds first.
+    pub fn register(&mut self, candidates: &[Shortcut]) -> Result<InUse, HyprError> {
+        let binds = socket_path(".socket.sock").ok().and_then(|path| binds_at(&path)).unwrap_or(Value::Null);
+        let (lua, in_use) = self.plan(&binds, candidates);
+        if in_use.taken.len() == candidates.len() {
+            eprintln!("aria: every shortcut Aria can use is taken; binding {} anyway", in_use.shortcut.label());
+        }
+        match hyprctl_eval(&lua)?.as_str() {
+            "ok" => {
+                self.bound = Some(in_use.shortcut.clone());
+                Ok(in_use)
+            }
+            other => Err(HyprError::Eval(other.to_string())),
+        }
+    }
+}
+
+/// One request on Hyprland's request socket (`j/monitors`, `j/binds`), its answer as text.
+fn request_at(socket: &Path, request: &str) -> Option<String> {
+    let mut stream = UnixStream::connect(socket).ok()?;
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut body = String::new();
+    stream.read_to_string(&mut body).ok()?;
+    Some(body)
+}
+
+/// The output of `hyprctl -j binds`, asked on the request socket.
+pub fn binds_at(socket: &Path) -> Option<Value> {
+    serde_json::from_str(&request_at(socket, "j/binds")?).ok()
 }
 
 pub fn config_kind_from_eval(output: &str) -> ConfigKind {
@@ -122,11 +260,7 @@ pub fn parse_focused(monitors_json: &str) -> Option<Monitor> {
 }
 
 pub fn focused_monitor_at(socket: &Path) -> Option<Monitor> {
-    let mut stream = UnixStream::connect(socket).ok()?;
-    stream.write_all(b"j/monitors").ok()?;
-    let mut body = String::new();
-    stream.read_to_string(&mut body).ok()?;
-    parse_focused(&body)
+    parse_focused(&request_at(socket, "j/monitors")?)
 }
 
 pub fn focused_monitor() -> Option<Monitor> {
@@ -170,20 +304,21 @@ pub fn watch_events(on_reload: impl Fn() + Send + 'static) -> JoinHandle<()> {
     watch_events_with(|| socket_path(".socket2.sock").ok(), Duration::from_secs(1), on_reload)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Registration {
     /// Hyprland is not reachable yet (or refused the bind): trying again.
     WaitingForHyprland,
     /// The classic configuration: the hotkey cannot be registered; not retried.
     ClassicConfig,
-    Registered,
+    /// Bound: which shortcut is in use (sent again after every change).
+    Registered(InUse),
 }
 
 /// Registers the hotkey, retrying every `retry` until Hyprland answers. Returns how it settled:
 /// `Registered` or `ClassicConfig`. `on_state` hears about every attempt.
 pub fn keep_registered_with(
     detect: impl Fn() -> Result<ConfigKind, HyprError>,
-    register: impl Fn() -> Result<(), HyprError>,
+    mut register: impl FnMut() -> Result<InUse, HyprError>,
     retry: Duration,
     on_state: impl Fn(Registration),
 ) -> Registration {
@@ -193,10 +328,16 @@ pub fn keep_registered_with(
                 on_state(Registration::ClassicConfig);
                 return Registration::ClassicConfig;
             }
-            Ok(ConfigKind::Lua) if register().is_ok() => {
-                on_state(Registration::Registered);
-                return Registration::Registered;
-            }
+            Ok(ConfigKind::Lua) => match register() {
+                Ok(in_use) => {
+                    on_state(Registration::Registered(in_use.clone()));
+                    return Registration::Registered(in_use);
+                }
+                Err(_) => {
+                    on_state(Registration::WaitingForHyprland);
+                    std::thread::sleep(retry);
+                }
+            },
             _ => {
                 on_state(Registration::WaitingForHyprland);
                 std::thread::sleep(retry);
@@ -205,24 +346,94 @@ pub fn keep_registered_with(
     }
 }
 
-/// In the background: register the hotkey as soon as Hyprland can take it, then register it again
-/// after every config reload (a reload drops runtime binds).
+/// Why the hotkey is registered again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wake {
+    /// Hyprland reloaded its config, which drops runtime binds: always bind again.
+    Reload,
+    /// The settings changed: bind again when the `shortcut` setting did.
+    Settings,
+}
+
+/// The hotkey's whole life, with its pieces passed in: register as soon as Hyprland can take it (the shortcut
+/// `source` names, or a fallback), then on every wake bind again (a reload) or bind the new shortcut (a settings change
+/// that changed it). `start_watching` runs once, after the first bind. Ends on a classic config, or when every sender
+/// of `wakes` is gone.
+pub fn run_hotkey(
+    detect: impl Fn() -> Result<ConfigKind, HyprError>,
+    mut register: impl FnMut(&[Shortcut]) -> Result<InUse, HyprError>,
+    source: impl Fn() -> String,
+    retry: Duration,
+    wakes: Receiver<Wake>,
+    start_watching: impl FnOnce(),
+    on_state: impl Fn(Registration),
+) {
+    let mut current = source();
+    let settled = keep_registered_with(
+        &detect,
+        || {
+            current = source();
+            register(&shortcut::candidates(&current, Platform::Linux))
+        },
+        retry,
+        &on_state,
+    );
+    if settled == Registration::ClassicConfig {
+        return;
+    }
+    start_watching();
+    for wake in wakes {
+        let chosen = source();
+        if wake == Wake::Settings && chosen == current {
+            continue;
+        }
+        current = chosen;
+        match register(&shortcut::candidates(&current, Platform::Linux)) {
+            Ok(in_use) => on_state(Registration::Registered(in_use)),
+            Err(error) => eprintln!("aria: could not register the shortcut again: {error}"),
+        }
+    }
+}
+
+/// Tells the hotkey thread to look again (see [`Wake`]).
+#[derive(Debug, Clone)]
+pub struct HotkeyControl(Sender<Wake>);
+
+impl HotkeyControl {
+    /// The settings changed: when the `shortcut` setting did, the old bind goes and the new one comes.
+    pub fn settings_changed(&self) {
+        let _ = self.0.send(Wake::Settings);
+    }
+}
+
+/// In the background: register the hotkey `source` names (the `shortcut` setting; a taken one falls back) as soon as
+/// Hyprland can take it, then register it again after every config reload (a reload drops runtime binds) and after a
+/// settings change that changed it. `on_state` hears which shortcut is in use.
 pub fn keep_hotkey_registered(
     exe: PathBuf,
+    source: impl Fn() -> String + Send + 'static,
     retry: Duration,
     on_state: impl Fn(Registration) + Send + 'static,
-) -> JoinHandle<()> {
+) -> HotkeyControl {
+    let (sender, wakes) = mpsc::channel();
+    let reloads = sender.clone();
     std::thread::spawn(move || {
-        let settled = keep_registered_with(detect_config, || register_hotkey(&exe), retry, on_state);
-        if settled == Registration::Registered {
-            let _ = watch_events(move || {
-                if let Err(error) = register_hotkey(&exe) {
-                    eprintln!("aria: could not register SUPER + A after a reload: {error}");
-                }
-            })
-            .join();
-        }
-    })
+        let mut hotkey = Hotkey::new(exe);
+        run_hotkey(
+            detect_config,
+            |candidates| hotkey.register(candidates),
+            source,
+            retry,
+            wakes,
+            move || {
+                let _ = watch_events(move || {
+                    let _ = reloads.send(Wake::Reload);
+                });
+            },
+            on_state,
+        );
+    });
+    HotkeyControl(sender)
 }
 
 #[cfg(test)]
@@ -301,9 +512,17 @@ mod tests {
         drop(server);
     }
 
+    fn sc(text: &str) -> Shortcut {
+        shortcut::parse(text, Platform::Linux).unwrap()
+    }
+
+    fn in_use(text: &str) -> InUse {
+        InUse { shortcut: sc(text), taken: Vec::new() }
+    }
+
     fn states_until_settled(
         detect: impl Fn() -> Result<ConfigKind, HyprError>,
-        register: impl Fn() -> Result<(), HyprError>,
+        register: impl Fn() -> Result<InUse, HyprError>,
     ) -> (Vec<Registration>, Registration) {
         let seen = std::cell::RefCell::new(Vec::new());
         let last = keep_registered_with(detect, register, Duration::from_millis(1), |s| seen.borrow_mut().push(s));
@@ -322,13 +541,11 @@ mod tests {
                     Ok(ConfigKind::Lua)
                 }
             },
-            || Ok(()),
+            || Ok(in_use("SUPER + A")),
         );
-        assert_eq!(
-            seen,
-            vec![Registration::WaitingForHyprland, Registration::WaitingForHyprland, Registration::Registered]
-        );
-        assert_eq!(last, Registration::Registered);
+        let registered = Registration::Registered(in_use("SUPER + A"));
+        assert_eq!(seen, vec![Registration::WaitingForHyprland, Registration::WaitingForHyprland, registered.clone()]);
+        assert_eq!(last, registered);
     }
 
     #[test]
@@ -336,10 +553,11 @@ mod tests {
         let refused = std::cell::Cell::new(true);
         let (seen, last) = states_until_settled(
             || Ok(ConfigKind::Lua),
-            || if refused.replace(false) { Err(HyprError::Eval("not ready".into())) } else { Ok(()) },
+            || if refused.replace(false) { Err(HyprError::Eval("not ready".into())) } else { Ok(in_use("SUPER + A")) },
         );
-        assert_eq!(seen, vec![Registration::WaitingForHyprland, Registration::Registered]);
-        assert_eq!(last, Registration::Registered);
+        let registered = Registration::Registered(in_use("SUPER + A"));
+        assert_eq!(seen, vec![Registration::WaitingForHyprland, registered.clone()]);
+        assert_eq!(last, registered);
     }
 
     #[test]
@@ -353,15 +571,191 @@ mod tests {
     #[test]
     fn lua_is_exact() {
         assert_eq!(
-            registration_lua(Path::new("/home/u/.local/bin/aria")),
+            registration_lua(Path::new("/home/u/.local/bin/aria"), &sc("SUPER + A"), &[]),
             r#"hl.unbind("SUPER + A"); hl.bind("SUPER + A", hl.dsp.exec_cmd("/home/u/.local/bin/aria toggle"), { description = "Toggle Aria" }); hl.layer_rule({ name = "aria-dock", match = { namespace = "^aria-dock$" }, blur = false, no_anim = true })"#
         );
     }
 
     #[test]
     fn lua_escapes_quotes_and_backslashes() {
-        let lua = registration_lua(Path::new(r#"/tmp/a"b\c/aria"#));
+        let lua = registration_lua(Path::new(r#"/tmp/a"b\c/aria"#), &sc("SUPER + A"), &[]);
         assert!(lua.contains(r#"exec_cmd("/tmp/a\"b\\c/aria toggle")"#), "{lua}");
+    }
+
+    #[test]
+    fn the_bind_lua_for_a_shortcut() {
+        let exe = Path::new("/home/ana/.local/bin/aria");
+        let lua = registration_lua(exe, &sc("super + shift + a"), &[sc("SUPER + A")]);
+        assert!(
+            lua.starts_with(
+                r#"hl.unbind("SUPER + A"); hl.unbind("SUPER + SHIFT + A"); hl.bind("SUPER + SHIFT + A", hl.dsp.exec_cmd("/home/ana/.local/bin/aria toggle"), { description = "Toggle Aria" }); hl.layer_rule("#
+            ),
+            "{lua}"
+        );
+        // The previous one equal to the new one (a reload), or repeated: unbound once.
+        let lua =
+            registration_lua(exe, &sc("SUPER + A"), &[sc("SUPER + A"), sc("CTRL + ALT + K"), sc("CTRL + ALT + K")]);
+        assert!(
+            lua.starts_with(r#"hl.unbind("CTRL + ALT + K"); hl.unbind("SUPER + A"); hl.bind("SUPER + A""#),
+            "{lua}"
+        );
+        assert_eq!(hypr_combo(&sc("ctrl + alt + space")), "CTRL + ALT + SPACE");
+        assert_eq!(hypr_combo(&sc("super + f5")), "SUPER + F5");
+    }
+
+    /// Entries in the shape `hyprctl -j binds` gives with the Lua config (every dispatcher is `__lua`).
+    fn binds_fixture() -> Value {
+        let bind = |modmask: u64, key: &str, keycode: u64, description: &str, submap: &str| {
+            serde_json::json!({
+                "locked": false, "mouse": false, "release": false, "repeat": false, "longPress": false,
+                "non_consuming": false, "auto_consuming": false, "has_description": !description.is_empty(),
+                "modmask": modmask, "submap": submap, "submap_universal": "false", "key": key, "keycode": keycode,
+                "catch_all": false, "description": description, "allow_input_capture": false,
+                "dispatcher": "__lua", "arg": "12"
+            })
+        };
+        let mut mouse = bind(64, "mouse:272", 0, "Move window", "");
+        mouse["mouse"] = Value::Bool(true);
+        serde_json::json!([
+            bind(64, "A", 0, "Toggle Aria", ""),
+            bind(64, "SPACE", 0, "Launch apps", ""),
+            bind(65, "A", 0, "Something else", ""),
+            bind(12, "k", 0, "", ""),
+            bind(64, "", 10, "Switch to workspace 1", ""),
+            bind(72, "A", 0, "Resize mode", "resize"),
+            mouse,
+        ])
+    }
+
+    #[test]
+    fn taken_reads_hyprctl_binds() {
+        let (binds, exe) = (binds_fixture(), Path::new("/home/ana/.local/bin/aria"));
+        assert!(taken(&binds, &sc("SUPER + SHIFT + A"), exe), "modmask 65 = SUPER + SHIFT");
+        assert!(taken(&binds, &sc("SUPER + Space"), exe), "keys compare without case");
+        assert!(taken(&binds, &sc("CTRL + ALT + K"), exe), "modmask 12 = CTRL + ALT");
+        assert!(taken(&binds, &sc("SUPER + 1"), exe), "a digit bound by its keycode");
+        assert!(!taken(&binds, &sc("SUPER + ALT + A"), exe), "only in a submap");
+        assert!(!taken(&binds, &sc("SUPER + B"), exe));
+        assert!(!taken(&binds, &sc("SUPER + CTRL + A"), exe), "other modifiers");
+        assert!(!taken(&Value::Null, &sc("SUPER + SHIFT + A"), exe), "no answer: nothing is taken");
+        assert_eq!(modmask(&sc("SUPER + CTRL + ALT + SHIFT + A")), 64 + 4 + 8 + 1);
+    }
+
+    #[test]
+    fn aria_s_own_bind_is_not_taken() {
+        let (binds, exe) = (binds_fixture(), Path::new("/home/ana/.local/bin/aria"));
+        assert!(!taken(&binds, &sc("SUPER + A"), exe), "described as Aria's");
+        let classic = serde_json::json!([
+            {"modmask": 64, "key": "B", "keycode": 0, "submap": "", "dispatcher": "exec", "arg": "/home/ana/.local/bin/aria toggle", "description": ""},
+            {"modmask": 64, "key": "C", "keycode": 0, "submap": "", "dispatcher": "exec", "arg": "/usr/bin/other toggle", "description": ""}
+        ]);
+        assert!(!taken(&classic, &sc("SUPER + B"), exe), "`exec <exe> toggle` is Aria's");
+        assert!(taken(&classic, &sc("SUPER + C"), exe));
+        assert_eq!(own_binds(&binds, exe), vec![sc("SUPER + A")]);
+    }
+
+    #[test]
+    fn the_plan_skips_taken_shortcuts_and_unbinds_the_old_one() {
+        let exe = PathBuf::from("/home/ana/.local/bin/aria");
+        let binds = serde_json::json!([
+            {"modmask": 64, "key": "A", "keycode": 0, "submap": "", "dispatcher": "__lua", "arg": "3", "description": "Omarchy thing"},
+            {"modmask": 65, "key": "A", "keycode": 0, "submap": "", "dispatcher": "__lua", "arg": "4", "description": "Another"}
+        ]);
+        let mut hotkey = Hotkey::new(exe);
+        let (lua, used) = hotkey.plan(&binds, &shortcut::candidates("", Platform::Linux));
+        assert_eq!(
+            used,
+            InUse { shortcut: sc("SUPER + ALT + A"), taken: vec![sc("SUPER + A"), sc("SUPER + SHIFT + A")] }
+        );
+        assert!(
+            lua.starts_with(r#"hl.unbind("SUPER + ALT + A"); hl.bind("SUPER + ALT + A""#),
+            "someone else's binds stay: {lua}"
+        );
+        hotkey.bound = Some(sc("SUPER + ALT + A"));
+        let (lua, used) = hotkey.plan(&Value::Null, &shortcut::candidates("ctrl + alt + k", Platform::Linux));
+        assert_eq!(used, in_use("CTRL + ALT + K"));
+        assert!(
+            lua.starts_with(r#"hl.unbind("SUPER + ALT + A"); hl.unbind("CTRL + ALT + K"); hl.bind("CTRL + ALT + K""#),
+            "{lua}"
+        );
+    }
+
+    #[test]
+    fn binds_are_asked_on_the_request_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".socket.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let answer = binds_fixture().to_string();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 64];
+            let n = stream.read(&mut request).unwrap();
+            assert_eq!(&request[..n], b"j/binds");
+            stream.write_all(answer.as_bytes()).unwrap();
+        });
+        assert_eq!(binds_at(&path), Some(binds_fixture()));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_settings_change_rebinds() {
+        use std::sync::Mutex;
+        let setting = Arc::new(Mutex::new(String::new()));
+        let bound = Arc::new(Mutex::new(Vec::<String>::new()));
+        let states = Arc::new(Mutex::new(Vec::<Registration>::new()));
+        let watching = Arc::new(AtomicUsize::new(0));
+        let (wake, wakes) = mpsc::channel();
+        let worker = {
+            let (setting, bound, states, watching) = (setting.clone(), bound.clone(), states.clone(), watching.clone());
+            std::thread::spawn(move || {
+                run_hotkey(
+                    || Ok(ConfigKind::Lua),
+                    // A fake Hyprland where SUPER + SHIFT + A is taken.
+                    |candidates| {
+                        let (used, taken) = shortcut::first_free(candidates, |s| s.label() == "SUPER + SHIFT + A");
+                        bound.lock().unwrap().push(used.label());
+                        Ok(InUse { shortcut: used, taken })
+                    },
+                    move || setting.lock().unwrap().clone(),
+                    Duration::from_millis(1),
+                    wakes,
+                    move || {
+                        watching.fetch_add(1, Ordering::SeqCst);
+                    },
+                    move |state| states.lock().unwrap().push(state),
+                )
+            })
+        };
+        let wait_for = |count: usize| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while states.lock().unwrap().len() < count && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        wait_for(1);
+        assert_eq!(*bound.lock().unwrap(), ["SUPER + A"], "empty: the default");
+        assert_eq!(watching.load(Ordering::SeqCst), 1);
+
+        wake.send(Wake::Settings).unwrap(); // something else in the settings changed
+        *setting.lock().unwrap() = "super + shift + a".into();
+        wake.send(Wake::Settings).unwrap();
+        wait_for(2);
+        wake.send(Wake::Reload).unwrap(); // a reload binds again even with nothing changed
+        drop(wake);
+        worker.join().unwrap();
+        assert_eq!(
+            *bound.lock().unwrap(),
+            ["SUPER + A", "SUPER + A", "SUPER + A"],
+            "the chosen one is taken: the default"
+        );
+        let states = states.lock().unwrap();
+        assert_eq!(
+            states[1],
+            Registration::Registered(InUse { shortcut: sc("SUPER + A"), taken: vec![sc("SUPER + SHIFT + A")] }),
+            "the page hears which one is in use, and which was taken"
+        );
+        assert_eq!(states.len(), 3);
+        assert_eq!(watching.load(Ordering::SeqCst), 1, "the reload watcher starts once");
     }
 
     #[test]

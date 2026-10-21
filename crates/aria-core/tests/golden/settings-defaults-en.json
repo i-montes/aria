@@ -57,6 +57,7 @@
     "completed": false,
     "mode": null
   },
+  "shortcut": "",
   "subagents": {
     "autoSkills": [
       "systematic-debugging",

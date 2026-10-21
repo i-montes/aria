@@ -35,6 +35,8 @@ pub struct Settings {
     pub sandbox: SandboxSettings,
     pub git: Git,
     pub subagents: Subagents,
+    /// The dock's shortcut, `MOD + MOD + KEY` (see `shortcut`); `""` is the platform's default.
+    pub shortcut: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -277,6 +279,7 @@ impl Default for Settings {
             sandbox: SandboxSettings::default(),
             git: Git::default(),
             subagents: Subagents::default(),
+            shortcut: String::new(),
         }
     }
 }
@@ -345,7 +348,8 @@ mod tests {
                 ],
                 "saveSessions": false, "turnLimit": null, "planExecute": true,
                 "autoSkills": ["systematic-debugging", "verification-before-completion"]
-            }
+            },
+            "shortcut": ""
         })
     }
 
@@ -374,6 +378,15 @@ mod tests {
         assert_eq!(settings.models.turn_timeout_minutes, 10, "an older file gets the default");
         let settings: Settings = serde_json::from_str(r#"{"models":{"turnTimeoutMinutes":0}}"#).unwrap();
         assert_eq!(settings.models.turn_timeout_minutes, 0);
+    }
+
+    #[test]
+    fn shortcut_defaults_to_empty() {
+        assert_eq!(Settings::defaults("en").shortcut, "");
+        let settings: Settings = serde_json::from_str(r#"{"version":1}"#).unwrap();
+        assert_eq!(settings.shortcut, "", "an older file gets the platform's default");
+        let settings: Settings = serde_json::from_str(r#"{"shortcut":"SUPER + SHIFT + A"}"#).unwrap();
+        assert_eq!(settings.shortcut, "SUPER + SHIFT + A");
     }
 
     #[test]

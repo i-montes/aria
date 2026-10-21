@@ -19,10 +19,11 @@ mod worktree;
 
 use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::paths::AriaPaths;
+use aria_core::shortcut::{default_shortcut, Platform as ShortcutPlatform};
 #[cfg(target_os = "linux")]
 use aria_hyprland::Registration;
 use chat::{ChatCtx, PlatformNotifier, Sessions};
-use dock::{Dock, HOTKEY_LABEL};
+use dock::Dock;
 use jobs::{Jobs, UPDATE_NOTICE_AFTER};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, OnceLock};
@@ -165,9 +166,10 @@ fn run_dock() {
             }),
         )
     };
-    // The page needs the shortcut for its notice and its "you are set up" screen: Super + A on Omarchy,
-    // Option + Space on macOS.
-    dock.send(&DockMessage::Platform { hotkey: HOTKEY_LABEL.to_string() });
+    // The page needs the shortcut for its notice and its "you are set up" screen: the default (Super + A on Omarchy,
+    // Option + Space on macOS) until the one in use is known, and again whenever it changes.
+    let default_hotkey = default_shortcut(ShortcutPlatform::current());
+    dock.send(&DockMessage::Platform { hotkey: default_hotkey.display() });
     if first_run {
         dock.show_notice();
     }
@@ -190,18 +192,22 @@ fn run_dock() {
     });
 
     // The hotkey. On Linux it is registered as soon as Hyprland can take it (it may not be up when a
-    // service starts), and again after every config reload; the thread reports how it is going and the
-    // problem banner follows it. On Mac Carbon registers it once, without permissions, for the life of
+    // service starts), and again after every config reload and every change of the `shortcut` setting (a taken one
+    // falls back); the thread reports how it is going, the problem banner follows it and the page hears which shortcut
+    // is in use. On Mac Carbon registers it once, without permissions, for the life of
     // the app; a shortcut another app already owns is reported the same way.
     #[cfg(target_os = "linux")]
     let (registration_sender, registration_receiver) = mpsc::channel::<Registration>();
     #[cfg(target_os = "linux")]
-    {
+    let hotkey = {
         let exe = std::env::current_exe().expect("own path");
-        aria_hyprland::keep_hotkey_registered(exe, Duration::from_secs(2), move |state| {
+        let paths = AriaPaths::from_env();
+        // An unreadable settings file means the default, as an empty setting does.
+        let source = move || aria_core::settings::load(&paths).ok().flatten().map(|s| s.shortcut).unwrap_or_default();
+        aria_hyprland::keep_hotkey_registered(exe, source, Duration::from_secs(2), move |state| {
             let _ = registration_sender.send(state);
-        });
-    }
+        })
+    };
     #[cfg(target_os = "macos")]
     {
         let hotkey_sender = sender.clone();
@@ -238,6 +244,8 @@ fn run_dock() {
             let sessions = chat_for_settings.clone();
             std::thread::spawn(move || sessions.settings_changed());
             dock.send(&DockMessage::SettingsChanged);
+            #[cfg(target_os = "linux")]
+            hotkey.settings_changed();
         }
         // Every 30 s, the turn watchdog: a run that got nothing from its Pi for `models.turnTimeoutMinutes` is stopped,
         // and the chat says so. Off the UI thread: it reads the settings.
@@ -294,14 +302,23 @@ fn run_dock() {
         #[cfg(target_os = "linux")]
         while let Ok(state) = registration_receiver.try_recv() {
             match state {
-                Registration::Registered => dock.clear_problem(),
+                Registration::Registered(in_use) => {
+                    dock.clear_problem();
+                    let taken: Vec<String> = in_use.taken.iter().map(|s| s.label()).collect();
+                    if taken.is_empty() {
+                        eprintln!("aria: the shortcut is {}", in_use.shortcut.label());
+                    } else {
+                        eprintln!("aria: the shortcut is {} ({} taken)", in_use.shortcut.label(), taken.join(", "));
+                    }
+                    dock.send(&DockMessage::Platform { hotkey: in_use.shortcut.display() });
+                }
                 Registration::WaitingForHyprland => dock.set_problem("hyprland-not-running"),
                 Registration::ClassicConfig => dock.set_problem("hyprland-classic-config"),
             }
         }
     });
 
-    eprintln!("aria: ready, press {HOTKEY_HINT}");
+    eprintln!("aria: ready, press {} (or the shortcut set in the settings)", default_hotkey.label());
     ui::run();
 }
 
@@ -373,11 +390,6 @@ impl JobsWait {
         true
     }
 }
-
-#[cfg(target_os = "linux")]
-const HOTKEY_HINT: &str = "SUPER + A";
-#[cfg(target_os = "macos")]
-const HOTKEY_HINT: &str = "Option + Space";
 
 /// Tests that start child processes or hold a listening socket take turns: a fork in one test
 /// leaves copies of every open descriptor in the child until it execs, which keeps a dropped socket

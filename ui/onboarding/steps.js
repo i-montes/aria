@@ -91,6 +91,7 @@ export function defaultSettings(language = 'en') {
       planExecute: true,
       autoSkills: ['systematic-debugging', 'verification-before-completion'],
     },
+    shortcut: '',
   }
 }
 

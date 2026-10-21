@@ -16,6 +16,7 @@ pub mod providers;
 pub mod quota;
 pub mod sessions;
 pub mod settings;
+pub mod shortcut;
 pub mod validate;
 
 #[cfg(any(test, feature = "testing"))]
