@@ -142,6 +142,14 @@ extension, the strip and the Alt+A list; see the [architecture](architecture.md#
 - Two background subagents in one session with the same title and task share one watch agent in the list.
 - The browser check (`tools/ui-sandbox/check.ts`) prints `PAGE ERROR ReferenceError: process is not defined` a few
   times; it happens on `main` too, and every check still passes.
+- The sandbox keeps a repository's `.git/config` and `hooks` read-only, but the rest of `.git` stays writable, and git
+  follows a `commondir` file in any git dir: a boxed command can point a repository at a config of its own, which the
+  person's own git (outside the box) then reads. Repositories nested under a folder that is not one are not protected
+  at all. The dock's own git commands neutralize hooks, fsmonitor and filter drivers, but a boxed background process
+  that swaps `commondir` between the dock's read of the filter drivers and its `git add -A` could slip one in. To do:
+  protect `commondir` and `gitdir` (or the whole git dir but what git must write) in `extensions/sandbox/policy.ts`, and
+  give the dock's git an empty attributes source.
+- If the projects folder is itself inside a git repository, `.aria-worktrees/` lands inside that repository.
 
 ## Known limits of the page (from the review, deferred)
 
