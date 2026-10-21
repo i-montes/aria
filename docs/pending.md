@@ -198,6 +198,12 @@ the MCP servers other apps have, and the shortcut is chosen in the settings (the
 - The test `an_import_that_cannot_write_says_so` fails when the tests run as root (a read-only folder does not stop
   root).
 - In the import list, the checks are lost when the setup goes Back and returns to Integrations.
+- The editor variables (`${userHome}`, `${workspaceFolder}`…) are translated whatever app the server came from: a
+  Claude Code entry whose env uses a variable with one of those names gets the editor's meaning, not Claude Code's.
+  Claude Desktop is assumed to expand `${X}` in env like Claude Code.
+- After a "nothing to import" refusal, the note shows on the Import button; when the new scan leaves nothing to
+  import, there is no button and the note is not shown.
+- On the Mac, a later retry that fails for another reason keeps the first problem's banner.
 - On Hyprland, a combination already bound (or Aria's own) never reaches the page, so the Shortcut row cannot record
   it by pressing it; it can be typed in the field under the row.
 
