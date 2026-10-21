@@ -47,10 +47,24 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("quit") => match control::ask(&control::control_socket_path(), "quit", Duration::from_secs(2)) {
+            Ok(_) => println!("Aria is stopping (`aria start` starts it again)"),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    || error.kind() == std::io::ErrorKind::ConnectionRefused =>
+            {
+                println!("Aria is not running")
+            }
+            Err(error) => {
+                eprintln!("aria: the dock did not take the quit: {error}");
+                std::process::exit(1);
+            }
+        },
+        Some("start") => start_service(),
         Some("--version" | "-V" | "version") => println!("aria {}", env!("CARGO_PKG_VERSION")),
         None => run_dock(),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show|update-ready|--version]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show|start|quit|update-ready|--version]");
             std::process::exit(2);
         }
     }
@@ -185,8 +199,8 @@ fn run_dock() {
         use std::io::{BufRead, BufReader, Write};
         for stream in listener.incoming().map_while(Result::ok) {
             if let Some(Ok(line)) = BufReader::new(&stream).lines().next() {
-                // The installer waits for this answer; without it (an older dock) it restarts the service itself.
-                if line == "update-ready" {
+                // The installer and `aria quit` wait for this answer: an older dock without it ignores the line.
+                if line == "update-ready" || line == "quit" {
                     let _ = (&stream).write_all(b"ok\n");
                 }
                 let _ = listener_sender.send(line);
@@ -300,6 +314,10 @@ fn run_dock() {
                     dock.feed(Event::Toggle)
                 }
                 "show" => dock.show(),
+                "quit" => {
+                    note("asked to quit");
+                    request_quit()
+                }
                 "update-ready" => {
                     eprintln!("aria: a new version is installed; restarting once the dock is hidden and idle");
                     update_ready = true;
@@ -418,6 +436,30 @@ pub(crate) fn note(message: &str) {
 
 /// Set by SIGTERM, SIGINT or SIGHUP; the UI thread's tick sees it. A handler can do little more than this safely.
 static QUIT: AtomicBool = AtomicBool::new(false);
+
+/// Quits the dock on its next tick, the way a signal does: background work and Pis are stopped first (Cmd+Q twice in the
+/// page, `aria quit`).
+pub(crate) fn request_quit() {
+    QUIT.store(true, Ordering::SeqCst);
+}
+
+/// `aria start`: the dock again under the service manager that starts it at login, so it is supervised as usual.
+fn start_service() {
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("launchctl")
+        .arg("kickstart")
+        .arg(format!("gui/{}/com.aria.dock", unsafe { libc::getuid() }))
+        .status();
+    #[cfg(target_os = "linux")]
+    let status = std::process::Command::new("systemctl").args(["--user", "start", "aria.service"]).status();
+    match status {
+        Ok(status) if status.success() => println!("Aria is running"),
+        _ => {
+            eprintln!("aria: the service did not start (is Aria installed?); `aria show` starts the dock by itself");
+            std::process::exit(1);
+        }
+    }
+}
 
 extern "C" fn on_quit_signal(_: libc::c_int) {
     QUIT.store(true, Ordering::SeqCst);

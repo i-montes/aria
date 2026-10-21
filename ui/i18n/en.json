@@ -426,5 +426,6 @@
   "ob.integrations.found.warn.tildeArg": "an argument starts with ~, which Aria reads as your home folder: check it after importing",
   "ob.integrations.found.warn.envFile": "its env file is not imported: add those variables after importing",
   "ob.error.mcp-write-failed": "Aria could not write ~/.aria/mcp.json.",
-  "ob.error.nothing-to-import": "None of the checked servers can be imported any more."
+  "ob.error.nothing-to-import": "None of the checked servers can be imported any more.",
+  "quit.confirm": "Press ⌘Q again to quit Aria"
 }

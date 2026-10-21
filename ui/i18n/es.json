@@ -426,5 +426,6 @@
   "ob.integrations.found.warn.tildeArg": "un argumento empieza con ~, que Aria lee como tu carpeta personal: revísalo después de importar",
   "ob.integrations.found.warn.envFile": "su archivo de entorno no se importa: añade esas variables después de importar",
   "ob.error.mcp-write-failed": "Aria no pudo escribir ~/.aria/mcp.json.",
-  "ob.error.nothing-to-import": "Ninguno de los servidores marcados se puede importar ya."
+  "ob.error.nothing-to-import": "Ninguno de los servidores marcados se puede importar ya.",
+  "quit.confirm": "Pulsa ⌘Q otra vez para cerrar Aria"
 }

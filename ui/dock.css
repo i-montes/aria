@@ -76,3 +76,9 @@ p.intro { color: #D4D4D8; font-size: 14px; line-height: 1.6; margin: 0 0 20px; }
   background: rgba(240, 180, 76, 0.08); border: 1px solid rgba(240, 180, 76, 0.32); color: var(--amber);
 }
 .problem b { display: block; margin-bottom: 4px; }
+
+/* Cmd+Q's question (app.js): a pill at the top of the dock column for the two seconds a second press would quit. */
+.quit-hint { position: fixed; top: 14px; right: 28px; z-index: 50; padding: 8px 14px; border-radius: 999px; background: #1C1C21;
+  border: 1px solid rgba(185, 168, 255, 0.6); color: #E8E8EC; font: 12.5px/1.3 'Geist Mono', ui-monospace, monospace;
+  opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity 140ms ease, transform 160ms ease; }
+.quit-hint.is-on { opacity: 1; transform: translateY(0); }

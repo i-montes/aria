@@ -125,6 +125,7 @@ pub fn is_chat(message: &PageMessage) -> bool {
 pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
     match message {
         PageMessage::Ready | PageMessage::Opened | PageMessage::CloseRequest => {}
+        PageMessage::QuitRequest => crate::request_quit(),
         PageMessage::LoadSettings { id } => emit(load_settings(id, ctx)),
         PageMessage::SaveSettings { id, settings } => {
             let _ = ctx.paths.ensure_root();

@@ -20,6 +20,9 @@ pub enum PageMessage {
     /// The page asks to close the dock (Esc).
     #[serde(rename = "closeRequest")]
     CloseRequest,
+    /// The person pressed Cmd+Q twice: Aria stops its background work and its Pis, and exits.
+    #[serde(rename = "quitRequest")]
+    QuitRequest,
     #[serde(rename = "loadSettings")]
     LoadSettings { id: u64 },
     #[serde(rename = "saveSettings")]
@@ -274,6 +277,7 @@ mod tests {
         assert_eq!(page(r#"{"type":"ready"}"#), PageMessage::Ready);
         assert_eq!(page(r#"{"type":"opened"}"#), PageMessage::Opened);
         assert_eq!(page(r#"{"type":"closeRequest"}"#), PageMessage::CloseRequest);
+        assert_eq!(page(r#"{"type":"quitRequest"}"#), PageMessage::QuitRequest);
         assert_eq!(page(r#"{"type":"loadSettings","id":1}"#), PageMessage::LoadSettings { id: 1 });
         assert_eq!(
             page(r#"{"type":"saveSettings","id":2,"settings":{"a":1}}"#),

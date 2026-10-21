@@ -58,10 +58,10 @@ fn install_edit_menu(mtm: objc2_foundation::MainThreadMarker) {
 
     let main = NSMenu::new(mtm);
 
-    // The app menu: at least Quit, so the dock can be stopped without a terminal.
+    // The app menu's Quit has no key: Cmd+Q reaches the page, which asks first and quits on a second press (app.js).
     let app_item = NSMenuItem::new(mtm);
     let app_menu = NSMenu::new(mtm);
-    app_menu.addItem(&item(mtm, ns_string!("Quit Aria"), sel!(terminate:), ns_string!("q")));
+    app_menu.addItem(&item(mtm, ns_string!("Quit Aria"), sel!(terminate:), ns_string!("")));
     app_item.setSubmenu(Some(&app_menu));
     main.addItem(&app_item);
 

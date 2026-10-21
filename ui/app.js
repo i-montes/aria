@@ -6,6 +6,7 @@ import { chatTexts } from './chat/texts.js'
 import { createChatView } from './chat/view.js'
 import { createOnboarding } from './onboarding/view.js'
 import { keyName } from './onboarding/shortcut.js'
+import { QUIT_WINDOW_MS, isQuitKey, quitPress } from './quit.js'
 
 let i18n = createI18n({})
 const t = (key, vars) => i18n.t(key, vars)
@@ -218,7 +219,30 @@ window.aria.chat = chat
 // Disabled controls cannot take focus, so the arrows have to skip them.
 const navigable = () => [...document.querySelectorAll('#flow [data-nav]:not(:disabled)')]
 
+let quitArmedAt = null
+let quitTimer = null
+const isMac = /Mac/.test(navigator.userAgent)
+
 document.addEventListener('keydown', (event) => {
+  // Cmd+Q asks first: Aria quits on a second press (the menu no longer takes the key, so it reaches the page).
+  if (isQuitKey(event, isMac)) {
+    event.preventDefault()
+    const press = quitPress(quitArmedAt, Date.now())
+    quitArmedAt = press.armedAt
+    clearTimeout(quitTimer)
+    const hint = document.getElementById('quit-hint')
+    if (press.quit) {
+      hint.classList.remove('is-on')
+      return post({ type: 'quitRequest' })
+    }
+    hint.textContent = t('quit.confirm')
+    hint.classList.add('is-on')
+    quitTimer = setTimeout(() => {
+      quitArmedAt = null
+      hint.classList.remove('is-on')
+    }, QUIT_WINDOW_MS)
+    return
+  }
   // Alt+A: the subagents view and back (the design's shortcut).
   if (event.altKey && event.key.toLowerCase() === 'a' && state.mode === 'chat') {
     event.preventDefault()
