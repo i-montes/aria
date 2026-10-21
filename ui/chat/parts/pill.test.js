@@ -36,6 +36,12 @@ describe('renderPill', () => {
     expect(html).not.toContain('<button')
     expect(html).toContain('<span class="p-pill-meta">1 KB</span>')
   })
+  test('a static pill with extra: its text is a span beside the extra, so only the extra is focusable', () => {
+    const html = renderPill({ label: 'a.pdf', tone: 'file', static: true, extra: '<button type="button" data-chat="x">×</button>' }, {}, t)
+    expect(html.startsWith('<span class="p-pill is-static has-extra tone-file">')).toBe(true)
+    expect(html).toContain('<span class="p-pill-main"><span class="p-pill-label">a.pdf</span></span><button')
+    expect(html.match(/<button/g).length).toBe(1)
+  })
   test('escapes every value', () => {
     const html = renderPill({ label: hostile, meta: hostile, tone: hostile, action: hostile, id: hostile, value: hostile }, {}, t)
     expect(html).not.toContain('<script>')

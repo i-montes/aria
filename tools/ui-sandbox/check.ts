@@ -515,6 +515,8 @@ const script = `(async () => {
     await wait(80)
     check('attach adds a chip', chips().join() === 'notes.txt,shot.png' && $('#chat-input').value === typedBefore, chips().join() + ' | ' + $('#chat-input').value)
     check('the chips show the sizes', $('#chat-composer .p-composer-files')?.textContent.includes('2 KB'), $('#chat-composer .p-composer-files')?.textContent)
+    const focusable = [...document.querySelectorAll('#chat-composer .p-composer-files button, #chat-composer .p-composer-files [tabindex]')]
+    check('in the composer only the chips’ remove buttons take the focus', focusable.length === 2 && focusable.every((b) => b.matches('.p-attach-remove')), focusable.map((b) => b.className).join())
     $('#chat-composer [data-chat="attach-remove"]').click(); await wait(40)
     check('remove drops it', chips().join() === 'shot.png' && document.activeElement === $('#chat-input'), chips().join() + ' ' + document.activeElement?.outerHTML.slice(0, 80))
     const before = sent().length
@@ -627,6 +629,18 @@ const script = `(async () => {
   const after = $('#flow [data-action="expert-on"]')
   check('a setup switch flips through a redraw of its component', after && after !== sw && after.getAttribute('aria-checked') !== was, was + ' -> ' + after?.getAttribute('aria-checked'))
   check('the redraw keeps the scroll position', kept > 0 && Math.abs(content.scrollTop - kept) < 2, kept + ' vs ' + content.scrollTop)
+  // a file dropped on the settings (the setup screens) never loads in the page's place
+  {
+    const dt = new DataTransfer(); dt.items.add(new File(['x'], 'photo.png', { type: 'image/png' }))
+    const over = new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true })
+    const drop = new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })
+    content.dispatchEvent(over); content.dispatchEvent(drop)
+    check('a file dropped on the setup screens is stopped', over.defaultPrevented && drop.defaultPrevented && over.dataTransfer.dropEffect === 'none', [over.defaultPrevented, drop.defaultPrevented, over.dataTransfer.dropEffect].join())
+    const text = new DataTransfer(); text.setData('text/plain', 'words')
+    const plain = new DragEvent('dragover', { dataTransfer: text, bubbles: true, cancelable: true })
+    content.dispatchEvent(plain)
+    check('a text drag on the setup screens is left to the browser', !plain.defaultPrevented)
+  }
   check('the redraw gives the focus back to the switch that was clicked', document.activeElement === after, document.activeElement?.outerHTML?.slice(0, 80))
 
   return results

@@ -14,7 +14,9 @@
 //   extra    TRUSTED markup (already escaped by the caller) put after the pill's button inside it, e.g. a stop button.
 //            With extra the pill is a <span> holding its main button (`.p-pill-main`) and the extra, since a button
 //            cannot hold another button; without it the pill is the button itself.
-//   static   true: a pill with nothing to press (a fact, like a sent message's file): a <span>, same look, no action
+//   static   true: a pill with nothing to press (a fact, like a sent message's file): a <span>, same look, no action.
+//            With extra too, its text is a <span class="p-pill-main"> (not a button) beside the extra, so only the extra
+//            can take the focus (a composer's file chip and its remove button)
 // ui: unused. t: unused (the pill has no texts of its own).
 // Emits: whatever `action` names, with data-id / data-value.
 // Styles: pill.css (`.p-pill`, `.p-pill-dot`, `.p-pill-label`, `.p-pill-meta`, `.p-pill-main`).
@@ -36,7 +38,10 @@ export function renderPill({ label, meta, dot = false, tone, pressed, action, id
     (dot ? '<span class="p-pill-dot" aria-hidden="true"></span>' : '') +
     `<span class="p-pill-label">${esc(label)}</span>` +
     (has(meta) ? `<span class="p-pill-meta">${esc(meta)}</span>` : '')
-  if (still) return `<span class="p-pill is-static${toneClass}"${has(title) ? ` title="${esc(title)}"` : ''}>${body}</span>`
+  const tip = has(title) ? ` title="${esc(title)}"` : ''
+  // Static with extra (a composer's file chip and its remove button): only the extra takes the focus.
+  if (still && extra) return `<span class="p-pill is-static has-extra${toneClass}"${tip}><span class="p-pill-main">${body}</span>${extra}</span>`
+  if (still) return `<span class="p-pill is-static${toneClass}"${tip}>${body}</span>`
   if (!extra) return `<button type="button" class="p-pill${toneClass}"${attrs}>${body}</button>`
   return `<span class="p-pill has-extra${toneClass}"><button type="button" class="p-pill-main"${attrs}>${body}</button>${extra}</span>`
 }

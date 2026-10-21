@@ -7,7 +7,7 @@ import { esc } from '../onboarding/components.js'
 import { renderAgentSession } from './parts/session.js'
 import { hasLiveWork, isFailed, renderJobRows, renderStrip, resultAgent } from './parts/background.js'
 import { renderCommandPicker, filterCommands, stepActive, clampActive, toInvocation, withSkillNames } from './parts/commands.js'
-import { admit, releaseAccepted } from './parts/attachments.js'
+import { admit, releaseAccepted, remember } from './parts/attachments.js'
 import { renderComposer } from './parts/composer.js'
 import { PROVIDERS, renderConnect } from './parts/connect.js'
 import { renderFilePicker, filterFiles } from './parts/files.js'
@@ -164,7 +164,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   // files, so a message the dock or Pi refuses gets its files back in the composer along with its text.
   const attached = new Map()
   const reading = new Map()
-  // session id -> [{ text (as sent), shown (as typed), files }]: only messages Pi has not taken yet (releaseAccepted)
+  // session id -> [{ text (as sent), shown (as typed), files }]: only messages Pi has not taken yet (releaseAccepted),
+  // the last SENT_KEPT at most
   const sentWith = new Map()
   let attachSeq = 0
   const expandedOf = new Map() // session id -> { open, rows, more }: which tool groups and rows are open
@@ -771,7 +772,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       chats.set(session, addUser(chat, text, shown))
     }
     if (files.length) {
-      sentWith.set(session, [...(sentWith.get(session) ?? []), { text: sentText, shown: text, files }])
+      sentWith.set(session, remember(sentWith.get(session), { text: sentText, shown: text, files }))
       attached.delete(session)
     }
     const before = tabs

@@ -1,7 +1,7 @@
 // Run: bun test ui/chat/parts/attachments.test.js
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { LIMITS, TEXTS, admit, humanSize, plainText, releaseAccepted, renderAttachments, splitAttached } from './attachments.js'
+import { LIMITS, SENT_KEPT, TEXTS, admit, humanSize, plainText, releaseAccepted, remember, renderAttachments, splitAttached } from './attachments.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const hostile = '<script>alert("x")</script> & \'q\''
@@ -75,6 +75,23 @@ describe('releaseAccepted', () => {
   test('a queue holding the text releases it too', () => {
     expect(releaseAccepted(kept, ev({ type: 'queue_update', steering: ['later' + lines], followUp: [] }))).toEqual([kept[0]])
   })
+  test('an echo releases only the first message with its text', () => {
+    const twice = [{ text: 'look', files: [{ data: 'AAAA' }] }, { text: 'look', files: [{ data: 'CCCC' }] }]
+    expect(releaseAccepted(twice, ev({ type: 'message_start', message: { role: 'user', content: 'look' + lines } }))).toEqual([twice[1]])
+    expect(releaseAccepted(twice, ev({ type: 'queue_update', steering: ['look'], followUp: [] }))).toEqual([twice[1]])
+    expect(releaseAccepted(twice, ev({ type: 'queue_update', steering: ['look'], followUp: ['look'] }))).toEqual([])
+  })
+  test('a settled run releases them all (a skill Pi expanded, a command run at once, a cancelled original)', () => {
+    expect(releaseAccepted(kept, ev({ type: 'agent_settled', aborted: false }))).toEqual([])
+    expect(releaseAccepted(kept, ev({ type: 'agent_settled', aborted: true }))).toEqual([])
+  })
+  test('at most the last three sent messages keep their data', () => {
+    let list = []
+    for (const text of ['a', 'b', 'c', 'd']) list = remember(list, { text, files: [] })
+    expect(SENT_KEPT).toBe(3)
+    expect(list.map((m) => m.text)).toEqual(['b', 'c', 'd'])
+    expect(remember(undefined, { text: 'x' })).toEqual([{ text: 'x' }])
+  })
   test('anything else keeps the list as it is', () => {
     expect(releaseAccepted(kept, ev({ type: 'message_start', message: { role: 'assistant', content: [] } }))).toBe(kept)
     expect(releaseAccepted(kept, ev({ type: 'command_failed', text: 'look' }))).toBe(kept)
@@ -94,6 +111,13 @@ describe('renderAttachments', () => {
     expect(html).toContain('data-chat="attach-remove" data-id="a1"')
     expect(html).toContain('data-chat="attach-remove" data-id="a2"')
     expect(html).toContain('aria-label="chat.attach.remove name=notes.txt"')
+  })
+  test('in the composer only the remove button takes the focus (the chip itself does nothing)', () => {
+    const html = renderAttachments({ files: [{ id: 'a1', name: 'notes.txt', size: 7 }], removable: true }, {}, t)
+    expect(html.match(/<button/g).length).toBe(1)
+    expect(html).toContain('<button type="button" class="p-attach-remove"')
+    expect(html).toContain('<span class="p-pill-main">')
+    expect(html).not.toContain('tabindex')
   })
   test('in the thread a chip shows the size the line gave, or that it is an image, and no remove', () => {
     const html = renderAttachments({ files: [{ name: 'a.pdf', size: '1.3 MB', path: '/x/1-a.pdf' }, { name: 's.png', image: true, path: '/x/2-s.png' }] }, {}, t)

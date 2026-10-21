@@ -15,6 +15,19 @@ const state = { problem: null, mode: 'setup', hotkey: 'Super + A' } // mode: `se
 window.addEventListener('error', (e) => console.error('page error:', e.message, e.filename, e.lineno))
 window.addEventListener('unhandledrejection', (e) => console.error('page rejection:', String(e.reason)))
 
+// A file dragged over the setup or settings screens (or anywhere the chat does not take it) must not open in the page's
+// place: the default of every file drag is refused here. The chat view's own handlers (on #chat) run first and take
+// the drops it wants.
+const carriesFiles = (event) => [...(event.dataTransfer?.types ?? [])].includes('Files')
+for (const kind of ['dragover', 'drop']) {
+  document.addEventListener(kind, (event) => {
+    if (!carriesFiles(event)) return
+    // Outside the chat nothing takes the file: the pointer says so (the chat sets its own).
+    if (kind === 'dragover' && !event.target?.closest?.('#chat')) event.dataTransfer.dropEffect = 'none'
+    event.preventDefault()
+  })
+}
+
 const post = (message) => window.webkit.messageHandlers.aria.postMessage(message)
 let nextId = 1
 const pending = new Map()

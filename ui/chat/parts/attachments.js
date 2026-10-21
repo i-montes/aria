@@ -93,17 +93,31 @@ export function admit(have, adding) {
   return { take: fit, notes }
 }
 
+/** How many sent messages keep their files' data at most (the oldest goes first): one that is never echoed (a skill
+ * Pi expands, a command that runs at once) must not keep its files in the page for good. */
+export const SENT_KEPT = 3
+
+/** `list` with `entry` (a message sent with files) added, the oldest dropped beyond `SENT_KEPT`. */
+export const remember = (list = [], entry) => [...list, entry].slice(-SENT_KEPT)
+
 /** The sent messages still holding their files' data (`[{ text, … }]`, `text` as sent), less the ones this dock message
- * shows Pi has taken: its echo of the message, or its queue holding it. Data is kept only for a message that can still
- * be refused (its files go back to the composer then). */
+ * shows Pi has taken: its echo of the message, or its queue holding it, each releasing the first entry with that text
+ * only (two sends of the same text are two entries); a settled run releases them all, as nothing can refuse them then.
+ * Data is kept only for a message that can still be refused (its files go back to the composer then). */
 export function releaseAccepted(list = [], message) {
   const event = message?.type === 'chatEvent' ? message.event ?? {} : {}
   const textOf = (content) => (typeof content === 'string' ? content : (content ?? []).filter((b) => b.type === 'text').map((b) => b.text).join(''))
+  if (event.type === 'agent_settled') return list.length ? [] : list
   let taken = null
   if (event.type === 'message_start' && event.message?.role === 'user') taken = [plainText(textOf(event.message.content))]
   else if (event.type === 'queue_update') taken = [...(event.steering ?? []), ...(event.followUp ?? [])].map(plainText)
   if (!taken) return list
-  return list.filter((m) => !taken.includes(m.text))
+  const left = [...list]
+  for (const text of taken) {
+    const at = left.findIndex((m) => m.text === text)
+    if (at >= 0) left.splice(at, 1)
+  }
+  return left.length === list.length ? list : left
 }
 
 const X =
@@ -117,7 +131,8 @@ export function renderAttachments({ files, removable = false } = {}, ui, t = (k)
     const extra = removable
       ? `<button type="button" class="p-attach-remove" data-chat="attach-remove" data-id="${esc(file.id)}" aria-label="${esc(label)}" title="${esc(label)}">${X}</button>`
       : ''
-    return renderPill({ label: file.name, meta, tone: file.image ? 'image' : 'file', title: file.path || file.name, extra, static: !removable }, {}, t)
+    // Static either way: a chip itself does nothing, so only its remove button (the composer's) can take the focus.
+    return renderPill({ label: file.name, meta, tone: file.image ? 'image' : 'file', title: file.path || file.name, extra, static: true }, {}, t)
   })
   return `<div class="p-attach">${chips.join('')}</div>`
 }
