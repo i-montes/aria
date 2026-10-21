@@ -198,6 +198,7 @@ mod tests {
             "HYPER + A",
             "SUPER + A + B",
             "Command + A",
+            r#"SUPER + A"); os.execute("x"#,
         ] {
             assert_eq!(parse(text, Linux), None, "{text:?}");
         }

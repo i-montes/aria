@@ -306,9 +306,9 @@ fn run_dock() {
                     dock.clear_problem();
                     let taken: Vec<String> = in_use.taken.iter().map(|s| s.label()).collect();
                     if taken.is_empty() {
-                        eprintln!("aria: the shortcut is {}", in_use.shortcut.label());
+                        eprintln!("aria: ready, press {}", in_use.shortcut.label());
                     } else {
-                        eprintln!("aria: the shortcut is {} ({} taken)", in_use.shortcut.label(), taken.join(", "));
+                        eprintln!("aria: ready, press {} ({} taken)", in_use.shortcut.label(), taken.join(", "));
                     }
                     dock.send(&DockMessage::Platform { hotkey: in_use.shortcut.display() });
                 }
@@ -318,7 +318,9 @@ fn run_dock() {
         }
     });
 
-    eprintln!("aria: ready, press {} (or the shortcut set in the settings)", default_hotkey.label());
+    // On Linux the shortcut in use is logged once it is bound (above).
+    #[cfg(target_os = "macos")]
+    eprintln!("aria: ready, press {}", default_hotkey.label());
     ui::run();
 }
 

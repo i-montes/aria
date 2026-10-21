@@ -85,11 +85,13 @@ pub fn modmask(shortcut: &Shortcut) -> u64 {
         .sum()
 }
 
-/// The X keycode of a digit key (`code:10` is `1`, … `code:19` is `0`), which is how Omarchy binds digits: those
-/// binds have no key name in `hyprctl binds`.
-fn digit_keycode(key: &str) -> Option<u64> {
-    let digit: u64 = key.parse().ok()?;
-    Some(if digit == 0 { 19 } else { 9 + digit })
+/// Whether a bind may be on a digit key. Omarchy binds digits by keycode (`code:10` … `code:19`), and `hyprctl binds`
+/// lists those with an empty key and keycode 0, so which digit is unknown: any such bind counts (conservative), as
+/// does a keycode in 10..=19 when one is listed.
+fn maybe_a_digit(bind: &Value) -> bool {
+    let key = bind["key"].as_str().unwrap_or("");
+    let code = bind["keycode"].as_u64().unwrap_or(0);
+    (key.is_empty() && code == 0) || (10..=19).contains(&code)
 }
 
 /// Whether one entry of `hyprctl -j binds` is Aria's own: its description, or (a bind made outside the Lua config)
@@ -102,7 +104,7 @@ fn is_own(bind: &Value, exe: &Path) -> bool {
 
 fn same_keys(bind: &Value, shortcut: &Shortcut) -> bool {
     let key_matches = bind["key"].as_str().is_some_and(|key| key.eq_ignore_ascii_case(&shortcut.key))
-        || bind["keycode"].as_u64().is_some_and(|code| code != 0 && Some(code) == digit_keycode(&shortcut.key));
+        || (shortcut.key.chars().all(|c| c.is_ascii_digit()) && maybe_a_digit(bind));
     bind["modmask"].as_u64() == Some(modmask(shortcut))
         && key_matches
         && bind["submap"].as_str().unwrap_or("").is_empty()
@@ -196,7 +198,10 @@ impl Hotkey {
     /// is taken, the first is bound anyway, as before shortcuts could be chosen.
     pub fn plan(&self, binds_json: &Value, candidates: &[Shortcut]) -> (String, InUse) {
         let (chosen, skipped) = shortcut::first_free(candidates, |s| taken(binds_json, s, &self.exe));
-        let previous: Vec<Shortcut> = self.bound.iter().cloned().chain(own_binds(binds_json, &self.exe)).collect();
+        // What Hyprland lists as Aria's is unbound; what Aria bound last only when Hyprland gave no list (a reload drops
+        // runtime binds, and a bind someone added to their config since must stay).
+        let previous: Vec<Shortcut> =
+            if binds_json.is_array() { own_binds(binds_json, &self.exe) } else { self.bound.iter().cloned().collect() };
         (registration_lua(&self.exe, &chosen, &previous), InUse { shortcut: chosen, taken: skipped })
     }
 
@@ -621,7 +626,7 @@ mod tests {
             bind(64, "SPACE", 0, "Launch apps", ""),
             bind(65, "A", 0, "Something else", ""),
             bind(12, "k", 0, "", ""),
-            bind(64, "", 10, "Switch to workspace 1", ""),
+            bind(64, "", 0, "Switch to workspace 1", ""),
             bind(72, "A", 0, "Resize mode", "resize"),
             mouse,
         ])
@@ -633,7 +638,11 @@ mod tests {
         assert!(taken(&binds, &sc("SUPER + SHIFT + A"), exe), "modmask 65 = SUPER + SHIFT");
         assert!(taken(&binds, &sc("SUPER + Space"), exe), "keys compare without case");
         assert!(taken(&binds, &sc("CTRL + ALT + K"), exe), "modmask 12 = CTRL + ALT");
-        assert!(taken(&binds, &sc("SUPER + 1"), exe), "a digit bound by its keycode");
+        assert!(taken(&binds, &sc("SUPER + 1"), exe), "a digit bound by keycode: listed with no key");
+        assert!(!taken(&binds, &sc("SUPER + CTRL + 1"), exe), "other modifiers");
+        assert!(!taken(&binds, &sc("SUPER + Q"), exe), "an empty key only stands for a digit");
+        let coded = serde_json::json!([{"modmask": 8, "key": "", "keycode": 12, "submap": "", "description": "x"}]);
+        assert!(taken(&coded, &sc("ALT + 5"), exe), "a keycode in 10..=19, when listed, counts for any digit");
         assert!(!taken(&binds, &sc("SUPER + ALT + A"), exe), "only in a submap");
         assert!(!taken(&binds, &sc("SUPER + B"), exe));
         assert!(!taken(&binds, &sc("SUPER + CTRL + A"), exe), "other modifiers");
@@ -676,7 +685,19 @@ mod tests {
         assert_eq!(used, in_use("CTRL + ALT + K"));
         assert!(
             lua.starts_with(r#"hl.unbind("SUPER + ALT + A"); hl.unbind("CTRL + ALT + K"); hl.bind("CTRL + ALT + K""#),
-            "{lua}"
+            "no list from Hyprland: the last bind is unbound: {lua}"
+        );
+        // After a reload Aria's bind is gone and the person's config now binds SUPER + A: it stays.
+        hotkey.bound = Some(sc("SUPER + A"));
+        let (lua, used) = hotkey.plan(&binds, &shortcut::candidates("", Platform::Linux));
+        assert_eq!(used.shortcut, sc("SUPER + ALT + A"));
+        assert!(!lua.contains(r#"hl.unbind("SUPER + A")"#), "a foreign SUPER + A is never unbound: {lua}");
+        let own =
+            serde_json::json!([{"modmask": 64, "key": "A", "keycode": 0, "submap": "", "description": "Toggle Aria"}]);
+        let (lua, _) = hotkey.plan(&own, &shortcut::candidates("super + shift + a", Platform::Linux));
+        assert!(
+            lua.starts_with(r#"hl.unbind("SUPER + A"); hl.unbind("SUPER + SHIFT + A");"#),
+            "listed as Aria's: {lua}"
         );
     }
 
