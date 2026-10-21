@@ -8,6 +8,8 @@
 // and lets the user allow it once, allow its programs (or a folder, for write/edit) for the rest of
 // the session, or turn the sandbox off for the session (see grants.ts). `/sandbox reset` forgets.
 //
+// background_run (a command that never ends, run by Aria's dock) takes the same route as bash.
+//
 // PI_SANDBOX=0 turns it off.
 import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
@@ -17,7 +19,9 @@ import { Type } from 'typebox'
 import { commandPreview, covers, coversPath, emptyGrants, grantDir, grantUnits } from './grants.ts'
 import { CLASSIFIER, parseReview, REVIEW_TIMEOUT_MS, reviewLine, reviewRequest } from './review.ts'
 import { canAsk, sandboxCard } from './card.ts'
-import { bashRoute } from './route.ts'
+import { backgroundLine, bashRoute, refusalText, SAID_NO } from './route.ts'
+import { startProcess } from '../background/client.ts'
+import { object, prepareRun, RUN_DESCRIPTION, RUN_PROPERTIES } from '../background/run.ts'
 import { ariaConfig } from '../lib/config.ts'
 import { BLOCK_NOTE, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, resolvePath, secretDirs, secretFiles, subagentProblem, wrapCommand, writableRoots, isAgentCode } from './policy.ts'
 
@@ -41,6 +45,8 @@ const tilde = (p: string) => (p.startsWith(homedir()) ? `~${p.slice(homedir().le
 const ONCE = 'Yes, just this once'
 const ALL = 'Yes, no sandbox for the rest of the session'
 const NO = 'No'
+
+const OUTSIDE = 'Only after a command failed because of the sandbox: run it outside it. The user is asked first, unless they already allowed it for this session.'
 
 export default function sandbox(pi: ExtensionAPI) {
   if (process.env.PI_SANDBOX === '0') return
@@ -103,15 +109,18 @@ export default function sandbox(pi: ExtensionAPI) {
     return true
   }
 
+  /** Where a command runs (bash and background_run alike). Allowed for the session: straight outside, without failing
+   * inside first. Without bwrap every command asks. */
+  const routeOf = (command: string, outsideSandbox: unknown, ctx: any) =>
+    bashRoute({ covered: covers(grants, command), outside: !!outsideSandbox, hasBwrap, canAsk: canAsk(ctx), platform: process.platform, mayLeave: ariaConfig().sandbox.askToLeave })
+
   pi.registerTool({
     ...boxed,
     label: 'bash (sandbox)',
     parameters: Type.Object({
       command: Type.String({ description: 'Bash command to execute' }),
       timeout: Type.Optional(Type.Number({ description: 'Timeout in seconds (optional, no default timeout)' })),
-      outsideSandbox: Type.Optional(
-        Type.Boolean({ description: 'Only after a command failed because of the sandbox: run it outside it. The user is asked first, unless they already allowed it for this session.' }),
-      ),
+      outsideSandbox: Type.Optional(Type.Boolean({ description: OUTSIDE })),
       reason: Type.Optional(
         Type.String({
           description:
@@ -121,24 +130,36 @@ export default function sandbox(pi: ExtensionAPI) {
     }),
     async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
       const { command, timeout, outsideSandbox, reason } = params
-      // Allowed for the session: straight outside, without failing inside first. Without bwrap every command asks.
-      const route = bashRoute({ covered: covers(grants, command), outside: !!outsideSandbox, hasBwrap, canAsk: canAsk(ctx), platform: process.platform, mayLeave: ariaConfig().sandbox.askToLeave })
+      const route = routeOf(command, outsideSandbox, ctx)
       if (route === 'plain') return plain.execute(id, { command, timeout }, signal, onUpdate, ctx)
-      if (route === 'refuse-nobody') {
-        return refuse(
-          hasBwrap
-            ? 'Running outside the sandbox needs the user\'s permission, and there is nobody here to ask. Find another way inside the project or explain what is needed.'
-            : 'There is no sandbox on this system, so every command needs the user\'s permission, and there is nobody here to ask.',
-        )
-      }
-      if (route === 'refuse-not-allowed') return refuse('Leaving the sandbox is not allowed (the user turned it off in Aria\'s settings): the command did not run. Do it inside the project, or tell the user what is needed.')
-      if (route === 'refuse-no-bwrap') return refuse('The sandbox cannot run: bwrap is missing (sudo pacman -S bubblewrap). No commands run without it.')
+      const refused = refusalText(route, hasBwrap)
+      if (refused) return refuse(refused)
       if (route === 'ask') {
-        if (!(await askOutside(ctx, command, reason))) return refuse('The user said no: the command did not run.')
+        if (!(await askOutside(ctx, command, reason))) return refuse(SAID_NO)
         return plain.execute(id, { command, timeout }, signal, onUpdate, ctx)
       }
       const r = await boxed.execute(id, { command, timeout }, signal, onUpdate, ctx)
       return looksBlocked(textOf(r)) ? withNote(r) : r
+    },
+  } as any)
+
+  // A command that never ends, run by Aria's dock: the same route as bash (boxed in bwrap for its folder, outside once
+  // allowed, asked, or refused with bash's texts). A subagent, no dock or a folder outside the projects folder refuses
+  // before the user is asked anything.
+  pi.registerTool({
+    name: 'background_run',
+    label: 'Run in the background',
+    description: RUN_DESCRIPTION,
+    parameters: object({ ...RUN_PROPERTIES, outsideSandbox: { type: 'boolean', description: OUTSIDE } }, ['command', 'title']),
+    async execute(_id: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
+      const ready = prepareRun(params, ctx)
+      if ('refused' in ready) return ready.refused
+      const { command, title, outsideSandbox } = params
+      const route = routeOf(command, outsideSandbox, ctx)
+      if (route === 'ask' && !(await askOutside(ctx, command, title))) return refuse(SAID_NO)
+      const line = backgroundLine(route, command, ready.folder)
+      if (line === null) return refuse(refusalText(route, hasBwrap)!)
+      return startProcess({ command, line, title, folder: ready.folder })
     },
   } as any)
 

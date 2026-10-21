@@ -7,20 +7,14 @@
 // use the background live in the tools' descriptions (Pi ignores `promptGuidelines` with Aria's SYSTEM.md).
 // In a subagent (`ctx.mode === 'json'`) nothing is opened and every tool refuses.
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
-import { resolvePath, subagentProblem } from '../sandbox/policy.ts'
+import { subagentProblem } from '../sandbox/policy.ts'
 import { DOCK_REFUSAL, jobsClient, refusal, startProcess, textResult, type JobsClient } from './client.ts'
+import { folderOf, isChild, object, prepareRun, RUN_DESCRIPTION, RUN_PROPERTIES, str, SUBAGENT_REFUSAL, WHEN } from './run.ts'
 import { endedMessage, listText, nowLine } from './text.ts'
 
-export const SUBAGENT_REFUSAL = 'Background work is not available inside a subagent.'
+export { SUBAGENT_REFUSAL }
 const LIST_TIMEOUT_MS = 150
 const MAX_REMEMBERED = 500
-
-const WHEN = [
-  'When to use the background (the person saying "in the background" or "do it here" always wins):',
-  '- a command that does not end by itself (a dev server, `watch`, `tail -f`, a tunnel, `docker compose up` without -d): always background_run;',
-  '- a job of more than a few steps that can be described up front (fix failing tests, refactor one module, research, a review): background_agent;',
-  '- anything short or conversational (one or two tool calls, iterative design, debugging step by step with the person): do it here, in the foreground.',
-].join('\n')
 
 const AGENT_DESCRIPTION = [
   'Start a subagent that works in the background while you keep talking with the person. It returns at once with the job id; you are told when it ends (do not wait for it or poll it).',
@@ -32,29 +26,13 @@ const AGENT_DESCRIPTION = [
   '`model: "heavy"` for heavy work (planning-grade model); "session" (default) uses the model of this chat.',
 ].join('\n')
 
-const RUN_DESCRIPTION = [
-  'Run a command that does not end by itself (a dev server, `watch`, `tail -f`, a tunnel, `docker compose up` without -d) in the background. It waits up to 3 s and returns the job id, the first output lines and the URL if one appeared; you are told if it dies by itself.',
-  WHEN,
-  '`title`: at most 6 words, in the person\'s language. `folder`: where it runs (default: your folder; ~ is expanded).',
-].join('\n')
-
-// Plain JSON Schema (Pi validates it like a TypeBox schema), so the extension loads under `bun test` without typebox.
-const str = (description: string) => ({ type: 'string', description })
-const object = (properties: Record<string, any>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false })
-
 const text = (t: string, details: any = undefined) => textResult(t, false, details)
-const isChild = (ctx: any) => ctx?.mode === 'json'
 
 /** The client for a tool call, or the refusal to return. */
 function clientFor(ctx: any): { client: JobsClient } | { refused: ReturnType<typeof refusal> } {
   if (isChild(ctx)) return { refused: refusal(SUBAGENT_REFUSAL) }
   const client = jobsClient()
   return client ? { client } : { refused: refusal(DOCK_REFUSAL) }
-}
-
-const folderOf = (folder: unknown, ctx: any): string => {
-  const cwd = ctx?.cwd ?? process.cwd()
-  return typeof folder === 'string' && folder.trim() ? resolvePath(folder, cwd).lexical : cwd
 }
 
 /** `j3`, `#3` or `3` → the job id. */
@@ -267,21 +245,13 @@ export default function background(pi: ExtensionAPI) {
       name: 'background_run',
       label: 'Run in the background',
       description: RUN_DESCRIPTION,
-      parameters: object(
-        {
-          command: str('The command, as bash would run it.'),
-          title: str("At most 6 words, in the person's language."),
-          folder: str('Where it runs (default: your folder; ~ is expanded).'),
-        },
-        ['command', 'title'],
-      ),
+      parameters: object(RUN_PROPERTIES, ['command', 'title']),
       async execute(_id: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
         const got = use(ctx)
         if ('refused' in got) return got.refused
-        const folder = folderOf(params.folder, ctx)
-        const problem = subagentProblem({ cwd: folder }, ctx?.cwd ?? process.cwd())
-        if (problem) return refusal(`Refused: ${problem}. A background command runs inside the projects folder.`)
-        return startProcess({ command: params.command, line: params.command, title: params.title, folder })
+        const ready = prepareRun(params, ctx)
+        if ('refused' in ready) return ready.refused
+        return startProcess({ command: params.command, line: params.command, title: params.title, folder: ready.folder })
       },
     } as any)
   }

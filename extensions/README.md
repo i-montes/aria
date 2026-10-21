@@ -7,7 +7,7 @@ every time a session starts; an extension the owner edited there is kept (see `c
 | Extension | What it does |
 |---|---|
 | `jev-router` | Jev classifies each message (route, memory, web, Notion, read-only) and adds a hidden hint and the answer-style rule; reasoning effort follows the route (`/effort`); `/plan` and `/execute` |
-| `sandbox` | every bash command runs in bwrap: writes only in the project, `/tmp` and caches; asks before leaving it, with Jev's review |
+| `sandbox` | every bash command runs in bwrap: writes only in the project, `/tmp` and caches; asks before leaving it, with Jev's review; also `background_run` (a never-ending command for Aria's dock), on the same route as bash |
 | `quota-fallback` | when the OpenCode Go quota is almost spent, asks to switch to the free model (countdown) |
 | `autocompact` | compacts the context at a set percent (`/autocompact`) |
 | `ask-user` | the `ask_user` tool: 1–4 questions with options |
