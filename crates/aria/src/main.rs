@@ -14,6 +14,9 @@ mod jobs;
 mod ui;
 mod visibility;
 mod watch;
+// Used by background subagents in a later step of background work; until then only its tests use it.
+#[allow(dead_code)]
+mod worktree;
 
 use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::paths::AriaPaths;
