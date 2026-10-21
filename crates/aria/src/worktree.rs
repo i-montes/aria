@@ -25,12 +25,22 @@ fn git(dir: &Path, args: &[&str], stdin: Option<&[u8]>) -> io::Result<Output> {
         .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // The tests must not depend on the machine's git config; the person's repo config still applies.
+    #[cfg(test)]
+    command.env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1");
     let mut child = command.spawn()?;
-    if let Some(input) = stdin {
-        // Taken so it closes before the wait, or git would wait for more input.
-        child.stdin.take().expect("piped stdin").write_all(input)?;
+    // Taken so it closes before the wait, or git would wait for more input.
+    let written = match (stdin, child.stdin.take()) {
+        (Some(input), Some(mut pipe)) => pipe.write_all(input),
+        _ => Ok(()),
+    };
+    // Waited for even when the write failed, so no zombie is left behind.
+    let out = child.wait_with_output()?;
+    match written {
+        // A git that stopped reading has failed; its status and stderr say why.
+        Err(e) if e.kind() != io::ErrorKind::BrokenPipe => Err(e),
+        _ => Ok(out),
     }
-    child.wait_with_output()
 }
 
 /// Like [`git`], but a failure is an error carrying git's own words, and the output is the trimmed stdout.
@@ -62,6 +72,7 @@ pub struct Worktree {
 /// Makes the worktree for job `id` under `root`. It starts from a stash commit of the person's uncommitted changes
 /// (made without touching their folder or stash list), or from `HEAD` when there are none.
 pub fn create(root: &Path, id: &str) -> io::Result<Worktree> {
+    debug_assert!(!id.is_empty() && !id.contains('/') && id != "." && id != "..", "a job id names one folder: {id:?}");
     let stash = git_ok(root, &["stash", "create"])?;
     let base = if stash.is_empty() { git_ok(root, &["rev-parse", "HEAD"])? } else { stash };
     // Before the worktree exists, so the person's `git status` never shows it.
@@ -112,7 +123,9 @@ pub enum Back {
 pub fn bring_back(root: &Path, wt: &Worktree) -> io::Result<Back> {
     // Staged in the worktree only, so new files are part of the diff; the person's index is never touched.
     git_ok(&wt.path, &["add", "-A"])?;
-    let diff = git(&wt.path, &["diff", "--binary", "--cached", &wt.base], None)?;
+    // Plumbing, not `git diff`: the person's diff settings (`diff.noprefix`, an external diff, textconv) would change
+    // the patch, and a patch without its `a/` `b/` prefixes applies with every path one folder short.
+    let diff = git(&wt.path, &["diff-index", "-p", "--binary", "--cached", &wt.base], None)?;
     if !diff.status.success() {
         return Err(io::Error::other(format!("git diff: {}", String::from_utf8_lossy(&diff.stderr).trim())));
     }
@@ -120,11 +133,16 @@ pub fn bring_back(root: &Path, wt: &Worktree) -> io::Result<Back> {
         remove(root, &wt.path)?;
         return Ok(Back::Empty);
     }
-    let applied = git(root, &["apply"], Some(&diff.stdout))?;
+    // `--whitespace=nowarn`: the person's `apply.whitespace` must neither refuse the patch nor rewrite it.
+    let applied = git(root, &["apply", "--whitespace=nowarn"], Some(&diff.stdout))?;
     if !applied.status.success() {
         return Ok(Back::Conflict(String::from_utf8_lossy(&applied.stderr).trim().to_string()));
     }
-    remove(root, &wt.path)?;
+    // The changes are in the person's folder now: a worktree that will not go is only a leftover, never an error,
+    // or a retry would apply them twice.
+    if let Err(error) = remove(root, &wt.path) {
+        eprintln!("aria: worktree {} left behind: {error}", wt.path.display());
+    }
     Ok(Back::Applied)
 }
 
@@ -219,6 +237,30 @@ mod tests {
     }
 
     #[test]
+    fn the_persons_diff_config_does_not_shape_the_patch() {
+        let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_dir, root) = repo();
+        git(&root, &["config", "diff.noprefix", "true"]);
+        let wt = create(&root, "j1").unwrap();
+        fs::create_dir(wt.path.join("src")).unwrap();
+        fs::write(wt.path.join("src/new.txt"), "new\n").unwrap();
+        assert_eq!(bring_back(&root, &wt).unwrap(), Back::Applied);
+        assert_eq!(read(&root.join("src/new.txt")), "new\n");
+        assert!(!root.join("new.txt").exists());
+    }
+
+    #[test]
+    fn the_persons_whitespace_rule_does_not_refuse_the_patch() {
+        let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_dir, root) = repo();
+        git(&root, &["config", "apply.whitespace", "error"]);
+        let wt = create(&root, "j1").unwrap();
+        fs::write(wt.path.join("a.txt"), "1  \n").unwrap();
+        assert_eq!(bring_back(&root, &wt).unwrap(), Back::Applied);
+        assert_eq!(read(&root.join("a.txt")), "1  \n");
+    }
+
+    #[test]
     fn a_clash_keeps_the_worktree() {
         let _serial = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (_dir, root) = repo();
@@ -237,6 +279,13 @@ mod tests {
         let wt = create(&root, "j1").unwrap();
         assert_eq!(bring_back(&root, &wt).unwrap(), Back::Empty);
         assert!(!wt.path.exists());
+    }
+
+    #[test]
+    #[should_panic(expected = "a job id names one folder")]
+    fn an_id_cannot_leave_the_worktrees_folder() {
+        // Checked before any git runs, so no repo (and no `SERIAL`, which a panic would poison) is needed.
+        let _ = create(Path::new("/nonexistent"), "../escape");
     }
 
     #[test]
