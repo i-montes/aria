@@ -25,6 +25,7 @@ interface ToolFacts {
 const asInToolName = (server: string) => server.replace(/[^A-Za-z0-9_]/g, '_')
 
 /** "notion" → "Notion", "my-docs" → "My Docs". */
+// The same as `displayName` in ui/onboarding/view.js (the settings' access rows): change both together.
 const displayName = (server: string) =>
   server
     .split(/[-_]+/)

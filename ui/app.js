@@ -62,7 +62,7 @@ const handlers = {
       const reply = await request({ type: 'loadSettings' })
       if (!reply.settings) return
       chat.setSettings(reply.settings)
-      if (state.mode === 'setup') onboarding.refreshSettings(reply.settings, reply.connected)
+      if (state.mode === 'setup') onboarding.refreshSettings(reply.settings, reply.connected, reply.servers)
     }),
   // These need the catalogs, so they wait for the boot to finish.
   notice: () => booted.then(showNotice),
@@ -167,7 +167,7 @@ const chat = createChatView({
   // The settings screen, loaded fresh from disk.
   onSettings: async () => {
     const reply = await request({ type: 'loadSettings' })
-    onboarding.start(reply.settings, reply.connected)
+    onboarding.start(reply.settings, reply.connected, reply.servers)
     setMode('setup')
     document.querySelector('#flow [data-nav]')?.focus()
   },
@@ -224,7 +224,7 @@ async function boot() {
   }
   chat.setSettings(reply.settings)
   chat.setSessions(await request({ type: 'sessionsLoad' }))
-  onboarding.start(reply.settings, reply.connected)
+  onboarding.start(reply.settings, reply.connected, reply.servers)
   setMode(reply.settings?.setup?.completed ? 'chat' : 'setup')
   // The dock starts with the session: every tab that was open loads its conversation now, not when the dock opens.
   if (state.mode === 'chat') chat.preload()

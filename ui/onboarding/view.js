@@ -14,7 +14,8 @@ const SERVICES = ['notion', 'tavily']
 const ACCESS_LEVELS = ['read', 'ask', 'allow']
 /** Never gated (the memory), so it has no level to set. */
 const UNGATED = new Set(['engram'])
-/** A server's name in words, as the connectors extension writes it in its card ("my-docs" -> "My Docs"). */
+/** A server's name in words, as the connectors extension writes it in its card ("my-docs" -> "My Docs"). The same as
+ * `displayName` in extensions/connectors/index.ts (TypeScript the page cannot import): change both together. */
 const displayName = (server) =>
   server.split(/[-_]+/).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') || server
 const SKILLS = ['brainstorming', 'writing-plans', 'test-driven-development', 'systematic-debugging', 'requesting-code-review', 'verification-before-completion']
@@ -59,6 +60,7 @@ export function createOnboarding(env) {
     error: null,
     settings: defaultSettings('en'),
     connected: new Set(), // what the dock found on disk, plus what this session set up
+    servers: [], // every server in Aria's mcp.json but engram (the dock's `servers`; an older dock sends none)
     svc: freshServices(), // Notion and Tavily do not depend on the provider, so they live apart from `ui`
     ui: freshUi(),
   }
@@ -100,10 +102,12 @@ export function createOnboarding(env) {
 
   // ---- entry points ---------------------------------------------------------------------------
 
-  /** `settings` is what the dock loaded (null on a first run); `connected` is what it found on disk. */
-  function start(settings, connected = []) {
+  /** `settings` is what the dock loaded (null on a first run); `connected` is what it found on disk; `servers` the
+   * servers configured in Aria's mcp.json. */
+  function start(settings, connected = [], servers = []) {
     state.error = null
     state.connected = new Set(connected)
+    state.servers = Array.isArray(servers) ? servers : []
     state.svc = freshServices()
     state.ui = freshUi()
     state.leaving = false
@@ -522,9 +526,11 @@ export function createOnboarding(env) {
     return html + (s.subagents.planExecute ? c.info('green', t('ob.integrations.auto.title'), t('ob.integrations.auto.desc')) : c.info('neutral', '', t('ob.integrations.auto.none')))
   }
 
-  /** One row per connected MCP server: Read only / Ask / Allow, for what it may change without asking. */
+  /** One row per configured MCP server (the dock's `servers`, plus any `mcp:<server>` connected meanwhile or listed by
+   * an older dock that sends no `servers`): Read only / Ask / Allow, for what it may change without asking. */
   function accessRows() {
-    const servers = [...state.connected].filter((id) => id.startsWith('mcp:')).map((id) => id.slice(4)).filter((server) => server && !UNGATED.has(server)).sort()
+    const fromConnected = [...state.connected].filter((id) => id.startsWith('mcp:')).map((id) => id.slice(4))
+    const servers = [...new Set([...state.servers, ...fromConnected])].filter((server) => typeof server === 'string' && server && !UNGATED.has(server)).sort()
     if (!servers.length) return ''
     const access = state.settings.integrations.access ?? {}
     const options = ACCESS_LEVELS.map((level) => ({ value: level, label: t(`ob.integrations.access.${level}`) }))
@@ -756,11 +762,12 @@ export function createOnboarding(env) {
 
   /** settings.json changed outside the page (/effort, /autocompact): the screen shows it, unless the user has changes
    * of their own on it, which are not overwritten under their hands. */
-  function refreshSettings(settings, connected = []) {
+  function refreshSettings(settings, connected = [], servers = []) {
     if (state.view !== 'settings' || isDirty() || state.saving || !settings?.setup?.completed) return
     state.settings = settings
     state.saved = JSON.stringify(settings)
     state.connected = new Set(connected)
+    state.servers = Array.isArray(servers) ? servers : []
     state.ui.signedIn = isSignedIn(settings, connected)
     render()
   }
@@ -1112,7 +1119,7 @@ export function createOnboarding(env) {
   async function onOpen() {
     if (state.view !== 'done') return
     const reply = await request({ type: 'loadSettings' })
-    if (state.view === 'done') start(reply.settings, reply.connected)
+    if (state.view === 'done') start(reply.settings, reply.connected, reply.servers)
   }
 
   // ---- events ---------------------------------------------------------------------------------

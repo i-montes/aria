@@ -41,7 +41,7 @@ const sandbox = `<script>
     window.__sent.push(m)
     setTimeout(() => {
       const r = (x) => window.aria.receive({ id: m.id, ...x })
-      if (m.type === 'loadSettings') r({ type: 'settings', settings, exists: !!settings, problem: null, connected: ['opencode-go:api_key', 'mcp:engram', 'mcp:notion'] })
+      if (m.type === 'loadSettings') r({ type: 'settings', settings, exists: !!settings, problem: null, connected: ['opencode-go:api_key', 'mcp:notion'], servers: ['notion', 'tavily', 'rea'] })
       else if (m.type === 'sessionsLoad') r({ type: 'sessions', sessions: [{ id: 's1', title: 'Fix the failing build' }], active: 's1' })
       else if (m.type === 'saveSettings') { settings = m.settings; r({ type: 'saved' }) }
       else if (m.type === 'checkKey') r({ type: 'keyResult', ok: true, error: null })

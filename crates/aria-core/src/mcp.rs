@@ -202,6 +202,20 @@ pub fn connected(paths: &AriaPaths) -> Vec<String> {
     found
 }
 
+/// The name of every server in Aria's `mcp.json` except `engram` (the memory, never gated), sorted: the connectors whose
+/// access level the settings show. A missing or broken file lists none.
+pub fn servers(paths: &AriaPaths) -> Vec<String> {
+    let mut names: Vec<String> = read_object(&paths.mcp())
+        .ok()
+        .and_then(|file| {
+            file.get("mcpServers").and_then(Value::as_object).map(|servers| servers.keys().cloned().collect())
+        })
+        .unwrap_or_default();
+    names.retain(|name| name != "engram");
+    names.sort();
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,6 +331,20 @@ mod tests {
         let notion = &read(&paths.mcp())["mcpServers"]["notion"];
         assert_eq!(notion["url"], "https://mcp.notion.com/mcp");
         assert!(notion.get("headers").is_none());
+    }
+
+    #[test]
+    fn servers_lists_every_configured_server_but_engram() {
+        let (_dir, paths) = paths();
+        assert!(super::servers(&paths).is_empty());
+        std::fs::write(paths.mcp(), "{ nope").unwrap();
+        assert!(super::servers(&paths).is_empty());
+        std::fs::write(
+            paths.mcp(),
+            r#"{"mcpServers":{"rea":{"command":"rea"},"engram":{"command":"engram"},"notion":{"url":"https://mcp.notion.com/mcp"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(super::servers(&paths), vec!["notion".to_string(), "rea".to_string()]);
     }
 
     #[test]

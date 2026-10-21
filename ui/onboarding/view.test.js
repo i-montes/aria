@@ -675,10 +675,11 @@ describe('the model fields list what Pi offers for the connected provider', () =
 })
 
 describe('the access level of each connector', () => {
-  const connected = ['opencode-go:api_key', 'mcp:engram', 'mcp:my-docs', 'mcp:notion']
+  const connected = ['opencode-go:api_key', 'mcp:notion']
+  const servers = ['my-docs', 'notion', 'engram']
   const open = (settings = completed) => {
     const h = harness()
-    h.ob.start(settings, connected)
+    h.ob.start(settings, connected, servers)
     h.click('settings-open', undefined, 'integrations')
     return h
   }
@@ -700,11 +701,27 @@ describe('the access level of each connector', () => {
     expect(selected(html, 'my-docs')).toEqual(['ask']) // nothing set: Ask
   })
 
-  test('no connected server, no access rows', () => {
+  test('no configured server, no access rows', () => {
     const h = harness()
-    h.ob.start(completed, ['opencode-go:api_key', 'mcp:engram'])
+    h.ob.start(completed, ['opencode-go:api_key', 'mcp:engram'], ['engram'])
     h.click('settings-open', undefined, 'integrations')
     expect(h.root.innerHTML).not.toContain('ob.integrations.section.access')
+  })
+
+  test('a server configured without a credential has its row too', () => {
+    const h = harness()
+    h.ob.start(completed, ['opencode-go:api_key'], ['rea'])
+    h.click('settings-open', undefined, 'integrations')
+    expect(h.root.innerHTML).toContain('data-field="access:rea" data-value="ask"')
+    expect(h.root.innerHTML).toContain('Rea')
+  })
+
+  test('an older dock without servers: the connected services still get their rows', () => {
+    const h = harness()
+    h.ob.start(completed, ['opencode-go:api_key', 'mcp:engram', 'mcp:notion'])
+    h.click('settings-open', undefined, 'integrations')
+    expect(h.root.innerHTML).toContain('data-field="access:notion"')
+    expect(h.root.innerHTML).not.toContain('access:engram')
   })
 
   test('choosing a level saves it', async () => {

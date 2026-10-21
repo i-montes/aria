@@ -120,9 +120,17 @@ pub enum DockMessage {
     #[serde(rename = "platform")]
     Platform { hotkey: String },
     /// `connected` names what is really set up, never a secret: `provider:type` for each credential in
-    /// `auth.json` (`anthropic:oauth`) and `mcp:<service>` for each configured MCP service.
+    /// `auth.json` (`anthropic:oauth`) and `mcp:<service>` for each configured MCP service. `servers` names every server
+    /// in Aria's `mcp.json` except `engram` (connected or not): the connectors whose access level the settings show.
     #[serde(rename = "settings")]
-    Settings { id: u64, settings: Option<Value>, exists: bool, problem: Option<String>, connected: Vec<String> },
+    Settings {
+        id: u64,
+        settings: Option<Value>,
+        exists: bool,
+        problem: Option<String>,
+        connected: Vec<String>,
+        servers: Vec<String>,
+    },
     #[serde(rename = "saved")]
     Saved { id: u64 },
     /// `error` is a UI string key: `key-rejected`, `network-unavailable`, `auth-file-broken`.
@@ -443,9 +451,10 @@ mod tests {
                 settings: None,
                 exists: false,
                 problem: None,
-                connected: vec!["mcp:tavily".into()]
+                connected: vec!["mcp:tavily".into()],
+                servers: vec!["rea".into(), "tavily".into()]
             }),
-            json!({"type": "settings", "id": 1, "settings": null, "exists": false, "problem": null, "connected": ["mcp:tavily"]})
+            json!({"type": "settings", "id": 1, "settings": null, "exists": false, "problem": null, "connected": ["mcp:tavily"], "servers": ["rea", "tavily"]})
         );
         assert_eq!(value(DockMessage::Saved { id: 2 }), json!({"type": "saved", "id": 2}));
         assert_eq!(

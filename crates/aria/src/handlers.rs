@@ -179,6 +179,7 @@ fn connected(ctx: &Ctx) -> Vec<String> {
 
 fn load_settings(id: u64, ctx: &Ctx) -> DockMessage {
     let connected = connected(ctx);
+    let servers = mcp::servers(&ctx.paths);
     match settings::load(&ctx.paths) {
         Ok(Some(settings)) => DockMessage::Settings {
             id,
@@ -186,14 +187,22 @@ fn load_settings(id: u64, ctx: &Ctx) -> DockMessage {
             exists: true,
             problem: None,
             connected,
+            servers,
         },
-        Ok(None) => DockMessage::Settings { id, settings: None, exists: false, problem: None, connected },
+        Ok(None) => DockMessage::Settings { id, settings: None, exists: false, problem: None, connected, servers },
         Err(error) => {
             let problem = match error {
                 SettingsError::File(JsonFileError::Io { .. }) => "settings-unreadable",
                 _ => "settings-invalid",
             };
-            DockMessage::Settings { id, settings: None, exists: true, problem: Some(problem.into()), connected }
+            DockMessage::Settings {
+                id,
+                settings: None,
+                exists: true,
+                problem: Some(problem.into()),
+                connected,
+                servers,
+            }
         }
     }
 }
@@ -555,7 +564,14 @@ mod tests {
         let h = harness(KeyCheck::Valid);
         assert_eq!(
             run(&h, PageMessage::LoadSettings { id: 1 }),
-            vec![DockMessage::Settings { id: 1, settings: None, exists: false, problem: None, connected: vec![] }]
+            vec![DockMessage::Settings {
+                id: 1,
+                settings: None,
+                exists: false,
+                problem: None,
+                connected: vec![],
+                servers: vec![]
+            }]
         );
     }
 
@@ -570,7 +586,8 @@ mod tests {
                 settings: None,
                 exists: true,
                 problem: Some("settings-invalid".into()),
-                connected: vec![]
+                connected: vec![],
+                servers: vec![]
             }]
         );
     }
@@ -592,7 +609,8 @@ mod tests {
                 settings: Some(value),
                 exists: true,
                 problem: None,
-                connected: vec![]
+                connected: vec![],
+                servers: vec![]
             }]
         );
     }
@@ -825,6 +843,26 @@ mod tests {
         let replies = run(&h, PageMessage::SaveKey { id: 22, provider: "tavily".into(), key: "k".into() });
         assert_eq!(replies, vec![DockMessage::KeyResult { id: 22, ok: false, error: Some("mcp-file-broken".into()) }]);
         assert_eq!(std::fs::read_to_string(h.ctx.paths.mcp()).unwrap(), "{ nope");
+    }
+
+    #[test]
+    fn the_settings_reply_lists_every_configured_server_but_engram() {
+        let h = harness(KeyCheck::Valid);
+        std::fs::write(h.ctx.paths.mcp(), "{ nope").unwrap();
+        match &run(&h, PageMessage::LoadSettings { id: 1 })[0] {
+            DockMessage::Settings { servers, .. } => assert!(servers.is_empty()),
+            other => panic!("expected settings, got {other:?}"),
+        }
+        std::fs::write(h.ctx.paths.mcp(), r#"{"mcpServers":{"rea":{"command":"rea"},"engram":{"command":"engram"}}}"#)
+            .unwrap();
+        run(&h, PageMessage::SaveKey { id: 2, provider: "tavily".into(), key: "t".into() });
+        match &run(&h, PageMessage::LoadSettings { id: 3 })[0] {
+            DockMessage::Settings { servers, connected, .. } => {
+                assert_eq!(servers, &vec!["rea".to_string(), "tavily".to_string()]);
+                assert!(!connected.iter().any(|c| c == "mcp:rea")); // a server is not a credential
+            }
+            other => panic!("expected settings, got {other:?}"),
+        }
     }
 
     #[test]
