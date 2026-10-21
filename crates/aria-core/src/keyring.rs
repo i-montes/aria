@@ -323,6 +323,9 @@ mod tests {
         };
         keyring.set("key:live", "a b'c\"d\n{\"json\":1}").unwrap();
         assert_eq!(keyring.get("key:live").unwrap().as_deref(), Some("a b'c\"d\n{\"json\":1}"));
+        // An update of an item that exists: it must not raise a dialog (the test would hang).
+        keyring.set("key:live", "second").unwrap();
+        assert_eq!(keyring.get("key:live").unwrap().as_deref(), Some("second"));
         keyring.delete("key:live").unwrap();
         assert_eq!(keyring.get("key:live").unwrap(), None);
     }
