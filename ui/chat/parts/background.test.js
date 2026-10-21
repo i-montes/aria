@@ -105,9 +105,10 @@ describe('renderJobRows', () => {
     expect(two).not.toContain('Docs <b>')
     expect(two.indexOf('Shop')).toBeLessThan(two.indexOf('Docs &lt;b&gt;'))
     expect(ids(two)).toEqual(['a', 'x'])
-    // finished jobs of another session also count as "several sessions have jobs"
+    // only running or queued work counts: a finished job of another session does not split Running into groups
     const finishedElsewhere = rows({ jobs: [job({ id: 'a' }), job({ id: 'f', session: 's2', state: 'exited', exit: 0, endedAt: NOW })] })
-    expect(finishedElsewhere).toContain('Shop')
+    expect(finishedElsewhere).not.toContain('Shop')
+    expect(ids(finishedElsewhere)).toEqual(['a', 'f'])
     expect(rows({ jobs: [] })).toBe('')
   })
 

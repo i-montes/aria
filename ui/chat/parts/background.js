@@ -25,7 +25,7 @@
 //   sessions  the tabs, [{ id, title }]: a group's heading; `active` is the active tab's id (its group comes first)
 //   open      the id of the job the list was opened on (a pill): that row is outlined (`is-target`)
 //   output    { [job id]: string[] }: the expanded process rows and their last lines
-// Sections "Running" (running + queued, grouped by session when more than one session has jobs) and "Finished"
+// Sections "Running" (running + queued, grouped by session when more than one session has such work) and "Finished"
 // (newest first). A row reuses the subagents list's row (`p-agents-row`) and adds its actions (`p-bg-act`):
 //   data-chat="bg-url"     data-id   open the job's URL in the browser
 //   data-chat="bg-output"  data-id   expand or fold the row's output (aria-expanded)
@@ -214,11 +214,12 @@ export function renderJobRows(props, ui, t) {
   const p = { ...props, now }
   const sessions = Array.isArray(props?.sessions) ? props.sessions : []
   const titleOf = (id) => sessions.find((s) => s?.id === id)?.title || String(id ?? '')
-  const ids = [...new Set(jobs.map((j) => j.session))]
+  const running = jobs.filter(isLive)
+  // Running is grouped only when more than one session has running or queued work
+  const ids = [...new Set(running.map((j) => j.session))]
   const grouped = ids.length > 1
   // the active session first, then the tabs in their order, then sessions without a tab
   const order = [props?.active, ...sessions.map((s) => s?.id), ...ids].filter((id, i, all) => ids.includes(id) && all.indexOf(id) === i)
-  const running = jobs.filter(isLive)
   const finished = jobs.filter((j) => !isLive(j)).sort((a, b) => Number(b.endedAt ?? 0) - Number(a.endedAt ?? 0))
   const parts = []
   if (running.length) {

@@ -49,7 +49,7 @@ const sandbox = `<script>
       else if (m.type === 'startOauth') { r({ type: 'oauthUrl', url: 'https://claude.ai/oauth/authorize?x=1' }); setTimeout(() => r({ type: 'oauthResult', ok: true, error: null }), 300) }
       else if (m.type === 'installClaudeBridge') setTimeout(() => (window.sim.installError ? r({ type: 'error', code: window.sim.installError }) : r({ type: 'saved' })), 300)
       else if (m.type === 'closeRequest') document.body.classList.remove('open')
-      else if (m.type === 'jobOutput') { window.sim.outputs = (window.sim.outputs || 0) + 1; r({ type: 'jobOutput', lines: ['$ bun dev', 'ready on http://localhost:3000', 'GET / 200 in ' + window.sim.outputs + ' ms'] }) }
+      else if (m.type === 'jobOutput') { window.sim.outputs = (window.sim.outputs || 0) + 1; r({ type: 'jobOutput', lines: ['$ bun dev', 'ready on http://localhost:3000', ...Array.from({ length: window.sim.outputs * 12 }, (_, i) => 'GET /page/' + (i + 1) + ' 200 in ' + (i % 9 + 1) + ' ms')].slice(-80) }) }
       else if (m.type === 'session') {
         const inner = m.message
         const w = (x) => window.aria.receive({ type: 'session', session: m.session, message: { id: inner.id, ...x } })

@@ -78,8 +78,8 @@ const script = `(async () => {
   {
     const now = Date.now()
     const job = (x) => ({ number: 1, session: 's1', kind: 'process', command: null, task: null, folder: '~/p', state: 'running', startedAt: now - 60000, endedAt: null, url: null, exit: null, isolation: null, worktree: null, writes: false, result: null, conflict: false, dismissed: false, ...x })
-    const jobs = [job({ id: 'b1', title: 'bun dev', url: 'http://localhost:3000' }), job({ id: 'b2', kind: 'agent', title: 'tests', task: 'Fix the tests' }), job({ id: 'b3', state: 'failed', endedAt: now - 1000, title: 'broken' }), job({ id: 'b4', kind: 'agent', state: 'done', endedAt: now - 2000, title: 'research', result: 'The answer <b>is</b> 42' })]
-    window.aria.chat.setAgents([{ id: 'w1', role: 'tests', task: 'Fix the tests', status: 'writing', kind: 'active', steps: [{ kind: 'msg', text: 'on it' }] }, { id: 'w2', role: 'reviewer', task: 'Review', status: 'queued', kind: 'queued' }])
+    const jobs = [job({ id: 'b1', title: 'bun dev', url: 'http://localhost:3000' }), job({ id: 'b2', kind: 'agent', title: 'tests', task: 'Fix the tests' }), job({ id: 'b3', state: 'failed', endedAt: now - 1000, title: 'broken' }), job({ id: 'b4', kind: 'agent', state: 'done', endedAt: now - 2000, title: 'research', task: 'Research', result: 'The answer <b>is</b> 42' })]
+    window.aria.chat.setAgents([{ id: 'w1', role: 'tests', task: 'Fix the tests', status: 'writing', kind: 'active', steps: [{ kind: 'msg', text: 'on it' }] }, { id: 'w2', role: 'reviewer', task: 'Review', status: 'queued', kind: 'queued' }, { id: 'w3', role: 'research', task: 'Research', status: 'done', kind: 'done', steps: [{ kind: 'msg', text: 'watch steps' }] }])
     window.aria.receive({ type: 'jobs', jobs }); await wait(60)
     check('the hint says alt+a background while a job runs', $('.p-composer-hints')?.textContent.includes('background') || $('.p-composer-hints')?.textContent.includes('segundo plano'))
     const before = window.__sent.length
@@ -92,7 +92,14 @@ const script = `(async () => {
     const outputsBefore = window.__sent.filter((m) => m.type === 'jobOutput').length
     list.querySelector('[data-chat="bg-output"][data-id="b1"]').click(); await wait(80)
     check('Output shows the last lines', !!list.querySelector('[data-job="b1"] .p-bg-output')?.textContent.includes('ready on'), list.querySelector('[data-job="b1"]')?.textContent.replace(/\\s+/g, ' '))
+    const stopB1 = () => list.querySelector('[data-chat="bg-stop"][data-id="b1"]')
+    stopB1().focus()
+    const outBlock = () => list.querySelector('[data-job="b1"] .p-bg-output')
+    const linesBefore = outBlock()?.textContent.length ?? 0
     await wait(2100)
+    check('a focused Stop keeps the focus while the output is polled', document.activeElement === stopB1() && document.activeElement?.dataset.id === 'b1', document.activeElement?.outerHTML?.slice(0, 80))
+    const ob = outBlock()
+    check('the output block shows its newest line after new lines arrive', ob && ob.textContent.length > linesBefore && ob.scrollHeight > ob.clientHeight && ob.scrollHeight - ob.scrollTop - ob.clientHeight < 4, ob && [ob.scrollTop, ob.scrollHeight, ob.clientHeight].join(' '))
     const polled = window.__sent.filter((m) => m.type === 'jobOutput')
     check('the output is asked again every second while the row is open, top level, 80 lines', polled.length - outputsBefore >= 3 && polled.every((m) => m.job === 'b1' && m.lines === 80 && typeof m.id === 'number'), polled.length - outputsBefore)
     list.querySelector('[data-chat="bg-output"][data-id="b1"]').click(); await wait(40)
@@ -105,7 +112,7 @@ const script = `(async () => {
     check('Session opens the watch agent the job runs', $('#view-session').textContent.includes('on it'), $('#view-session').textContent.slice(0, 80))
     $('#view-session [data-chat="agent-back"]').click(); await wait(60)
     $('#view-agents [data-chat="bg-session"][data-id="b4"]').click(); await wait(60)
-    check('Result shows a finished agent’s answer, escaped', $('#view-session').textContent.includes('The answer <b>is</b> 42') && !$('#view-session b'), $('#view-session .p-session-steps')?.innerHTML.slice(0, 120))
+    check('Result shows a finished agent’s answer, escaped, even while its watch agent is listed', $('#view-session').textContent.includes('The answer <b>is</b> 42') && !$('#view-session').textContent.includes('watch steps') && !$('#view-session b'), $('#view-session .p-session-steps')?.innerHTML.slice(0, 120))
     window.aria.chat.toggleAgents(); await wait(40)
     window.aria.receive({ type: 'jobs', jobs: [job({ id: 'b5', state: 'exited', exit: 0, endedAt: now })] }); await wait(40)
     check('a finished job alone does not change the hint', !$('.p-composer-hints')?.textContent.includes('background'), $('.p-composer-hints')?.textContent)

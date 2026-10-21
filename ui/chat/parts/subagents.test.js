@@ -85,6 +85,9 @@ describe('with background work', () => {
     expect(parallelAgents(watch, jobs).map((a) => a.id)).toEqual(['a2', 'a3'])
     expect(jobAgent(jobs[0], watch)?.id).toBe('a1')
     expect(jobAgent(jobs[1], watch)).toBeUndefined()
+    // the title and the task together: another job with the same task text does not take this agent
+    expect(jobAgent({ ...jobs[0], id: 'j9', title: 'other' }, watch)).toBeUndefined()
+    expect(parallelAgents(watch, [{ ...jobs[0], title: 'other' }]).map((a) => a.id)).toEqual(['a1', 'a2', 'a3'])
     const html = renderSubagents({ agents: watch, jobs, background: '<section id="bg"></section>' }, {}, t)
     expect(html).not.toContain('data-id="a1"')
     expect(html).toContain('data-id="a2"')

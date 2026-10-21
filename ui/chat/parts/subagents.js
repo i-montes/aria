@@ -79,9 +79,10 @@ export const statusLabel = (status, t) => {
 export const agentKind = (kind) => (KINDS.includes(kind) ? kind : 'queued')
 const agentsOf = (agents) => (Array.isArray(agents) ? agents.filter((a) => a && typeof a === 'object') : [])
 
-/** The watch agent a background agent job runs: the one the dock named with the job's task (chat.rs before_spawn). */
+/** The watch agent a background agent job runs: the dock names it with the job's title and task (chat.rs
+ * before_spawn); both must match, so two jobs with the same task text never share one. */
 export const jobAgent = (job, agents) =>
-  job?.kind === 'agent' && job.task ? agentsOf(agents).find((a) => a.task === job.task) : undefined
+  job?.kind === 'agent' && job.task ? agentsOf(agents).find((a) => a.task === job.task && a.role === job.title) : undefined
 
 /** The agents that are not a background job's: the session's `parallel` subagents. */
 export function parallelAgents(agents, jobs) {

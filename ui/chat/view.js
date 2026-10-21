@@ -114,6 +114,7 @@ const selectorFor = (el) => {
   const d = el.dataset ?? {}
   if (d.chatField) return `[data-chat-field="${d.chatField}"]`
   if (d.op) return `[data-chat="question"][data-op="${d.op}"]${d.q !== undefined ? `[data-q="${d.q}"]` : ''}`
+  if (d.chat && d.id !== undefined) return `[data-chat="${CSS.escape(d.chat)}"][data-id="${CSS.escape(d.id)}"]` // a row's action (the background list)
   return null
 }
 
@@ -172,9 +173,11 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   let composerKey = ''
   let backgroundKey = ''
   let agentsKey = ''
-  // The expanded process rows of the background list: job id -> { lines, busy, done }. Polled once a second while the
+  // The expanded process rows of the background list: job id -> { lines, done }. Polled once a second while the
   // agents view shows them; one request in flight per job at most.
   const outputs = new Map()
+  const outputAsked = new Set() // job ids with a `jobOutput` in flight: kept apart from the entry, so a fold and a
+  // re-expand never send a second request while the first is still out
   let outputTimer = null
   let headerKey = ''
   let indexKey = ''
@@ -448,7 +451,17 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       const list = agents.length || background ? renderSubagents({ agents, jobs, background, footnote: t('chat.agents.footnote') }, {}, t) : `<p class="chat-panel-empty">${esc(t('chat.agents.empty'))}</p>`
       if (list === agentsKey && $('view-agents').firstChild) return // the tick redraws the minutes; nothing else changed
       agentsKey = list
-      drawPanel($('view-agents'), list, `<button type="button" class="chat-back" data-chat="panel-back"><kbd>Alt</kbd><kbd>A</kbd><span>${esc(t('chat.agents.back'))}</span></button>`)
+      // The list is one element, so a draw rebuilds it: the focused action is given back, and each output block stays
+      // pinned to its newest line unless the reader scrolled up in it.
+      const section = $('view-agents')
+      const scrolls = new Map([...section.querySelectorAll('[data-job] .p-bg-output')].map((el) => [
+        el.closest('[data-job]').dataset.job, { top: el.scrollTop, bottom: el.scrollHeight - el.scrollTop - el.clientHeight < 8 },
+      ]))
+      keepingFocus(section, () => drawPanel(section, list, `<button type="button" class="chat-back" data-chat="panel-back"><kbd>Alt</kbd><kbd>A</kbd><span>${esc(t('chat.agents.back'))}</span></button>`))
+      for (const el of section.querySelectorAll('[data-job] .p-bg-output')) {
+        const was = scrolls.get(el.closest('[data-job]').dataset.job)
+        el.scrollTop = !was || was.bottom ? el.scrollHeight : was.top
+      }
     } else if (view === 'session') {
       drawPanel($('view-session'), renderAgentSession({ agent: sessionAgent() }, { now: Date.now() }, t))
     } else if (view === 'memory') {
@@ -520,7 +533,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     if (ui.sessionJob) {
       const job = data.jobs.find((j) => j.id === ui.sessionJob)
       if (!job) return null
-      return jobAgent(job, chatOf(job.session).agents) ?? resultAgent(job, t)
+      // Session (a running job): the watch's steps. Result (an ended one): always its final answer.
+      const live = job.state === 'running' || job.state === 'queued'
+      return (live && jobAgent(job, chatOf(job.session).agents)) || resultAgent(job, t)
     }
     const agents = current().agents
     return agents.find((a) => (a.id ?? a.role) === ui.agent) ?? agents[0] ?? null
@@ -559,12 +574,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   function pollOutputs() {
     if (ui.view !== 'agents' || !outputs.size) return stopOutputs()
     for (const [id, o] of outputs) {
-      if (o.busy || o.done) continue
+      if (outputAsked.has(id) || o.done) continue
       const job = data.jobs.find((j) => j.id === id)
       const last = !job || (job.state !== 'running' && job.state !== 'queued')
-      o.busy = true
+      outputAsked.add(id)
       request({ type: 'jobOutput', job: id, lines: 80 }).then((reply) => {
-        o.busy = false
+        outputAsked.delete(id)
         if (outputs.get(id) !== o) return // folded, or the view closed, while it was asked
         o.lines = Array.isArray(reply?.lines) ? reply.lines.map(String) : []
         if (last) o.done = true
@@ -581,7 +596,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     if (outputs.delete(id)) {
       if (!outputs.size) stopOutputs()
     } else {
-      outputs.set(id, { lines: null, busy: false, done: false })
+      outputs.set(id, { lines: null, done: false })
       if (!outputTimer) outputTimer = setInterval(pollOutputs, 1000)
       pollOutputs()
     }
