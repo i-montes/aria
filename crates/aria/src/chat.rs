@@ -465,26 +465,34 @@ impl Chat {
     /// Sends a message. Its attachments are saved first (a message that cannot be saved is refused, and its text goes back
     /// to the composer, as Pi's own refusals do); images go to Pi as images only when the session's model can see them.
     fn send_prompt(&self, text: &str, behavior: Option<&str>, attachments: &[Attachment]) {
-        let engine = match self.ensure_engine() {
-            Ok(engine) => engine,
-            Err(code) => return self.emit(self.state_message(Some(code))),
-        };
         let refuse = |error: &str| {
             self.emit(DockMessage::ChatEvent {
                 event: json!({"type": "command_failed", "command": "prompt", "error": error, "text": text}),
             })
         };
+        let engine = match self.ensure_engine() {
+            Ok(engine) => engine,
+            Err(code) => {
+                self.emit(self.state_message(Some(code)));
+                // A message with files is refused like any failed prompt: its text and files go back to the composer.
+                if !attachments.is_empty() {
+                    refuse("Pi could not start, so the message was not sent");
+                }
+                return;
+            }
+        };
+        let images_ok = attachments.iter().any(crate::attachments::is_image) && self.model_sees_images(&engine);
         let saved = match crate::attachments::save(
             &self.ctx.paths.attachments(),
             &self.session,
             &crate::attachments::today(),
             attachments,
+            images_ok,
         ) {
             Ok(saved) => saved,
             Err(error) => return refuse(&error),
         };
-        let images_ok = saved.iter().any(|one| one.image.is_some()) && self.model_sees_images(&engine);
-        let (message, images) = crate::attachments::message(text, &saved, images_ok);
+        let (message, images) = crate::attachments::message(text, &saved);
         let mut fields = json!({"message": message});
         if !images.is_empty() {
             fields["images"] = json!(images);
@@ -501,11 +509,12 @@ impl Chat {
         }
     }
 
-    /// Can the session's model be sent images? Read from `get_available_models` once and kept per model; a model Pi does
-    /// not list, or a list Pi does not give, is a model that cannot.
+    /// Can the session's model be sent images? Read from `get_available_models` and kept per model until Pi restarts; a
+    /// model Pi does not list, or a list Pi does not give, is a model that cannot, and is asked about again next time.
     fn model_sees_images(&self, engine: &Engine) -> bool {
-        let model = self.inner.lock().unwrap().model.clone().or_else(|| self.settings().and_then(|s| s.models.daily));
-        let Some(model) = model else { return false };
+        // Bound first: no settings read while `inner` is locked.
+        let chosen = self.inner.lock().unwrap().model.clone();
+        let Some(model) = chosen.or_else(|| self.settings().and_then(|s| s.models.daily)) else { return false };
         if let Some(&known) = self.inner.lock().unwrap().sees_images.get(&model) {
             return known;
         }
@@ -518,7 +527,7 @@ impl Chat {
                 inner.sees_images.insert(format!("{provider}/{id}"), image);
             }
         }
-        *inner.sees_images.entry(model).or_insert(false)
+        inner.sees_images.get(&model).copied().unwrap_or(false)
     }
 
     /// The running Pi, starting one when there is none. `Err` is a UI problem key.
@@ -587,6 +596,8 @@ impl Chat {
             inner.workdir = Some(workdir);
             inner.spawn_args = spec_args.clone();
             inner.pending_prompts.clear();
+            // Another Pi may list other models (an extension, a changed models file): ask it again.
+            inner.sees_images.clear();
             // Whatever the previous Pi left open can never be answered now.
             let stale: Vec<String> = inner.dialogs.drain().map(|(id, _)| id).collect();
             let dismiss = !inner.notified.is_empty();
@@ -2535,6 +2546,12 @@ mod tests {
         let saved = h.paths.attachments().join("s1").join(crate::attachments::today()).join("1-shot.png");
         assert!(message.contains(&saved.display().to_string()), "{message}");
         assert_eq!(std::fs::read(&saved).unwrap(), b"PNGDATA");
+        {
+            // A model Pi does not list is not taken for text-only for good; the listed ones are kept.
+            let inner = h.chat.inner.lock().unwrap();
+            assert!(!inner.sees_images.contains_key("opencode-go/deepseek-v4.1-flash"), "{:?}", inner.sees_images);
+            assert_eq!(inner.sees_images.get("opencode-go/kimi-k3"), Some(&true));
+        }
 
         h.chat.handle(PageMessage::SetModel { id: 2, model: "opencode-go/kimi-k3".into() });
         wait_for(&h, "the model change", |m| matches!(m, DockMessage::Saved { id: 2 }));
@@ -2543,6 +2560,32 @@ mod tests {
         assert_eq!(images, 1);
         assert!(message.starts_with("again\n\n[attached image: shot.png at "), "{message}");
         assert!(message.ends_with("2-shot.png]"), "{message}");
+    }
+
+    #[test]
+    fn a_new_pi_is_asked_again_which_models_see_images() {
+        let h = harness();
+        ready(&h);
+        h.chat.handle(with_image("look"));
+        prompt_seen(&h);
+        assert!(!h.chat.inner.lock().unwrap().sees_images.is_empty());
+        h.chat.shutdown();
+        ready(&h);
+        assert!(h.chat.inner.lock().unwrap().sees_images.is_empty());
+    }
+
+    #[test]
+    fn a_message_with_files_is_given_back_when_pi_cannot_start() {
+        let h = harness_with(false);
+        h.chat.handle(with_image("look"));
+        match wait_for(&h, "the refusal", |m| event_of(m, "command_failed")) {
+            DockMessage::ChatEvent { event } => {
+                assert_eq!(event["command"], json!("prompt"));
+                assert_eq!(event["text"], json!("look"));
+            }
+            _ => unreachable!(),
+        }
+        assert!(!h.paths.attachments().exists(), "nothing is saved for a message that was not sent");
     }
 
     #[test]

@@ -40,3 +40,25 @@ pub(crate) fn content_type(path: &str) -> &'static str {
         _ => "application/octet-stream",
     }
 }
+
+/// May the dock's web view load this address? Only the embedded page (`aria://…`, and the blank page WebKit starts
+/// from): a dropped file or a stray link never replaces it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn stays_in_app(uri: &str) -> bool {
+    uri.starts_with("aria://") || uri == "about:blank"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stays_in_app;
+
+    #[test]
+    fn only_the_page_itself_loads() {
+        assert!(stays_in_app("aria://app/index.html"));
+        assert!(stays_in_app("about:blank"));
+        for away in ["file:///home/u/photo.png", "https://example.com/", "data:text/html,x", "ARIA://app/x", "aria:/x"]
+        {
+            assert!(!stays_in_app(away), "{away}");
+        }
+    }
+}

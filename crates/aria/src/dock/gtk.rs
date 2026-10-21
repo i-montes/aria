@@ -17,7 +17,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use webkit2gtk::{
-    SecurityManagerExt, SettingsExt, URISchemeRequest, URISchemeRequestExt, UserContentManager, UserContentManagerExt,
+    NavigationPolicyDecision, NavigationPolicyDecisionExt, PolicyDecisionExt, PolicyDecisionType, SecurityManagerExt,
+    SettingsExt, URIRequestExt, URISchemeRequest, URISchemeRequestExt, UserContentManager, UserContentManagerExt,
     WebContext, WebContextExt, WebView, WebViewExt,
 };
 
@@ -67,6 +68,22 @@ impl Dock {
                 settings.set_enable_write_console_messages_to_stdout(true);
             }
         }
+        // The page never leaves `aria://`: a file dropped where nothing takes it, or a link, would load in its place.
+        webview.connect_decide_policy(|_, decision, kind| {
+            if !matches!(kind, PolicyDecisionType::NavigationAction | PolicyDecisionType::NewWindowAction) {
+                return false;
+            }
+            let uri = decision
+                .downcast_ref::<NavigationPolicyDecision>()
+                .and_then(|d| d.navigation_action())
+                .and_then(|action| action.request())
+                .and_then(|request| request.uri());
+            if uri.as_deref().is_some_and(super::stays_in_app) {
+                return false; // WebKit's default: load it
+            }
+            decision.ignore();
+            true
+        });
         window.add(&webview);
 
         // Clicks pass through the clear part of the veil; only the dock column takes them.
