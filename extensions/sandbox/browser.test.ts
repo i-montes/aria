@@ -4,10 +4,17 @@
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { shellQuote, wrapCommand } from './policy.ts'
 
-const ready = existsSync('/usr/bin/bwrap') && !!Bun.which('agent-browser')
+// The version Aria pins and installs: the check proves that one, from Aria's own bin when it is there.
+const pin = readFileSync(join(import.meta.dir, '../../agent-browser-version'), 'utf8').trim()
+const ariaBrowser = join(homedir(), '.aria/bin/agent-browser')
+const browser = existsSync(ariaBrowser) ? ariaBrowser : Bun.which('agent-browser')
+const version = browser ? spawnSync(browser, ['--version'], { encoding: 'utf8' }).stdout ?? '' : ''
+const pinned = version.trim().split(/\s+/).includes(pin)
+const ready = existsSync('/usr/bin/bwrap') && pinned
 
 // agent-browser's daemon learns its session from the environment (its command line is only the binary), and Chrome
 // inherits it, so a leftover is a process whose environment names the session.
@@ -34,7 +41,7 @@ const settle = (session: string, ms = 3000) => {
   return left
 }
 
-describe.skipIf(!ready)('checking a page in the browser from the sandbox', () => {
+describe.skipIf(!ready)(`checking a page in the browser from the sandbox (needs bwrap and agent-browser ${pin})`, () => {
   test('one boxed call opens the page, reads it and closes the browser', () => {
     const project = mkdtempSync('/tmp/sbx-browser-')
     mkdirSync(join(project, '.git'))
@@ -43,7 +50,8 @@ describe.skipIf(!ready)('checking a page in the browser from the sandbox', () =>
     const session = `check-test-${process.pid}-${Date.now()}`
     const s = shellQuote(session)
     const command = [
-      `agent-browser --session ${s} batch --bail`,
+      `export PATH=${shellQuote(dirname(browser!))}:"$PATH";`,
+      `agent-browser --session ${s} --idle-timeout 2m batch --bail`,
       shellQuote(`open file://${page}`),
       shellQuote('set viewport 390 844'),
       shellQuote('snapshot -i'),
@@ -61,7 +69,7 @@ describe.skipIf(!ready)('checking a page in the browser from the sandbox', () =>
       expect(settle(session)).toEqual([])
     } finally {
       // Only after a failed run: a host-side close of a closed session starts a daemon of its own.
-      if (!closed) spawnSync('agent-browser', ['--session', session, 'close'], { stdio: 'ignore', timeout: 30_000 })
+      if (!closed) spawnSync(browser!, ['--session', session, 'close'], { stdio: 'ignore', timeout: 30_000 })
       rmSync(project, { recursive: true, force: true })
     }
   }, 120_000)
