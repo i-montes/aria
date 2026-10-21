@@ -5,6 +5,30 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.4.0 — 2026-10-21
+
+### New
+
+- open the keyring vault at start, sync it every second, close it on quit; aria secret and aria keyring
+- the setup, the import and the quota read and write through the keyring
+- move plain keys into the keyring, verified, and the way back
+- sealed credential files with a live copy outside ~/.aria
+- credentials.keyring, on by default
+- the system keyring behind one interface (security on macOS, secret-tool on Linux)
+- aria quit and aria start; Cmd+Q asks first and quits on a second press
+
+### Fixed
+
+- Linux keeps long values in pieces, as secret-tool cuts a secret at 8192 bytes and still exits 0; the Cmd+Q check expects Super+Q left alone off a Mac
+- the keyring sync runs off the UI thread and backs off when the keyring fails
+- a vanished live copy is written back, never deleted; plain copies are merged into the sealed one; live files always exist; a migrated home keeps its keyring
+- long values are kept in pieces below security's line limit, and names that could break its input are refused
+- no access list on macOS items, so an update never raises a keychain dialog
+- a migration seals every file before it removes any
+- the page's defaults carry credentials.keyring too
+- Quit Aria (Cmd+Q) stops the background work and the Pis first, as a signal does; macOS cannot end them with the dock
+- the writable and protected folders are also compared by their real paths, so /tmp, /var and linked project folders work on macOS
+
 ## 0.3.0 — 2026-10-21
 
 ### New
