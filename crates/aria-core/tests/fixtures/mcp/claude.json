@@ -17,6 +17,7 @@
       "type": "stdio",
       "command": "/home/ana/.local/bin/files-mcp",
       "args": ["--root", "/home/ana/notes"],
+      "cwd": "/home/ana/notes",
       "env": { "FILES_TOKEN": "files-secret-value" }
     },
     "weather": { "type": "http", "url": "https://weather.example.com/mcp", "headers": { "Authorization": "Bearer weather-secret-value" } },

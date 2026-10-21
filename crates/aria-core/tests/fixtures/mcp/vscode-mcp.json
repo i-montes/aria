@@ -5,7 +5,8 @@
       "type": "stdio",
       "command": "node",
       "args": ["/home/ana/tools/tracker/index.js"],
-      "env": { "TRACKER_TOKEN": "${input:tracker-token}" }
+      "env": { "TRACKER_TOKEN": "${input:tracker-token}", "TRACKER_HOME": "${env:HOME}/tracker" },
+      "enabled": false
     },
     "search": { "type": "http", "url": "https://search.example.com/mcp", "headers": { "Authorization": "Bearer ${input:search-key}" } }
   },

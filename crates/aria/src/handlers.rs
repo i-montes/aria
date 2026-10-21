@@ -45,14 +45,17 @@ pub struct Ctx {
     pub installer: Installer,
     /// The `PATH` Pi would inherit (to find Claude Code and Node).
     pub path_var: String,
-    /// The person's home, where the other apps keep their MCP servers.
+    /// The person's home, where the other apps keep their MCP servers (empty without `$HOME`: nothing is found).
     pub home: PathBuf,
+    /// Where Claude Desktop and VS Code keep theirs on Linux (`$XDG_CONFIG_HOME` or `~/.config`).
+    pub config_dir: PathBuf,
     /// Every session's Pi starts again when its run settles (`enginesRestart`); the dock wires it to the chat.
     pub restart_engines: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl Ctx {
     pub fn real(paths: AriaPaths) -> Ctx {
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         Ctx {
             paths,
             validator: Arc::new(check_key),
@@ -82,7 +85,8 @@ impl Ctx {
                     .is_ok_and(|status| status.success())
             }),
             path_var: std::env::var("PATH").unwrap_or_default(),
-            home: std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
+            home: home.clone(),
+            config_dir: mcp_import::config_dir(&home, std::env::var_os("XDG_CONFIG_HOME").as_deref()),
             restart_engines: Arc::new(|| {}),
         }
     }
@@ -187,21 +191,22 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
 /// The servers the other apps configure that Aria's `mcp.json` does not have yet (names, kinds, targets and the names of
 /// their secrets; never a value).
 fn mcp_scan(id: u64, ctx: &Ctx) -> DockMessage {
-    let found = mcp_import::find(&ctx.home, &mcp::servers(&ctx.paths));
+    let found = mcp_import::find_in(&ctx.home, &ctx.config_dir, &mcp::servers(&ctx.paths));
     DockMessage::McpFound { id, servers: serde_json::to_value(found).unwrap_or_default() }
 }
 
 /// Finds the servers again (the page never holds their configuration) and copies the chosen ones; on success every Pi
 /// restarts when its run settles, so it sees them.
 fn mcp_import(id: u64, ids: &[String], ctx: &Ctx) -> DockMessage {
-    let found = mcp_import::find(&ctx.home, &mcp::servers(&ctx.paths));
+    let found = mcp_import::find_in(&ctx.home, &ctx.config_dir, &mcp::servers(&ctx.paths));
     match mcp_import::import(&ctx.paths, &found, ids) {
         Ok(_) => {
             (ctx.restart_engines)();
             DockMessage::Saved { id }
         }
         Err(ImportError::NothingToImport) => DockMessage::Error { id, code: "nothing-to-import".into() },
-        Err(ImportError::File(_) | ImportError::Write(_)) => DockMessage::Error { id, code: "mcp-file-broken".into() },
+        Err(ImportError::File(_)) => DockMessage::Error { id, code: "mcp-file-broken".into() },
+        Err(ImportError::Write(_)) => DockMessage::Error { id, code: "mcp-write-failed".into() },
     }
 }
 
@@ -484,6 +489,7 @@ mod tests {
             installer: Arc::new(|_| false),
             path_var: String::new(),
             home: dir.path().join("home"),
+            config_dir: dir.path().join("home/.config"),
             restart_engines: Arc::new(move || {
                 r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }),
@@ -511,7 +517,7 @@ mod tests {
         std::fs::create_dir_all(cursor.parent().unwrap()).unwrap();
         std::fs::write(
             &cursor,
-            r#"{"mcpServers": {"docs": {"url": "https://docs.example.com/mcp", "headers": {"X-Api-Key": "docs-secret-value"}}, "tavily": {"command": "tavily-mcp"}}}"#,
+            r#"{"mcpServers": {"docs": {"url": "https://docs.example.com/mcp", "headers": {"X-Api-Key": "docs-secret-value"}}, "tavily": {"command": "tavily-mcp"}, "feed": {"type": "sse", "url": "https://feed.example.com/sse"}}}"#,
         )
         .unwrap();
         mcp::add_notion_server(&h.ctx.paths).unwrap();
@@ -522,7 +528,10 @@ mod tests {
             replies,
             vec![DockMessage::McpFound {
                 id: 1,
-                servers: serde_json::json!([{"id": "cursor:docs", "name": "docs", "source": "cursor", "kind": "http", "target": "docs.example.com", "secrets": ["X-Api-Key"]}]),
+                servers: serde_json::json!([
+                    {"id": "cursor:docs", "name": "docs", "source": "cursor", "kind": "http", "target": "docs.example.com", "secrets": ["X-Api-Key"], "importable": true, "disabled": false},
+                    {"id": "cursor:feed", "name": "feed", "source": "cursor", "kind": "sse", "target": "feed.example.com", "secrets": [], "importable": false, "disabled": false}
+                ]),
             }],
             "tavily is already in Aria's mcp.json, and no secret value reaches the page"
         );
@@ -547,7 +556,15 @@ mod tests {
         // Imported: no longer offered.
         assert_eq!(
             run(&h, PageMessage::McpScan { id: 4 }),
-            vec![DockMessage::McpFound { id: 4, servers: serde_json::json!([]) }]
+            vec![DockMessage::McpFound {
+                id: 4,
+                servers: serde_json::json!([{"id": "cursor:feed", "name": "feed", "source": "cursor", "kind": "sse", "target": "feed.example.com", "secrets": [], "importable": false, "disabled": false}])
+            }]
+        );
+        // SSE is listed but never imported.
+        assert_eq!(
+            run(&h, PageMessage::McpImport { id: 6, ids: vec!["cursor:feed".into()] }),
+            vec![DockMessage::Error { id: 6, code: "nothing-to-import".into() }]
         );
 
         std::fs::write(h.ctx.paths.mcp(), "{ broken").unwrap();
@@ -556,6 +573,20 @@ mod tests {
             vec![DockMessage::Error { id: 5, code: "mcp-file-broken".into() }]
         );
         assert_eq!(h.restarts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn an_import_that_cannot_write_says_so() {
+        let h = harness(KeyCheck::Valid);
+        let cursor = h.ctx.home.join(".cursor/mcp.json");
+        std::fs::create_dir_all(cursor.parent().unwrap()).unwrap();
+        std::fs::write(&cursor, r#"{"mcpServers": {"docs": {"url": "https://docs.example.com/mcp"}}}"#).unwrap();
+        let root = &h.ctx.paths.root;
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let reply = run(&h, PageMessage::McpImport { id: 1, ids: vec!["cursor:docs".into()] });
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(reply, vec![DockMessage::Error { id: 1, code: "mcp-write-failed".into() }]);
+        assert_eq!(h.restarts.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]

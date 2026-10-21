@@ -91,7 +91,8 @@ pub enum PageMessage {
     #[serde(rename = "mcpScan")]
     McpScan { id: u64 },
     /// Copy the found servers with these ids (`source:name`) into Aria's `mcp.json`; replies `saved` (and every Pi
-    /// restarts when its run settles), or an `error` whose `code` is `mcp-file-broken` or `nothing-to-import`.
+    /// restarts when its run settles), or an `error` whose `code` is `mcp-file-broken`, `mcp-write-failed` or
+    /// `nothing-to-import` (none of the ids found, or only SSE ones).
     #[serde(rename = "mcpImport")]
     McpImport { id: u64, ids: Vec<String> },
     /// Is the chat on screen (false while the settings are open)? A prompt nobody sees gets a notification.
@@ -155,8 +156,8 @@ pub enum DockMessage {
     },
     #[serde(rename = "saved")]
     Saved { id: u64 },
-    /// The answer to `mcpScan`: `[{ id, name, source, kind, target, secrets }]` (`mcp_import::Found`), never a secret's
-    /// value, only the names of the variables and headers.
+    /// The answer to `mcpScan`: `[{ id, name, source, kind, target, secrets, importable, disabled }]` (`mcp_import::Found`),
+    /// never a secret's value, only the names of the variables and headers. `kind: "sse"` is `importable: false`.
     #[serde(rename = "mcpFound")]
     McpFound { id: u64, servers: Value },
     /// `error` is a UI string key: `key-rejected`, `network-unavailable`, `auth-file-broken`.
