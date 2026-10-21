@@ -140,8 +140,6 @@ extension, the strip and the Alt+A list; see the [architecture](architecture.md#
 - `background_output` for a subagent says its state, not what its watch says it is doing now (the jobs socket does not
   see the watch).
 - Two background subagents in one session with the same title and task share one watch agent in the list.
-- The browser check (`tools/ui-sandbox/check.ts`) prints `PAGE ERROR ReferenceError: process is not defined` a few
-  times; it happens on `main` too, and every check still passes.
 - The sandbox keeps a repository's `.git/config` and `hooks` read-only, but the rest of `.git` stays writable, and git
   follows a `commondir` file in any git dir: a boxed command can point a repository at a config of its own, which the
   person's own git (outside the box) then reads. Repositories nested under a folder that is not one are not protected
@@ -150,6 +148,21 @@ extension, the strip and the Alt+A list; see the [architecture](architecture.md#
   protect `commondir` and `gitdir` (or the whole git dir but what git must write) in `extensions/sandbox/policy.ts`, and
   give the dock's git an empty attributes source.
 - If the projects folder is itself inside a git repository, `.aria-worktrees/` lands inside that repository.
+
+## Connectors and attachments
+
+Connector approvals (the `connectors` extension, the access rows in Settings → Integrations) and attachments (the
+paperclip, drop and paste; `~/.aria/attachments/`). Left:
+
+- Nothing removes old attachments: every file sent stays under `~/.aria/attachments/` until the person deletes it.
+- The thread shows an attached image as a chip (name and kind), never as a preview: the page never receives image data.
+- A connector card's preview shows the arguments as they are, not redacted; a secret in them is on the card.
+- Paste and drop were checked in headless Chrome only, not on the real dock (WebKitGTK): whether it hands files from
+  the file manager or the clipboard over as files is untried.
+- A queued message that is re-queued (another queued one cancelled) keeps its path lines, but an image that went to
+  the model as an image does not go again as one; the file stays on disk and its line names it.
+- Two queued messages with the same text and different files can swap their chips until Pi's next queue update puts
+  each one right.
 
 ## Known limits of the page (from the review, deferred)
 

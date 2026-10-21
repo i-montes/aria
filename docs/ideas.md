@@ -5,8 +5,8 @@ owner, first to last.
 
 | # | Idea | Why it fits | Effort |
 |---|---|---|---|
-| 1 | **Per-action approval for connectors**: each one read-only or read-and-send, with a preview and a question before anything that sends or changes something | Notion is connected and can write today without asking; the sandbox's permission card can be reused | Medium |
-| 2 | **Attach files and images** (paperclip, drag and drop, paste): images to the model when it can see them, the rest into the working folder | Missing from the chat; used every day | Medium |
+| 1 | **Done (2026-10-21).** **Per-action approval for connectors**: each one read-only or read-and-send, with a preview and a question before anything that sends or changes something | Notion is connected and can write today without asking; the sandbox's permission card can be reused | Medium |
+| 2 | **Done (2026-10-21).** **Attach files and images** (paperclip, drag and drop, paste): images to the model when it can see them, the rest into the working folder | Missing from the chat; used every day | Medium |
 | 3 | **A per-turn timeout for the model, and MCP connections retried with backoff** | Cheap robustness | Low |
 | 4 | **Secrets in the system keyring** (Secret Service on Omarchy, Keychain on the Mac) instead of `auth.json` at mode 600 | Keeps credentials out of files a command outside the sandbox could read | Medium |
 | 5 | **Import the MCP servers the person already has** (Claude Code, Cursor, VS Code) | Saves configuring them by hand | Low |

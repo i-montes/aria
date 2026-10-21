@@ -33,14 +33,14 @@ Aria is a small Rust program that hosts a web page. The page is the interface; R
   - `bridge` — the messages between the dock and the page (below).
   - `pi` — the pinned Pi (`pi-version`): where it is installed, whether Node can run it, the `pi` shim for Pi's own children.
   - `agent` — Pi's directory, `~/.aria/agent/`, prepared before every Pi start: its `settings.json` (default model, packages, the superpowers skills of the settings), links to the credential files, the owner's extensions, one sessions folder (`sessions/aria`), the Claude provider package.
-  - `agent_config` — `aria.json`, the one file the extensions read Aria's settings from (`extensions/lib/config.ts`; without it they keep the values in their code).
+  - `agent_config` — `aria.json`, the one file the extensions read Aria's settings from (`extensions/lib/config.ts`; without it they keep the values in their code). It carries each connector's access level as `connectors`, which the `connectors` extension reads: an MCP tool call that writes asks first on the chat's permission card, is refused (Read only) or runs (Allow); see [the extensions](../extensions/README.md).
   - `persona` — `SYSTEM.md` and the experts, rendered from the owner's text where a setting varies them.
   - `sessions` — the dock's tabs (`sessions.json`): ids, titles, the active one.
   - `files` — the `@` file picker's `.gitignore`-aware walk.
   - `quota` — the quota windows of the model's provider (OpenCode Go, a Claude plan).
 - **`aria-hyprland`** is the Hyprland adapter: it registers the hotkey at run time, asks which monitor has the focus, and reports config reloads. On macOS, **`aria-mac`** sits next to it with the same two jobs: `Option + Space` through Carbon (no Accessibility permission, no config to reload) and the screen under the pointer (macOS has no focused monitor that survives app switches).
 - **`aria-engine`** speaks Pi's RPC protocol: strict JSONL framing, commands and their responses, events, extension dialogs, and one supervised child (`Engine::close` stops it: stdin closed, killed after three seconds).
-- **`aria`** is the binary. `main.rs` wires things, `ui.rs` is the platform event loop (GTK/glib or `NSApplication`/`NSTimer`), `control.rs` keeps one instance, `visibility.rs` decides when the dock is shown or closing (a pure state machine), `dock/{gtk,mac}.rs` is the window (the same `Dock` API on both platforms), `handlers.rs` answers the page's setup messages, `chat.rs` owns the sessions: one Pi per tab, started when the tab is shown, restarted when a credential or a setting changes (a busy one when its run settles; `main.rs` watches `settings.json` once a second), with desktop notifications for a prompt nobody can see. `watch.rs` is each tab's subagent socket; `jobs.rs`, `jobs_socket.rs` and `worktree.rs` are background work (below); `lines.rs` reads a child's or a peer's lines up to a limit.
+- **`aria`** is the binary. `main.rs` wires things, `ui.rs` is the platform event loop (GTK/glib or `NSApplication`/`NSTimer`), `control.rs` keeps one instance, `visibility.rs` decides when the dock is shown or closing (a pure state machine), `dock/{gtk,mac}.rs` is the window (the same `Dock` API on both platforms), `handlers.rs` answers the page's setup messages, `chat.rs` owns the sessions: one Pi per tab, started when the tab is shown, restarted when a credential or a setting changes (a busy one when its run settles; `main.rs` watches `settings.json` once a second), with desktop notifications for a prompt nobody can see. `attachments.rs` saves a message's attachments (below); `watch.rs` is each tab's subagent socket; `jobs.rs`, `jobs_socket.rs` and `worktree.rs` are background work (below); `lines.rs` reads a child's or a peer's lines up to a limit.
 
 ## The hotkey, without touching Hyprland's config
 
@@ -107,14 +107,14 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 | `openUrl` | open an `https://` link in the browser |
 | `installClaudeBridge`, `enginesRestart` | install the Claude provider; restart every Pi after a credential changed |
 | `sessionsLoad`, `sessionsSave`, `sessionClose`, `chatShown` | the tabs; is the chat on screen (not the settings) |
-| `session` (wrapping `chatSend`, `chatAbort`, `chatLoad`, `chatClearQueue`, `uiAnswer`, `listCommands`, `listModels`, `setModel`, `listFiles`) | everything about one tab's conversation |
+| `session` (wrapping `chatSend`, `chatAbort`, `chatLoad`, `chatClearQueue`, `uiAnswer`, `listCommands`, `listModels`, `setModel`, `listFiles`) | everything about one tab's conversation. `chatSend` may carry `attachments: [{ name, mime, data }]` (base64; at most 10, 20 MB each, 50 MB together): the dock saves them under `~/.aria/attachments/<session>/<yyyy-mm-dd>/<n>-<safe name>` and adds a line per file to the message, `[attached: <name> (<mime>, <size>) at <path>]`, or `[attached image: <name> at <path>]` with the image itself in Pi's `images` when the session's model can see images. A save that fails comes back as `command_failed` with the page's own text |
 | `jobStop`, `jobDismiss` | stop a background job; take a failed one off the strip (no answer: the next `jobs` shows it) |
 | `jobOutput` | a job's last lines (80 unless `lines` says otherwise) |
 
 | Dock → page | Meaning |
 |---|---|
 | `open`, `close`, `notice` | animate the dock; show the first-run corner notice |
-| `settings`, `saved`, `keyResult`, `oauthUrl`, `oauthResult`, `error` | answers; failures carry a string key such as `key-rejected`. `settings` also lists what is really connected (`opencode-go:api_key`, `anthropic:oauth`, `mcp:notion`…), never a secret, so the setup does not have to assume it |
+| `settings`, `saved`, `keyResult`, `oauthUrl`, `oauthResult`, `error` | answers; failures carry a string key such as `key-rejected`. `settings` also lists what is really connected (`opencode-go:api_key`, `anthropic:oauth`, `mcp:notion`…), never a secret, so the setup does not have to assume it, and `servers`, every MCP server in Aria's `mcp.json` but `engram`, so each gets its access row |
 | `problem` | something prevents Aria from working (for example `hyprland-classic-config`) |
 | `sessions` | the saved tabs |
 | `session` (wrapping `chatState`, `chatEvent`, `chatDialog`, `chatDialogClosed`, `chatEngine`, `chatQuota`, and the replies `commands`, `models`, `files`, `saved`, `error`) | what one tab's Pi says |
@@ -123,7 +123,7 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 
 ## Data and safety
 
-- Everything Aria stores is under `~/.aria/`. `settings.json` never holds a secret; `auth.json`, `mcp.json` and `mcp-auth.json` are mode `600`, and so is `jobs.json`, which holds each job's state, a subagent's result (up to 8000 characters) and, until its session is told, an end note's last 20 lines of output. The one exception is a background subagent's worktree, in the projects folder (`<projects dir>/.aria-worktrees/`).
+- Everything Aria stores is under `~/.aria/`. `settings.json` never holds a secret; `auth.json`, `mcp.json` and `mcp-auth.json` are mode `600`, and so is `jobs.json`, which holds each job's state, a subagent's result (up to 8000 characters) and, until its session is told, an end note's last 20 lines of output. Attachments are saved in `~/.aria/attachments/` (folders `700`, files `600`) and never removed; the model can read them, and a command in the sandbox cannot write there. The one exception is a background subagent's worktree, in the projects folder (`<projects dir>/.aria-worktrees/`).
 - Files are written atomically (a unique temp file and rename), and a file that cannot be parsed is reported, never overwritten (a broken `sessions.json` is moved to `sessions.json.broken`).
 - A key is validated against its provider before it is stored, and a rejected or unreachable check writes nothing.
 - The installer never edits `~/.config/hypr/`.

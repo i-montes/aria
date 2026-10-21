@@ -99,3 +99,9 @@ Notes: the desktop notification for a prompt that nobody can see is sent with `o
 | `~/.aria/jobs.json` | the background jobs' state, a finished subagent's result (up to 8000 characters) and, until its session is told, an end note's last 20 lines of output (nothing more of the output), mode 600, written by the dock on every change; jobs still running at the next start become `cut` (new) | none, new | `rm ~/.aria/jobs.json` while the dock is stopped (the Finished list and any end note not yet told are forgotten) |
 | `$XDG_RUNTIME_DIR/aria/jobs-<session>.sock` (in `~/.aria/run/` on macOS; `j-<hash>.sock` when the usual name would be too long) | one socket per open tab for its background work, mode 600, removed when the tab closes (new) | none | stopping the dock removes them |
 | `<projects dir>/.aria-worktrees/<repo>-<job>` (and git's own bookkeeping for it in `<repo>/.git/worktrees/`) | a git worktree for a background subagent that writes while another writer holds the same repository (or that asked for one), outside the repository so its tools never see it; removed once its changes are back in the folder, kept when they clash or the subagent was stopped, failed or cut (new) | none, new; the person's own files are not touched | `git worktree remove --force <projects dir>/.aria-worktrees/<repo>-<job>` in the repository (after taking what you want from it), then `rmdir <projects dir>/.aria-worktrees` |
+
+## 2026-10-21 — connector approvals and attachments
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| `~/.aria/attachments/` | every file attached in the chat, saved by the dock as `<session>/<yyyy-mm-dd>/<n>-<safe name>` (folders mode 0700, files 0600) so the model can read it; nothing removes them (new) | none, new | `rm -r ~/.aria/attachments` (messages that named a file there can no longer be read again) |
