@@ -1,10 +1,32 @@
 # Aria
 
-A personal assistant that lives on your desktop. Press **Super + A** and a dock opens over whatever you are doing, on the monitor you are looking at, to work with your files and tasks and to talk to you in your language.
+A personal assistant that lives on your desktop. Press **Super + A** (**Option + Space** on a Mac) and a dock opens over whatever you are doing, on the monitor you are looking at, to work with your files and tasks and to talk to you in your language.
 
-> **Status: phase 2 of 5 built (parts 2a to 2d), waiting for the owner's acceptance, and the macOS platform layer.** Aria installs, opens with its hotkey, runs the first-run setup, and the dock is now a chat backed by its own pinned [Pi](https://github.com/earendil-works/pi) engine, working in the folder shown at the top of the dock. `/connect` connects a provider from the chat (Anthropic with your Claude plan or an API key, or OpenCode Go). The `+` opens another session as a tab (up to eight, each with its own Pi, so a background tab keeps working and tells you when it needs you). It runs with the owner's persona and his Pi extensions (router, sandbox, quota fallback, autocompaction, questions, subagents). Its settings drive Pi and the extensions, and [the parity matrix](docs/parity.md) checks it against the owner's Pi; phase 2 is accepted by the owner using Aria for real work, and phase 3 (autonomous goals) is next. See [the roadmap](docs/superpowers/specs/2026-10-18-aria-base-design.md#roadmap) and [phase 2](docs/superpowers/specs/2026-10-18-aria-phase2-parity-design.md).
+> **Status: 0.7.** The dock, its chat and the installer work on **Omarchy** (Hyprland 0.56+ with the Lua configuration)
+> and **macOS 12+** (Apple silicon or Intel). Next on [the roadmap](docs/superpowers/specs/2026-10-18-aria-base-design.md#roadmap):
+> autonomous goals (phase 3). What changed in each version is in [RELEASES.md](RELEASES.md); what is still missing, in
+> [docs/pending.md](docs/pending.md) (on macOS: click-through, notification clicks and a sandbox for commands).
 
-Supported today: **Omarchy** (Hyprland 0.56+ with the Lua configuration, `Super + A`) and **macOS 12+** on Apple silicon or Intel (`Option + Space`). The Mac port is [phase 5 pulled forward](docs/superpowers/specs/2026-10-18-aria-mac-design.md): the dock, setup, chat and installer work; click-through, notification clicks and the sandbox extension are still on the list ([pending](docs/pending.md)).
+## What it does
+
+- **A dock on the right of the screen**, opened with `Super + A` on Omarchy or `Option + Space` on macOS (or the
+  shortcut you choose in the settings, with fallbacks when one is taken), on the monitor you are looking at.
+- **A chat backed by its own pinned [Pi](https://github.com/earendil-works/pi)**, working in your projects folder. Up to
+  eight tabs, each with its own Pi, so a tab in the background keeps working and tells you when it needs you. A long
+  conversation goes on in a fresh session after a compaction, and you can page back through the earlier one.
+- **Providers**: OpenCode Go, Anthropic with an API key, or your Claude plan (`/connect` from the chat), with the quota of
+  each window on hand and, on OpenCode Go, a fallback to a free model when a quota runs out.
+- **Messages while it works**: Enter puts yours in at the run's next step; Alt+Enter keeps it for when the run ends.
+  The `/` menu has Pi's own commands (`/compact`, `/session`, `/copy`, `/export`, `/reload`) and your skills.
+- **The owner's extensions**: a sandbox for every command (bubblewrap on Omarchy; on macOS every command asks first), a
+  router that picks the model and the expert, subagents you can watch (Alt+A), questions, autocompaction, and a check of
+  the pages agents build in a headless browser.
+- **Background work**: dev servers and long jobs run in the background, owned by the dock, as pills above the input;
+  subagents get their own git worktree when the repository is taken.
+- **Connectors** (Notion, Tavily, and the MCP servers your other apps already have), each read-only, ask-first or
+  allowed; **attachments** by the paperclip, drop or paste; **memory** with its own Engram.
+- **Keys in the system keyring** (Keychain, Secret Service), never in plain files under `~/.aria`.
+- **Updates that never cut a run**: the dock restarts into a new version once it is hidden and idle.
 
 ## Install
 
@@ -14,7 +36,18 @@ curl -fsSL https://<your site>/install.sh | sh
 
 The installer detects the system. It needs **Node 22.19 or newer** (it checks, and says so if not). It puts the `aria` binary in `~/.local/bin`, creates `~/.aria/`, installs the pinned Pi engine in `~/.aria/pi/<version>` and the pinned `agent-browser` the agents check the pages they build with (`~/.aria/agent-browser/<version>`, linked as `~/.aria/bin/agent-browser`, with its Chrome in `~/.agent-browser/browsers`; if that step fails the installer only warns), and installs a login item: a **systemd user unit** on Omarchy, a **LaunchAgent** (`~/Library/LaunchAgents/com.aria.dock.plist`) on macOS. On Omarchy it adds Aria's system libraries, asking for `sudo` only if they are missing, and it **never edits `~/.config/hypr/`**: Aria registers `Super + A` (or the shortcut chosen in the settings) with Hyprland itself each time it starts. On macOS it needs no `sudo`, no Accessibility permission and no system configuration: `Option + Space` (or the chosen one) is registered with Carbon, and the dock runs as an accessory app (no Dock icon).
 
-`aria quit` stops Aria (its background work and engines first) and `aria start` starts it again; in the dock, Cmd+Q asks first and quits on a second press. Run it again to update. An update does not cut a run: the running dock restarts into the new version once it is hidden and no session is working (`--restart-now` restarts it at once). To remove Aria: `sh install.sh --uninstall` (it asks before deleting `~/.aria`). The browser `agent-browser` downloaded stays in `~/.agent-browser/browsers`; delete it by hand if you want it gone. Add `--dry-run` to any command to see what would happen without changing anything.
+Run it again to update. An update does not cut a run: the running dock restarts into the new version once it is hidden and no session is working (`--restart-now` restarts it at once). To remove Aria: `sh install.sh --uninstall` (it asks before deleting `~/.aria`). The browser `agent-browser` downloaded stays in `~/.agent-browser/browsers`; delete it by hand if you want it gone. Add `--dry-run` to any command to see what would happen without changing anything.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `aria toggle` / `aria show` | Opens or closes the dock (the shortcut does the same) / only opens it; starts it first if it is not running |
+| `aria start` / `aria quit` | Starts the dock under its login service / stops it (its background work and engines first). In the dock, Cmd+Q asks first and quits on a second press |
+| `aria keyring status` | Whether the keys are in the keyring, and which (names only) |
+| `aria keyring off` / `on` | Moves every key back into plain files in `~/.aria` and turns the keyring off / turns it on again (the dock moves them at its next start) |
+| `aria secret --home <root> <account>` | Prints one key from the keyring: what the `!aria secret …` commands in Pi's files run |
+| `aria --version` | The version installed |
 
 ### Build it yourself
 
