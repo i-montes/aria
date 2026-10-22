@@ -14,6 +14,7 @@ const CREATE_DESCRIPTION = [
   'Before calling this, tell the person in one line when it will run and what it may do (each connector read-only unless they said it may write, and no folder outside the projects folder unless they named one), and wait for their yes.',
   '`prompt` is the whole instruction as it will be sent at that time (the run does not see this conversation). `at` is local 24-hour HH:MM. `days`: some of mon tue wed thu fri sat sun (default every day), or `date` YYYY-MM-DD for a single run.',
   '`connectors`: a level per connector the task uses, "read" or "allow" (allow = it may write there without asking). Nothing is ever asked during a scheduled run: what is not granted is refused.',
+  'A task that may write (any "allow", or writable folders) is saved paused until the person presses Approve in /schedules; a read-only task starts at once.',
 ].join('\n')
 
 const DAYS_SCHEMA = { type: 'array', items: { type: 'string', enum: EVERY_DAY }, description: 'Days it runs on (default every day).' }
@@ -86,7 +87,11 @@ export default function schedule(pi: ExtensionAPI) {
       ['title', 'prompt', 'at'],
     ),
     async execute(_id: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
-      return ask(ctx, 'schedule_create', params, (answer) => `Scheduled: ${taskLine({ ...answer.task, next: answer.task?.next })}`)
+      return ask(ctx, 'schedule_create', params, (answer) =>
+        answer.task?.awaiting
+          ? `Saved, waiting for the person: a task that writes runs only once they approve it with Approve in /schedules (it just opened). Tell them so. ${taskLine(answer.task)}`
+          : `Scheduled: ${taskLine({ ...answer.task, next: answer.task?.next })}`,
+      )
     },
   } as any)
 
@@ -122,7 +127,11 @@ export default function schedule(pi: ExtensionAPI) {
       ['task'],
     ),
     async execute(_id: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
-      return ask(ctx, 'schedule_update', params, (answer) => `Changed: ${taskLine(answer.task ?? {})}`)
+      return ask(ctx, 'schedule_update', params, (answer) =>
+        answer.task?.awaiting
+          ? `Changed, and waiting for the person: it runs again once they approve it with Approve in /schedules. Tell them so. ${taskLine(answer.task)}`
+          : `Changed: ${taskLine(answer.task ?? {})}`,
+      )
     },
   } as any)
 

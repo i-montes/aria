@@ -34,6 +34,14 @@ describe('the scheduled tasks panel', () => {
     expect(html).toContain('chat.schedules.paused')
   })
 
+  test('a task waiting for the person says so and offers to approve it', () => {
+    const html = renderSchedules({ tasks: [task({ enabled: false, awaiting: true, next: null, grants: { connectors: { notion: 'allow' }, writable: [] } })], now: 0 }, {}, t)
+    expect(html).toContain('chat.schedules.awaiting')
+    expect(html).toContain('chat.schedules.approve')
+    expect(html).toContain('data-enabled="true"')
+    expect(html).toContain('notion')
+  })
+
   test('a failed run says so', () => {
     expect(renderSchedules({ tasks: [task({ lastResult: { at: 1, ok: false, summary: 'no network' } })], now: 0 }, {}, t)).toContain('chat.schedules.failed')
   })

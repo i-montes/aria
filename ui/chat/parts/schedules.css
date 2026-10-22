@@ -14,3 +14,4 @@
 .p-sched-btn { padding: 6px 12px; border-radius: 9px; border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.1)); background: var(--field, #0f0f12); color: #EDEDEF; font-size: 12.5px; cursor: pointer; }
 .p-sched-btn:hover, .p-sched-btn:focus-visible { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); outline: none; }
 .p-sched-btn.is-danger:hover, .p-sched-btn.is-danger:focus-visible { border-color: rgba(242, 163, 163, 0.7); }
+.p-sched-btn.is-approve { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); }

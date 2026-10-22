@@ -72,6 +72,7 @@ const handlers = {
   // A scheduled task's tab, made by its first run, and the tab of a task that was deleted.
   scheduleTab: (message) => booted.then(() => chat.addScheduledTab(message)),
   scheduleRemoved: (message) => booted.then(() => chat.removeScheduledTab(message.id)),
+  scheduleAwaiting: () => booted.then(() => chat.showAwaiting()),
   // Aria's version, sent once when the dock starts; the settings overview shows it.
   version: (message) => {
     if (typeof message.version === 'string') state.version = message.version

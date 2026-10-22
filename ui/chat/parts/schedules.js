@@ -22,6 +22,8 @@ export const TEXTS = {
     'chat.schedules.once': 'On {date} at {at}',
     'chat.schedules.next': 'Next: {when}',
     'chat.schedules.paused': 'Paused',
+    'chat.schedules.awaiting': 'Waiting for your approval: it may write ({what})',
+    'chat.schedules.approve': 'Approve',
     'chat.schedules.never': 'Has not run yet',
     'chat.schedules.ok': 'Last: {summary}',
     'chat.schedules.failed': 'Last run failed: {summary}',
@@ -46,6 +48,8 @@ export const TEXTS = {
     'chat.schedules.once': 'El {date} a las {at}',
     'chat.schedules.next': 'Próxima: {when}',
     'chat.schedules.paused': 'En pausa',
+    'chat.schedules.awaiting': 'Espera tu aprobación: puede escribir ({what})',
+    'chat.schedules.approve': 'Aprobar',
     'chat.schedules.never': 'Todavía no ha corrido',
     'chat.schedules.ok': 'Última: {summary}',
     'chat.schedules.failed': 'La última falló: {summary}',
@@ -81,7 +85,14 @@ function nextLabel(next, now) {
 }
 
 function row(task, now, t) {
-  const status = !task.enabled
+  // What it may write: the connectors allowed and the folders, for the person to approve knowingly.
+  const writes = [
+    ...Object.entries(task.grants?.connectors ?? {}).filter(([, level]) => level === 'allow').map(([name]) => name),
+    ...(task.grants?.writable ?? []),
+  ].join(', ')
+  const status = task.awaiting
+    ? t('chat.schedules.awaiting', { what: writes })
+    : !task.enabled
     ? t('chat.schedules.paused')
     : typeof task.next === 'number'
       ? t('chat.schedules.next', { when: nextLabel(task.next, now) })
@@ -94,7 +105,7 @@ function row(task, now, t) {
     <div class="p-sched-head"><span class="p-sched-title">${esc(task.title)}</span><span class="p-sched-when">${esc(whenLabel(task.when, t))}</span></div>
     <div class="p-sched-meta">${status ? `<span>${esc(status)}</span>` : ''}<span class="p-sched-last">${esc(last)}</span></div>
     <div class="p-sched-actions">
-      <button type="button" class="p-sched-btn" data-chat="schedule-toggle" data-schedule="${esc(task.id)}" data-enabled="${resume}">${esc(t(resume ? 'chat.schedules.resume' : 'chat.schedules.pause'))}</button>
+      <button type="button" class="p-sched-btn${task.awaiting ? ' is-approve' : ''}" data-chat="schedule-toggle" data-schedule="${esc(task.id)}" data-enabled="${resume}">${esc(t(task.awaiting ? 'chat.schedules.approve' : resume ? 'chat.schedules.resume' : 'chat.schedules.pause'))}</button>
       <button type="button" class="p-sched-btn is-danger" data-chat="schedule-delete" data-schedule="${esc(task.id)}">${esc(t('chat.schedules.delete'))}</button>
     </div>
   </li>`

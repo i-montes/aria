@@ -145,6 +145,10 @@ describe('preloading the saved tabs', () => {
     const tabs = { sessions: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], active: 'b' }
     expect(preloadOrder(tabs)).toEqual(['b', 'a', 'c'])
   })
+  test("a scheduled task's tab is not woken at boot: its Pi starts with its run", () => {
+    const tabs = { sessions: [{ id: 'a' }, { id: 's-1', schedule: 's-1' }, { id: 'b' }], active: 'a' }
+    expect(preloadOrder(tabs)).toEqual(['a', 'b'])
+  })
   test('no tabs, nothing to load', () => expect(preloadOrder({ sessions: [], active: null })).toEqual([]))
 })
 

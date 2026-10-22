@@ -165,7 +165,8 @@ export function shiftExpanded(ex, by) {
 export const hasParallelAgents = (agents, jobs) => parallelAgents(agents, jobs).length > 0
 
 export const preloadOrder = (tabs) => {
-  const ids = (tabs?.sessions ?? []).map((s) => s.id)
+  // A scheduled task's tab is left asleep: its Pi (and its MCP servers) start with its run, or when it is opened.
+  const ids = (tabs?.sessions ?? []).filter((s) => !s.schedule).map((s) => s.id)
   return ids.includes(tabs?.active) ? [tabs.active, ...ids.filter((id) => id !== tabs.active)] : ids
 }
 
@@ -1712,6 +1713,11 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       if (tabs === before) return
       save()
       render()
+    },
+    /** A task the model made or widened to write waits for the person (the dock's `scheduleAwaiting`): the panel
+     * opens on it, with its Approve button. */
+    showAwaiting() {
+      openView('schedules')
     },
     /** A deleted task's tab (the dock's `scheduleRemoved`). */
     removeScheduledTab(id) {

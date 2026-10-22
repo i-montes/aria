@@ -63,6 +63,13 @@ describe('the schedule extension', () => {
     expect(text(out)).toContain('07:30')
   })
 
+  test('a task that writes waits for the person, and the model is told to say so', async () => {
+    const pi = await withDock((req) => (req.op === 'schedule_create' ? { ok: true, task: { ...TASK, enabled: false, awaiting: true, grants: { connectors: { notion: 'allow' }, writable: [] } } } : undefined))
+    const out = text(await pi.run('schedule_create', { title: 'Notion tasks', prompt: 'p', at: '07:30', connectors: { notion: 'allow' } }, rpc))
+    expect(out).toContain('approve')
+    expect(out).toContain('/schedules')
+  })
+
   test('list shows every task with its next run and last result', async () => {
     const pi = await withDock((req) => (req.op === 'schedule_list' ? { ok: true, tasks: [TASK] } : undefined))
     const out = text(await pi.run('schedule_list', {}, rpc))
