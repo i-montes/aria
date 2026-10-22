@@ -428,7 +428,10 @@ mod tests {
                 json!({"t": "result", "text": "boom", "error": true}),
             ],
         );
-        let agents = eventually(&w, "steps", |a| a[0]["steps"].as_array().is_some_and(|s| s.len() >= 3));
+        // Wait for the error note itself: the live step a running agent shows can make three steps before it arrives.
+        let agents = eventually(&w, "steps", |a| {
+            a[0]["steps"].as_array().is_some_and(|s| s.iter().any(|step| step["kind"] == "note"))
+        });
         let steps = agents[0]["steps"].as_array().unwrap();
         assert_eq!(
             steps[0],
@@ -484,8 +487,11 @@ mod tests {
         let agents = eventually(&w, "two closed", |a| {
             a.as_array().is_some_and(|l| l.len() == 2 && l.iter().all(|x| x["kind"] == "done"))
         });
-        assert_eq!(agents[0]["status"], "done");
-        assert_eq!(agents[1]["status"], "failed");
+        // The two connections are served by their own threads, so either may be listed first: tell them by their work.
+        let list = agents.as_array().unwrap();
+        let worked = |a: &&Value| a["steps"].as_array().is_some_and(|s| s.iter().any(|step| step["kind"] == "msg"));
+        assert_eq!(list.iter().find(worked).unwrap()["status"], "done");
+        assert_eq!(list.iter().find(|a| !worked(a)).unwrap()["status"], "failed");
     }
 
     #[test]
