@@ -5,6 +5,22 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.9.0 — 2026-10-22
+
+### New
+
+- /debug opens a live trace of the turn
+- the trace waterfall part
+- widen the surface for the trace panel
+- trace a tab's turns on request
+- keep each subagent's spans for the trace
+- send ids, times and usage for the trace
+- build a turn's trace from Pi's events
+
+### Fixed
+
+- a fresh page tells the dock it is not wide
+
 ## 0.8.1 — 2026-10-22
 
 ### Fixed
