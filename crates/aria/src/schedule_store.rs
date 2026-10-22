@@ -289,7 +289,9 @@ fn too_wide(path: &std::path::Path, aria_root: &std::path::Path) -> Option<&'sta
     if std::fs::canonicalize(aria_root).is_ok_and(|root| path.starts_with(&root) || root.starts_with(path)) {
         return Some("Aria's own folder");
     }
-    const GUARDED: [&str; 15] = [
+    // Each platform's keyring and login items: macOS's Keychains and LaunchAgents; Linux's Secret Service (gnome-keyring),
+    // XDG autostart, systemd user units and Hyprland's exec-once.
+    const GUARDED: [&str; 17] = [
         ".ssh",
         ".gnupg",
         ".aws",
@@ -303,8 +305,10 @@ fn too_wide(path: &std::path::Path, aria_root: &std::path::Path) -> Option<&'sta
         ".pi",
         "Library/LaunchAgents",
         "Library/Keychains",
+        ".local/share/keyrings",
         ".config/autostart",
         ".config/systemd",
+        ".config/hypr",
     ];
     let home = home?;
     GUARDED
@@ -477,6 +481,19 @@ mod tests {
             assert!(refused(&link), "a link is judged by where it points");
             let _ = std::fs::remove_file(&link);
         }
+    }
+
+    #[test]
+    fn both_platforms_keyrings_and_login_items_are_guarded() {
+        let home = std::fs::canonicalize(std::env::var_os("HOME").unwrap()).unwrap();
+        let root = std::path::Path::new("/nonexistent-aria-root");
+        for folder in ["Library/Keychains", "Library/LaunchAgents"] {
+            assert!(too_wide(&home.join(folder), root).is_some(), "macOS: {folder}");
+        }
+        for folder in [".local/share/keyrings", ".config/autostart", ".config/systemd/user", ".config/hypr"] {
+            assert!(too_wide(&home.join(folder), root).is_some(), "Linux: {folder}");
+        }
+        assert!(too_wide(&home.join("Documents/notes"), root).is_none(), "an ordinary folder is narrow enough");
     }
 
     #[test]
