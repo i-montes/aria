@@ -23,6 +23,7 @@ import { backgroundLine, bashRoute, refusalText, SAID_NO } from './route.ts'
 import { startProcess } from '../background/client.ts'
 import { object, prepareRun, RUN_DESCRIPTION, RUN_PROPERTIES } from '../background/run.ts'
 import { ariaConfig } from '../lib/config.ts'
+import { handOver, takeOver } from '../lib/rotation.ts'
 import { BLOCK_NOTE, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, resolvePath, secretDirs, secretFiles, subagentProblem, wrapCommand, writableRoots, isAriaOwn } from './policy.ts'
 
 const hasBwrap = (() => {
@@ -45,6 +46,9 @@ const tilde = (p: string) => (p.startsWith(homedir()) ? `~${p.slice(homedir().le
 const ONCE = 'Yes, just this once'
 const ALL = 'Yes, no sandbox for the rest of the session'
 const NO = 'No'
+
+/** The key the session's grants are handed over under at a rotation. */
+const GRANTS = 'sandbox.grants'
 
 const OUTSIDE = 'Only after a command failed because of the sandbox: run it outside it. The user is asked first, unless they already allowed it for this session.'
 
@@ -207,9 +211,11 @@ export default function sandbox(pi: ExtensionAPI) {
     return { block: true, reason: `${path} is outside the project, /tmp and the caches: the sandbox does not allow writing it${canAsk(ctx) ? ' (the user said no)' : ''}.` }
   })
 
-  // A new session (startup, /new, /resume, fork) starts with no permissions.
-  pi.on('session_start', (_event: any, ctx: any) => {
-    grants = emptyGrants()
+  // A new session (startup, /new, /resume, fork) starts with no permissions; Aria's rotation is the same conversation,
+  // so it keeps them (../lib/rotation.ts).
+  pi.on('session_shutdown', () => handOver(GRANTS, grants))
+  pi.on('session_start', (event: any, ctx: any) => {
+    grants = takeOver<typeof grants>(GRANTS, event) ?? emptyGrants()
     showStatus(ctx)
   })
 

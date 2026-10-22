@@ -37,6 +37,22 @@ Pi's files do today).
 - **After.** Aria asks `get_state`, takes `sessionId`, and appends it to the tab's `segments` in `sessions.json`. The
   page is not told to reload: its thread already shows the conversation. If the command fails, Aria logs it and
   tries again at the next quiet moment, never in a loop (one try per compaction).
+  - Pi's `sessionId` is read after the command whatever its answer, and every later `get_state` (a Pi announcing
+    itself, a page reload) records it too when it is not the tab's current segment: a switch whose answer was lost
+    or late is never left out of the chain.
+  - Pi's new session starts from the settings' default model and thinking level, so Aria reads both before the
+    command and sets them again (`set_model`, then `set_thinking_level`) where they differ, then sends the page the
+    state and the context's fill.
+  - Pi reloads the extensions in-process with the new session. The person's session grants (the sandbox's, the
+    connectors') are kept: the command marks the switch on `globalThis` while `newSession` runs, and each extension
+    hands its grants over at `session_shutdown` and takes them back at the `session_start` (reason `new`) that
+    follows (`extensions/lib/rotation.ts`). The MCP servers reconnect, so a stateful MCP session (a browser) starts
+    over.
+- **Held messages.** While a rotation runs, the page's sends, `/` commands, model changes, queue edits, restarts and
+  `chatLoad` wait and then run in order; a second held prompt goes as a follow-up. A stop gives the held prompts back
+  (and, once they are being sent, stops Pi too). A send counts as waiting from the moment it arrives, so no rotation
+  starts under it. While Pi compacts (and the tab has no prompt of its own waiting on it), the same messages wait for
+  the compaction's end: Pi refuses prompts meanwhile.
 
 ## Paged history
 

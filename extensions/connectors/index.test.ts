@@ -5,6 +5,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import connectors from './index.ts'
+import { markRotating } from '../lib/rotation.ts'
 
 const ONCE = 'Yes, just this once'
 const NO = 'No'
@@ -203,6 +204,36 @@ describe('the connectors extension', () => {
     await pi.fire('session_start', { type: 'session_start' }, dock().ctx)
     const d = dock(ONCE)
     await pi.fire('tool_call', call('mcp__notion__notion_create_pages'), d.ctx)
+    expect(d.asked).toHaveLength(1)
+  })
+
+  test('grants_survive_arias_rotation_into_the_reloaded_extension', async () => {
+    const before = await started()
+    await before.fire('tool_call', call('mcp__notion__notion_create_pages'), dock(SESSION).ctx)
+    // The rotate command marks the switch; Pi shuts the old instance down and starts a fresh one (reason `new`).
+    markRotating(true)
+    try {
+      await before.fire('session_shutdown', { type: 'session_shutdown', reason: 'new' }, dock().ctx)
+      const after = fakePi()
+      connectors(after as any)
+      await after.fire('session_start', { type: 'session_start', reason: 'new' }, dock().ctx)
+      const d = dock(ONCE)
+      expect(await after.fire('tool_call', call('mcp__notion__notion_create_pages'), d.ctx)).toBeUndefined()
+      expect(d.asked).toHaveLength(0)
+    } finally {
+      markRotating(false)
+    }
+  })
+
+  test('grants_do_not_survive_a_new_session_that_is_not_a_rotation', async () => {
+    const before = await started()
+    await before.fire('tool_call', call('mcp__notion__notion_create_pages'), dock(SESSION).ctx)
+    await before.fire('session_shutdown', { type: 'session_shutdown', reason: 'new' }, dock().ctx)
+    const after = fakePi()
+    connectors(after as any)
+    await after.fire('session_start', { type: 'session_start', reason: 'new' }, dock().ctx)
+    const d = dock(ONCE)
+    await after.fire('tool_call', call('mcp__notion__notion_create_pages'), d.ctx)
     expect(d.asked).toHaveLength(1)
   })
 

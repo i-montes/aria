@@ -1,6 +1,7 @@
 // Run: bun test extensions
 import { describe, expect, test } from 'bun:test'
 import rotate from './index.ts'
+import { isRotating } from '../lib/rotation.ts'
 import { COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX } from './seed.ts'
 
 function command() {
@@ -55,6 +56,24 @@ describe('/aria-rotate', () => {
       ['custom', 'aria-background', 'done', true, { job: 2 }],
       ['message', reply],
     ])
+  })
+
+  test('marks the switch while the new session starts, and clears the mark after, even when it fails', async () => {
+    const path = [
+      { type: 'message', id: 'u', parentId: null, timestamp: '', message: hello },
+      { type: 'compaction', id: 'c', parentId: 'u', timestamp: '', summary: 'S', firstKeptEntryId: 'u', tokensBefore: 1 },
+    ]
+    const seen: boolean[] = []
+    const { ctx } = stubCtx(path)
+    ctx.newSession = async () => (seen.push(isRotating()), { cancelled: false })
+    await command().handler('', ctx)
+    expect(seen).toEqual([true])
+    expect(isRotating()).toBe(false)
+    ctx.newSession = async () => {
+      throw new Error('no')
+    }
+    await expect(command().handler('', ctx)).rejects.toThrow('no')
+    expect(isRotating()).toBe(false)
   })
 
   test("frames the summary exactly as Pi's compaction summary", () => {

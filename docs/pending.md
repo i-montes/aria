@@ -221,6 +221,18 @@ the MCP servers other apps have, and the shortcut is chosen in the settings (the
   why in its log. Not yet tried on the Omarchy machine.
 - No Touch ID: the keyring opens with the session, as the owner chose (2026-10-21).
 
+## Session rotation
+
+A tab continues in a new Pi session file after each compaction (see the
+[spec](superpowers/specs/2026-10-21-session-rotation-design.md)). Known limits:
+
+- A rotation reloads the extensions in-process: the session grants are kept, but the MCP servers reconnect, so a
+  stateful MCP session (a browser, a login held by the server) starts over.
+- A segment whose tokens exceed the model's window cannot compact (the summary call itself does not fit), so the
+  compaction Aria asks for over 8 MB fails and is tried again once per Pi start; the file keeps growing meanwhile.
+- While Pi compacts, the page's messages wait for the compaction's end; a compaction over a large context takes a
+  model call's time, and the composer says nothing about why the message has not started.
+
 ## Known limits of the page (from the review, deferred)
 
 - The thread is redrawn on every streamed fragment, so text cannot be selected or copied while a run streams; the other regions only redraw when they change.

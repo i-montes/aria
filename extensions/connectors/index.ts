@@ -3,9 +3,10 @@
 // (`aria.json` `connectors`, see ../lib/config.ts: 'read' refuses writes, 'ask' is the default, 'allow' runs them).
 // Calls from a codemode script go through the same `tool_call` hook (with `parentToolCallId`), so they are gated
 // the same. Aria's memory (`engram`) is not a connector and is never gated. "Yes, and don't ask again" lasts until
-// the next session_start, like the sandbox's grants.
+// the next session_start, like the sandbox's grants (a rotation keeps it).
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { ariaConfig, type AccessLevel } from '../lib/config.ts'
+import { handOver, takeOver } from '../lib/rotation.ts'
 import { canAsk } from '../sandbox/card.ts'
 import { connectorCard, preview } from './card.ts'
 import { actionOf, isMcpTool, isWrite, serverOf, type Annotations } from './classify.ts'
@@ -13,6 +14,8 @@ import { actionOf, isMcpTool, isWrite, serverOf, type Annotations } from './clas
 const ONCE = 'Yes, just this once'
 const NO = 'No'
 const NEVER_GATED = new Set(['engram'])
+/** The key the session's grants are handed over under at a rotation. */
+const GRANTS = 'connectors.grants'
 
 interface ToolFacts {
   annotations?: Annotations
@@ -105,9 +108,11 @@ export default function connectors(pi: ExtensionAPI) {
     return { block: true, reason: `The question was closed without an answer: ${connector} ${action} did not run.` }
   })
 
-  // A new session (startup, /new, /resume, fork) starts with no grants; a reconnected server may have new tools.
-  pi.on('session_start', () => {
-    grants = new Set()
+  // A new session (startup, /new, /resume, fork) starts with no grants; Aria's rotation is the same conversation, so it
+  // keeps them (../lib/rotation.ts). A reconnected server may have new tools either way.
+  pi.on('session_shutdown', () => handOver(GRANTS, grants))
+  pi.on('session_start', (event: any) => {
+    grants = takeOver<Set<string>>(GRANTS, event) ?? new Set()
     facts = new Map()
   })
 }
