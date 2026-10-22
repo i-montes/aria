@@ -14,6 +14,7 @@ mod jobs;
 mod jobs_socket;
 mod keyring_cli;
 mod lines;
+mod schedule_store;
 mod ui;
 mod visibility;
 mod watch;
@@ -105,6 +106,8 @@ fn run_dock() {
     // are cloned into the handlers, the chat and the jobs).
     let initial = aria_core::settings::load(&paths).ok().flatten();
     let (paths, vault) = keyring_cli::open_for_dock(paths, initial.as_ref());
+    // The scheduled tasks: changed through every session's jobs socket, run by the scheduler on the tick.
+    let schedules = schedule_store::ScheduleStore::open(paths.clone());
     let vault: keyring_cli::Shared = Arc::new(std::sync::Mutex::new(vault));
     keyring_cli::spawn_sync(vault.clone());
     let mut settings_watch = chat::SettingsWatch::new(paths.settings());
@@ -163,6 +166,7 @@ fn run_dock() {
                 path_var: std::env::var("PATH").unwrap_or_default(),
                 quota_fetcher: Arc::new(aria_core::quota::real_fetcher),
                 jobs: jobs.clone(),
+                schedules: schedules.clone(),
             },
             Arc::new(move |message| {
                 let _ = sender.send(message);

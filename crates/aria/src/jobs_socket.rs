@@ -10,6 +10,7 @@
 
 use crate::jobs::{AgentStart, Job, JobEvent, Jobs, ProcessStart};
 use crate::lines::read_bounded_line;
+use crate::schedule_store::ScheduleStore;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufReader, Write};
@@ -68,6 +69,7 @@ struct Session {
     name: String,
     jobs: Jobs,
     launcher: Arc<dyn Launcher>,
+    schedules: ScheduleStore,
 }
 
 /// A connection's writing half, shared by answers and pushed events. `written` is the highest event `seq` this
@@ -87,7 +89,13 @@ impl Writer {
 
 impl JobsSocket {
     /// Listens on `path` (mode 0600, replacing a stale file) for `session`'s Pi.
-    pub fn bind(path: &Path, session: String, jobs: Jobs, launcher: Arc<dyn Launcher>) -> std::io::Result<JobsSocket> {
+    pub fn bind(
+        path: &Path,
+        session: String,
+        jobs: Jobs,
+        launcher: Arc<dyn Launcher>,
+        schedules: ScheduleStore,
+    ) -> std::io::Result<JobsSocket> {
         if let Some(dir) = path.parent().filter(|dir| !dir.exists()) {
             use std::os::unix::fs::DirBuilderExt;
             std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
@@ -98,7 +106,7 @@ impl JobsSocket {
         listener.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
         let clients: Arc<Mutex<HashMap<u64, UnixStream>>> = Arc::default();
-        let session = Arc::new(Session { name: session, jobs, launcher });
+        let session = Arc::new(Session { name: session, jobs, launcher, schedules });
         {
             let (stop, clients) = (stop.clone(), clients.clone());
             let next = AtomicU64::new(0);
@@ -267,8 +275,28 @@ fn answer(session: &Session, op: Option<&str>, request: &Value) -> Result<Fields
                 Ok(fields(json!({"already": true})))
             }
         }
+        // Scheduled tasks are the dock's, not the session's: any tab can make or change them (the task id is `task`).
+        Some("schedule_create") => {
+            let task = session.schedules.create(request, now_ms())?;
+            Ok(fields(json!({"task": task})))
+        }
+        Some("schedule_list") => Ok(fields(json!({"tasks": session.schedules.list(now_ms())}))),
+        Some("schedule_update") => {
+            let mut input = request.clone();
+            input["id"] = request["task"].clone();
+            let task = session.schedules.update(&input)?;
+            Ok(fields(json!({"task": task})))
+        }
+        Some("schedule_delete") => {
+            session.schedules.delete(request["task"].as_str().ok_or("task is missing")?)?;
+            Ok(Fields::new())
+        }
         _ => Err("unknown op".into()),
     }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
 /// The `job` the request names, when it is one of this session's.
@@ -413,6 +441,7 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
         dir: tempfile::TempDir,
         jobs: Jobs,
         launcher: Arc<FakeLauncher>,
+        schedules: ScheduleStore,
     }
 
     fn setup(with_pi: bool) -> Setup {
@@ -424,12 +453,22 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
             path
         });
         let jobs = Jobs::new(dir.path().join("jobs.json"), Arc::new(|| {}));
-        Setup { dir, jobs, launcher: Arc::new(FakeLauncher { pi, spawned: AtomicUsize::new(0) }) }
+        let paths = aria_core::paths::AriaPaths::new(dir.path().to_path_buf());
+        std::fs::write(paths.mcp(), r#"{"mcpServers":{"notion":{"url":"https://n"}}}"#).unwrap();
+        let schedules = ScheduleStore::open(paths);
+        Setup { dir, jobs, launcher: Arc::new(FakeLauncher { pi, spawned: AtomicUsize::new(0) }), schedules }
     }
 
     fn bind(setup: &Setup, session: &str) -> JobsSocket {
         let path = setup.dir.path().join(format!("{session}.sock"));
-        JobsSocket::bind(&path, session.to_string(), setup.jobs.clone(), setup.launcher.clone()).unwrap()
+        JobsSocket::bind(
+            &path,
+            session.to_string(),
+            setup.jobs.clone(),
+            setup.launcher.clone(),
+            setup.schedules.clone(),
+        )
+        .unwrap()
     }
 
     struct Client {
@@ -465,6 +504,43 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
                 }
             }
         }
+    }
+
+    #[test]
+    fn create_lists_and_deletes_a_task() {
+        let s = setup(false);
+        let socket = bind(&s, "s1");
+        let mut c = Client::connect(&socket);
+        let created = c.ask(json!({"id": 1, "op": "schedule_create", "title": "Notion tasks", "prompt": "My tasks", "at": "07:30", "days": ["mon", "fri"]}));
+        assert_eq!(created["ok"], true, "{created}");
+        let id = created["task"]["id"].as_str().unwrap().to_string();
+        let list = c.ask(json!({"id": 2, "op": "schedule_list"}));
+        assert_eq!(list["tasks"][0]["id"], id.as_str());
+        assert!(list["tasks"][0]["next"].is_i64());
+        assert_eq!(c.ask(json!({"id": 3, "op": "schedule_delete", "id_": 0, "task": id}))["ok"], true);
+        assert_eq!(c.ask(json!({"id": 4, "op": "schedule_list"}))["tasks"], json!([]));
+    }
+
+    #[test]
+    fn create_refuses_an_unknown_connector() {
+        let s = setup(false);
+        let socket = bind(&s, "s1");
+        let mut c = Client::connect(&socket);
+        let refused = c.ask(json!({"id": 1, "op": "schedule_create", "title": "t", "prompt": "p", "at": "07:30", "connectors": {"gmail": "read"}}));
+        assert_eq!(refused["ok"], false);
+        assert!(refused["error"].as_str().unwrap().contains("gmail"), "{refused}");
+    }
+
+    #[test]
+    fn update_pauses_a_task() {
+        let s = setup(false);
+        let socket = bind(&s, "s1");
+        let mut c = Client::connect(&socket);
+        let id = c.ask(json!({"id": 1, "op": "schedule_create", "title": "t", "prompt": "p", "at": "07:30"}))["task"]
+            ["id"]
+            .clone();
+        let paused = c.ask(json!({"id": 2, "op": "schedule_update", "task": id, "enabled": false}));
+        assert_eq!(paused["task"]["enabled"], false, "{paused}");
     }
 
     fn eventually(what: &str, test: impl Fn() -> bool) {
@@ -656,7 +732,8 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
     fn a_folder_it_makes_for_the_socket_is_private_too() {
         let s = setup(false);
         let path = s.dir.path().join("run").join("aria").join("j.sock");
-        let socket = JobsSocket::bind(&path, "s1".into(), s.jobs.clone(), s.launcher.clone()).unwrap();
+        let socket =
+            JobsSocket::bind(&path, "s1".into(), s.jobs.clone(), s.launcher.clone(), s.schedules.clone()).unwrap();
         for dir in [s.dir.path().join("run"), s.dir.path().join("run").join("aria")] {
             let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o700, "{}", dir.display());
@@ -772,7 +849,12 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
     fn a_second_hello_on_one_connection_keeps_what_it_already_gave() {
         // An acked event still buffered for the old forwarder must not go out again after the new hello.
         let s = setup(false);
-        let session = Session { name: "s1".into(), jobs: s.jobs.clone(), launcher: s.launcher.clone() };
+        let session = Session {
+            name: "s1".into(),
+            jobs: s.jobs.clone(),
+            launcher: s.launcher.clone(),
+            schedules: s.schedules.clone(),
+        };
         let (dock, _peer) = UnixStream::pair().unwrap();
         let writer = Arc::new(Mutex::new(Writer { stream: dock, written: 9 }));
         let closed = Arc::new(AtomicBool::new(false));

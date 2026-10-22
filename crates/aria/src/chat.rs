@@ -170,6 +170,8 @@ pub struct ChatCtx {
     /// The dock's background work, every session's. One for the dock's whole life: its spawner thread is the parent
     /// every job is tied to (`PR_SET_PDEATHSIG`), so the last clone going away ends them all.
     pub jobs: Jobs,
+    /// The scheduled tasks every session's jobs socket can change.
+    pub schedules: crate::schedule_store::ScheduleStore,
 }
 
 #[derive(Default)]
@@ -623,7 +625,13 @@ impl Chat {
         }
         let path = jobs_socket::socket_path(&self.ctx.run_dir, &self.session);
         let launcher = Arc::new(SessionLauncher { chat: self.clone() });
-        let socket = match JobsSocket::bind(&path, self.session.clone(), self.ctx.jobs.clone(), launcher) {
+        let socket = match JobsSocket::bind(
+            &path,
+            self.session.clone(),
+            self.ctx.jobs.clone(),
+            launcher,
+            self.ctx.schedules.clone(),
+        ) {
             Ok(socket) => socket,
             Err(error) => {
                 eprintln!("aria: no background work for session {}: the jobs socket: {error}", self.session);
@@ -2064,6 +2072,7 @@ mod tests {
             path_var: "/usr/bin:/bin".into(),
             quota_fetcher,
             jobs: Jobs::new(dir.path().join("jobs.json"), Arc::new(|| {})),
+            schedules: crate::schedule_store::ScheduleStore::open(AriaPaths::new(dir.path().to_path_buf())),
         };
         Harness {
             _turn: turn,
@@ -2414,6 +2423,7 @@ mod tests {
             path_var: "/nonexistent".into(),
             quota_fetcher: Arc::new(|_| None),
             jobs: h.chat.ctx.jobs.clone(),
+            schedules: h.chat.ctx.schedules.clone(),
         };
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);
@@ -2640,6 +2650,7 @@ mod tests {
             path_var: "/usr/bin:/bin".into(),
             quota_fetcher: Arc::new(|_| None),
             jobs: h.chat.ctx.jobs.clone(),
+            schedules: h.chat.ctx.schedules.clone(),
         };
         let sessions = Sessions::new(ctx, emit);
         SessionsHarness { h, sessions, messages }
@@ -3698,6 +3709,7 @@ mod tests {
             path_var: "/usr/bin:/bin".into(),
             quota_fetcher: Arc::new(|_| None),
             jobs: h.chat.ctx.jobs.clone(),
+            schedules: h.chat.ctx.schedules.clone(),
         };
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);
