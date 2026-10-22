@@ -176,14 +176,18 @@ pub fn report(session: &str, activity: Activity) {
         state.last_active = Instant::now();
     }
     state.sessions.insert(session.to_string(), activity);
-    write_if_changed(&mut state);
+    let changed = write_if_changed(&mut state);
+    drop(state);
+    tell(changed);
 }
 
 /// A closed session no longer counts.
 pub fn forget(session: &str) {
     let mut state = state().lock().unwrap_or_else(|e| e.into_inner());
     state.sessions.remove(session);
-    write_if_changed(&mut state);
+    let changed = write_if_changed(&mut state);
+    drop(state);
+    tell(changed);
 }
 
 /// The person opened the dock: failures have been seen, and Aria is awake.
@@ -195,7 +199,9 @@ pub fn seen() {
         }
     }
     state.last_active = Instant::now();
-    write_if_changed(&mut state);
+    let changed = write_if_changed(&mut state);
+    drop(state);
+    tell(changed);
 }
 
 /// One session's face now (the suites check what a chat reported).
@@ -207,17 +213,20 @@ pub fn session_now(session: &str) -> Option<Face> {
 
 fn refresh() {
     let mut state = state().lock().unwrap_or_else(|e| e.into_inner());
-    write_if_changed(&mut state);
+    let changed = write_if_changed(&mut state);
+    drop(state);
+    tell(changed);
 }
 
-fn write_if_changed(state: &mut State) {
+/// Writes the face when it changed; returns it then, for the listeners (told once the state's lock is let go).
+fn write_if_changed(state: &mut State) -> Option<Face> {
     let face = overall(state.sessions.values(), state.last_active, Instant::now());
     if state.written == Some(face) {
-        return;
+        return None;
     }
     if cfg!(test) {
         state.written = Some(face); // the suites' chats must not change the face of the person running them
-        return;
+        return Some(face);
     }
     let path = face_path();
     if let Some(dir) = path.parent() {
@@ -228,11 +237,52 @@ fn write_if_changed(state: &mut State) {
         Ok(()) => state.written = Some(face),
         Err(error) => crate::note(&format!("the face could not be written to {}: {error}", path.display())),
     }
+    Some(face)
+}
+
+type Listener = Box<dyn Fn(&'static str) + Send>;
+
+fn listeners() -> &'static Mutex<Vec<Listener>> {
+    static LISTENERS: OnceLock<Mutex<Vec<Listener>>> = OnceLock::new();
+    LISTENERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Hears every new face (the macOS wing plays it), starting with the one now.
+pub fn on_change(listener: Listener) {
+    let now = {
+        let state = state().lock().unwrap_or_else(|e| e.into_inner());
+        overall(state.sessions.values(), state.last_active, Instant::now())
+    };
+    listener(now.word());
+    listeners().lock().unwrap_or_else(|e| e.into_inner()).push(listener);
+}
+
+fn tell(changed: Option<Face>) {
+    if let Some(face) = changed {
+        for listener in listeners().lock().unwrap_or_else(|e| e.into_inner()).iter() {
+            listener(face.word());
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn on_change_hears_each_change_once() {
+        let heard = std::sync::Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let into = heard.clone();
+        on_change(Box::new(move |word| into.lock().unwrap().push(word)));
+        let session = "face-listener-test";
+        report(session, Activity { asking: true, ..Activity::default() });
+        report(session, Activity { asking: true, ..Activity::default() });
+        forget(session);
+        let heard = heard.lock().unwrap().clone();
+        assert!(heard.len() >= 2, "the face at registration, then asking: {heard:?}");
+        assert!(heard.contains(&"asking"), "{heard:?}");
+        assert!(heard.windows(2).all(|w| w[0] != w[1]), "once per change: {heard:?}");
+    }
 
     fn running(tools: &[&str]) -> Activity {
         Activity { running: true, tools: tools.iter().map(|t| t.to_string()).collect(), ..Activity::default() }
