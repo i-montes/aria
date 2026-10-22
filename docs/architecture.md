@@ -157,6 +157,17 @@ draws it with `ui/chat/parts/trace.js` in a panel left of the column and asks th
 700 → 1,060 px, `crates/aria/src/dock`). Nothing is written to disk; the trace holds the current turn only
 ([design](superpowers/specs/2026-10-22-trace-design.md)).
 
+## Aria's face
+
+`crates/aria/src/face.rs` turns what every tab is doing into one word (asking, error, delegating, editing, working,
+reading, thinking, scheduled, done, idle, sleeping) and writes it to `$XDG_RUNTIME_DIR/aria/face` (`~/.aria/run/face`
+on macOS); listeners registered with `face::on_change` hear each change. On Omarchy the bar widget
+(`install/omarchy/aria.face/Face.qml`) reads the file and plays it. On macOS the dock plays it itself: `face_motion.rs`
+is that widget's logic ported to Rust (springs, timers, sequences; pure and seeded, so it is tested without a display),
+`dock/face_layers.rs` draws a frame as a Core Animation layer tree in the widget's 96 x 96 space, and
+`dock/face_wing.rs` is the black wing beside the notch (`aria_mac::wing` decides where), stepped by the dock's 16 ms tick
+while it is visible; a click sends `toggle`. `ARIA_FACE=<word>` forces a face, to look at one.
+
 ## Data and safety
 
 - Keys live in the system keyring (`aria-core/src/keyring.rs`: Apple's `security` on macOS, `secret-tool` on Linux).

@@ -253,6 +253,14 @@ A tab continues in a new Pi session file after each compaction (see the
 - Only the current turn is kept: no saved traces, no past turns, no comparing runs, no export.
 - A subagent's own subagents appear only as far as they reach the session's watch socket.
 
+## Aria's face on macOS
+
+- Checked live on one notched MacBook screen (the wing at the notch's right edge, 38 x 32 pt, under 1 % CPU); the
+  drawing was checked by rendering every face to images. A click on the wing and a setup with an external display were
+  not tried by hand yet.
+- No setting hides the wing; no right-click menu or hover details.
+- Omarchy's bar keeps its QML widget; `face_motion.rs` is not used there.
+
 ## Known limits of the page (from the review, deferred)
 
 - The thread is redrawn on every streamed fragment, so text cannot be selected or copied while a run streams; the other regions only redraw when they change.
