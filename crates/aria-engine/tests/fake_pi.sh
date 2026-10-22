@@ -1,13 +1,29 @@
 #!/bin/sh
 # A stand-in for `pi --mode rpc` used by the tests: it answers a few commands in Pi's JSONL format.
 field() { printf '%s' "$2" | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p"; }
+# The session it runs on, as Pi takes it from `--session-dir`/`--session-id`; `/aria-rotate` moves it to `rotated-<n>`.
+sid=""; sdir=""; rotations=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --session-id) sid="$2"; shift ;;
+    --session-dir) sdir="$2"; shift ;;
+  esac
+  shift
+done
 while IFS= read -r line; do
   id=$(field id "$line")
   type=$(field type "$line")
   case "$type" in
     get_state)
-      printf '{"type":"response","id":"%s","command":"get_state","success":true,"data":{"isStreaming":false,"thinkingLevel":"medium","model":{"provider":"opencode-go","id":"deepseek-v4.1-flash"}}}\n' "$id" ;;
+      printf '{"type":"response","id":"%s","command":"get_state","success":true,"data":{"isStreaming":false,"thinkingLevel":"medium","model":{"provider":"opencode-go","id":"deepseek-v4.1-flash"},"sessionId":"%s","sessionFile":"%s"}}\n' "$id" "$sid" "${sdir:+$sdir/$sid.jsonl}" ;;
     prompt)
+      # The rotate extension's command: no model turn; the session moves to a new id.
+      if [ "$(field message "$line")" = "/aria-rotate" ]; then
+        rotations=$((rotations + 1)); sid="rotated-$rotations"
+        printf '{"type":"rotate_seen","session":"%s"}\n' "$sid"
+        printf '{"type":"response","id":"%s","command":"prompt","success":true,"data":{"disposition":"handled"}}\n' "$id"
+        continue
+      fi
       if [ "$(field message "$line")" = "FAIL" ]; then
         printf '{"type":"response","id":"%s","command":"prompt","success":false,"error":"Cannot submit a prompt while compaction is in progress"}\n' "$id"
         continue
@@ -32,7 +48,7 @@ while IFS= read -r line; do
     notify)
       printf '{"type":"extension_ui_request","id":"n1","method":"notify","message":"careful","notifyType":"warning"}\n' ;;
     get_commands)
-      printf '{"type":"response","id":"%s","command":"get_commands","success":true,"data":{"commands":[{"name":"effort","description":"Set effort","source":"extension"}]}}\n' "$id" ;;
+      printf '{"type":"response","id":"%s","command":"get_commands","success":true,"data":{"commands":[{"name":"effort","description":"Set effort","source":"extension"},{"name":"aria-rotate","description":"Rotate","source":"extension"}]}}\n' "$id" ;;
     get_available_models)
       printf '{"type":"response","id":"%s","command":"get_available_models","success":true,"data":{"models":[{"provider":"opencode-go","id":"glm-5.3","name":"GLM 5.3","input":["text"]},{"provider":"opencode-go","id":"kimi-k3","name":"Kimi K3","input":["text","image"]}]}}\n' "$id" ;;
     get_messages)
@@ -40,6 +56,10 @@ while IFS= read -r line; do
     get_session_stats)
       printf '{"type":"response","id":"%s","command":"get_session_stats","success":true,"data":{"contextUsage":{"tokens":60000,"contextWindow":200000,"percent":30}}}\n' "$id" ;;
     compact)
+      # Pi's manual compaction says so as events before it answers.
+      printf '{"type":"compact_seen"}\n'
+      printf '{"type":"compaction_start","reason":"manual"}\n'
+      printf '{"type":"compaction_end","reason":"manual","aborted":false,"willRetry":false}\n'
       printf '{"type":"response","id":"%s","command":"compact","success":true,"data":{"tokensBefore":150000,"estimatedTokensAfter":32000,"instructions":"%s"}}\n' "$id" "$(field customInstructions "$line")" ;;
     export_html)
       printf '{"type":"response","id":"%s","command":"export_html","success":false,"error":"Nothing to export"}\n' "$id" ;;

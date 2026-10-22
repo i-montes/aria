@@ -41,6 +41,14 @@ pub const UPDATE_WAITS: &str =
     "An Aria update is waiting for the background work to finish; stop it from the background list to update now.";
 /// Output lines the page gets when its `jobOutput` names no number.
 const PAGE_OUTPUT_LINES: usize = 80;
+/// The rotate extension's command: continue the conversation in a new session file that starts from the compaction.
+const ROTATE_COMMAND: &str = "aria-rotate";
+/// How long the command may take (it writes the new file; no model call).
+const ROTATE_TIMEOUT: Duration = Duration::from_secs(60);
+/// A segment file larger than this is compacted when the tab is quiet, which then rotates it.
+const SEGMENT_LIMIT: u64 = 8 * 1024 * 1024;
+/// `sessions.json` is read, changed and written by the page's saves and by rotations: one at a time.
+static SESSIONS_FILE: Mutex<()> = Mutex::new(());
 
 /// Raises and removes the desktop notification for a prompt nobody can see.
 ///
@@ -209,6 +217,24 @@ struct Inner {
     compacting: bool,
     /// The turn watchdog stopped this run already (it stops a run once; the next `agent_start` clears it).
     watchdog_fired: bool,
+    /// A compaction ended and the tab has not rotated since: it rotates the next time it is quiet (kept across Pi
+    /// restarts; cleared when the rotation is tried, whatever its outcome, so a failure waits for the next compaction).
+    rotate_due: bool,
+    /// This Pi was asked to compact an oversized segment already (once per Pi).
+    compact_asked: bool,
+    /// The file of the segment the running Pi is on, from `get_state`.
+    session_file: Option<PathBuf>,
+}
+
+/// The tab is quiet: its Pi runs, with no run going, no prompt waiting to be accepted, no dialog open and no
+/// compaction under way.
+fn quiet(inner: &Inner) -> bool {
+    inner.engine.is_some()
+        && !inner.running
+        && !inner.compacting
+        && !inner.restart_pending
+        && inner.dialogs.is_empty()
+        && inner.pending_prompts.is_empty()
 }
 
 /// What `get_state` tells about the model and thinking level. `running` is deliberately not taken from
@@ -217,11 +243,14 @@ fn apply_state(inner: &mut Inner, data: &Value) {
     let model = data["model"]["provider"].as_str().zip(data["model"]["id"].as_str()).map(|(p, id)| format!("{p}/{id}"));
     inner.model = model.or(inner.model.take());
     inner.thinking = data["thinkingLevel"].as_str().map(str::to_string);
+    if let Some(file) = data["sessionFile"].as_str().filter(|file| !file.is_empty()) {
+        inner.session_file = Some(PathBuf::from(file));
+    }
 }
 
 #[derive(Clone)]
 pub struct Chat {
-    /// The session (tab) this chat is: Pi's `--session-id` and the notifications' key.
+    /// The session (tab) this chat is: its id everywhere (sockets, jobs, notifications); Pi runs on its current segment.
     session: String,
     ctx: Arc<ChatCtx>,
     emit: Emit,
@@ -325,6 +354,21 @@ impl Chat {
             // `/reload`: this tab's Pi starts again (reading its extensions, skills and templates), after its run.
             PageMessage::EnginesRestart => self.restart_when_idle(),
             PageMessage::SetModel { id, model } => self.set_model(id, model),
+            PageMessage::ChatEarlier { cursor } => {
+                let chat = self.clone();
+                std::thread::spawn(move || {
+                    let page = aria_core::history::earlier_page(
+                        &agent::sessions_dir(&chat.ctx.paths),
+                        &chat.segments(),
+                        cursor,
+                    );
+                    chat.emit(DockMessage::ChatEvent {
+                        event: for_page(
+                            json!({"type": "earlier", "messages": page.messages, "cursor": page.cursor, "more": page.more}),
+                        ),
+                    });
+                });
+            }
             PageMessage::ListFiles { id, query } => {
                 let chat = self.clone();
                 std::thread::spawn(move || {
@@ -627,7 +671,7 @@ impl Chat {
                 "--session-dir".into(),
                 agent::sessions_dir(&self.ctx.paths).display().to_string(),
                 "--session-id".into(),
-                self.session.clone(),
+                self.current_segment(),
             ],
             env: pi::session_env(&self.ctx.paths, &self.ctx.path_var, &workdir),
             unset: pi::unset_for_pi(std::env::vars()),
@@ -651,6 +695,8 @@ impl Chat {
             inner.tools.clear();
             inner.compacting = false;
             inner.workdir = Some(workdir);
+            inner.compact_asked = false;
+            inner.session_file = None;
             inner.spawn_args = spec_args.clone();
             inner.pending_prompts.clear();
             // Another Pi may list other models (an extension, a changed models file): ask it again.
@@ -731,6 +777,122 @@ impl Chat {
         self.refresh_context(engine);
         // Not forced: a run that already settled may have asked a moment ago.
         self.refresh_quota(false);
+        if self.is_current(engine) {
+            self.when_quiet();
+        }
+    }
+
+    /// The tab's segments (Pi session ids, oldest first) as `sessions.json` keeps them; a tab not in it is its own id.
+    fn segments(&self) -> Vec<String> {
+        let list = sessions::load(&self.ctx.paths);
+        list.sessions
+            .iter()
+            .find(|entry| entry.id == self.session)
+            .map(sessions::segments_of)
+            .unwrap_or_else(|| vec![self.session.clone()])
+    }
+
+    /// The Pi session the tab runs on: its last segment.
+    fn current_segment(&self) -> String {
+        self.segments().pop().unwrap_or_else(|| self.session.clone())
+    }
+
+    /// The tab may have become quiet (a run settled, a compaction ended, its Pi started). A rotation that is due is
+    /// tried; otherwise a segment file over `SEGMENT_LIMIT` is compacted (once per Pi), and the compaction's end then
+    /// rotates it. The work runs on its own thread.
+    fn when_quiet(&self) {
+        let (engine, rotate, file) = {
+            let mut inner = self.inner.lock().unwrap();
+            if !quiet(&inner) {
+                return;
+            }
+            let Some(engine) = inner.engine.clone() else { return };
+            let rotate = std::mem::take(&mut inner.rotate_due);
+            let file = if inner.compact_asked { None } else { inner.session_file.clone() };
+            (engine, rotate, file)
+        };
+        if rotate {
+            let chat = self.clone();
+            std::thread::spawn(move || chat.rotate(&engine));
+            return;
+        }
+        let Some(file) = file.filter(|file| std::fs::metadata(file).is_ok_and(|meta| meta.len() > SEGMENT_LIMIT))
+        else {
+            return;
+        };
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.compact_asked || inner.rotate_due || !quiet(&inner) {
+                return;
+            }
+            inner.compact_asked = true;
+        }
+        let session = self.session.clone();
+        std::thread::spawn(move || {
+            crate::note(&format!("tab {session}: its session file {} is over 8 MB: compacting it", file.display()));
+            match engine.request("compact", json!({}), PI_COMMANDS[0].1) {
+                Ok(response) if response.success => {}
+                Ok(response) => crate::note(&format!(
+                    "tab {session}: the compaction of an oversized session failed: {}",
+                    response.error.unwrap_or_default()
+                )),
+                Err(error) => {
+                    crate::note(&format!("tab {session}: the compaction of an oversized session failed: {error}"))
+                }
+            }
+        });
+    }
+
+    /// Sends `/aria-rotate`; when Pi then runs on another session, that session becomes the tab's current segment. Any
+    /// failure is logged and waits for the next compaction.
+    fn rotate(&self, engine: &Engine) {
+        let fail = |why: String| {
+            crate::note(&format!(
+                "tab {}: the session did not rotate ({why}); it is tried again after the next compaction",
+                self.session
+            ))
+        };
+        // Unknown to Pi, the command would go to the model as an ordinary message.
+        let known = engine
+            .request("get_commands", json!({}), REQUEST_TIMEOUT)
+            .ok()
+            .filter(|response| response.success)
+            .is_some_and(|response| {
+                response.data["commands"]
+                    .as_array()
+                    .is_some_and(|commands| commands.iter().any(|c| c["name"] == ROTATE_COMMAND))
+            });
+        if !known {
+            return fail(format!("Pi has no /{ROTATE_COMMAND} command"));
+        }
+        match engine.request("prompt", json!({"message": format!("/{ROTATE_COMMAND}")}), ROTATE_TIMEOUT) {
+            Ok(response) if response.success => {}
+            Ok(response) => return fail(response.error.unwrap_or_else(|| "the command failed".into())),
+            Err(error) => return fail(error.to_string()),
+        }
+        let state = match engine.request("get_state", json!({}), REQUEST_TIMEOUT) {
+            Ok(response) if response.success => response.data,
+            Ok(_) => return fail("no state after the command".into()),
+            Err(error) => return fail(error.to_string()),
+        };
+        if self.is_current(engine) {
+            apply_state(&mut self.inner.lock().unwrap(), &state);
+        }
+        let Some(segment) = state["sessionId"].as_str().filter(|id| !id.is_empty()) else {
+            return fail("Pi did not say its session".into());
+        };
+        let recorded = {
+            let _file = SESSIONS_FILE.lock().unwrap_or_else(|e| e.into_inner());
+            if self.current_segment() == segment {
+                return fail("Pi stayed on the same session".into());
+            }
+            sessions::append_segment(&self.ctx.paths, &self.session, segment)
+        };
+        match recorded {
+            Ok(true) => crate::note(&format!("tab {}: the conversation continues in session {segment}", self.session)),
+            Ok(false) => fail(format!("the tab is not in sessions.json, so session {segment} was not recorded")),
+            Err(error) => fail(format!("session {segment} could not be recorded: {error}")),
+        }
     }
 
     fn list(&self, id: u64, command: &'static str, key: &'static str) {
@@ -859,7 +1021,18 @@ impl Chat {
                             inner.compacting = false;
                         }
                         Some("compaction_start") => self.inner.lock().unwrap().compacting = true,
-                        Some("compaction_end") => self.inner.lock().unwrap().compacting = false,
+                        // A compaction (automatic or asked) rotates the tab once it is quiet: now, or when its run
+                        // settles.
+                        Some("compaction_end") => {
+                            {
+                                let mut inner = self.inner.lock().unwrap();
+                                inner.compacting = false;
+                                if raw["aborted"] != json!(true) {
+                                    inner.rotate_due = true;
+                                }
+                            }
+                            self.when_quiet();
+                        }
                         // The last tool ending restarts the watchdog's clock (this event already set it).
                         Some("tool_execution_end") => {
                             let id = raw["toolCallId"].as_str().unwrap_or_default();
@@ -898,6 +1071,7 @@ impl Chat {
                                 let chat = self.clone();
                                 std::thread::spawn(move || chat.refresh_context(&engine));
                                 self.refresh_quota(false);
+                                self.when_quiet();
                             }
                         }
                         _ => {}
@@ -1295,6 +1469,21 @@ impl Sessions {
             }
             PageMessage::SessionsSave { sessions: entries, active } => {
                 let _ = self.ctx.paths.ensure_root();
+                // The page never owns a tab's chain of segments: each tab keeps the ones stored for it.
+                let _file = SESSIONS_FILE.lock().unwrap_or_else(|e| e.into_inner());
+                let stored = sessions::load(&self.ctx.paths);
+                let entries = entries
+                    .into_iter()
+                    .map(|mut entry| {
+                        entry.segments = stored
+                            .sessions
+                            .iter()
+                            .find(|kept| kept.id == entry.id)
+                            .map(|kept| kept.segments.clone())
+                            .unwrap_or_default();
+                        entry
+                    })
+                    .collect();
                 let _ = sessions::save(&self.ctx.paths, &SessionList { sessions: entries, active });
             }
             // Credentials or packages changed.
@@ -3386,6 +3575,162 @@ mod tests {
         });
         assert!(!to_bb, "a session without background work is not told");
         jobs.stop_all();
+    }
+
+    // ---- session rotation: a tab's chain of segments ------------------------------------------------
+
+    /// The harness's tab `s1` in `sessions.json`, with these segments.
+    fn save_tab(h: &Harness, segments: &[&str]) {
+        let entry = aria_core::sessions::SessionEntry {
+            id: "s1".into(),
+            title: "Tab".into(),
+            segments: segments.iter().map(|s| s.to_string()).collect(),
+        };
+        sessions::save(&h.paths, &SessionList { sessions: vec![entry], active: Some("s1".into()) }).unwrap();
+    }
+
+    fn stored_segments(h: &Harness) -> Vec<String> {
+        sessions::load(&h.paths).sessions.first().map(sessions::segments_of).unwrap_or_default()
+    }
+
+    fn session_id_arg(h: &Harness) -> String {
+        let args = h.chat.test_spawn_args();
+        let at = args.iter().position(|a| a == "--session-id").expect("--session-id is passed");
+        args[at + 1].clone()
+    }
+
+    /// A session file of `bytes` (sparse) where the fake Pi says its session `id` lives.
+    fn segment_file_of_size(h: &Harness, id: &str, bytes: u64) {
+        let dir = agent::sessions_dir(&h.paths);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::File::create(dir.join(format!("{id}.jsonl"))).unwrap().set_len(bytes).unwrap();
+    }
+
+    #[test]
+    fn after_a_compaction_the_settled_tab_rotates_once_and_a_later_pi_starts_on_the_new_segment() {
+        let h = harness();
+        save_tab(&h, &[]);
+        ready(&h);
+        h.chat.test_send_raw("start");
+        wait_for(&h, "the run", |m| event_of(m, "agent_start"));
+        h.chat.test_send_raw("compaction_end");
+        wait_for(&h, "the compaction", |m| event_of(m, "compaction_end"));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(drain(&h).iter().all(|m| !event_of(m, "rotate_seen")), "never during a run");
+
+        h.chat.test_send_raw("settle");
+        wait_for(&h, "the rotation", |m| event_of(m, "rotate_seen"));
+        eventually("the new segment is recorded", || stored_segments(&h) == ["s1", "rotated-1"]);
+
+        // Another run settles with no compaction: nothing more.
+        h.chat.test_send_raw("start");
+        h.chat.test_send_raw("settle");
+        wait_for(&h, "the second settle", |m| event_of(m, "agent_settled"));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(drain(&h).iter().all(|m| !event_of(m, "rotate_seen")), "one rotation per compaction");
+        assert_eq!(stored_segments(&h), ["s1", "rotated-1"]);
+
+        h.chat.shutdown();
+        ready(&h);
+        assert_eq!(session_id_arg(&h), "rotated-1", "Pi starts on the tab's current segment");
+    }
+
+    #[test]
+    fn a_compaction_while_the_tab_is_quiet_rotates_at_once() {
+        let h = harness();
+        save_tab(&h, &[]);
+        ready(&h);
+        h.chat.handle(PageMessage::PiCommand { id: 1, command: "compact".into(), args: Value::Null });
+        wait_for(&h, "the rotation", |m| event_of(m, "rotate_seen"));
+        eventually("the new segment is recorded", || stored_segments(&h) == ["s1", "rotated-1"]);
+    }
+
+    #[test]
+    fn pi_starts_on_the_last_stored_segment_or_the_tab_id() {
+        let h = harness();
+        ready(&h);
+        assert_eq!(session_id_arg(&h), "s1", "a tab not in sessions.json runs on its own id");
+        h.chat.shutdown();
+        save_tab(&h, &["s1", "seg-2"]);
+        ready(&h);
+        assert_eq!(session_id_arg(&h), "seg-2");
+    }
+
+    #[test]
+    fn a_segment_over_8_mb_is_compacted_then_rotated_and_compacted_once_per_pi() {
+        let h = harness();
+        save_tab(&h, &[]);
+        segment_file_of_size(&h, "s1", 8 * 1024 * 1024 + 1);
+        // The next segment is large too: only the once-per-Pi rule stops a second compaction.
+        segment_file_of_size(&h, "rotated-1", 9 * 1024 * 1024);
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
+        wait_for(&h, "the compaction asked", |m| event_of(m, "compact_seen"));
+        wait_for(&h, "the rotation that follows", |m| event_of(m, "rotate_seen"));
+        eventually("the new segment is recorded", || stored_segments(&h) == ["s1", "rotated-1"]);
+        send(&h, "x");
+        wait_for(&h, "a run settles", |m| event_of(m, "agent_settled"));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(drain(&h).iter().all(|m| !event_of(m, "compact_seen")), "compact is sent once per Pi");
+    }
+
+    #[test]
+    fn a_segment_of_8_mb_or_less_is_left_alone() {
+        let h = harness();
+        save_tab(&h, &[]);
+        segment_file_of_size(&h, "s1", 8 * 1024 * 1024);
+        ready(&h);
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(drain(&h).iter().all(|m| !event_of(m, "compact_seen") && !event_of(m, "rotate_seen")));
+    }
+
+    #[test]
+    fn chat_earlier_answers_a_page_read_from_the_tabs_segment_files() {
+        let h = harness();
+        save_tab(&h, &["s1", "seg-2"]);
+        let dir = agent::sessions_dir(&h.paths);
+        std::fs::create_dir_all(&dir).unwrap();
+        let header = |id: &str| json!({"type": "session", "version": 3, "id": id, "timestamp": "t", "cwd": "/w"});
+        let image = json!({"type": "image", "data": "AAAA", "mimeType": "image/png"});
+        let old = [
+            header("s1"),
+            json!({"type": "message", "id": "m1", "parentId": null, "timestamp": "t",
+                   "message": {"role": "user", "content": "one", "timestamp": 1}}),
+            json!({"type": "message", "id": "m2", "parentId": "m1", "timestamp": "t",
+                   "message": {"role": "toolResult", "content": [image], "timestamp": 2}}),
+        ];
+        let lines = |entries: &[Value]| entries.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n";
+        std::fs::write(dir.join("2026-10-21T00-00-00-000Z_s1.jsonl"), lines(&old)).unwrap();
+        std::fs::write(dir.join("2026-10-21T01-00-00-000Z_seg-2.jsonl"), lines(&[header("seg-2")])).unwrap();
+
+        h.chat.handle(PageMessage::ChatEarlier { cursor: None });
+        let DockMessage::ChatEvent { event } = wait_for(&h, "the earlier page", |m| event_of(m, "earlier")) else {
+            unreachable!()
+        };
+        assert_eq!(event["messages"][0]["content"], json!("one"));
+        assert_eq!(event["messages"][1]["content"][0], json!({"type": "image", "mimeType": "image/png"}));
+        assert_eq!(event["cursor"], json!({"segment": 0, "index": 0}));
+        assert_eq!(event["more"], json!(false));
+        assert!(drain(&h).iter().all(|m| !matches!(m, DockMessage::ChatEngine { .. })), "no Pi is needed");
+    }
+
+    #[test]
+    fn saving_the_tabs_keeps_each_tabs_stored_segments() {
+        let s = sessions_harness();
+        let entry = |id: &str, title: &str, segments: &[&str]| aria_core::sessions::SessionEntry {
+            id: id.into(),
+            title: title.into(),
+            segments: segments.iter().map(|s| s.to_string()).collect(),
+        };
+        sessions::save(&s.h.paths, &SessionList { sessions: vec![entry("aa", "Old", &["aa", "x-2"])], active: None })
+            .unwrap();
+        // The page renames a tab, adds one, and never owns the chain (no segments, or stale ones).
+        s.sessions.handle(PageMessage::SessionsSave {
+            sessions: vec![entry("aa", "Renamed", &[]), entry("bb", "New", &["forged"])],
+            active: Some("bb".into()),
+        });
+        let list = sessions::load(&s.h.paths);
+        assert_eq!(list.sessions, vec![entry("aa", "Renamed", &["aa", "x-2"]), entry("bb", "New", &[])]);
+        assert_eq!(list.active.as_deref(), Some("bb"));
     }
 
     #[cfg(target_os = "linux")]
