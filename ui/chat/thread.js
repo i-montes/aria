@@ -34,8 +34,28 @@ function renderCard(dialog, t) {
   return renderPermission({ id: dialog.id, kind: card.kind, summary: card.summary, detail: card.detail || card.path, jev: card.jev, options: card.options }, {}, t)
 }
 
-/** The group of the run going on now (design: it is open while Aria works, with its live pulse). */
-export const isLive = (state, index) => state.running && index >= (state.turnFrom ?? 0)
+/** The group of the run going on now (design: it is open while Aria works, with its live pulse): the turn's last group,
+ * and only while no message to the owner came after it. A message interrupts the chain: the group before it folds and
+ * stops pulsing, so only the one being worked on shows as live. -1 when none is. */
+const liveGroups = new WeakMap()
+function liveGroup(state) {
+  if (!state.running) return -1
+  const known = liveGroups.get(state)
+  if (known !== undefined) return known
+  let live = -1
+  for (let i = state.messages.length - 1; i >= (state.turnFrom ?? 0); i--) {
+    const entry = state.messages[i]
+    if (entry.kind === 'assistant' && entry.text) break
+    if (entry.kind === 'tools') {
+      live = i
+      break
+    }
+  }
+  liveGroups.set(state, live)
+  return live
+}
+
+export const isLive = (state, index) => index === liveGroup(state)
 
 /** Open while live unless closed by hand; folded afterwards unless opened by hand. */
 export const groupOpen = (state, index, opened, closed) => (isLive(state, index) ? !closed.has(index) : opened.has(index))
