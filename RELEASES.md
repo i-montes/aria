@@ -5,6 +5,18 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.6.0 — 2026-10-21
+
+### New
+
+- the macOS dock reloads its page when the web view's process dies
+- the Omarchy dock reloads its page when the web view's process dies
+
+### Fixed
+
+- reload follow-ups: unique request ids, a reload log line, docs
+- a reloaded page gets every tab's conversation back
+
 ## 0.5.0 — 2026-10-21
 
 ### New
