@@ -11,6 +11,7 @@ mod chat;
 mod control;
 mod dock;
 mod face;
+mod face_motion;
 mod handlers;
 mod jobs;
 mod jobs_socket;
