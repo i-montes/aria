@@ -5,6 +5,12 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.10.0 — 2026-10-22
+
+### New
+
+- Aria's face in the Omarchy bar, put there by the installer
+
 ## 0.9.0 — 2026-10-22
 
 ### New
