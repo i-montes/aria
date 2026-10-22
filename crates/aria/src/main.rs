@@ -476,6 +476,7 @@ fn report_mac_hotkey(
                     hotkey: String::new(),
                     taken: error.taken().iter().map(|s| s.display()).collect(),
                     os: ShortcutPlatform::Mac.name().into(),
+                    animation: aria_core::bridge::animation_of(ShortcutPlatform::Mac).into(),
                 });
             }
             None

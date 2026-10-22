@@ -52,15 +52,28 @@ const handlers = {
   open: () => {
     if (state.mode === 'chat') booted.then(() => chat.show())
     else onboarding.onOpen() // in the middle of a setup, keep the place
-    document.body.classList.remove('show-notice')
+    document.body.classList.remove('show-notice', 'notice-up')
+    const focus = () => {
+      if (state.mode === 'chat') document.getElementById('chat-input')?.focus()
+      else document.querySelector('#flow [data-nav]')?.focus()
+    }
+    if (document.body.classList.contains('compositor-anim')) {
+      // Nothing animates on this platform (dock.css): the open state goes on once the chat is built (after the show
+      // scheduled above), and `opened` goes back at once, since no transition ends.
+      booted.then(() => {
+        document.body.classList.add('open')
+        focus()
+        post({ type: 'opened' })
+      })
+      return
+    }
     document.body.classList.remove('open')
     void document.body.offsetWidth
     // Two frames, so the closed state is on screen before the transition starts.
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         document.body.classList.add('open')
-        if (state.mode === 'chat') document.getElementById('chat-input')?.focus()
-        else document.querySelector('#flow [data-nav]')?.focus()
+        focus()
       }),
     )
   },
@@ -84,6 +97,8 @@ const handlers = {
     if (typeof message.hotkey === 'string') state.hotkey = message.hotkey
     state.taken = Array.isArray(message.taken) ? message.taken : []
     if (message.os) state.os = message.os
+    // Who animates the open and the close: the compositor (Omarchy; the page stays painted, dock.css) or the page.
+    if (message.animation) document.body.classList.toggle('compositor-anim', message.animation === 'compositor')
     onboarding.platformChanged()
     // The first-run notice goes up with the default; the shortcut really registered (a fallback, or none) can come
     // after it: the notice shown says that one.
@@ -170,8 +185,11 @@ function renderNotice() {
 
 function showNotice() {
   renderNotice()
-  document.body.classList.add('show-notice')
+  document.body.classList.add('show-notice', 'notice-up')
   setTimeout(() => document.body.classList.remove('show-notice'), NOTICE_MS)
+  // Under the compositor's animation the dock stays painted: it paints nothing while the surface is mapped for the
+  // notice, until after the dock has unmapped it (NOTICE_UNMAP_MS in dock/gtk.rs).
+  setTimeout(() => document.body.classList.remove('notice-up'), NOTICE_MS + 1000)
 }
 
 // ---- onboarding ------------------------------------------------------------------------------

@@ -2,8 +2,17 @@
 //! commands `visibility::step` decides and carries the messages of `aria_core::bridge`.
 //!
 //! Two WebKitGTK facts that cost the first Aria prototype days: the window must be sized with
-//! `set_size_request` (a default size never paints a layer surface with a WebView child), and
-//! `WEBKIT_DISABLE_DMABUF_RENDERER=1` must be set before GTK starts (done in `ui.rs`).
+//! `set_size_request` (a default size never paints a layer surface with a WebView child), and WebKit's renderer must
+//! be chosen before GTK starts (`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`, done in `ui.rs`).
+//!
+//! Nothing animates the dock on Omarchy. WebKitGTK 2.54 shows stale frames while a transparent surface animates its
+//! opacity, so the page never animates its own open and keeps its open look while hidden; and the compositor's own
+//! layer fade is off too (the rule `aria_hyprland` registers), since it would run over the empty first buffers (WebKit
+//! renders nothing while the surface is unmapped and its first render after a map takes 70 ms, 200 ms the first time
+//! in a process) and the content would pop in mid-fade. So an open maps the surface at once and the dock shows the
+//! moment WebKit has its first frame, complete (the window has its real height from the start, `build_window`); a close
+//! unmaps at once. The page is also mapped once at start, opened but off the monitor's edge, once the first
+//! conversation has reached it, so WebKit brings its renderer up and renders the real chat before the first open.
 //!
 //! The page runs in WebKit's own web process. When that process dies the surface would stay mapped and paint
 //! nothing, so the dock reloads the page (after the `Recovery` delay) and brings the new page up to date: the
@@ -26,8 +35,12 @@ use webkit2gtk::{
     WebContext, WebContextExt, WebView, WebViewExt,
 };
 
-/// The close transition (140 ms + 20 ms delay in dock.css) plus a frame of margin.
-const CLOSE_MS: u64 = 180;
+/// Nothing to wait for on a close: the surface unmaps at once.
+const CLOSE_MS: u64 = 0;
+/// How long the surface stays mapped for the warm-up at start: WebKit's renderer coming up and a first render.
+const WARM_MS: u64 = 500;
+/// The warm-up waits for the first conversation to reach the page (its chat is built then), this long at most.
+const WARM_WAIT_MS: u64 = 8000;
 /// The page, loaded at start and again after its web process dies.
 const PAGE: &str = "aria://app/index.html";
 /// The corner notice fades after 8 s in the page (`NOTICE_MS` in app.js); the surface goes a bit later.
@@ -63,6 +76,11 @@ pub struct Dock {
     notice_visible: Cell<bool>,
     notice_generation: Cell<u64>,
     notice_wanted: Cell<bool>,
+    /// The surface is mapped, unseen, for the warm-up (once, at start).
+    warming: Cell<bool>,
+    warmed: Cell<bool>,
+    /// A conversation has reached the page: the warm-up can build the chat for real.
+    history_seen: Cell<bool>,
     /// Is the dock on screen? Read by the chat (a prompt that nobody can see needs a notification).
     visible: Arc<AtomicBool>,
     on_message: OnMessage,
@@ -131,6 +149,9 @@ impl Dock {
             notice_visible: Cell::new(false),
             notice_generation: Cell::new(0),
             notice_wanted: Cell::new(false),
+            warming: Cell::new(false),
+            warmed: Cell::new(false),
+            history_seen: Cell::new(false),
             visible,
             on_message,
         });
@@ -172,6 +193,11 @@ impl Dock {
 
     /// Sends a message to the page; before the page has loaded it waits in a queue.
     pub fn send(&self, message: &DockMessage) {
+        if let DockMessage::Session { message: inner, .. } = message {
+            if matches!(&**inner, DockMessage::ChatEvent { event } if event["type"] == "history") {
+                self.history_seen.set(true);
+            }
+        }
         let Ok(json) = serde_json::to_string(message) else { return };
         self.replay.borrow_mut().remember(message, &json);
         if self.ready.get() {
@@ -211,6 +237,69 @@ impl Dock {
         if self.notice_wanted.take() {
             self.show_notice_now();
         }
+        self.warm_up_when_ready();
+    }
+
+    /// Warms up once the first conversation has reached the page (so the chat it builds is the real one), or after
+    /// `WARM_WAIT_MS` without one.
+    fn warm_up_when_ready(self: &Rc<Self>) {
+        if self.warmed.get() {
+            return;
+        }
+        let weak: Weak<Dock> = Rc::downgrade(self);
+        let started = std::time::Instant::now();
+        glib::timeout_add_local(Duration::from_millis(250), move || {
+            let Some(dock) = weak.upgrade() else { return glib::ControlFlow::Break };
+            if dock.warmed.get() {
+                return glib::ControlFlow::Break;
+            }
+            if dock.history_seen.get() || started.elapsed() >= Duration::from_millis(WARM_WAIT_MS) {
+                dock.warm_up();
+                return glib::ControlFlow::Break;
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    /// Maps the surface once, unseen, with the page opened, so WebKit brings its renderer up and renders the chat now
+    /// and not on the first open (see the module doc).
+    fn warm_up(self: &Rc<Self>) {
+        if self.warmed.replace(true) || self.state.get() != State::Hidden || self.notice_visible.get() {
+            return;
+        }
+        self.warming.set(true);
+        self.click_through.set(true);
+        // Off the monitor's right edge: mapped and rendered as the real thing, seen by nobody.
+        self.window.set_layer_shell_margin(Edge::Right, -(super::SURFACE_WIDE + 40));
+        self.window.set_keyboard_mode(KeyboardMode::None);
+        self.window.show_all();
+        self.refresh_input_region();
+        // Opened as well: the chat gets built and rendered now, so the first open's render is a short one.
+        self.send(&DockMessage::Open { monitor: self.monitor.borrow().clone() });
+        let weak: Weak<Dock> = Rc::downgrade(self);
+        glib::timeout_add_local_once(Duration::from_millis(WARM_MS), move || {
+            let Some(dock) = weak.upgrade() else { return };
+            if dock.end_warm_up() && dock.state.get() == State::Hidden && !dock.notice_visible.get() {
+                dock.window.hide();
+            }
+        });
+    }
+
+    /// Ends the warm-up: the page shows itself again, and clicks are taken again unless the notice is up. True when
+    /// one was going.
+    fn end_warm_up(&self) -> bool {
+        if !self.warming.replace(false) {
+            return false;
+        }
+        self.window.set_layer_shell_margin(Edge::Right, 0);
+        if self.state.get() == State::Hidden {
+            self.send(&DockMessage::Close);
+        }
+        if !self.notice_visible.get() {
+            self.click_through.set(false);
+            self.refresh_input_region();
+        }
+        true
     }
 
     /// The page's web process died: messages wait in the queue until the page is loaded again, after the
@@ -314,9 +403,9 @@ impl Dock {
                 let was_notice = self.notice_visible.replace(false);
                 self.notice_generation.set(self.notice_generation.get() + 1);
                 self.click_through.set(false);
-                // A surface that is still mapped (re-opened mid-close, or showing the notice) does not
-                // get the keyboard back by changing the mode, so it is mapped again.
-                if previous == State::Closing || was_notice {
+                // A surface still mapped for the notice or the warm-up does not get the keyboard back by changing
+                // the mode, so it is mapped again (once the page says it is painted).
+                if was_notice || self.end_warm_up() {
                     self.window.hide();
                 }
                 let monitor = self.place_on_focused_monitor();
@@ -335,8 +424,9 @@ impl Dock {
                 self.send(&DockMessage::Problem { code });
             }
             Command::StartClose => {
-                // The surface stays mapped for the close animation; it must not keep the keyboard.
+                // Unmapped at once.
                 self.window.set_keyboard_mode(KeyboardMode::None);
+                self.window.hide();
                 self.send(&DockMessage::Close);
                 self.generation.set(self.generation.get() + 1);
                 self.schedule_close_finished(self.generation.get());
@@ -357,9 +447,14 @@ impl Dock {
         });
     }
 
-    /// Moves the surface to the monitor Hyprland says has the focus; returns its name.
+    /// Moves the surface to the monitor Hyprland says has the focus and gives it that monitor's usable height before it
+    /// maps: the compositor confirms the height only after the map, and a page laid out at the window's minimum until
+    /// then hands the fade-in a half-made first frame. Returns the monitor's name.
     fn place_on_focused_monitor(&self) -> String {
         let Some(focused) = aria_hyprland::focused_monitor() else { return "(compositor's choice)".into() };
+        if let Some(height) = focused.usable_height {
+            self.window.set_size_request(super::surface_width(self.wide.get()), height);
+        }
         match gdk_monitor_at(focused.x, focused.y) {
             Some(monitor) => {
                 self.window.set_monitor(&monitor);
@@ -390,8 +485,12 @@ fn build_window() -> gtk::Window {
         window.set_anchor(edge, true);
     }
     window.set_keyboard_mode(KeyboardMode::None);
-    // set_size_request, not set_default_size (see the module comment). The compositor sets the height.
-    window.set_size_request(super::SURFACE_NARROW, 100);
+    // set_size_request, not set_default_size (see the module comment). The compositor sets the height once the
+    // surface maps; until then the window has this one, and the page lays out to it: the focused monitor's usable
+    // height now, so the page's first paint after the first map is its real layout (at the minimum, the composer
+    // would sit at the top of a 100 px page for the ~200 ms the relayout takes, after the fade-in).
+    let height = aria_hyprland::focused_monitor().and_then(|monitor| monitor.usable_height).unwrap_or(100);
+    window.set_size_request(super::SURFACE_NARROW, height);
     window.set_app_paintable(true);
     if let Some(visual) = WidgetExt::screen(&window).and_then(|screen| screen.rgba_visual()) {
         window.set_visual(Some(&visual));

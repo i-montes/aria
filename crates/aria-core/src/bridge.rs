@@ -173,9 +173,11 @@ pub enum DockMessage {
     /// The host's shortcut in use, for the notice, the hints and the settings' Shortcut row (`Super + A`,
     /// `Option + Space`); `taken` the ones tried before it that something else holds (the chosen one, the default), in
     /// the same form; `os` (`linux`, `mac`) which modifier names the settings row records. An empty `hotkey` means none
-    /// could be registered (macOS, every candidate taken; `taken` lists them all).
+    /// could be registered (macOS, every candidate taken; `taken` lists them all). `animation`: who animates the open and
+    /// the close: `compositor` (Omarchy: nothing does, the surface maps and unmaps at once and the page keeps its open
+    /// look) or `page` (macOS: the page's own transitions).
     #[serde(rename = "platform")]
-    Platform { hotkey: String, taken: Vec<String>, os: String },
+    Platform { hotkey: String, taken: Vec<String>, os: String, animation: String },
     /// Aria's version (`0.2.0`, from the workspace's `Cargo.toml`), sent once when the dock starts; the settings show it.
     #[serde(rename = "version")]
     Version { version: String },
@@ -289,7 +291,16 @@ impl DockMessage {
             hotkey: in_use.shortcut.display(),
             taken: in_use.taken.iter().map(Shortcut::display).collect(),
             os: platform.name().into(),
+            animation: animation_of(platform).into(),
         }
+    }
+}
+
+/// Who animates the dock's open and close on a platform (see `DockMessage::Platform`).
+pub fn animation_of(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Linux => "compositor",
+        Platform::Mac => "page",
     }
 }
 
@@ -583,16 +594,19 @@ mod tests {
             value(DockMessage::Platform {
                 hotkey: "Control + Option + Space".into(),
                 taken: vec!["Option + Space".into()],
-                os: "mac".into()
+                os: "mac".into(),
+                animation: "page".into()
             }),
-            json!({"type": "platform", "hotkey": "Control + Option + Space", "taken": ["Option + Space"], "os": "mac"})
+            json!({"type": "platform", "hotkey": "Control + Option + Space", "taken": ["Option + Space"], "os": "mac", "animation": "page"})
         );
+        assert_eq!(animation_of(Platform::Linux), "compositor");
+        assert_eq!(animation_of(Platform::Mac), "page");
         let linux = |text| crate::shortcut::parse(text, Platform::Linux).unwrap();
         let in_use =
             InUse { shortcut: linux("SUPER + SHIFT + A"), taken: vec![linux("CTRL + ALT + K"), linux("SUPER + A")] };
         assert_eq!(
             value(DockMessage::platform(&in_use, Platform::Linux)),
-            json!({"type": "platform", "hotkey": "Super + Shift + A", "taken": ["Ctrl + Alt + K", "Super + A"], "os": "linux"}),
+            json!({"type": "platform", "hotkey": "Super + Shift + A", "taken": ["Ctrl + Alt + K", "Super + A"], "os": "linux", "animation": "compositor"}),
             "the shortcut in use and the taken ones, in the page's form"
         );
         assert_eq!(

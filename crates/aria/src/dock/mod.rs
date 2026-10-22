@@ -189,7 +189,12 @@ mod tests {
     }
 
     fn platform(hotkey: &str) -> DockMessage {
-        DockMessage::Platform { hotkey: hotkey.into(), taken: Vec::new(), os: "linux".into() }
+        DockMessage::Platform {
+            hotkey: hotkey.into(),
+            taken: Vec::new(),
+            os: "linux".into(),
+            animation: "compositor".into(),
+        }
     }
 
     fn remember(replay: &mut Replay, message: &DockMessage) -> String {

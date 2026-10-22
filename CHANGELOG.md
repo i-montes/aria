@@ -118,6 +118,15 @@ and never writes them.
 | Hyprland / Carbon (runtime only, nothing on disk) | the bind is now the `shortcut` setting, or the first free fallback (`SUPER + SHIFT + A`, `SUPER + ALT + A`; macOS `Control + Option + Space`, `Command + Option + Space`) when it is taken | not applicable | set `shortcut` back to `""`, or stop the dock; on Hyprland `hyprctl eval 'hl.unbind("<the shortcut>")'` |
 | `rustup` target `aarch64-apple-darwin` and mise's `zig@0.14.1` (developer machines that run `sh tools/check-macos.sh`) | the Rust standard library for the Mac target and zig as its C compiler, installed on first use | none, new | `rustup target remove aarch64-apple-darwin`; `mise uninstall zig@0.14.1` |
 
+## 2026-10-22 — the dock after WebKitGTK 2.54 (`sh install/install.sh --local target/release/aria`)
+
+Omarchy's update of the day brought WebKitGTK 2.54, whose Skia compositor paints a transparent layer surface wrong under the renderer setting the dock used (only what changes), and shows stale frames while such a surface animates its opacity. Nothing on disk changes beyond the binary; what the dock asks of Hyprland at run time does.
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| Hyprland (runtime only, nothing on disk) | the `aria-dock` layer rule stays `blur = false, no_anim = true`, said outright (a rule declared again under the same name keeps the fields it does not name); nothing animates the dock now, neither the page nor Hyprland | not applicable | stop the dock; `hyprctl reload` drops every rule registered at run time |
+| WebKit (runtime only, in the dock's environment) | `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` instead of `WEBKIT_DISABLE_DMABUF_RENDERER=1`; a value set in the environment is kept | not applicable | set either variable yourself |
+
 ## 2026-10-22 — Aria's face in the Omarchy bar (`aria bar install`, run by the installer)
 
 First put in by hand as a test, then taken out with `aria bar remove` and put back by `sh install/install.sh --local`.

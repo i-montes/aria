@@ -48,6 +48,15 @@ body.open aside { opacity: 1; transform: none; transition: opacity 200ms var(--o
 body.open .content { animation: enter 300ms var(--content) both; }
 @keyframes enter { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
 
+/* Omarchy (body.compositor-anim, from the dock's `platform` message): nothing animates the open and the close; the
+   surface maps and unmaps at once and the page keeps its open look while hidden, never animating it (WebKitGTK 2.54
+   shows stale frames when a transparent surface animates its opacity). It shows nothing only while the surface is
+   mapped for the first-run notice (`notice-up`). */
+body.compositor-anim .veil, body.compositor-anim aside { opacity: 1; transform: none; transition: none; }
+body.compositor-anim .trace, body.compositor-anim.open.wide .trace { transition: none; }
+body.compositor-anim.open .content, body.compositor-anim.open.mode-chat .chat { animation: none; }
+body.compositor-anim.notice-up .veil, body.compositor-anim.notice-up aside { visibility: hidden; }
+
 .dot { display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: glow 2400ms ease-in-out infinite; flex: none; }
 @keyframes glow {
   0%, 100% { box-shadow: 0 0 14px rgba(185, 168, 255, 0.5); }

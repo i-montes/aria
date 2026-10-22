@@ -3,11 +3,34 @@
 
 #[cfg(target_os = "linux")]
 pub fn init() {
-    // WebKitGTK's DMA-BUF renderer draws nothing in a layer-shell surface on this setup.
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    let set = |name: &str| std::env::var_os(name).is_some();
+    if let Some((name, value)) =
+        renderer_env(set("WEBKIT_DISABLE_DMABUF_RENDERER"), set("WEBKIT_DMABUF_RENDERER_FORCE_SHM"))
+    {
+        std::env::set_var(name, value);
     }
     gtk::init().expect("gtk");
+}
+
+/// How WebKitGTK draws the dock: its DMA-BUF renderer with shared-memory buffers. GPU buffers draw nothing in a
+/// layer-shell surface here, and since WebKitGTK 2.54 the old way around that (`WEBKIT_DISABLE_DMABUF_RENDERER`) paints
+/// only what changes, so the rest of the transparent dock is see-through and it flickers. A variable the person set
+/// themselves is left as it is.
+#[cfg(target_os = "linux")]
+fn renderer_env(disable_set: bool, shm_set: bool) -> Option<(&'static str, &'static str)> {
+    (!disable_set && !shm_set).then_some(("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1"))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::renderer_env;
+
+    #[test]
+    fn the_dock_draws_with_shared_memory_buffers_unless_the_person_chose() {
+        assert_eq!(renderer_env(false, false), Some(("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1")));
+        assert_eq!(renderer_env(true, false), None, "their WEBKIT_DISABLE_DMABUF_RENDERER stays");
+        assert_eq!(renderer_env(false, true), None, "their WEBKIT_DMABUF_RENDERER_FORCE_SHM stays");
+    }
 }
 
 /// Calls `tick` on the UI thread every `ms` milliseconds.

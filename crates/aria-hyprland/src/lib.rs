@@ -36,6 +36,9 @@ pub struct Monitor {
     pub name: String,
     pub x: i32,
     pub y: i32,
+    /// The height a layer surface anchored to the top and the bottom gets there, in logical pixels: the monitor's
+    /// less what is reserved above and below it (the bar). None when `hyprctl monitors` does not say.
+    pub usable_height: Option<i32>,
 }
 
 fn lua_string(text: &str) -> String {
@@ -53,7 +56,9 @@ pub fn hypr_combo(shortcut: &Shortcut) -> String {
 
 /// The Lua that binds `shortcut` to `<exe> toggle` and adds the dock's layer rule. It unbinds `previous` (the
 /// shortcuts Aria bound before) and the new one first, so a change leaves no old bind behind and registering twice
-/// never leaves two binds that would toggle twice.
+/// never leaves two binds that would toggle twice. The layer rule turns blur off and Hyprland's layer animation off: the
+/// dock appears and goes at once (`aria::dock::gtk` says why nothing animates it). `no_anim` is said outright because a
+/// rule declared again under the same name keeps the fields it does not name.
 pub fn registration_lua(exe: &Path, shortcut: &Shortcut, previous: &[Shortcut]) -> String {
     let combo = hypr_combo(shortcut);
     let mut unbind: Vec<String> = Vec::new();
@@ -253,10 +258,18 @@ pub fn socket_path(name: &str) -> Result<PathBuf, HyprError> {
 pub fn parse_focused(monitors_json: &str) -> Option<Monitor> {
     let monitors: serde_json::Value = serde_json::from_str(monitors_json).ok()?;
     let focused = monitors.as_array()?.iter().find(|m| m["focused"].as_bool() == Some(true))?;
+    // `reserved` is [left, top, right, bottom], logical pixels; `height` is physical, `scale` makes it logical.
+    let scale = focused["scale"].as_f64().filter(|s| *s > 0.0).unwrap_or(1.0);
+    let reserved = |side: usize| focused["reserved"][side].as_f64().unwrap_or(0.0);
+    let usable_height = focused["height"]
+        .as_f64()
+        .map(|height| ((height / scale).round() - reserved(1) - reserved(3)) as i32)
+        .filter(|height| *height > 0);
     Some(Monitor {
         name: focused["name"].as_str()?.to_string(),
         x: focused["x"].as_i64()? as i32,
         y: focused["y"].as_i64()? as i32,
+        usable_height,
     })
 }
 
@@ -449,7 +462,7 @@ mod tests {
 
     const MONITORS: &str = r#"[
         {"id":0,"name":"DP-1","width":1920,"height":1080,"x":0,"y":0,"scale":1.25,"focused":false},
-        {"id":1,"name":"DP-2","width":1920,"height":1080,"x":1536,"y":0,"scale":1.25,"focused":true}
+        {"id":1,"name":"DP-2","width":1920,"height":1080,"x":1536,"y":0,"scale":1.25,"reserved":[0,22,0,0],"focused":true}
     ]"#;
 
     #[test]
@@ -797,7 +810,16 @@ mod tests {
 
     #[test]
     fn parse_focused_picks_focused() {
-        assert_eq!(parse_focused(MONITORS), Some(Monitor { name: "DP-2".into(), x: 1536, y: 0 }));
+        assert_eq!(
+            parse_focused(MONITORS),
+            Some(Monitor { name: "DP-2".into(), x: 1536, y: 0, usable_height: Some(842) }),
+            "1080 physical at 1.25 is 864 logical, less the 22 px bar above"
+        );
+        let plain =
+            parse_focused(r#"[{"name":"DP-1","width":1920,"height":1080,"x":0,"y":0,"scale":1,"focused":true}]"#);
+        assert_eq!(plain.and_then(|m| m.usable_height), Some(1080), "nothing reserved, scale 1");
+        let no_height = parse_focused(r#"[{"name":"DP-1","x":0,"y":0,"focused":true}]"#);
+        assert_eq!(no_height.map(|m| m.usable_height), Some(None), "no height: the compositor decides");
     }
 
     #[test]
@@ -825,7 +847,10 @@ mod tests {
             assert_eq!(&request[..n], b"j/monitors");
             stream.write_all(MONITORS.as_bytes()).unwrap();
         });
-        assert_eq!(focused_monitor_at(&path), Some(Monitor { name: "DP-2".into(), x: 1536, y: 0 }));
+        assert_eq!(
+            focused_monitor_at(&path),
+            Some(Monitor { name: "DP-2".into(), x: 1536, y: 0, usable_height: Some(842) })
+        );
         server.join().unwrap();
     }
 
