@@ -232,6 +232,19 @@ A tab continues in a new Pi session file after each compaction (see the
 - While Pi compacts, the page's messages wait for the compaction's end; a compaction over a large context takes a
   model call's time, and the composer says nothing about why the message has not started.
 
+## Scheduled tasks
+
+- A task runs only while Aria runs; a sleeping computer is never woken (`pmset`), so a missed time runs when it is back,
+  once, and only on the same day.
+- On macOS a click on the notification does not open the dock (an unbundled app has no notification action); the tab is
+  marked unread for when it opens.
+- No intervals ("every 2 hours") and no results sent outside Aria (email, Telegram).
+- Tasks are changed by asking Aria; the `/schedules` panel only pauses, resumes and deletes them.
+- A successful scheduled run was checked live only with the fake Pi (a real one needs a key); the late start, the tab,
+  Pi's grants and a refused run's record were checked live on macOS. Not yet tried on Omarchy.
+- `chat::tests::a_compaction_with_no_run_shows_in_the_state` fails about one full `cargo test` run in two (on main
+  too): a timing flake to look at.
+
 ## Known limits of the page (from the review, deferred)
 
 - The thread is redrawn on every streamed fragment, so text cannot be selected or copied while a run streams; the other regions only redraw when they change.
