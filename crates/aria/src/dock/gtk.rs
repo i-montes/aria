@@ -4,8 +4,12 @@
 //! Two WebKitGTK facts that cost the first Aria prototype days: the window must be sized with
 //! `set_size_request` (a default size never paints a layer surface with a WebView child), and
 //! `WEBKIT_DISABLE_DMABUF_RENDERER=1` must be set before GTK starts (done in `ui.rs`).
+//!
+//! The page runs in WebKit's own web process. When that process dies the surface would stay mapped and paint
+//! nothing, so the dock reloads the page (after the `Recovery` delay) and brings the new page up to date: the
+//! `Replay`ed `Platform` and `Version`, then `Open` and `Problem` when the dock is on screen, then what was queued.
 
-use super::{content_type, UI};
+use super::{content_type, Recovery, Replay, UI};
 use crate::visibility::{self, Command, Event, State};
 use aria_core::bridge::{DockMessage, PageMessage};
 use gtk::prelude::*;
@@ -15,7 +19,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use webkit2gtk::{
     NavigationPolicyDecision, NavigationPolicyDecisionExt, PolicyDecisionExt, PolicyDecisionType, SecurityManagerExt,
     SettingsExt, URIRequestExt, URISchemeRequest, URISchemeRequestExt, UserContentManager, UserContentManagerExt,
@@ -27,6 +31,8 @@ const SURFACE_WIDTH: i32 = 700;
 const DOCK_WIDTH: i32 = 470;
 /// The close transition (140 ms + 20 ms delay in dock.css) plus a frame of margin.
 const CLOSE_MS: u64 = 180;
+/// The page, loaded at start and again after its web process dies.
+const PAGE: &str = "aria://app/index.html";
 /// The corner notice fades after 8 s in the page (`NOTICE_MS` in app.js); the surface goes a bit later.
 const NOTICE_UNMAP_MS: u64 = 8600;
 
@@ -39,9 +45,20 @@ pub struct Dock {
     /// Bumped on every show and close, so a close timer from an earlier close is ignored.
     generation: Cell<u64>,
     problem: RefCell<Option<String>>,
-    /// The page has loaded and can take messages; until then they wait in `queued`.
+    /// The page has loaded and can take messages; until then (and from its process's death until the reloaded page
+    /// is ready) they wait in `queued`.
     ready: Cell<bool>,
     queued: RefCell<Vec<String>>,
+    /// The monitor of the last open, sent again in `Open` to a page reloaded while the dock is on screen.
+    monitor: RefCell<String>,
+    /// How long to wait before reloading after the page's process dies.
+    recovery: RefCell<Recovery>,
+    /// The messages sent only once, sent again to a reloaded page.
+    replay: RefCell<Replay>,
+    /// Bumped on every death of the page's process, so a reload timer from an earlier death is ignored.
+    reloads: Cell<u64>,
+    /// The page was reloaded after a death and has not said `ready` yet: when it does, it is brought up to date.
+    reloaded: Cell<bool>,
     /// While the first-run notice is on screen the surface is mapped but lets every click through.
     click_through: Rc<Cell<bool>>,
     notice_visible: Cell<bool>,
@@ -104,6 +121,11 @@ impl Dock {
             problem: RefCell::new(None),
             ready: Cell::new(false),
             queued: RefCell::new(Vec::new()),
+            monitor: RefCell::new(String::new()),
+            recovery: RefCell::new(Recovery::default()),
+            replay: RefCell::new(Replay::default()),
+            reloads: Cell::new(0),
+            reloaded: Cell::new(false),
             click_through,
             notice_visible: Cell::new(false),
             notice_generation: Cell::new(0),
@@ -124,10 +146,16 @@ impl Dock {
                 Err(error) => eprintln!("aria: ignoring a page message: {error}"),
             }
         });
+        let weak = Rc::downgrade(&dock);
+        dock.webview.connect_web_process_terminated(move |_, reason| {
+            if let Some(dock) = weak.upgrade() {
+                dock.page_died(reason);
+            }
+        });
         // Escape is the page's to interpret (it closes a picker, stops a run, leaves a panel, and only then asks to
         // close with `closeRequest`): a window-level handler here would close the dock on every Escape.
 
-        dock.webview.load_uri("aria://app/index.html");
+        dock.webview.load_uri(PAGE);
         dock
     }
 
@@ -143,6 +171,7 @@ impl Dock {
     /// Sends a message to the page; before the page has loaded it waits in a queue.
     pub fn send(&self, message: &DockMessage) {
         let Ok(json) = serde_json::to_string(message) else { return };
+        self.replay.borrow_mut().remember(message, &json);
         if self.ready.get() {
             self.deliver(&json);
         } else {
@@ -162,12 +191,43 @@ impl Dock {
 
     fn page_ready(self: &Rc<Self>) {
         self.ready.set(true);
+        // On the first load what was sent before is all in the queue; a reloaded page also needs what was sent once
+        // and, when the dock is on screen, the open (as `Command::Show` sends it).
+        if self.reloaded.take() {
+            for json in self.replay.borrow().messages() {
+                self.deliver(&json);
+            }
+            if self.state.get() != State::Hidden {
+                self.send(&DockMessage::Open { monitor: self.monitor.borrow().clone() });
+                let code = self.problem.borrow().clone().unwrap_or_default();
+                self.send(&DockMessage::Problem { code });
+            }
+        }
         for json in self.queued.take() {
             self.deliver(&json);
         }
         if self.notice_wanted.take() {
             self.show_notice_now();
         }
+    }
+
+    /// The page's web process died: messages wait in the queue until the page is loaded again, after the
+    /// `Recovery` delay.
+    fn page_died(self: &Rc<Self>, reason: webkit2gtk::WebProcessTerminationReason) {
+        self.ready.set(false);
+        self.reloaded.set(true);
+        let delay = self.recovery.borrow_mut().died(Instant::now());
+        eprintln!("aria: the page's process died ({reason:?}); reloading in {} ms", delay.as_millis());
+        self.reloads.set(self.reloads.get() + 1);
+        let reloads = self.reloads.get();
+        let weak: Weak<Dock> = Rc::downgrade(self);
+        glib::timeout_add_local_once(delay, move || {
+            if let Some(dock) = weak.upgrade() {
+                if dock.reloads.get() == reloads {
+                    dock.webview.load_uri(PAGE);
+                }
+            }
+        });
     }
 
     /// The first-run corner notice, shown while the dock is closed: the surface is mapped without the
@@ -240,6 +300,7 @@ impl Dock {
                     self.window.hide();
                 }
                 let monitor = self.place_on_focused_monitor();
+                *self.monitor.borrow_mut() = monitor.clone();
                 // On demand, not exclusive: Hyprland still focuses the dock when it maps (so you can type at
                 // once), but a click on another window takes the keyboard away. Exclusive made every other
                 // window impossible to focus while Aria was open.
