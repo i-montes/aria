@@ -169,7 +169,7 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         // background jobs, which the dock owns for every session).
         PageMessage::ChatSend { .. }
         | PageMessage::ChatAbort
-        | PageMessage::ChatLoad
+        | PageMessage::ChatLoad { .. }
         | PageMessage::EnginesRestart
         | PageMessage::ChatShown { .. }
         | PageMessage::ChatClearQueue { .. }

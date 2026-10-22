@@ -1701,9 +1701,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       renderSoon()
     },
     mount,
-    /** Wakes every saved tab's Pi without showing anything: each one's history arrives in its own state. */
+    /**
+     * Wakes every saved tab's Pi without showing anything: each one's history arrives in its own state. Runs once per page
+     * load, so it asks as a fresh page: a Pi still running from before a reload sends its conversation again.
+     */
     preload() {
-      for (const session of preloadOrder(tabs)) post({ type: 'chatLoad' }, session)
+      for (const session of preloadOrder(tabs)) post({ type: 'chatLoad', fresh: true }, session)
     },
     show() {
       post({ type: 'chatLoad' })

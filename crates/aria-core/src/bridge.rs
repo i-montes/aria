@@ -52,9 +52,13 @@ pub enum PageMessage {
     },
     #[serde(rename = "chatAbort")]
     ChatAbort,
-    /// The dock opened: tell the page where Aria works and how it is doing.
+    /// The dock opened: tell the page where Aria works and how it is doing. `fresh` is a page that just booted (its
+    /// first look at each tab): a Pi that is already running replays its conversation to it.
     #[serde(rename = "chatLoad")]
-    ChatLoad,
+    ChatLoad {
+        #[serde(default)]
+        fresh: bool,
+    },
     /// Cancel a queued message: Pi can only empty its queue, so the others are queued again, in order: those in `steer`
     /// for the next gap between steps, those in `keep` for when the run ends.
     #[serde(rename = "chatClearQueue")]
@@ -328,7 +332,8 @@ mod tests {
             PageMessage::ChatSend { text: "hi".into(), behavior: None, attachments: vec![] }
         );
         assert_eq!(page(r#"{"type":"chatAbort"}"#), PageMessage::ChatAbort);
-        assert_eq!(page(r#"{"type":"chatLoad"}"#), PageMessage::ChatLoad);
+        assert_eq!(page(r#"{"type":"chatLoad"}"#), PageMessage::ChatLoad { fresh: false });
+        assert_eq!(page(r#"{"type":"chatLoad","fresh":true}"#), PageMessage::ChatLoad { fresh: true });
         assert_eq!(page(r#"{"type":"installClaudeBridge","id":12}"#), PageMessage::InstallClaudeBridge { id: 12 });
         assert_eq!(page(r#"{"type":"enginesRestart"}"#), PageMessage::EnginesRestart);
         assert_eq!(page(r#"{"type":"mcpScan","id":7}"#), PageMessage::McpScan { id: 7 });
