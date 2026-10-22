@@ -445,8 +445,13 @@ mod tests {
         let (_d, w, _) = watch();
         let code = format!("const a = 1;\n{}", "x".repeat(300));
         let _c = child(&w, &[json!({"t": "tool", "name": "codemode", "args": code})]);
-        let agents = eventually(&w, "the tool", |a| a[0]["steps"].as_array().is_some_and(|s| !s.is_empty()));
-        assert_eq!(agents[0]["steps"][0]["target"], "const a = 1;");
+        // Wait for the tool step itself: a running agent may show its "live" step first.
+        let agents = eventually(&w, "the tool", |a| {
+            a[0]["steps"].as_array().is_some_and(|s| s.iter().any(|step| step["kind"] == "tool"))
+        });
+        let steps = agents[0]["steps"].as_array().unwrap();
+        let tool = steps.iter().find(|step| step["kind"] == "tool").unwrap();
+        assert_eq!(tool["target"], "const a = 1;");
     }
 
     #[test]
