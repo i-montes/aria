@@ -8,8 +8,12 @@
 //!
 //! A click on the veil closes the dock (the page sends `closeRequest`); click-through, which is what
 //! GTK gets from an input region, is not implemented on macOS yet (docs/pending.md).
+//!
+//! The page runs in WebKit's own web content process. When that process dies the panel would stay on screen and paint
+//! nothing, so the dock reloads the page (after the `Recovery` delay) and brings the new page up to date: the
+//! `Replay`ed `Platform` and `Version`, then `Open` and `Problem` when the dock is on screen, then what was queued.
 
-use super::{content_type, UI};
+use super::{content_type, Recovery, Replay, UI};
 use crate::visibility::{self, Command, Event, State};
 use aria_core::bridge::{DockMessage, PageMessage};
 use block2::RcBlock;
@@ -25,20 +29,22 @@ use objc2_foundation::{
     NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer, NSURLRequest, NSURLResponse, NSURL,
 };
 use objc2_web_kit::{
-    WKScriptMessage, WKScriptMessageHandler, WKURLSchemeHandler, WKURLSchemeTask, WKUserContentController, WKWebView,
-    WKWebViewConfiguration,
+    WKNavigationDelegate, WKScriptMessage, WKScriptMessageHandler, WKURLSchemeHandler, WKURLSchemeTask,
+    WKUserContentController, WKWebView, WKWebViewConfiguration,
 };
 use std::cell::{Cell, RefCell};
 use std::ptr::NonNull;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The surface covers the design's 700 px veil; the page draws the dock column inside it.
 const SURFACE_WIDTH: f64 = 700.0;
 /// The close transition (140 ms + 20 ms delay in dock.css) plus a frame of margin.
 const CLOSE_MS: u64 = 180;
+/// The page, loaded at start and again after its web process dies.
+const PAGE: &str = "aria://app/index.html";
 /// The corner notice fades after 8 s in the page (`NOTICE_MS` in app.js); the panel goes a bit later.
 const NOTICE_UNMAP_MS: u64 = 8600;
 
@@ -52,13 +58,26 @@ pub struct Dock {
     _controller: Retained<WKUserContentController>,
     _scheme: Retained<SchemeHandler>,
     _script: Retained<ScriptHandler>,
+    /// The web view holds its navigation delegate weakly: this field is what keeps it alive.
+    _navigation: Retained<NavigationDelegate>,
     state: Cell<State>,
     /// Bumped on every show and close, so a close timer from an earlier close is ignored.
     generation: Cell<u64>,
     problem: RefCell<Option<String>>,
-    /// The page has loaded and can take messages; until then they wait in `queued`.
+    /// The page has loaded and can take messages; until then (and from its process's death until the reloaded page
+    /// is ready) they wait in `queued`.
     ready: Cell<bool>,
     queued: RefCell<Vec<String>>,
+    /// The monitor of the last open, sent again in `Open` to a page reloaded while the dock is on screen.
+    monitor: RefCell<String>,
+    /// How long to wait before reloading after the page's process dies.
+    recovery: RefCell<Recovery>,
+    /// The messages sent only once, sent again to a reloaded page.
+    replay: RefCell<Replay>,
+    /// Bumped on every death of the page's process, so a reload timer from an earlier death is ignored.
+    reloads: Cell<u64>,
+    /// The page was reloaded after a death and has not said `ready` yet: when it does, it is brought up to date.
+    reloaded: Cell<bool>,
     notice_visible: Cell<bool>,
     notice_generation: Cell<u64>,
     notice_wanted: Cell<bool>,
@@ -103,6 +122,7 @@ impl Dock {
         // Rc exists, before the page can load.
         let dock_cell: Rc<RefCell<Option<Weak<Dock>>>> = Rc::new(RefCell::new(None));
         let script = ScriptHandler::new(mtm, dock_cell.clone());
+        let navigation = NavigationDelegate::new(mtm, dock_cell.clone());
         let scheme = SchemeHandler::new(mtm);
         let config = unsafe { WKWebViewConfiguration::new(mtm) };
         let controller = unsafe { WKUserContentController::new(mtm) };
@@ -128,6 +148,7 @@ impl Dock {
             let draws = NSNumber::numberWithBool(false);
             let _: () = msg_send![&*webview, setValue: &*draws, forKey: ns_string!("drawsBackground")];
         }
+        unsafe { webview.setNavigationDelegate(Some(ProtocolObject::from_ref(&*navigation))) };
         panel.setContentView(Some(&webview));
 
         let dock = Rc::new(Dock {
@@ -137,11 +158,17 @@ impl Dock {
             _controller: controller,
             _scheme: scheme,
             _script: script,
+            _navigation: navigation,
             state: Cell::new(State::Hidden),
             generation: Cell::new(0),
             problem: RefCell::new(None),
             ready: Cell::new(false),
             queued: RefCell::new(Vec::new()),
+            monitor: RefCell::new(String::new()),
+            recovery: RefCell::new(Recovery::default()),
+            replay: RefCell::new(Replay::default()),
+            reloads: Cell::new(0),
+            reloaded: Cell::new(false),
             notice_visible: Cell::new(false),
             notice_generation: Cell::new(0),
             notice_wanted: Cell::new(false),
@@ -151,10 +178,14 @@ impl Dock {
         });
         *dock_cell.borrow_mut() = Some(Rc::downgrade(&dock));
 
-        if let Some(url) = NSURL::URLWithString(ns_string!("aria://app/index.html")) {
-            unsafe { dock.webview.loadRequest(&NSURLRequest::requestWithURL(&url)) };
-        }
+        dock.load_page();
         dock
+    }
+
+    fn load_page(&self) {
+        if let Some(url) = NSURL::URLWithString(&NSString::from_str(PAGE)) {
+            unsafe { self.webview.loadRequest(&NSURLRequest::requestWithURL(&url)) };
+        }
     }
 
     /// Something prevents Aria from working; the page shows it every time the dock opens.
@@ -169,6 +200,7 @@ impl Dock {
     /// Sends a message to the page; before the page has loaded it waits in a queue.
     pub fn send(&self, message: &DockMessage) {
         let Ok(json) = serde_json::to_string(message) else { return };
+        self.replay.borrow_mut().remember(message, &json);
         if self.ready.get() {
             self.deliver(&json);
         } else {
@@ -184,12 +216,43 @@ impl Dock {
     fn page_ready(self: &Rc<Self>) {
         self.ready.set(true);
         crate::note("page ready");
+        // On the first load what was sent before is all in the queue; a reloaded page also needs what was sent once
+        // and, when the dock is on screen, the open (as `Command::Show` sends it).
+        if self.reloaded.take() {
+            for json in self.replay.borrow().messages() {
+                self.deliver(&json);
+            }
+            if self.state.get() != State::Hidden {
+                self.send(&DockMessage::Open { monitor: self.monitor.borrow().clone() });
+                let code = self.problem.borrow().clone().unwrap_or_default();
+                self.send(&DockMessage::Problem { code });
+            }
+        }
         for json in self.queued.take() {
             self.deliver(&json);
         }
         if self.notice_wanted.take() {
             self.show_notice_now();
         }
+    }
+
+    /// The page's web content process died: messages wait in the queue until the page is loaded again, after the
+    /// `Recovery` delay.
+    fn page_died(self: &Rc<Self>) {
+        self.ready.set(false);
+        self.reloaded.set(true);
+        let delay = self.recovery.borrow_mut().died(Instant::now());
+        crate::note(&format!("the page's process died; reloading in {} ms", delay.as_millis()));
+        self.reloads.set(self.reloads.get() + 1);
+        let reloads = self.reloads.get();
+        let weak: Weak<Dock> = Rc::downgrade(self);
+        after(delay, move || {
+            if let Some(dock) = weak.upgrade() {
+                if dock.reloads.get() == reloads {
+                    dock.load_page();
+                }
+            }
+        });
     }
 
     /// The first-run corner notice, shown while the dock is closed: mapped without the keyboard and
@@ -250,6 +313,7 @@ impl Dock {
                     self.panel.orderOut(None);
                 }
                 let monitor = self.place_on_focused_screen();
+                *self.monitor.borrow_mut() = monitor.clone();
                 self.remember_previous_app();
                 self.panel.setIgnoresMouseEvents(false);
                 let app = NSApplication::sharedApplication(self.mtm);
@@ -369,7 +433,8 @@ define_class!(
     }
 );
 
-struct ScriptIvars {
+/// The dock, for the Objective-C objects that call back into it: a weak slot filled once the dock's `Rc` exists.
+struct DockIvars {
     dock: Rc<RefCell<Option<Weak<Dock>>>>,
 }
 
@@ -380,7 +445,7 @@ define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "AriaScriptHandler"]
-    #[ivars = ScriptIvars]
+    #[ivars = DockIvars]
     struct ScriptHandler;
 
     unsafe impl NSObjectProtocol for ScriptHandler {}
@@ -414,7 +479,40 @@ define_class!(
 
 impl ScriptHandler {
     fn new(mtm: MainThreadMarker, dock: Rc<RefCell<Option<Weak<Dock>>>>) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(ScriptIvars { dock });
+        let this = Self::alloc(mtm).set_ivars(DockIvars { dock });
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+// WebKit reports the death of the page's web content process (out of memory, a WebKit bug, killed) to the web view's
+// navigation delegate; the dock reloads the page. Every other navigation callback keeps WebKit's default.
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements, and NavigationDelegate does not implement Drop.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "AriaNavigationDelegate"]
+    #[ivars = DockIvars]
+    struct NavigationDelegate;
+
+    unsafe impl NSObjectProtocol for NavigationDelegate {}
+
+    unsafe impl WKNavigationDelegate for NavigationDelegate {
+        #[unsafe(method(webViewWebContentProcessDidTerminate:))]
+        unsafe fn process_did_terminate(&self, _web_view: &WKWebView) {
+            let dock = {
+                let cell = self.ivars().dock.borrow();
+                cell.as_ref().and_then(Weak::upgrade)
+            };
+            if let Some(dock) = dock {
+                dock.page_died();
+            }
+        }
+    }
+);
+
+impl NavigationDelegate {
+    fn new(mtm: MainThreadMarker, dock: Rc<RefCell<Option<Weak<Dock>>>>) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(DockIvars { dock });
         unsafe { msg_send![super(this), init] }
     }
 }

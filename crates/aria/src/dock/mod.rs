@@ -54,13 +54,11 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// When to reload the page after its web process dies: at once after a quiet period, and backing off when it keeps
 /// dying (1, 2, 4, 8, 16 s, then 30 s) so a page that crashes as it loads does not reload in a tight loop.
 #[derive(Default)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) struct Recovery {
     last_death: Option<Instant>,
     delay: Duration,
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 impl Recovery {
     /// Records a death at `now`; returns how long to wait before reloading.
     pub(crate) fn died(&mut self, now: Instant) -> Duration {
@@ -77,13 +75,11 @@ impl Recovery {
 
 /// What the dock pushes to the page only once (`Platform`, `Version`), kept to send again to a reloaded page.
 #[derive(Default)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) struct Replay {
     platform: Option<String>,
     version: Option<String>,
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 impl Replay {
     /// Keeps `json` (the serialised `message`) when it is a `Platform` or a `Version`; ignores any other message.
     pub(crate) fn remember(&mut self, message: &DockMessage, json: &str) {
