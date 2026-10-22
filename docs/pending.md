@@ -107,6 +107,7 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
 
 ## Smaller gaps
 
+- Each restart into a new version (`aria update-ready`, the dock re-executes itself) leaves the old WebKit network and web processes as zombies under the dock: the new image never reaps the children of the old one. They hold no memory, but they pile up until the dock's process ends; reaping them (or letting them exit with the old image) is still to do.
 - The agent-session view has no composer (the design has one): there is no way to steer a subagent yet.
 - Clicking the "needs your answer" desktop notification opens the dock on the active tab, not on the tab that is waiting.
 - Question card: the sliding animation between questions and the "Answers sent" / "Open questions" states were not ported (the card is removed when answered).
