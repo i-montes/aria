@@ -683,6 +683,10 @@ impl Chat {
         if let Some(path) = watch {
             env.push(("PI_WATCH_SOCK".into(), path));
         }
+        // A scheduled task's agents run under its grants too, never the person's wider settings.
+        if let Some(grants) = self.inner.lock().unwrap().scheduled.as_ref().map(|s| s.grants.clone()) {
+            env.push(("ARIA_GRANTS".into(), grants));
+        }
         let mut unset = pi::unset_for_pi(std::env::vars());
         // No background work inside background work.
         unset.push("ARIA_JOBS_SOCK".into());
@@ -3342,6 +3346,22 @@ mod tests {
         let ran = std::iter::from_fn(|| s.messages.try_recv().ok())
             .any(|m| matches!(m, DockMessage::Session { ref message, .. } if event_of(message, "scheduled_run")));
         assert!(!ran, "a task paused while it waited does not run");
+    }
+
+    #[test]
+    fn a_scheduled_tabs_background_agents_get_its_grants() {
+        let s = sessions_harness();
+        let task = scheduled_task(&s);
+        let chat = s.sessions.chat(&task.id).unwrap();
+        chat.inner.lock().unwrap().model = Some("opencode-go/glm".into());
+        let (_, _, env, _, _) = chat.agent_launch("session").expect("a launch");
+        let grants = env.iter().find(|(k, _)| k == "ARIA_GRANTS").map(|(_, v)| v.clone()).expect("ARIA_GRANTS");
+        let grants: Value = serde_json::from_str(&grants).unwrap();
+        assert_eq!(grants["connectors"], json!({"notion": "read"}));
+        let regular = s.sessions.chat("aa").unwrap();
+        regular.inner.lock().unwrap().model = Some("opencode-go/glm".into());
+        let (_, _, env, _, _) = regular.agent_launch("session").unwrap();
+        assert!(!env.iter().any(|(k, _)| k == "ARIA_GRANTS"), "a regular tab's agents keep the person's settings");
     }
 
     #[test]
