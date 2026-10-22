@@ -32,7 +32,9 @@ for (const kind of ['dragover', 'drop']) {
 }
 
 const post = (message) => window.webkit.messageHandlers.aria.postMessage(message)
-let nextId = 1
+// Unique per page load: after the dock reloads its page, a late reply to the old page's request must not match a new one.
+// Milliseconds times 1000 stay an exact integer (and a u64 for the dock) for centuries.
+let nextId = Date.now() * 1000
 const pending = new Map()
 
 /** Sends a request and resolves with the dock's reply (matched by `id`). `onProgress` gets

@@ -86,6 +86,8 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
   - The `aria-mac` hotkey test checks its own constants; the screen tests check the geometry only.
   - The installer gives up waiting for the old agent after 5 s, and `bootstrap` then fails after the binary was
     replaced.
+  - The page reload after the web content process dies (`webViewWebContentProcessDidTerminate`, `dock/mac.rs`) is
+    type-checked only: killing the WebContent process on a Mac is the check still to run.
 - The chosen shortcut on macOS (2026-10-21): `aria-mac` registers the `shortcut` setting with Carbon, falls back to
   `Option + Space`, `Control + Option + Space`, `Command + Option + Space` when `RegisterEventHotKey` refuses one, and
   registers again (new first, then the old one unregistered) when the setting changes. The key codes and the order are

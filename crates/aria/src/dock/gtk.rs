@@ -224,6 +224,7 @@ impl Dock {
         glib::timeout_add_local_once(delay, move || {
             if let Some(dock) = weak.upgrade() {
                 if dock.reloads.get() == reloads {
+                    eprintln!("aria: page reloaded");
                     dock.webview.load_uri(PAGE);
                 }
             }

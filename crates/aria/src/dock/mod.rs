@@ -138,6 +138,8 @@ mod tests {
         assert_eq!(recovery.died(start + secs(59)), secs(1));
         assert_eq!(recovery.died(start + secs(59 + 59)), secs(2));
         assert_eq!(recovery.died(start + secs(59 + 59 + 59)), secs(4));
+        // Exactly a minute after the previous death still counts as close.
+        assert_eq!(recovery.died(start + secs(59 + 59 + 59 + 60)), secs(8));
     }
 
     fn platform(hotkey: &str) -> DockMessage {

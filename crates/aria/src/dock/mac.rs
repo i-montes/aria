@@ -182,6 +182,7 @@ impl Dock {
         dock
     }
 
+    /// Loads the page into the web view: at start, and again after its web content process died.
     fn load_page(&self) {
         if let Some(url) = NSURL::URLWithString(&NSString::from_str(PAGE)) {
             unsafe { self.webview.loadRequest(&NSURLRequest::requestWithURL(&url)) };
@@ -249,6 +250,7 @@ impl Dock {
         after(delay, move || {
             if let Some(dock) = weak.upgrade() {
                 if dock.reloads.get() == reloads {
+                    crate::note("page reloaded");
                     dock.load_page();
                 }
             }
