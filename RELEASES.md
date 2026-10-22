@@ -5,6 +5,12 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.12.1 — 2026-10-22
+
+### Fixed
+
+- the wing reads as part of the notch: it runs on under it, flares into the top edge, rounds its bottom corner
+
 ## 0.12.0 — 2026-10-22
 
 ### New
