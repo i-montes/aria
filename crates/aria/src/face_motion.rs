@@ -6,7 +6,7 @@
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))] // only the macOS wing draws it; Omarchy's bar keeps its QML
 
 /// A colour, as the widget writes them (`#B9A8FF`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -485,6 +485,7 @@ impl Motion {
     }
 
     /// The face on screen (it follows `want` once the eyes have closed).
+    #[cfg(test)]
     pub fn shown(&self) -> &'static str {
         self.shown
     }

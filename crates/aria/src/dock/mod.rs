@@ -12,6 +12,11 @@ mod gtk;
 #[cfg(target_os = "linux")]
 pub use gtk::Dock;
 
+/// Aria's face beside the notch: its layers and its wing.
+#[cfg(target_os = "macos")]
+mod face_layers;
+#[cfg(target_os = "macos")]
+pub mod face_wing;
 #[cfg(target_os = "macos")]
 mod mac;
 #[cfg(target_os = "macos")]

@@ -286,7 +286,22 @@ fn run_dock() {
     let mut update_ready = false;
     let mut jobs_wait = JobsWait::default();
     let mut ticks: u32 = 0;
+    // macOS: Aria's face beside the notch; a click on it does what the shortcut does.
+    #[cfg(target_os = "macos")]
+    let face_wing = {
+        let click = sender.clone();
+        let wing = objc2_foundation::MainThreadMarker::new()
+            .and_then(|mtm| dock::face_wing::FaceWing::new(mtm, Box::new(move || drop(click.send("toggle".into())))));
+        if wing.is_none() {
+            note("no screen for Aria's face");
+        }
+        wing
+    };
     ui::every(16, move || {
+        #[cfg(target_os = "macos")]
+        if let Some(wing) = &face_wing {
+            wing.tick();
+        }
         if quit_requested(&QUIT, || {
             eprintln!("aria: stopping");
             jobs.stop_all();
