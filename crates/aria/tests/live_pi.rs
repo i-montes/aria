@@ -1,5 +1,7 @@
 //! Talks to the real pinned Pi with the owner's real credentials (a one-word prompt, a few tokens).
 //! Run by hand: `cargo test -p aria --test live_pi -- --ignored --nocapture`.
+mod common;
+
 use aria_core::agent;
 use aria_core::paths::AriaPaths;
 use aria_core::pi;
@@ -16,7 +18,7 @@ fn the_pinned_pi_answers_a_prompt_through_the_engine() {
     let dir = tempfile::tempdir().unwrap();
     let paths = AriaPaths::new(dir.path().to_path_buf());
     std::os::unix::fs::symlink(real.pi_root(), paths.pi_root()).unwrap();
-    std::fs::copy(real.auth(), paths.auth()).expect("run the Aria setup first (auth.json)");
+    common::borrow_auth(&real, &paths);
     let loaded = settings::load(&real).ok().flatten();
 
     let install = pi::locate(&paths, pi::pinned_version()).expect("the pinned Pi is installed");

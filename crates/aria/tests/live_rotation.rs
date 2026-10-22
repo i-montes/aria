@@ -1,6 +1,8 @@
 //! Session rotation against the real pinned Pi with the owner's real credentials, in a scratch Aria home: two short
 //! prompts, a compaction, `/aria-rotate`, and the new session starting from the compaction's summary (a few model calls).
 //! Run by hand: `cargo test -p aria --test live_rotation -- --ignored --nocapture`.
+mod common;
+
 use aria_core::agent;
 use aria_core::paths::AriaPaths;
 use aria_core::pi;
@@ -39,7 +41,7 @@ fn a_compacted_session_rotates_into_one_that_starts_from_the_summary() {
     let dir = tempfile::tempdir().unwrap();
     let paths = AriaPaths::new(dir.path().to_path_buf());
     std::os::unix::fs::symlink(real.pi_root(), paths.pi_root()).unwrap();
-    std::fs::copy(real.auth(), paths.auth()).expect("run the Aria setup first (auth.json)");
+    common::borrow_auth(&real, &paths);
     let loaded = settings::load(&real).ok().flatten();
 
     let install = pi::locate(&paths, pi::pinned_version()).expect("the pinned Pi is installed");
