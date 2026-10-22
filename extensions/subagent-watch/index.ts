@@ -9,15 +9,15 @@
 // Nothing is written to disk; the socket file lives in the temp dir and is removed on shutdown.
 // Everything is best effort: if the socket is missing or breaks, subagents run as before.
 import { existsSync, unlinkSync } from 'node:fs'
-import { createConnection, createServer, type Server, type Socket } from 'node:net'
+import { createServer, type Server, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui'
+import { child } from './child.ts'
 
 const ENV = 'PI_WATCH_SOCK'
 const MAX_ENTRIES = 2000
-const MAX_RESULT_CHARS = 4000
 const MAX_AGENTS = 20
 
 type Kind = 'prompt' | 'text' | 'thinking' | 'tool' | 'result' | 'error' | 'status'
@@ -34,69 +34,6 @@ interface Agent {
   tools: number
 }
 
-const textOf = (content: unknown): string => {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content
-    .map((b: any) => (b?.type === 'text' ? b.text : b?.type === 'image' ? '[imagen]' : ''))
-    .filter(Boolean)
-    .join('\n')
-}
-
-const argsPreview = (name: string, args: any): string => {
-  if (!args || typeof args !== 'object') return ''
-  if (name === 'bash') return String(args.command ?? '')
-  if (name === 'read' || name === 'write' || name === 'edit') return String(args.path ?? '')
-  if (name === 'codemode') return String(args.code ?? '')
-  const s = JSON.stringify(args)
-  return s.length > 400 ? `${s.slice(0, 400)}…` : s
-}
-
-// --- Child side ---------------------------------------------------------------------------------
-
-function child(pi: ExtensionAPI, path: string) {
-  let sock: Socket | null = null
-  const send = (msg: Record<string, unknown>) => {
-    if (!sock || sock.destroyed) return
-    try {
-      sock.write(`${JSON.stringify(msg)}\n`)
-    } catch {
-      // the parent went away; keep working
-    }
-  }
-
-  pi.on('session_start', () => {
-    try {
-      sock = createConnection(path)
-      sock.on('error', () => {
-        sock = null
-      })
-      sock.unref()
-    } catch {
-      sock = null
-    }
-  })
-  pi.on('session_shutdown', () => sock?.end())
-
-  pi.on('before_agent_start', (event: any) => {
-    if (event.messageType === 'user') send({ t: 'prompt', text: String(event.prompt ?? '') })
-  })
-  pi.on('message_update', (event: any) => {
-    const e = event.assistantMessageEvent
-    if (e?.type === 'text_delta') send({ t: 'text', delta: e.delta })
-    else if (e?.type === 'thinking_delta') send({ t: 'thinking', delta: e.delta })
-  })
-  pi.on('message_end', (event: any) => {
-    if (event.message?.role === 'assistant') send({ t: 'turn' })
-  })
-  pi.on('tool_execution_start', (event: any) => {
-    send({ t: 'tool', name: event.toolName, args: argsPreview(event.toolName, event.args) })
-  })
-  pi.on('tool_execution_end', (event: any) => {
-    send({ t: 'result', text: textOf(event.result?.content).slice(0, MAX_RESULT_CHARS), error: !!event.isError })
-  })
-  pi.on('agent_end', () => send({ t: 'end' }))
-}
 
 // --- Parent side --------------------------------------------------------------------------------
 
