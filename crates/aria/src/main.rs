@@ -108,6 +108,7 @@ fn run_dock() {
     let (paths, vault) = keyring_cli::open_for_dock(paths, initial.as_ref());
     // The scheduled tasks: changed through every session's jobs socket, run by the scheduler on the tick.
     let schedules = schedule_store::ScheduleStore::open(paths.clone());
+    let scheduling = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let vault: keyring_cli::Shared = Arc::new(std::sync::Mutex::new(vault));
     keyring_cli::spawn_sync(vault.clone());
     let mut settings_watch = chat::SettingsWatch::new(paths.settings());
@@ -319,6 +320,28 @@ fn run_dock() {
         if ticks.is_multiple_of(WATCHDOG_TICKS) {
             let sessions = chat_for_settings.clone();
             std::thread::spawn(move || sessions.check_stalled(Instant::now()));
+        }
+        // Once a second, the scheduled tasks: each due one runs in its own tab (a time missed while the computer slept or
+        // Aria was off runs once, and only today's), and a run that waited for its busy tab starts once it is free. Off
+        // the UI thread, one check at a time: starting a tab's Pi takes a moment.
+        if ticks.is_multiple_of(60) && !scheduling.swap(true, Ordering::SeqCst) {
+            let (sessions, schedules, scheduling) = (chat_for_settings.clone(), schedules.clone(), scheduling.clone());
+            std::thread::spawn(move || {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis() as i64);
+                for (task, late) in schedules.take_due(now, &aria_core::schedules::SystemClock) {
+                    note(&format!(
+                        "running the scheduled task {} ({}){}",
+                        task.id,
+                        task.title,
+                        if late { ", late" } else { "" }
+                    ));
+                    sessions.start_scheduled(&task, late);
+                }
+                sessions.flush_scheduled();
+                scheduling.store(false, Ordering::SeqCst);
+            });
         }
         // A dock that just hid with a question still open needs its notification.
         let visible = visible_now.load(Ordering::SeqCst);

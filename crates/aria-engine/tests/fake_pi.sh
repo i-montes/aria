@@ -53,6 +53,10 @@ while IFS= read -r line; do
       printf '{"type":"response","id":"%s","command":"prompt","success":true,"data":{"disposition":"started"}}\n' "$id"
       printf '{"type":"agent_start"}\n'
       printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"hi"}}\n'
+      # A scheduled task's prompt (it says TASKS) gets a whole answer, as a run's summary is its first line.
+      case "$(field message "$line")" in *TASKS*)
+        printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Here are 3 tasks for today\\nthe first"}],"stopReason":"stop"}}\n' ;;
+      esac
       printf '{"type":"agent_settled","aborted":false}\n' ;;
     reject)
       printf '{"type":"response","id":"%s","command":"reject","success":false,"error":"nope"}\n' "$id" ;;
@@ -134,6 +138,8 @@ while IFS= read -r line; do
       printf '{"type":"background","pid":"%s"}\n' "$!" ;;
     env_projects)
       printf '{"type":"env","projects":"%s"}\n' "$ARIA_PROJECTS_DIR" ;;
+    env_grants)
+      printf '{"type":"env","grants":"%s"}\n' "$(printf '%s' "$ARIA_GRANTS" | base64 | tr -d '\n')" ;;
     env_settings)
       printf '{"type":"env","settings":"%s"}\n' "$ARIA_SETTINGS" ;;
     env_watch)

@@ -125,6 +125,15 @@ pub enum PageMessage {
     /// Close a session's Pi (its conversation stays in Pi's session file).
     #[serde(rename = "sessionClose")]
     SessionClose { session: String },
+    /// The scheduled tasks, for the `/schedules` panel; replies `schedules`.
+    #[serde(rename = "schedulesList")]
+    SchedulesList { id: u64 },
+    /// Pause or resume a scheduled task; replies `schedules`.
+    #[serde(rename = "scheduleUpdate")]
+    ScheduleUpdate { id: u64, schedule: String, enabled: bool },
+    /// Delete a scheduled task and its tab; replies `schedules`.
+    #[serde(rename = "scheduleDelete")]
+    ScheduleDelete { id: u64, schedule: String },
     /// Stop a background job (any session's: the page lists them all) and whatever it forked.
     #[serde(rename = "jobStop")]
     JobStop { job: String },
@@ -242,6 +251,15 @@ pub enum DockMessage {
     Session { session: String, message: Box<DockMessage> },
     #[serde(rename = "sessions")]
     Sessions { id: u64, sessions: Vec<SessionEntry>, active: Option<String> },
+    /// Every scheduled task (aria-core `schedules::Task`, camelCase, with `next`), the answer to a schedules request.
+    #[serde(rename = "schedules")]
+    Schedules { id: u64, tasks: Value },
+    /// A scheduled task's tab, made by its first run: the page adds it (not active) if it does not have it.
+    #[serde(rename = "scheduleTab")]
+    ScheduleTab { id: String, title: String, schedule: String },
+    /// A deleted task's tab is gone.
+    #[serde(rename = "scheduleRemoved")]
+    ScheduleRemoved { id: String },
     /// Every session's background jobs (crates/aria/src/jobs.rs `Job`, camelCase): running and queued first, then
     /// finished, newest first. Sent whenever they change (at most four times a second) and on any session's `chatLoad`.
     #[serde(rename = "jobs")]

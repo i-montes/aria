@@ -13,6 +13,7 @@ pub struct ScheduleStore {
     pub(crate) paths: AriaPaths,
     tasks: Arc<Mutex<Vec<Task>>>,
     on_delete: OnDelete,
+    on_update: OnDelete,
 }
 
 fn strings(value: &Value) -> Option<Vec<String>> {
@@ -30,12 +31,22 @@ fn text(value: &Value, field: &str) -> Result<Option<String>, String> {
 impl ScheduleStore {
     pub fn open(paths: AriaPaths) -> ScheduleStore {
         let tasks = schedules::load(&paths);
-        ScheduleStore { paths, tasks: Arc::new(Mutex::new(tasks)), on_delete: Arc::default() }
+        ScheduleStore {
+            paths,
+            tasks: Arc::new(Mutex::new(tasks)),
+            on_delete: Arc::default(),
+            on_update: Arc::default(),
+        }
     }
 
     /// What runs when a task is deleted (the dock closes its tab).
     pub fn on_delete(&self, f: impl Fn(&str) + Send + 'static) {
         *self.on_delete.lock().unwrap() = Some(Box::new(f));
+    }
+
+    /// What runs when a task changes (the dock gives its tab's Pi the new grants).
+    pub fn on_update(&self, f: impl Fn(&str) + Send + 'static) {
+        *self.on_update.lock().unwrap() = Some(Box::new(f));
     }
 
     fn servers(&self) -> Vec<String> {
@@ -123,6 +134,10 @@ impl ScheduleStore {
         next[at] = task.clone();
         self.save(&next)?;
         *tasks = next;
+        drop(tasks);
+        if let Some(f) = self.on_update.lock().unwrap().as_ref() {
+            f(&task.id);
+        }
         Ok(task)
     }
 
