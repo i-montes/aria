@@ -292,7 +292,7 @@ impl Chat {
 
     pub fn handle(&self, message: PageMessage) {
         match message {
-            PageMessage::ChatLoad => self.load(),
+            PageMessage::ChatLoad { fresh } => self.load(fresh),
             PageMessage::ChatSend { text, behavior, attachments } => {
                 self.send_prompt(&text, behavior.as_deref(), &attachments)
             }
@@ -486,7 +486,9 @@ impl Chat {
         self.inner.lock().unwrap().engine.clone().filter(|engine| engine.is_alive())
     }
 
-    fn load(&self) {
+    /// `fresh` is a page that just booted: a Pi that was already running replays its conversation to it (a Pi started
+    /// here announces itself, once).
+    fn load(&self, fresh: bool) {
         let problem = self.problem();
         self.emit(self.state_message(problem));
         if let Some(windows) = self.inner.lock().unwrap().quota.clone() {
@@ -497,7 +499,15 @@ impl Chat {
         }
         if problem.is_none() {
             // Showing a session wakes its Pi: that is what brings the conversation (and its model) back.
-            let _ = self.ensure_engine();
+            let running = self.current_engine();
+            let engine = self.ensure_engine();
+            // Only the Pi that was already running: one started just now has announced itself.
+            if let (true, Some(running), Ok(engine)) = (fresh, running, engine) {
+                if Arc::ptr_eq(&running, &engine) {
+                    let chat = self.clone();
+                    std::thread::spawn(move || chat.announce(&engine));
+                }
+            }
         }
         let open: Vec<(String, Value)> =
             self.inner.lock().unwrap().dialogs.iter().map(|(id, raw)| (id.clone(), raw.clone())).collect();
@@ -1271,7 +1281,7 @@ impl Sessions {
                     return;
                 }
                 if let Some(chat) = self.chat(&session) {
-                    let first_look = matches!(*message, PageMessage::ChatLoad);
+                    let first_look = matches!(*message, PageMessage::ChatLoad { .. });
                     chat.handle(*message);
                     // The background list shows every session's jobs; a session's first look is the page's too.
                     if first_look {
@@ -1649,7 +1659,7 @@ mod tests {
     #[test]
     fn chat_load_reports_the_folder_and_model_then_starts_pi_and_replays_the_history() {
         let h = harness();
-        h.chat.handle(PageMessage::ChatLoad);
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
         match wait_for(&h, "chatState", |m| matches!(m, DockMessage::ChatState { .. })) {
             DockMessage::ChatState { workdir, running, model, problem, .. } => {
                 assert_eq!(workdir, h.workdir.display().to_string());
@@ -1668,9 +1678,39 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_page_gets_the_running_pis_history_again_and_a_tab_switch_does_not() {
+        let h = harness();
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
+        wait_for(&h, "the first history", |m| event_of(m, "history"));
+        // A tab switch on the same page: the conversation is already there.
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(drain(&h).iter().all(|m| !event_of(m, "history")), "a tab switch replayed the history");
+        // A reloaded page: the Pi is still running, so nothing announces it unless the page asks.
+        h.chat.handle(PageMessage::ChatLoad { fresh: true });
+        let history = wait_for(&h, "the history again", |m| event_of(m, "history"));
+        assert!(
+            matches!(history, DockMessage::ChatEvent { ref event } if event["messages"][0]["content"] == json!("earlier"))
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        let rest = drain(&h);
+        assert!(rest.iter().all(|m| !event_of(m, "history")), "the history came twice");
+        assert!(rest.iter().all(|m| !matches!(m, DockMessage::ChatEngine { state } if state == "starting")));
+    }
+
+    #[test]
+    fn a_fresh_load_that_starts_pi_announces_it_once() {
+        let h = harness();
+        h.chat.handle(PageMessage::ChatLoad { fresh: true });
+        wait_for(&h, "the history", |m| event_of(m, "history"));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(drain(&h).iter().all(|m| !event_of(m, "history")), "a new Pi announced itself twice");
+    }
+
+    #[test]
     fn chat_load_with_a_missing_pi_only_reports_the_problem() {
         let h = harness_with(false);
-        h.chat.handle(PageMessage::ChatLoad);
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
         wait_for(
             &h,
             "the problem",
@@ -1733,7 +1773,7 @@ mod tests {
         h.visible.store(false, Ordering::SeqCst);
         h.chat.test_send_raw("ask");
         wait_for(&h, "the dialog", |m| matches!(m, DockMessage::ChatDialog { .. }));
-        h.chat.handle(PageMessage::ChatLoad);
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
         wait_for(
             &h,
             "the replayed dialog",
@@ -1840,7 +1880,7 @@ mod tests {
             DockMessage::ChatState { problem, .. } => assert_eq!(problem.as_deref(), Some("pi-missing")),
             _ => unreachable!(),
         }
-        h.chat.handle(PageMessage::ChatLoad);
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
         wait_for(
             &h,
             "the problem again on load",
@@ -2041,7 +2081,7 @@ mod tests {
         wait_for(&h, "the old dialog closing", |m| matches!(m, DockMessage::ChatDialogClosed { id } if id == "u1"));
         wait_for(&h, "settled after the respawn", |m| event_of(m, "agent_settled"));
         assert_eq!(h.notifier.log().last().map(String::as_str), Some("dismiss"));
-        h.chat.handle(PageMessage::ChatLoad);
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
         std::thread::sleep(Duration::from_millis(100));
         assert!(
             !drain(&h).iter().any(|m| matches!(m, DockMessage::ChatDialog { .. })),
@@ -2057,7 +2097,7 @@ mod tests {
         let mut settings = settings::load(&h.paths).unwrap().unwrap();
         settings.sandbox.projects_dir = h._dir.path().join("elsewhere").display().to_string();
         settings::save(&h.paths, &settings).unwrap();
-        h.chat.handle(PageMessage::ChatLoad);
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
         match wait_for(&h, "chatState after the change", |m| matches!(m, DockMessage::ChatState { .. })) {
             DockMessage::ChatState { workdir, .. } => assert_eq!(workdir, h.workdir.display().to_string()),
             _ => unreachable!(),
@@ -2149,7 +2189,7 @@ mod tests {
             "../evil",
             PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] },
         ));
-        s.sessions.handle(in_session("fresh-1", PageMessage::ChatLoad));
+        s.sessions.handle(in_session("fresh-1", PageMessage::ChatLoad { fresh: false }));
         wait_session(&s, "its state", "fresh-1", |m| matches!(m, DockMessage::ChatState { .. }));
         assert!(!s.h.paths.agent().join("sessions").join("../evil").exists());
     }
@@ -2230,7 +2270,7 @@ mod tests {
         s.sessions.handle(PageMessage::EnginesRestart);
         wait_session(&s, "the dialog closing", "aa", |m| matches!(m, DockMessage::ChatDialogClosed { .. }));
         // showing a session again wakes a new Pi, which sees the changed credentials
-        s.sessions.handle(in_session("bb", PageMessage::ChatLoad));
+        s.sessions.handle(in_session("bb", PageMessage::ChatLoad { fresh: false }));
         wait_session(
             &s,
             "a new start",
@@ -2507,7 +2547,7 @@ mod tests {
         send(&h, "x");
         wait_for(&h, "the quota", |m| matches!(m, DockMessage::ChatQuota { .. }));
         drain(&h);
-        h.chat.handle(PageMessage::ChatLoad);
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
         wait_for(&h, "the quota again", |m| matches!(m, DockMessage::ChatQuota { windows } if windows.len() == 3));
         assert_eq!(h.quota_calls.load(Ordering::SeqCst), 1, "replayed, not fetched again");
     }
@@ -3235,7 +3275,7 @@ mod tests {
         let jobs = s.sessions.ctx.jobs.clone();
         let job = sleeper(&jobs, "aa", s.h._dir.path());
         // The page's first look: any session's chatLoad brings the whole list, unwrapped.
-        s.sessions.handle(in_session("bb", PageMessage::ChatLoad));
+        s.sessions.handle(in_session("bb", PageMessage::ChatLoad { fresh: false }));
         let listed = loop {
             match s.messages.recv_timeout(Duration::from_secs(5)).expect("the jobs list") {
                 DockMessage::Jobs { jobs } => break jobs,
@@ -3314,7 +3354,7 @@ mod tests {
     fn sessions_with_background_work_are_told_an_update_waits() {
         let s = sessions_harness();
         for id in ["aa", "bb"] {
-            s.sessions.handle(in_session(id, PageMessage::ChatLoad));
+            s.sessions.handle(in_session(id, PageMessage::ChatLoad { fresh: false }));
             wait_session(&s, "its state", id, |m| matches!(m, DockMessage::ChatState { .. }));
         }
         let jobs = s.sessions.ctx.jobs.clone();
