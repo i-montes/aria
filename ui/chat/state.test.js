@@ -145,6 +145,18 @@ describe('the engine and notices', () => {
     expect(reduce(state, { type: 'chatState', workdir: '/home/u/Projects', running: false, model: null, thinking: null, problem: null }).problem).toBeNull()
   })
 
+  test('a compaction the state reports keeps the working line, even after a reload', () => {
+    // Aria compacts a large session on its own, with no run: the state says so, and a later state does not hide it.
+    const fresh = reduce(createChat(), { type: 'chatState', workdir: '/w', running: false, compacting: true, model: null, thinking: null, problem: null })
+    expect(fresh).toMatchObject({ running: true, compacting: true, phase: 'compacting context' })
+    const started = reduce(createChat(), { type: 'chatEvent', event: { type: 'compaction_start' } })
+    const again = reduce(started, { type: 'chatState', workdir: '/w', running: false, compacting: true, model: null, thinking: null, problem: null })
+    expect(again).toMatchObject({ running: true, compacting: true, phase: 'compacting context' })
+    expect(again.startedAt).toBe(started.startedAt)
+    const ended = reduce(reduce(again, { type: 'chatEvent', event: { type: 'compaction_end', result: { summary: 's' } } }), { type: 'chatState', workdir: '/w', running: false, compacting: false, model: null, thinking: null, problem: null })
+    expect(ended).toMatchObject({ running: false, compacting: false })
+  })
+
   test('chatEngine records the engine state', () => {
     expect(reduce(createChat(), { type: 'chatEngine', state: 'ready' }).engine).toBe('ready')
   })

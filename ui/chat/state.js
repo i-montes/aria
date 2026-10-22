@@ -421,10 +421,16 @@ export function reduce(state, message) {
     case 'chatEvent':
       return reduceEvent(state, message.event ?? {})
     case 'chatState': {
+      // A compaction Pi is doing with no run of its own (one Aria asked for) keeps the working line: a later state, or
+      // the one a reloaded page starts from, must not hide it.
+      const compacting = Boolean(message.compacting)
       const next = {
         ...state,
         workdir: message.workdir,
-        running: message.running,
+        running: message.running || compacting,
+        compacting,
+        phase: compacting ? 'compacting context' : state.phase,
+        startedAt: compacting && !state.compacting ? (state.startedAt ?? Date.now()) : state.startedAt,
         model: message.model ?? null,
         thinking: message.thinking ?? null,
         context: message.context ?? null,

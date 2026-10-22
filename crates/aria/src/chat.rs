@@ -392,6 +392,7 @@ impl Chat {
         DockMessage::ChatState {
             workdir: inner.workdir.clone().unwrap_or_else(|| agent::workdir(settings.as_ref())).display().to_string(),
             running: inner.running,
+            compacting: inner.compacting && !inner.running,
             model: inner.model.clone().or_else(|| settings.as_ref().and_then(|s| s.models.daily.clone())),
             thinking: inner.thinking.clone(),
             context: inner.context,
@@ -3180,6 +3181,26 @@ mod tests {
         wait_for(&h, "the second tool's end", |m| event_of(m, "tool_execution_end"));
         assert!(!h.chat.check_stalled(Instant::now(), LIMIT), "the clock starts again when the last tool ends");
         assert!(h.chat.check_stalled(Instant::now() + 2 * LIMIT, LIMIT), "then the silence counts");
+    }
+
+    #[test]
+    fn a_compaction_with_no_run_shows_in_the_state() {
+        let h = harness();
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
+        wait_for(&h, "the first state", |m| matches!(m, DockMessage::ChatState { .. }));
+        h.chat.test_send_raw("compaction_start");
+        wait_for(&h, "the compaction", |m| event_of(m, "compaction_start"));
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
+        let state = wait_for(&h, "a state", |m| matches!(m, DockMessage::ChatState { .. }));
+        assert!(matches!(state, DockMessage::ChatState { compacting: true, running: false, .. }), "{state:?}");
+        h.chat.test_send_raw("compaction_end");
+        wait_for(&h, "the compaction's end", |m| event_of(m, "compaction_end"));
+        // The event reaches the page before the chat records it: a state asked a moment later says it is over.
+        std::thread::sleep(Duration::from_millis(100));
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
+        wait_for(&h, "a state without the compaction", |m| {
+            matches!(m, DockMessage::ChatState { compacting: false, .. })
+        });
     }
 
     #[test]
