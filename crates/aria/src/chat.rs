@@ -228,6 +228,34 @@ struct Inner {
     rotating: bool,
     /// The page's messages (and restarts) that came during a rotation, oldest first.
     held: std::collections::VecDeque<PageMessage>,
+    /// The tab was closed for good: nothing held runs and no Pi starts for it again.
+    closed: bool,
+}
+
+/// Runs when the rotation thread ends, however it ends: normally, the held work runs; after a panic, `rotating` is
+/// cleared and the held work is dropped (its prompts given back to the composer) with a log line, so the tab never holds
+/// everything forever.
+struct RotationEnd {
+    chat: Chat,
+}
+
+impl Drop for RotationEnd {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            return self.chat.rotation_ended();
+        }
+        let dropped: Vec<PageMessage> = {
+            let mut inner = self.chat.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.rotating = false;
+            inner.held.drain(..).collect()
+        };
+        crate::note(&format!(
+            "tab {}: the session rotation failed unexpectedly; {} held message(s) dropped",
+            self.chat.session,
+            dropped.len()
+        ));
+        self.chat.give_back(dropped, "Aria could not send this message; send it again");
+    }
 }
 
 /// What must wait for a rotation to end: everything that reaches Pi's session or restarts it.
@@ -237,6 +265,7 @@ fn waits_for_rotation(message: &PageMessage) -> bool {
         PageMessage::ChatSend { .. }
             | PageMessage::PiCommand { .. }
             | PageMessage::SetModel { .. }
+            | PageMessage::ChatClearQueue { .. }
             | PageMessage::EnginesRestart
     )
 }
@@ -336,14 +365,39 @@ impl Chat {
     }
 
     pub fn handle(&self, message: PageMessage) {
-        if waits_for_rotation(&message) {
+        let stopped = {
             let mut inner = self.inner.lock().unwrap();
-            if inner.rotating {
+            if inner.rotating && waits_for_rotation(&message) {
                 inner.held.push_back(message);
                 return;
             }
+            // Stop during a rotation: Pi has nothing running; the held messages never start.
+            if inner.rotating && matches!(message, PageMessage::ChatAbort) {
+                let (sends, rest) = std::mem::take(&mut inner.held).into_iter().partition(|held| {
+                    matches!(held, PageMessage::ChatSend { .. } | PageMessage::ChatClearQueue { .. })
+                });
+                inner.held = rest;
+                Some(sends)
+            } else {
+                None
+            }
+        };
+        match stopped {
+            Some(sends) => self.give_back(sends, "Stopped before it was sent"),
+            None => self.dispatch(message),
         }
-        self.dispatch(message);
+    }
+
+    /// Held messages that will never be sent: each prompt leaves the thread and its text goes back to the composer, as
+    /// for a prompt Pi refused.
+    fn give_back(&self, held: impl IntoIterator<Item = PageMessage>, why: &str) {
+        for message in held {
+            if let PageMessage::ChatSend { text, .. } = message {
+                self.emit(DockMessage::ChatEvent {
+                    event: json!({"type": "command_failed", "command": "prompt", "error": why, "text": text}),
+                });
+            }
+        }
     }
 
     fn dispatch(&self, message: PageMessage) {
@@ -665,6 +719,9 @@ impl Chat {
         if let Some(engine) = self.current_engine() {
             return Ok(engine); // another thread started it while this one waited
         }
+        if self.inner.lock().unwrap().closed {
+            return Err("session-closed"); // a late message for a closed tab never brings its Pi back
+        }
         let install = pi::locate(&self.ctx.paths, pi::pinned_version()).map_err(|e| e.problem_code())?;
         if !pi::node_ok(&self.ctx.paths, &self.ctx.path_var) {
             return Err(PiError::NodeMissing.problem_code());
@@ -842,8 +899,8 @@ impl Chat {
         if rotate {
             let chat = self.clone();
             std::thread::spawn(move || {
+                let _end = RotationEnd { chat: chat.clone() };
                 chat.rotate(&engine);
-                chat.rotation_ended();
             });
             return;
         }
@@ -880,6 +937,12 @@ impl Chat {
         loop {
             let next = {
                 let mut inner = self.inner.lock().unwrap();
+                if inner.closed {
+                    // A closed tab: what it held is dropped, and no Pi starts for it.
+                    inner.held.clear();
+                    inner.rotating = false;
+                    return;
+                }
                 match inner.held.pop_front() {
                     Some(message) => message,
                     None => {
@@ -1269,8 +1332,14 @@ impl Chat {
     }
 
     /// The session is closed for good: Pi stops, and so does everything it started (MCP servers, subagents, a dev
-    /// server), so nothing of a closed tab keeps running.
+    /// server), so nothing of a closed tab keeps running; what it held during a rotation is dropped, and no Pi starts
+    /// for it again.
     pub fn close_for_good(&self) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.closed = true;
+            inner.held.clear();
+        }
         self.stop(true);
     }
 
@@ -3738,6 +3807,66 @@ mod tests {
         assert_eq!(stored_segments(&h), ["s1", "rotated-1"]);
         ready(&h);
         assert_eq!(session_id_arg(&h), "rotated-1");
+    }
+
+    #[test]
+    fn closing_a_tab_during_a_rotation_drops_what_it_held_and_starts_no_pi() {
+        let h = harness();
+        save_tab(&h, &[]);
+        ready(&h);
+        drain(&h); // the first run's events
+        h.chat.test_send_raw("compaction_end");
+        wait_for(&h, "the rotation", |m| event_of(m, "rotate_seen"));
+        send(&h, "meanwhile");
+        h.chat.close_for_good();
+        std::thread::sleep(Duration::from_millis(700));
+        let after = drain(&h);
+        assert!(
+            after.iter().all(|m| !matches!(m, DockMessage::ChatEngine { state } if state == "starting")),
+            "no Pi starts for a closed tab"
+        );
+        assert!(after.iter().all(|m| !event_of(m, "agent_start")), "the held prompt never reached a Pi");
+        assert!(h.chat.inner.lock().unwrap().held.is_empty());
+    }
+
+    #[test]
+    fn stop_during_a_rotation_gives_the_held_prompts_back_and_nothing_starts_after() {
+        let h = harness();
+        save_tab(&h, &[]);
+        ready(&h);
+        drain(&h); // the first run's events
+        h.chat.test_send_raw("compaction_end");
+        wait_for(&h, "the rotation", |m| event_of(m, "rotate_seen"));
+        send(&h, "meanwhile");
+        h.chat.handle(PageMessage::ChatAbort);
+        let given = wait_for(&h, "the prompt given back", |m| event_of(m, "command_failed"));
+        assert!(matches!(given, DockMessage::ChatEvent { ref event } if event["text"] == "meanwhile"));
+        eventually("the rotation still ends", || stored_segments(&h) == ["s1", "rotated-1"]);
+        std::thread::sleep(Duration::from_millis(300));
+        let after = drain(&h);
+        assert!(after.iter().all(|m| !event_of(m, "agent_start")), "nothing starts after a stop");
+        assert!(after.iter().all(|m| !event_of(m, "abort_seen")), "Pi was not touched mid-rotation");
+    }
+
+    #[test]
+    fn a_rotation_that_panics_releases_the_tab() {
+        let h = harness();
+        {
+            let mut inner = h.chat.inner.lock().unwrap();
+            inner.rotating = true;
+            inner.held.push_back(PageMessage::ChatSend { text: "held".into(), behavior: None, attachments: vec![] });
+        }
+        let chat = h.chat.clone();
+        let thread = std::thread::spawn(move || {
+            let _end = RotationEnd { chat };
+            panic!("a bug in the rotation");
+        });
+        assert!(thread.join().is_err());
+        let inner = h.chat.inner.lock().unwrap();
+        assert!(!inner.rotating && inner.held.is_empty(), "the tab holds nothing any more");
+        drop(inner);
+        let given = wait_for(&h, "the prompt given back", |m| event_of(m, "command_failed"));
+        assert!(matches!(given, DockMessage::ChatEvent { ref event } if event["text"] == "held"));
     }
 
     #[test]
