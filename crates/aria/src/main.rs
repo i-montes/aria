@@ -15,6 +15,7 @@ mod jobs_socket;
 mod keyring_cli;
 mod lines;
 mod schedule_store;
+mod trace;
 mod ui;
 mod visibility;
 mod watch;
