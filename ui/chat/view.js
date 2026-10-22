@@ -211,7 +211,9 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
   let tick = null
   // `/debug`, per session: { tree, receivedAt, folds: Map<id, folded?>, open, focus }. Absent = off.
   const traces = new Map()
-  let wideSent = false
+  // What the dock was last told about its width; null until the first draw, which always tells it (a reloaded page
+  // must not leave a wide dock without its panel).
+  let wideSent = null
   let pendingClose = null // a closed tab whose Pi is only stopped when its undo window is over
   let fileToken = 0
   let fileTimer = null

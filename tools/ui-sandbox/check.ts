@@ -42,6 +42,8 @@ const script = `(async () => {
   const reset = async () => { window.sim.queue = []; window.sim.steering = []; ev({ type: 'agent_settled', aborted: false }); ev({ type: 'session_reset' }); const i = $('#chat-input'); if (i) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })) }; await wait(50) }
 
   await wait(300)
+  // A page that loads (or reloads after its process died) says the dock is not wide, so a wide dock never outlives it.
+  check('a fresh page tells the dock it is not wide', window.__sent.some((m) => m.type === 'wide' && m.on === false), JSON.stringify(window.__sent.map((m) => m.type)))
 
   // 0. the header with a single session: the name, and no model button
   check('the single-session header has the assistant name and no model button', $('#chat-header .chat-name') && !$('#chat-header .p-meter') && !$('#chat-header [data-chat="open-models"]'), $('#chat-header').innerHTML.slice(0, 200))
