@@ -775,3 +775,30 @@ describe('earlier in this conversation (paged history)', () => {
     expect(state.earlier).toEqual(createChat().earlier)
   })
 })
+
+describe('earlier: review fixes', () => {
+  const seed = { role: 'custom', customType: 'aria-earlier', content: 'framed', display: true, details: { from: 'old-id', summary: 'S' } }
+  const kept = [{ role: 'user', content: 'and now?' }]
+  const history = ev({ type: 'history', messages: [seed, ...kept] })
+  const page = ev({ type: 'earlier', messages: [{ role: 'user', content: 'older' }], cursor: { segment: 0, index: 0 }, more: false })
+
+  test('the summary keeps its id when the history comes again (an open summary stays open)', () => {
+    const a = reduce(createChat(), history).messages[0].id
+    const b = run(createChat(), history, history).messages[0].id
+    expect(a).toBe('earlier-old-id')
+    expect(b).toBe(a)
+    expect(reduce(createChat(), ev({ type: 'history', messages: [{ role: 'compactionSummary', summary: 'S' }] })).messages[0].id).toBe('earlier-0')
+  })
+
+  test('a history arriving while a page is on its way: still loading, that page is dropped, then asking works again', () => {
+    let state = reduce(createChat(), history)
+    state = askEarlier(state)[0]
+    state = reduce(state, history)
+    expect(state.earlier).toMatchObject({ loading: true, stale: true })
+    expect(askEarlier(state)[1]).toBeNull() // page 1 is not asked twice
+    state = reduce(state, page)
+    expect(state.messages.map((m) => m.text ?? m.kind)).toEqual(['earlier', 'and now?'])
+    expect(state.earlier).toMatchObject({ loading: false, stale: false, more: true, count: 0 })
+    expect(askEarlier(state)[1]).toEqual({ type: 'chatEarlier' })
+  })
+})

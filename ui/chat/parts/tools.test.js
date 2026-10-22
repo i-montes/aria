@@ -308,3 +308,13 @@ describe('one step on its own (the earlier summary)', () => {
     expect(open).toContain('Second line.')
   })
 })
+
+describe('a step with its own chip and markup', () => {
+  test('an empty chip leaves the chip out; html replaces the lines inside the same fold', () => {
+    const step = { id: 'e2', think: true, label: 'Summary', chip: '', html: '<p class="p-md-p">x</p>', text: '## raw', status: 'done' }
+    const html = renderToolStep({ call: step }, { openRows: new Set(['e2']) }, (k) => k)
+    expect(html).not.toContain('p-tools-cmd')
+    expect(html).toContain('<div class="p-tools-detail is-open"><div class="p-tools-clip"><div class="p-tools-lines p-tools-md p-md"><p class="p-md-p">x</p></div>')
+    expect(html).not.toContain('## raw')
+  })
+})

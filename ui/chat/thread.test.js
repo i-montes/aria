@@ -201,7 +201,9 @@ describe('attachments in the thread', () => {
 })
 
 describe('earlier in this conversation', () => {
-  const seed = { role: 'custom', customType: 'aria-earlier', content: 'framed <summary>x</summary>', display: true, details: { from: 'a', summary: 'We fixed the build.\nThen the docs.' } }
+  // A summary as Pi writes it (pi-coding-agent's compaction prompt: ## Goal, ## Progress, ### Done, ## Next Steps…).
+  const piSummary = '## Goal\nMake RELEASE optional.\n\n## Progress\n### Done\n- [x] **env.ts** reads it lazily\n\n## Next Steps\n1. Update the docs'
+  const seed = { role: 'custom', customType: 'aria-earlier', content: 'framed <summary>x</summary>', display: true, details: { from: 'a', summary: piSummary } }
   const kept = [{ role: 'user', content: 'and now?' }]
   const withSeed = () => reduce(createChat(), ev({ type: 'history', messages: [seed, ...kept] }))
 
@@ -212,8 +214,9 @@ describe('earlier in this conversation', () => {
     expect(html).toContain('Earlier in this conversation')
     const id = state.messages[0].id
     expect(html).toContain(`data-chat="toggle-tool-row" data-id="${id}" aria-expanded="false"`)
-    expect(html).toContain('We fixed the build.') // the chip: its first line
     expect(html).toContain('<div class="p-tools-detail">') // folded: the detail is there, closed
+    expect(html).not.toContain('p-tools-cmd') // no chip: it would show "## Goal"
+    expect(html).not.toContain('##')
     expect(html).not.toContain('framed')
   })
 
@@ -222,7 +225,13 @@ describe('earlier in this conversation', () => {
     const html = renderThread(state, { openRows: new Set([state.messages[0].id]) }, t)
     expect(html).toContain('aria-expanded="true"')
     expect(html).toContain('<div class="p-tools-detail is-open">')
-    expect(html).toContain('Then the docs.')
+    // the chat's markdown, not the raw text: headings, a list, bold; no markers left
+    expect(html).toContain('p-tools-md p-md')
+    expect(html).toContain('<p class="p-md-h p-md-h2">Goal</p>')
+    expect(html).toContain('<strong>env.ts</strong>')
+    expect(html).toContain('Update the docs')
+    expect(html).not.toContain('##')
+    expect(html).not.toContain('**')
   })
 
   test('"Show earlier" sits above the first message while there is more, and says it is loading once asked', () => {

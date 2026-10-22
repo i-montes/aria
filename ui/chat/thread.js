@@ -8,6 +8,7 @@ import { renderDivider } from './parts/divider.js'
 import { messageDomId } from './parts/index.js'
 import { renderJev } from './parts/jev.js'
 import { renderNote } from './parts/note.js'
+import { renderMarkdown } from './parts/markdown.js'
 import { renderPermission } from './parts/permission.js'
 import { renderPill } from './parts/pill.js'
 import { renderQuota } from './parts/quota.js'
@@ -70,9 +71,10 @@ function renderEntry(state, entry, index, ui, t) {
     case 'divider':
       return `<div class="thread-item">${renderDivider({ text: t(entry.key, entry.vars) }, {}, t)}</div>`
     case 'earlier': {
-      // The chat's divider, and the summary folded under it as a tool row (open on click, by its id).
+      // The chat's divider, and the summary folded under it as a tool row (open on click, by its id). Pi's summaries are
+      // markdown (## Goal, ## Progress…): no chip, and the open row shows them through the chat's markdown.
       const open = (ui.openRows ?? new Set()).has(entry.id)
-      const step = { id: entry.id, think: true, label: t('chat.earlier.summary'), text: entry.summary, status: 'done' }
+      const step = { id: entry.id, think: true, label: t('chat.earlier.summary'), chip: '', html: renderMarkdown(entry.summary), status: 'done' }
       return cached(entry, String(open), t, () => `<div class="thread-item thread-earlier">${renderDivider({ text: t('chat.earlier.divider') }, {}, t)}${entry.summary.trim() ? renderToolStep({ call: step }, { openRows: open ? new Set([entry.id]) : new Set() }, t) : ''}</div>`)
     }
     case 'answers':

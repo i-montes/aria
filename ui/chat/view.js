@@ -149,7 +149,7 @@ const SWAP_MS = 480
 export function shiftExpanded(ex, by) {
   if (!by) return ex
   for (const name of ['open', 'closed', 'more']) {
-    const moved = [...ex[name]].map((i) => i + by)
+    const moved = [...ex[name]].map((i) => i + by).filter((i) => i >= 0)
     ex[name].clear()
     for (const i of moved) ex[name].add(i)
   }
@@ -215,7 +215,8 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   // redraw cannot, or a stream of tokens (one redraw a frame) pulls back the first pixels of every scroll up.
   let following = true
   let listTop = 0
-  // Older messages put above the thread keep the reader where they were: their distance from the thread's end.
+  // Older messages put above the thread keep the reader where they were: { session, offset }, the offset being their
+  // distance from the thread's end. Only that tab's thread uses it; another tab drawn first drops it.
   let anchor = null
   let banner = ''
 
@@ -329,10 +330,11 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       patchItems(list, connectHtml ? [...items, connectHtml] : items)
     })
     tickElapsed() // a working line drawn just now shows its start time until the timer reaches it
-    if (anchor !== null) {
-      list.scrollTop = list.scrollHeight - anchor
+    const kept = anchor?.session === tabs.active ? anchor.offset : null
+    anchor = null
+    if (kept !== null) {
+      list.scrollTop = list.scrollHeight - kept
       listTop = list.scrollTop
-      anchor = null
     } else if (following || (ui.connect && ui.connect.justOpened)) list.scrollTop = list.scrollHeight
     if (ui.connect) ui.connect.justOpened = false
   }
@@ -1703,7 +1705,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
         const added = chatOf(session).messages.length - before.messages.length
         if (expandedOf.has(session)) shiftExpanded(expandedOf.get(session), added)
         const list = session === tabs.active ? $('chat-list') : null
-        if (list && added) anchor = list.scrollHeight - list.scrollTop
+        if (list && added) anchor = { session, offset: list.scrollHeight - list.scrollTop }
       }
       if (sentWith.has(session)) sentWith.set(session, releaseAccepted(sentWith.get(session), message))
       // A refused message goes back to the composer (when it is empty), so nothing looks sent that was not.

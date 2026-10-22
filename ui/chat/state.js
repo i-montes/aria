@@ -15,7 +15,8 @@ import { parseCardTitle } from './parts/cards.js'
 //                                                   compaction's, or the `aria-earlier` message a rotation starts with)
 //   { kind: 'jev', mode, action }                   the router's route line before an answer
 //   { kind: 'answers', answers: [{ header, selected, talk }] }   what you answered to a question card
-// `earlier` pages back through older history: { more, cursor, loading, count } (count: the entries prepended so far).
+// `earlier` pages back through older history: { more, cursor, loading, count, stale } (count: the entries prepended so
+// far; stale: a history came while a page was on its way, so that page belongs to the paging before it and is dropped).
 // `queue` holds messages waiting behind the run ({ text, steer?, files?, raw? }); `phase` names what the run is doing now.
 //
 // Attachments: the dock adds a line per file to the message it gives Pi (`[attached: …]`), so Pi's echo, its queue and
@@ -35,7 +36,7 @@ export function createChat() {
   }
 }
 
-const NO_EARLIER = { more: false, cursor: null, loading: false, count: 0 }
+const NO_EARLIER = { more: false, cursor: null, loading: false, count: 0, stale: false }
 
 const RESULT_LIMIT = 4000
 
@@ -229,7 +230,7 @@ function earlierSummary(message) {
 function fromHistory(messages) {
   let entries = []
   const calls = new Map()
-  for (const message of messages ?? []) {
+  for (const [at, message] of (messages ?? []).entries()) {
     if (message.role === 'user') {
       entries.push(userEntry(textOf(message.content)))
     } else if (message.role === 'assistant') {
@@ -250,7 +251,8 @@ function fromHistory(messages) {
         if (text) entries.push({ kind: 'assistant', text, thinking: '', done: true, texts: { 0: text }, thoughts: {} })
       }
     } else if (earlierSummary(message) !== null) {
-      entries.push({ kind: 'earlier', id: `earlier-${++stepSeq}`, summary: earlierSummary(message) })
+      // A stable id (the old session it summarises, or its place), so a history sent again keeps it open.
+      entries.push({ kind: 'earlier', id: `earlier-${message.details?.from ?? at}`, summary: earlierSummary(message) })
     } else if (message.role === 'custom') {
       const note = backgroundNote(message)
       if (note) entries.push(note)
@@ -378,7 +380,7 @@ function reduceEvent(state, event) {
       const past = fromHistory(event.messages)
       // Pages shown before it are dropped: the paging starts again from this history, whose summary replaces any shown.
       const shown = state.messages.slice(state.earlier.count).filter((m) => m.kind !== 'earlier' || !past.some((p) => p.kind === 'earlier'))
-      state = { ...withMessages(state, shown), loaded: true, turnFrom: Math.max(0, (state.turnFrom ?? 0) - state.earlier.count), earlier: { ...NO_EARLIER, more: past[0]?.kind === 'earlier' } }
+      state = { ...withMessages(state, shown), loaded: true, turnFrom: Math.max(0, (state.turnFrom ?? 0) - state.earlier.count), earlier: { ...NO_EARLIER, more: past[0]?.kind === 'earlier', loading: state.earlier.loading, stale: state.earlier.loading } }
       if (!state.messages.length) return withMessages(state, past)
       const first = state.messages.find((m) => m.kind === 'user')
       if (!first) return state.running || state.messages.some((m) => m.kind === 'assistant' && !m.done) ? state : withMessages(state, [...past, ...state.messages])
@@ -387,11 +389,13 @@ function reduceEvent(state, event) {
     }
     case 'earlier': {
       // A page of older messages goes above what is shown; indexes into the thread move with it.
+      // A page asked before a history came again belongs to the paging before it: dropped (ask again).
+      if (state.earlier.stale) return { ...state, earlier: { ...state.earlier, loading: false, stale: false } }
       const page = fromHistory(event.messages)
       return {
         ...withMessages(state, [...page, ...state.messages]),
         turnFrom: (state.turnFrom ?? 0) + page.length,
-        earlier: { more: event.more === true, cursor: event.cursor ?? null, loading: false, count: state.earlier.count + page.length },
+        earlier: { more: event.more === true, cursor: event.cursor ?? null, loading: false, count: state.earlier.count + page.length, stale: false },
       }
     }
     case 'session_reset':

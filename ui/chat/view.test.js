@@ -169,3 +169,12 @@ describe('a page of earlier messages prepended', () => {
     expect([...ex.rows]).toEqual(['t1'])
   })
 })
+
+describe('a history after earlier pages', () => {
+  test('moves the indexes back and drops the ones of entries that went away', () => {
+    const ex = { open: new Set([1, 6]), closed: new Set([2]), rows: new Set(), more: new Set() }
+    shiftExpanded(ex, -4)
+    expect([...ex.open]).toEqual([2])
+    expect([...ex.closed]).toEqual([])
+  })
+})
