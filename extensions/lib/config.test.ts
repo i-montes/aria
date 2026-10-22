@@ -76,6 +76,38 @@ describe("the extensions' settings (aria.json)", () => {
   })
 })
 
+describe("a scheduled tab's fixed permissions (ARIA_GRANTS)", () => {
+  const savedGrants = process.env.ARIA_GRANTS
+  afterEach(() => {
+    if (savedGrants === undefined) delete process.env.ARIA_GRANTS
+    else process.env.ARIA_GRANTS = savedGrants
+  })
+
+  test('grants set the connector levels and turn asking off', () => {
+    write({ connectors: { notion: 'ask', tavily: 'allow' }, sandbox: { extraWritable: ['/a'], askToLeave: true, jevReview: false } })
+    process.env.ARIA_GRANTS = JSON.stringify({ connectors: { notion: 'read', tavily: 'read' }, sandbox: { askToLeave: false, extraWritable: ['/out'] } })
+    const config = ariaConfig()
+    expect(config.connectors).toEqual({ notion: 'read', tavily: 'read' })
+    expect(config.sandbox).toEqual({ extraWritable: ['/out'], askToLeave: false, jevReview: false })
+  })
+
+  test('invalid grants change nothing', () => {
+    write({ connectors: { notion: 'allow' } })
+    for (const bad of ['{ nope', '[]', '"x"', JSON.stringify({ connectors: 'all', sandbox: { askToLeave: 'no', extraWritable: [1] } })]) {
+      process.env.ARIA_GRANTS = bad
+      const config = ariaConfig()
+      expect(config.connectors).toEqual({ notion: 'allow' })
+      expect(config.sandbox.askToLeave).toBe(true)
+      expect(config.sandbox.extraWritable).toEqual([])
+    }
+  })
+
+  test('a granted level outside read, ask and allow reads as ask', () => {
+    process.env.ARIA_GRANTS = JSON.stringify({ connectors: { notion: 'everything' } })
+    expect(ariaConfig().connectors).toEqual({ notion: 'ask' })
+  })
+})
+
 describe("writing Aria's settings (ARIA_SETTINGS)", () => {
   const savedSettings = process.env.ARIA_SETTINGS
   afterEach(() => {

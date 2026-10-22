@@ -99,5 +99,28 @@ export function ariaConfig(): AriaConfig {
   } catch {
     // no file (the owner's own Pi) or a broken one: today's values
   }
-  return merge(DEFAULTS, found, '') as AriaConfig
+  return withGrants(merge(DEFAULTS, found, '') as AriaConfig)
+}
+
+/**
+ * A scheduled task's tab runs with fixed permissions (`ARIA_GRANTS`, set by the dock when it starts that tab's Pi): its
+ * connector levels replace the ones in aria.json, and its sandbox never asks to leave. Anything that is not of the
+ * expected shape is ignored, so a bad value can only leave the config as it was, never widen it.
+ */
+function withGrants(config: AriaConfig): AriaConfig {
+  let grants: unknown
+  try {
+    grants = JSON.parse(process.env.ARIA_GRANTS ?? '')
+  } catch {
+    return config
+  }
+  if (!isObject(grants)) return config
+  const out: AriaConfig = { ...config, sandbox: { ...config.sandbox } }
+  if (isObject(grants.connectors)) out.connectors = merge({}, grants.connectors, 'connectors') as Record<string, AccessLevel>
+  const sandbox = isObject(grants.sandbox) ? grants.sandbox : {}
+  if (typeof sandbox.askToLeave === 'boolean') out.sandbox.askToLeave = sandbox.askToLeave
+  if (Array.isArray(sandbox.extraWritable) && sandbox.extraWritable.every((dir) => typeof dir === 'string')) {
+    out.sandbox.extraWritable = sandbox.extraWritable as string[]
+  }
+  return out
 }
