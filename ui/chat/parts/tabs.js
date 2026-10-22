@@ -35,6 +35,7 @@ export const TEXTS = {
     'chat.new': 'New session',
     'chat.sessions': 'Sessions',
     'chat.tab.close': 'Close {title}',
+    'chat.tab.scheduled': 'scheduled task',
     'chat.tab.rename': 'Rename session',
     'chat.tab.more': '+{n}',
     'chat.tab.menu': 'More sessions',
@@ -53,6 +54,7 @@ export const TEXTS = {
     'chat.new': 'Sesión nueva',
     'chat.sessions': 'Sesiones',
     'chat.tab.close': 'Cerrar {title}',
+    'chat.tab.scheduled': 'tarea programada',
     'chat.tab.rename': 'Renombrar sesión',
     'chat.tab.more': '+{n}',
     'chat.tab.menu': 'Más sesiones',
@@ -81,6 +83,9 @@ const X =
 const PLUS =
   '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>'
 
+const CLOCK =
+  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2.5 2"></path></svg>'
+
 export function renderSessionTabs(tabs, ui = {}, t = (key) => key) {
   const max = Math.max(2, Math.round(Number(ui.maxVisible)) || 4)
   const { visible, overflow } = visibleTabs(tabs, max)
@@ -100,14 +105,17 @@ export function renderSessionTabs(tabs, ui = {}, t = (key) => key) {
     const on = s.id === tabs.active
     const tone = toneOf(s)
     const status = statusOf(s)
-    const cls = `p-tabs-tab status-${status} tone-${tone}${on ? ' on' : ''}${s.unread ? ' unread' : ''}${multi ? ' closable' : ''}`
+    const cls = `p-tabs-tab status-${status} tone-${tone}${on ? ' on' : ''}${s.unread ? ' unread' : ''}${multi ? ' closable' : ''}${s.schedule ? ' scheduled' : ''}`
     if (ui.renaming === s.id) {
       return `<div class="${cls}"><input class="p-tabs-input" data-chat-rename data-session="${esc(s.id)}" value="${esc(s.title)}" aria-label="${esc(t('chat.tab.rename'))}" spellcheck="false" autocomplete="off"></div>`
     }
-    const label = status === 'idle' && tone === 'idle' ? titleOf(s) : `${titleOf(s)}, ${t(`chat.status.${tone}`)}`
+    const plain = status === 'idle' && tone === 'idle' ? titleOf(s) : `${titleOf(s)}, ${t(`chat.status.${tone}`)}`
+    const label = s.schedule ? `${plain}, ${t('chat.tab.scheduled')}` : plain
+    // A scheduled task's tab: a clock where the title starts.
+    const clock = s.schedule ? `<span class="p-tabs-clock" aria-hidden="true">${CLOCK}</span>` : ''
     return `<div class="${cls}">
       <button type="button" class="p-tabs-main" role="tab" aria-selected="${on}" aria-label="${esc(label)}" data-chat="select" data-session="${esc(s.id)}">
-        <span class="p-tabs-dot" aria-hidden="true"></span><span class="p-tabs-title">${esc(titleOf(s))}</span>
+        <span class="p-tabs-dot" aria-hidden="true"></span>${clock}<span class="p-tabs-title">${esc(titleOf(s))}</span>
       </button>${
         multi
           ? `<button type="button" class="p-tabs-x" data-chat="close-tab" data-session="${esc(s.id)}" aria-label="${esc(t('chat.tab.close', { title: titleOf(s) }))}">${X}</button>`

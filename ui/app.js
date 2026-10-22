@@ -69,6 +69,9 @@ const handlers = {
   session: (message) => booted.then(() => chat.receive(message.session, message.message)),
   // Every session's background jobs (top level, like the dock's own messages): the strip and the list.
   jobs: (message) => booted.then(() => chat.setJobs(message.jobs)),
+  // A scheduled task's tab, made by its first run, and the tab of a task that was deleted.
+  scheduleTab: (message) => booted.then(() => chat.addScheduledTab(message)),
+  scheduleRemoved: (message) => booted.then(() => chat.removeScheduledTab(message.id)),
   // Aria's version, sent once when the dock starts; the settings overview shows it.
   version: (message) => {
     if (typeof message.version === 'string') state.version = message.version

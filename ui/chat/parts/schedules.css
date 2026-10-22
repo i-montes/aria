@@ -1,0 +1,16 @@
+/* The scheduled tasks panel. Owner's rule: buttons and cards are SOLID and never change fill on hover or focus; only the
+   border takes the accent. */
+.p-scheds { display: flex; flex-direction: column; gap: 12px; font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; }
+.p-sched-heading { font: 11px 'Geist Mono', ui-monospace, monospace; letter-spacing: 0.08em; color: var(--muted, #8A8A94); }
+.p-sched-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.p-sched { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 12px; background: var(--surface, #141417); border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.1)); }
+.p-sched.is-paused { opacity: 0.7; }
+.p-sched-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.p-sched-title { font-size: 14px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-sched-when { flex: none; font: 12px 'Geist Mono', ui-monospace, monospace; color: #B4B4BC; }
+.p-sched-meta { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; line-height: 1.5; color: #B4B4BC; }
+.p-sched.is-failed .p-sched-last { color: #F2A3A3; }
+.p-sched-actions { display: flex; gap: 8px; }
+.p-sched-btn { padding: 6px 12px; border-radius: 9px; border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.1)); background: var(--field, #0f0f12); color: #EDEDEF; font-size: 12.5px; cursor: pointer; }
+.p-sched-btn:hover, .p-sched-btn:focus-visible { border-color: var(--accent-border, rgba(185, 168, 255, 0.7)); outline: none; }
+.p-sched-btn.is-danger:hover, .p-sched-btn.is-danger:focus-visible { border-color: rgba(242, 163, 163, 0.7); }

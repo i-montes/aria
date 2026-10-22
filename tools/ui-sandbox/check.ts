@@ -724,6 +724,27 @@ const script = `(async () => {
     check('Super+Q off a Mac is left alone', !$('#quit-hint').classList.contains('is-on') && !window.__sent.some((m) => m.type === 'quitRequest'))
   }
 
+  // 8e. a scheduled task's tab: made hidden by the dock, shown with its run (a clock, the time), and /schedules lists it
+  await reset()
+  window.aria.receive({ type: 'scheduleTab', id: 's-notion0000', title: 'Notion tasks', schedule: 's-notion0000' }); await settle()
+  const tabIds = () => [...document.querySelectorAll('#chat-header [data-chat="select"]')].map((b) => b.dataset.session)
+  check('a scheduled tab is not in the bar before it has news', !tabIds().includes('s-notion0000'), tabIds().join(','))
+  const onTask = (event) => window.aria.receive({ type: 'session', session: 's-notion0000', message: { type: 'chatEvent', event } })
+  onTask({ type: 'scheduled_run', text: 'Give me my Notion tasks', at: '07:30', late: false })
+  onTask({ type: 'agent_start' })
+  onTask({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: '3 tasks for today' }] } })
+  onTask({ type: 'agent_settled', aborted: false }); await wait(120)
+  check('after its run the scheduled tab shows, with its clock', tabIds().includes('s-notion0000') && $('#chat-header .scheduled .p-tabs-clock'), $('#chat-header').innerHTML.slice(0, 200))
+  $('#chat-header [data-session="s-notion0000"][data-chat="select"]')?.click(); await wait(120)
+  check("its run is the person's message with the scheduled time", $('#chat-list .p-user.is-scheduled')?.textContent.includes('07:30'), $('#chat-list').textContent.slice(0, 160))
+  $('#chat-header [data-session="s-notion0000"][data-chat="close-tab"]')?.click(); await wait(120)
+  check('closing it only hides it', !tabIds().includes('s-notion0000') && !window.__sent.some((m) => m.type === 'sessionClose' && m.session === 's-notion0000'), tabIds().join(','))
+  typeIn('/schedules'); await wait(120); key($('#chat-input'), 'Enter'); await wait(40); key($('#chat-input'), 'Enter'); await wait(200) // pick, then run
+  check('/schedules lists the task', $('#view-schedules')?.textContent.includes('Notion tasks') && !$('#view-schedules').hidden, $('#view-schedules')?.textContent.slice(0, 120))
+  $('[data-chat="schedule-toggle"]')?.click(); await wait(150)
+  check('pausing it shows it paused, with a resume button', $('#view-schedules .p-sched.is-paused') && $('[data-chat="schedule-toggle"]')?.dataset.enabled === 'true')
+  $('[data-chat="panel-back"]')?.click(); await wait(80)
+
   // 9. the settings: a control redraws the section through its components, keeping the scroll and the focus
   $('[data-chat="settings"]').click(); await wait(200)
   $('#flow [data-action="settings-open"][data-value="agents"]')?.click(); await wait(120)

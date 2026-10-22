@@ -117,3 +117,18 @@ describe('attachments in the bubble', () => {
     expect(html).toContain('chat.user.queued')
   })
 })
+
+describe('a scheduled run', () => {
+  const t = (key, vars) => (vars ? `${key} at=${vars.at}` : key)
+  test('says it was scheduled, and when', () => {
+    const html = renderUser({ text: 'My tasks', scheduled: { at: '07:30', late: false } }, {}, t)
+    expect(html).toContain('chat.user.scheduled at=07:30')
+    expect(html).toContain('is-scheduled')
+  })
+  test('a late one says it ran late', () => {
+    expect(renderUser({ text: 'My tasks', scheduled: { at: '07:30', late: true } }, {}, t)).toContain('chat.user.scheduledLate at=07:30')
+  })
+  test('the texts exist in both languages', () => {
+    for (const lang of ['en', 'es']) for (const key of ['chat.user.scheduled', 'chat.user.scheduledLate']) expect(TEXTS[lang][key], `${lang} ${key}`).toBeTruthy()
+  })
+})

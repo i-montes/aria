@@ -39,7 +39,7 @@ export const splitMentions = (text) => {
 const CLOCK =
   '<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="7"></circle><path d="M12 10v3l2 1.5M9.5 3h5"></path></svg>'
 
-export const renderUser = ({ text: raw, files: given, command, queued, steer, id }, ui, t) => {
+export const renderUser = ({ text: raw, files: given, command, queued, steer, id, scheduled }, ui, t) => {
   const split = splitAttached(raw)
   const text = split.text
   const files = given?.length ? given : split.files
@@ -54,18 +54,26 @@ export const renderUser = ({ text: raw, files: given, command, queued, steer, id
     : ''
   const bubble = text || !files.length ? `<div class="p-user-bubble p-md${command ? ' is-command' : ''}">${parts}</div>` : ''
   const chips = files.length ? `<div class="p-user-files">${renderAttachments({ files }, {}, t)}</div>` : ''
-  return `<div class="p-user${queued ? ' is-queued' : ''}${queued && steer ? ' is-steer' : ''}">${bubble}${chips}${queue}</div>`
+  // A scheduled task's run: the dock sent it at its time, or late when the computer slept or Aria was off.
+  const when = scheduled
+    ? `<div class="p-user-queue">${CLOCK}<span>${esc(t(scheduled.late ? 'chat.user.scheduledLate' : 'chat.user.scheduled', { at: scheduled.at }))}</span></div>`
+    : ''
+  return `<div class="p-user${queued ? ' is-queued' : ''}${queued && steer ? ' is-steer' : ''}${scheduled ? ' is-scheduled' : ''}">${bubble}${chips}${queue}${when}</div>`
 }
 
 export const TEXTS = {
   en: {
     'chat.user.queued': 'Queued · sends when Aria finishes',
     'chat.user.steer': 'Next · goes in when the current step ends',
+    'chat.user.scheduled': 'Scheduled · {at}',
+    'chat.user.scheduledLate': 'Scheduled for {at} · ran late',
     'chat.user.cancel': 'Cancel',
   },
   es: {
     'chat.user.queued': 'En cola · se envía cuando Aria termine',
     'chat.user.steer': 'Siguiente · entra cuando termine el paso en curso',
+    'chat.user.scheduled': 'Programada · {at}',
+    'chat.user.scheduledLate': 'Programada para las {at} · corrió tarde',
     'chat.user.cancel': 'Cancelar',
   },
 }

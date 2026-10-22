@@ -231,3 +231,15 @@ describe('texts', () => {
     }
   })
 })
+
+describe('a scheduled task tab', () => {
+  test('carries a clock and says it is scheduled', () => {
+    const html = render({ sessions: [{ id: 'a', title: 'A', status: 'idle', unread: false }, { id: 's-1', title: 'Notion tasks', status: 'done', unread: true, schedule: 's-1' }], active: 'a' })
+    expect(html).toContain('p-tabs-tab status-')
+    expect(html).toMatch(/scheduled[^>]*>[\s\S]*p-tabs-clock/)
+    expect(html).toContain('chat.tab.scheduled')
+  })
+  test('the text exists in both languages', () => {
+    for (const lang of ['en', 'es']) expect(TEXTS[lang]['chat.tab.scheduled']).toBeTruthy()
+  })
+})

@@ -13,6 +13,7 @@ import { PROVIDERS, renderConnect } from './parts/connect.js'
 import { renderFilePicker, filterFiles } from './parts/files.js'
 import { indexItems, indexLayout, renderIndex } from './parts/index.js'
 import { renderMemory, initialMemoryUi, reduceMemoryUi } from './parts/memory.js'
+import { renderSchedules } from './parts/schedules.js'
 import { renderModelPicker, orderedModels, providerLabel, withoutPayPerUse } from './parts/models.js'
 import { questionAnswers, questionInit, questionReduce, normalizeQuestions, renderQuestion } from './parts/question.js'
 import { renderQuotaBars } from './parts/quotabars.js'
@@ -21,7 +22,8 @@ import { renderSessionTabs } from './parts/tabs.js'
 import { renderTasks } from './parts/tasks.js'
 import { formatElapsed } from './parts/working.js'
 import {
-  MAX_SESSIONS, addSession, applyStatus, closeSession, createTabs, renameSession, selectSession, setTitleIfEmpty, toSaved, undoClose,
+  MAX_SESSIONS, addScheduled, addSession, applyStatus, closeSession, createTabs, hideScheduled, regularCount, removeSession, renameSession,
+  selectSession, setTitleIfEmpty, shownSessions, toSaved, undoClose,
 } from './sessions.js'
 import { addNote, addNotice, addQueued, addUser, answerDialog, askEarlier, tookBack, answersForCard, clearQueue, createChat, reduce } from './state.js'
 import { threadItems, groupOpen } from './thread.js'
@@ -186,7 +188,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   let picker = null // { kind, items, query, active, start }
   let dismissed = null // { kind, text }: Esc closed the picker for this text
   let settings = null
-  const data = { tasks: null, tasksKind: 'tasks', memory: [], jobs: [] } // jobs: every session's background jobs (the dock's `jobs`)
+  const data = { tasks: null, tasksKind: 'tasks', memory: [], jobs: [], schedules: [] } // jobs: every session's background jobs (the dock's `jobs`)
   const ui = { connect: null, menuOpen: false, renaming: null, view: 'chat', agent: null, job: null, sessionJob: null, memory: initialMemoryUi(), tasksOpen: true, index: { expanded: false, my: null, off: 0, height: 360, settled: false } }
   let toast = null
   let connectToken = 0 // a connection in progress that was closed or replaced must not act when its reply arrives
@@ -263,6 +265,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       <section class="chat-view" id="view-agents" hidden></section>
       <section class="chat-view" id="view-session" hidden></section>
       <section class="chat-view" id="view-memory" hidden></section>
+      <section class="chat-view" id="view-schedules" hidden></section>
     </div>
     <div id="chat-toast"></div>`
     input = null
@@ -297,10 +300,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     ])
     if (key === headerKey && $('chat-header').firstChild) return
     headerKey = key
-    const multi = tabs.sessions.length > 1
-    const full = tabs.sessions.length >= MAX_SESSIONS
+    // A scheduled task's tab shows only while it has something to show; it never counts against the eight.
+    const shown = shownSessions(tabs)
+    const multi = shown.length > 1
+    const full = regularCount(tabs) >= MAX_SESSIONS
     // Each tab's hover card is the quota card, fed with that session's own model, context and quota windows.
-    const sessions = tabs.sessions.map((s) => {
+    const sessions = shown.map((s) => {
       const chat = chatOf(s.id)
       const model = chat.model ?? ''
       return {
@@ -485,7 +490,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   function drawViews() {
     const view = ui.view
     $('chat-body').dataset.view = view
-    for (const name of ['chat', 'agents', 'session', 'memory']) $(`view-${name}`).hidden = name !== view
+    for (const name of ['chat', 'agents', 'session', 'memory', 'schedules']) $(`view-${name}`).hidden = name !== view
     if (view === 'chat') return
     if (view === 'agents') {
       const output = Object.fromEntries([...outputs].map(([id, o]) => [id, o.lines ?? []]))
@@ -509,6 +514,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       }
     } else if (view === 'session') {
       drawPanel($('view-session'), renderAgentSession({ agent: sessionAgent() }, { now: Date.now() }, t))
+    } else if (view === 'schedules') {
+      const back = `<button type="button" class="chat-back" data-chat="panel-back"><span>${esc(t('chat.schedules.back'))}</span></button>`
+      keepingFocus($('view-schedules'), () => drawPanel($('view-schedules'), renderSchedules({ tasks: data.schedules, now: Date.now() }, {}, t), back))
     } else if (view === 'memory') {
       keepingFocus($('view-memory'), () => {
         $('view-memory').innerHTML = renderMemory({ memories: data.memory, now: Date.now() }, ui.memory, t)
@@ -590,6 +598,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     const from = ui.view
     ui.view = view
     if (view === 'memory') ui.memory = initialMemoryUi()
+    if (view === 'schedules') refreshSchedules()
     if (view !== 'agents') stopOutputs()
     if (view === 'chat') ui.job = null
     // Opening the list is where a failed job's pill leaves the strip (it stays under Finished).
@@ -670,8 +679,15 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     input?.focus()
   }
 
+  /** The scheduled tasks from the dock, for the panel; `answer` is a reply that already carries them. */
+  async function refreshSchedules(answer) {
+    const reply = answer ?? (await request({ type: 'schedulesList' }))
+    data.schedules = Array.isArray(reply?.tasks) ? reply.tasks : []
+    if (ui.view === 'schedules') render()
+  }
+
   function addTab() {
-    if (tabs.sessions.length >= MAX_SESSIONS) return
+    if (regularCount(tabs) >= MAX_SESSIONS) return
     commitClose() // adding a session ends the undo window
     const id = makeId()
     if (input) drafts.set(tabs.active, input.value)
@@ -703,6 +719,16 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   }
 
   function closeTab(id) {
+    // A scheduled task's tab is only hidden: its task stays, and it shows again with its next result.
+    if (tabs.sessions.find((s) => s.id === id)?.schedule) {
+      const hidden = hideScheduled(tabs, id)
+      if (hidden.active === tabs.active) {
+        tabs = hidden
+        return render()
+      }
+      tabs = { ...hidden, active: tabs.active }
+      return switchTo(hidden.active)
+    }
     const wasActive = id === tabs.active
     const before = tabs
     commitClose() // an earlier close can no longer be undone
@@ -759,6 +785,10 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     if (/^\/memory(\s|$)/.test(text)) {
       clearDraft()
       return openView('memory')
+    }
+    if (/^\/schedules(\s|$)/.test(text)) {
+      clearDraft()
+      return openView('schedules')
     }
     const connect = /^\/connect(?:\s+(\S+))?\s*$/.exec(text)
     if (connect) {
@@ -977,6 +1007,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     }
     const local = () => [
       { name: 'memory', description: t('chat.cmd.memory'), source: 'aria' },
+      { name: 'schedules', description: t('chat.cmd.schedules'), source: 'aria' },
       { name: 'model', description: t('chat.cmd.model'), source: 'aria' },
       { name: 'connect', description: t('chat.cmd.connect'), source: 'aria' },
       { name: 'compact', description: t('chat.cmd.compact'), source: 'aria' },
@@ -1604,6 +1635,10 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
         return openView('agents')
       case 'panel-back': return openView('chat')
       case 'memory-back': return openView('chat')
+      case 'schedule-toggle':
+        return request({ type: 'scheduleUpdate', schedule: el.dataset.schedule, enabled: el.dataset.enabled === 'true' }).then(refreshSchedules)
+      case 'schedule-delete':
+        return request({ type: 'scheduleDelete', schedule: el.dataset.schedule }).then(refreshSchedules)
       case 'toast-open':
         toast = null
         return switchTo(session)
@@ -1668,6 +1703,25 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     /** The active session's subagents (the dock sends them as `chatAgents`; the UI sandbox calls this). */
     setAgents(list) {
       chats.set(tabs.active, reduce(current(), { type: 'chatAgents', agents: list ?? [] }))
+      render()
+    },
+    /** A scheduled task's tab, made by its first run (the dock's `scheduleTab`): added without taking the focus. */
+    addScheduledTab({ id, title, schedule }) {
+      const before = tabs
+      tabs = addScheduled(tabs, id, title, schedule)
+      if (tabs === before) return
+      save()
+      render()
+    },
+    /** A deleted task's tab (the dock's `scheduleRemoved`). */
+    removeScheduledTab(id) {
+      if (!tabs.sessions.some((s) => s.id === id)) return
+      if (id === tabs.active) switchTo(tabs.sessions.find((s) => !s.schedule)?.id)
+      tabs = removeSession(tabs, id)
+      chats.delete(id)
+      drafts.delete(id)
+      save()
+      if (ui.view === 'schedules') refreshSchedules()
       render()
     },
     /** Every session's background jobs (the dock's top-level `jobs` message): the strip shows the active session's. */
