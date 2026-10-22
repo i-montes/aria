@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { createChat } from './state.js'
 import { chatTexts } from './texts.js'
-import { hasParallelAgents, insertFile, keepRenameField, pickerQuery, renderDialog, renderPath, renderProblem, renderUndo, preloadOrder, shortPath } from './view.js'
+import { hasParallelAgents, insertFile, shiftExpanded, keepRenameField, pickerQuery, renderDialog, renderPath, renderProblem, renderUndo, preloadOrder, shortPath } from './view.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const ev = (event) => ({ type: 'chatEvent', event })
@@ -156,5 +156,16 @@ describe('the composer', () => {
     expect(hasParallelAgents([watched, { id: 'a2', role: 'security', task: 'Review', kind: 'active' }], [job])).toBe(true)
     expect(hasParallelAgents([watched], [])).toBe(true)
     expect(hasParallelAgents([], [job])).toBe(false)
+  })
+})
+
+describe('a page of earlier messages prepended', () => {
+  test('moves the folded and opened groups by the entries it added; open rows are by id and stay', () => {
+    const ex = { open: new Set([0, 3]), closed: new Set([5]), rows: new Set(['t1']), more: new Set([3]) }
+    shiftExpanded(ex, 4)
+    expect([...ex.open]).toEqual([4, 7])
+    expect([...ex.closed]).toEqual([9])
+    expect([...ex.more]).toEqual([7])
+    expect([...ex.rows]).toEqual(['t1'])
   })
 })

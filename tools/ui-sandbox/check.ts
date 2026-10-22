@@ -489,6 +489,33 @@ const script = `(async () => {
   await reset()
   ;[...document.querySelectorAll('nav button')].find((b) => b.textContent === 'Run /plan').click(); await wait(60)
   check('the route line from the router shows in the thread', $('#chat-list .p-jev')?.textContent.includes('strong model'), $('#chat-list').textContent.slice(0, 120))
+  // 17b. paged history: the earlier divider with its folded summary, "Show earlier" twice, the reader's place kept
+  {
+    await reset()
+    const wasChatMode = document.body.classList.contains('mode-chat')
+    document.body.classList.add('mode-chat') // the thread needs its real height to scroll
+    ;[...document.querySelectorAll('nav button')].find((b) => b.textContent === 'Earlier conversation').click(); await wait(80)
+    const list = $('#chat-list')
+    const divider = () => $('#chat-list .thread-earlier .p-divider')
+    check('the earlier divider shows, the summary folded under it', divider()?.textContent.includes('Earlier in this conversation') && $('#chat-list .thread-earlier [data-chat="toggle-tool-row"]')?.getAttribute('aria-expanded') === 'false' && !list.textContent.includes('<summary>'), list.textContent.slice(0, 160))
+    $('#chat-list .thread-earlier [data-chat="toggle-tool-row"]').click(); await wait(60)
+    check('a click opens the summary', $('#chat-list .thread-earlier .p-tools-detail.is-open')?.textContent.includes('Next: the docs.'))
+    const more = () => $('#chat-list [data-chat="chat-earlier"]')
+    check('"Show earlier" sits above the first message', more()?.textContent.includes('Show earlier') && list.querySelector('.thread-item') === more().closest('.thread-item'))
+    list.scrollTop = 0; await wait(40)
+    const at = divider().getBoundingClientRect().top
+    more().click()
+    check('asking says it is loading and posts chatEarlier without a cursor', $('#chat-list .thread-earlier-more')?.textContent.includes('Loading') && !more() && JSON.stringify(sent().filter((m) => m.type === 'chatEarlier').at(-1)) === '{"type":"chatEarlier"}', JSON.stringify(sent().at(-1)))
+    await wait(120)
+    const text = () => list.textContent
+    check('the first page goes above, in order, before the divider', text().indexOf('Older question 1') >= 0 && text().indexOf('Older question 1') < text().indexOf('Older question 20') && text().indexOf('Older question 20') < text().indexOf('Earlier in this conversation') && text().includes('Recent question 10'), text().slice(0, 120))
+    check('the reader stays where they were', Math.abs(divider().getBoundingClientRect().top - at) < 2 && list.scrollTop > 0, [at, divider().getBoundingClientRect().top, list.scrollTop].join(' '))
+    check('the summary stays open', !!$('#chat-list .thread-earlier .p-tools-detail.is-open'))
+    more().click(); await wait(120)
+    check('the second ask sends the cursor it got', JSON.stringify(sent().filter((m) => m.type === 'chatEarlier').at(-1)?.cursor) === '{"segment":0,"index":40}', JSON.stringify(sent().filter((m) => m.type === 'chatEarlier')))
+    check('the last page goes on top and the button goes away', text().indexOf('Oldest question 3') >= 0 && text().indexOf('Oldest question 3') < text().indexOf('Older question 1') && !more() && !$('#chat-list .thread-earlier-more'), text().slice(0, 120))
+    document.body.classList.toggle('mode-chat', wasChatMode)
+  }
   // 9. no model button next to the working folder
   document.querySelector('[data-chat="add"]').click(); await wait(60)
   check('no model button beside the working folder, with one session or several', !$('.chat-path-row .p-meter') && !$('.chat-path-row .p-composer-model'))

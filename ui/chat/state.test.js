@@ -1,6 +1,6 @@
 // Run: bun test ui
 import { describe, expect, test } from 'bun:test'
-import { addNotice, addQueued, addUser, answerDialog, answersForCard, clearQueue, createChat, reduce, toolSummary } from './state.js'
+import { addNotice, addQueued, addUser, answerDialog, answersForCard, askEarlier, clearQueue, createChat, reduce, toolSummary } from './state.js'
 
 const ev = (event) => ({ type: 'chatEvent', event })
 const run = (state, ...messages) => messages.reduce(reduce, state)
@@ -694,5 +694,84 @@ describe('attachments', () => {
   test('a note from the page goes into the thread', () => {
     const state = addNotice(createChat(), 'warn', 'chat.attach.tooMany', { max: 10 })
     expect(state.messages).toEqual([{ kind: 'notice', tone: 'warn', key: 'chat.attach.tooMany', vars: { max: 10 } }])
+  })
+})
+
+describe('earlier in this conversation (paged history)', () => {
+  const framed = 'The conversation history before this point was compacted into the following summary:\n\n<summary>\nWe fixed the build.\n</summary>'
+  const seed = { role: 'custom', customType: 'aria-earlier', content: framed, display: true, details: { from: 'old-id', summary: 'We fixed the build.' } }
+  const compaction = { role: 'compactionSummary', summary: 'We talked about tests.', tokensBefore: 120000 }
+  const kept = [{ role: 'user', content: 'and now?' }, { role: 'assistant', content: [{ type: 'text', text: 'Now the docs.' }] }]
+  const page = (texts, cursor, more) => ev({ type: 'earlier', messages: texts.flatMap((text) => [{ role: 'user', content: text }, { role: 'assistant', content: [{ type: 'text', text: `re: ${text}` }] }]), cursor, more })
+
+  test('a rotated segment\'s seed message is one earlier entry with the raw summary, never the framed text', () => {
+    const state = reduce(createChat(), ev({ type: 'history', messages: [seed, ...kept] }))
+    expect(state.messages[0]).toMatchObject({ kind: 'earlier', summary: 'We fixed the build.' })
+    expect(state.messages.map((m) => m.kind)).toEqual(['earlier', 'user', 'assistant'])
+    expect(JSON.stringify(state.messages)).not.toContain('<summary>')
+  })
+
+  test('a compaction summary not rotated yet is the same entry', () => {
+    const state = reduce(createChat(), ev({ type: 'history', messages: [compaction, ...kept] }))
+    expect(state.messages[0]).toMatchObject({ kind: 'earlier', summary: 'We talked about tests.' })
+  })
+
+  test('other custom messages are not earlier entries', () => {
+    const other = { ...seed, customType: 'aria-other' }
+    expect(reduce(createChat(), ev({ type: 'history', messages: [other, ...kept] })).messages.map((m) => m.kind)).toEqual(['user', 'assistant'])
+  })
+
+  test('there is more to show when the history starts with an earlier entry, and not otherwise', () => {
+    expect(reduce(createChat(), ev({ type: 'history', messages: [seed, ...kept] })).earlier).toMatchObject({ more: true, cursor: null, loading: false })
+    expect(reduce(createChat(), ev({ type: 'history', messages: kept })).earlier.more).toBe(false)
+  })
+
+  test('asking: the first time without a cursor, then with the last one; it is loading until the reply', () => {
+    let state = reduce(createChat(), ev({ type: 'history', messages: [seed, ...kept] }))
+    let message
+    ;[state, message] = askEarlier(state)
+    expect(message).toEqual({ type: 'chatEarlier' })
+    expect(state.earlier.loading).toBe(true)
+    expect(askEarlier(state)[1]).toBeNull() // one request at a time
+    state = reduce(state, page(['one'], { segment: 0, index: 40 }, true))
+    expect(state.earlier.loading).toBe(false)
+    ;[state, message] = askEarlier(state)
+    expect(message).toEqual({ type: 'chatEarlier', cursor: { segment: 0, index: 40 } })
+  })
+
+  test('nothing is asked when there is no more', () => {
+    const state = reduce(createChat(), ev({ type: 'history', messages: kept }))
+    expect(askEarlier(state)).toEqual([state, null])
+  })
+
+  test('a reply goes above what is shown, in order, and keeps the rest; a second one goes above it', () => {
+    let state = reduce(createChat(), ev({ type: 'history', messages: [seed, ...kept] }))
+    state = reduce(askEarlier(state)[0], page(['b1', 'b2'], { segment: 0, index: 4 }, true))
+    expect(state.messages.map((m) => m.text ?? m.kind)).toEqual(['b1', 're: b1', 'b2', 're: b2', 'earlier', 'and now?', 'Now the docs.'])
+    expect(state.earlier).toMatchObject({ more: true, cursor: { segment: 0, index: 4 } })
+    state = reduce(askEarlier(state)[0], page(['a1'], { segment: 0, index: 0 }, false))
+    expect(state.messages.map((m) => m.text ?? m.kind)).toEqual(['a1', 're: a1', 'b1', 're: b1', 'b2', 're: b2', 'earlier', 'and now?', 'Now the docs.'])
+    expect(state.earlier).toMatchObject({ more: false, cursor: { segment: 0, index: 0 }, loading: false })
+  })
+
+  test('the running turn\'s start moves with what was prepended', () => {
+    let state = run(createChat(), ev({ type: 'history', messages: [seed, ...kept] }), ev({ type: 'agent_start' }))
+    const from = state.turnFrom
+    state = reduce(state, page(['x'], { segment: 0, index: 0 }, false))
+    expect(state.turnFrom).toBe(from + 2)
+  })
+
+  test('a history that comes again replaces the pages shown before it instead of repeating them', () => {
+    let state = reduce(createChat(), ev({ type: 'history', messages: [seed, ...kept] }))
+    state = reduce(state, page(['b1'], { segment: 0, index: 2 }, false))
+    state = reduce(state, ev({ type: 'history', messages: [seed, ...kept] }))
+    expect(state.messages.map((m) => m.text ?? m.kind)).toEqual(['earlier', 'and now?', 'Now the docs.'])
+    expect(state.earlier).toMatchObject({ more: true, cursor: null, count: 0 })
+  })
+
+  test('a reset forgets the paging', () => {
+    let state = reduce(createChat(), ev({ type: 'history', messages: [seed, ...kept] }))
+    state = reduce(state, ev({ type: 'session_reset' }))
+    expect(state.earlier).toEqual(createChat().earlier)
   })
 })

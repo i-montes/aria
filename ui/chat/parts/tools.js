@@ -6,6 +6,7 @@
 //           calls: [{ id, name, args, status: 'running'|'done'|'error', summary, result }
 //                   | { id, think: true, text }],  a reasoning step: the "Thinking" row
 //           live?: boolean }                    true while the run is going (any running call counts too)
+//         a reasoning step may carry its own `label` instead of "Thinking" (the earlier summary's "Summary")
 // Ui:     { open?: Set<number>|boolean,         is the group expanded (a Set holds message indexes)
 //           openRows?: Set<string>,             call ids whose result is shown
 //           moreOpen?: Set<number>|boolean,     all changed-file chips instead of the first three
@@ -112,7 +113,7 @@ const argPath = (args) => {
 
 /** The row's title: what the tool does ("Read file", "Write 3 lines"). */
 export function toolLabel(call, t) {
-  if (call.think) return t('chat.tools.thinking')
+  if (call.think) return call.label || t('chat.tools.thinking')
   const name = call.name
   switch (toolKind(name)) {
     case 'run': {
@@ -344,3 +345,8 @@ export function renderTools(props, ui, t) {
       </div></div>
     </div>`
 }
+
+/** One step on its own, without the group's header: the same row, folded or open (`ui.openRows`), for a text the
+ * thread folds outside a turn (the earlier conversation's summary). */
+export const renderToolStep = ({ call }, ui, t) =>
+  `<div class="p-tools p-tools-step"><div class="p-tools-list">${row(call, ui?.openRows ?? new Set(), false, t)}</div></div>`

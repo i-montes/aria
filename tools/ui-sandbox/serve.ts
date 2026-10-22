@@ -79,6 +79,10 @@ const sandbox = `<script>
         else if (inner.type === 'chatClearQueue') { sim.steering = [...(inner.steer ?? [])]; sim.queue = [...(inner.keep ?? [])]; sim.ev({ type: 'queue_update', steering: [...sim.steering], followUp: [...sim.queue] }, m.session) }
         else if (inner.type === 'chatSend') sim.reply(m.session, inner.text)
         else if (inner.type === 'chatAbort') { sim.stopRun(m.session) }
+        // Like the dock: older history in pages, the newest first; two pages here, the second the last.
+        else if (inner.type === 'chatEarlier') sim.ev(inner.cursor
+          ? { type: 'earlier', messages: sim.pairs('Oldest question', 3), cursor: { segment: 0, index: 0 }, more: false }
+          : { type: 'earlier', messages: sim.pairs('Older question', 20), cursor: { segment: 0, index: 40 }, more: true }, m.session)
       }
     }, 15)
   } } } }
@@ -136,6 +140,8 @@ const sandbox = `<script>
         sim.ev({ type: 'agent_settled', aborted: false }, session)
       }, 3600)
     },
+    // n user/assistant pairs in get_messages' shape, oldest first.
+    pairs: (label, n) => Array.from({ length: n }, (_, i) => [{ role: 'user', content: label + ' ' + (i + 1) }, { role: 'assistant', content: [{ type: 'text', text: 'Answer to ' + label.toLowerCase() + ' ' + (i + 1) + ', with enough text to take some room.' }] }]).flat(),
     stopRun(session) { clearTimeout(sim.timer); if (sim.timer) { sim.ev({ type: 'agent_settled', aborted: true }, session); sim.timer = null } },
   }
   window.sim = sim
@@ -157,6 +163,8 @@ const sandbox = `<script>
     'Background work (Alt A)': () => { const now = Date.now(); const job = sim.job; window.aria.chat.setAgents([{ id: 'a1', role: 'tests', task: 'Fix the checkout tests', status: 'writing', kind: 'active', steps: [{ kind: 'tool', tool: 'read', target: 'src/checkout.test.ts' }] }, { id: 'a2', role: 'security', task: 'Review the sandbox policy', status: 'done', kind: 'done' }]); sim.jobs = [job({ id: 'j1', title: 'bun dev', command: 'bun dev', url: 'http://localhost:3000' }), job({ id: 'j2', number: 2, kind: 'agent', title: 'tests', task: 'Fix the checkout tests', writes: true, isolation: 'worktree' }), job({ id: 'j5', number: 5, session: 's2', title: 'tail -f log', command: 'tail -f log' }), job({ id: 'j3', number: 3, state: 'exited', exit: 1, endedAt: now - 60000, title: 'bun test' }), job({ id: 'j4', number: 4, kind: 'agent', state: 'done', endedAt: now - 120000, title: 'research', task: 'Compare the routers', result: 'The **first** router wins.\\n\\n## Learnings\\n- keep it small', worktree: '~/Projects/.aria-worktrees/aria-j4', conflict: true })]; window.aria.receive({ type: 'jobs', jobs: sim.jobs }); window.aria.chat.toggleAgents() },
     'Other tab needs you': () => { sim.sess('s2', { type: 'chatDialog', id: 'x' + ++sim.n, method: 'select', request: { title: card({ kind: 'sandbox', summary: 'Wants to leave the sandbox', detail: 'ls /etc' }), options: ['allow', 'always', 'deny'] }, hidden: false }) },
     'Attachments in history': () => sim.ev({ type: 'history', messages: [{ role: 'user', content: [{ type: 'text', text: 'Why does the build fail?\\n\\n[attached: build.log (text/plain, 12 KB) at /home/ana/.aria/attachments/s1/2026-10-21/1-build.log]\\n[attached image: screenshot.png at /home/ana/.aria/attachments/s1/2026-10-21/2-screenshot.png]' }] }, { role: 'assistant', content: [{ type: 'text', text: 'The log says RELEASE is missing.' }] }] }),
+    // A rotated session: its history starts with the seed message (Pi's framing in content, the raw summary in details).
+    'Earlier conversation': () => sim.ev({ type: 'history', messages: [{ role: 'custom', customType: 'aria-earlier', display: true, content: 'The conversation history before this point was compacted into the following summary:\\n\\n<summary>\\nWe fixed the build.\\n</summary>', details: { from: 'old-session', summary: 'We fixed the build: RELEASE is optional now.\\nNext: the docs.' } }, ...sim.pairs('Recent question', 10)] }),
     'Many messages': () => { for (let i = 0; i < 8; i++) { sim.sess(sim.active, { type: 'chatEvent', event: { type: 'message_start', message: { role: 'user', content: 'x' } } }); sim.say('Answer number ' + (i + 1) + ' with enough text to take some room in the thread.\\n\\nA second paragraph.') } },
   }
   const nav = document.createElement('nav')
