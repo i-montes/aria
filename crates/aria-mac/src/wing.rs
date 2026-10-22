@@ -44,6 +44,33 @@ pub fn wing_frame(screens: &[ScreenInfo]) -> Option<(Area, bool)> {
     Some((Area { x, y: top(s) - height, width: WING_WIDTH, height }, false))
 }
 
+/// How far the wing reaches under the notch: the notch's own bottom corner is rounded, and the wing covers that curve
+/// (hidden behind the notch) so the two read as one shape with one straight bottom edge.
+pub const OVERLAP: f64 = 12.0;
+/// The concave curve at the wing's top outer corner(s), where it meets the screen's top edge, as the notch's own.
+pub const FLARE: f64 = 6.0;
+/// The convex radius of the wing's bottom outer corner(s), about the notch's own.
+pub const BOTTOM: f64 = 8.0;
+
+/// The panel that holds the wing: the wing's area, plus the part under the notch and the flare beside a notch, or a
+/// flare on each side for the pill.
+pub fn panel_frame(wing: Area, notch: bool) -> Area {
+    if notch {
+        Area { x: wing.x - OVERLAP, width: wing.width + OVERLAP + FLARE, ..wing }
+    } else {
+        Area { x: wing.x - FLARE, width: wing.width + 2.0 * FLARE, ..wing }
+    }
+}
+
+/// Where the wing's own area (what the face is centred in) starts inside its panel.
+pub fn wing_inset(notch: bool) -> f64 {
+    if notch {
+        OVERLAP
+    } else {
+        FLARE
+    }
+}
+
 /// The menu bar's height when it hides itself and the screen cannot say.
 const MENU_BAR: f64 = 24.0;
 
@@ -110,6 +137,20 @@ mod tests {
             main: true,
         };
         assert_eq!(wing_frame(&[main]), Some((area(941.0, 1056.0, 38.0, 24.0), false)));
+    }
+
+    #[test]
+    fn beside_a_notch_the_panel_reaches_under_it_and_flares_out() {
+        let wing = area(851.0, 950.0, 38.0, 32.0);
+        assert_eq!(panel_frame(wing, true), area(839.0, 950.0, 56.0, 32.0));
+        assert_eq!(wing_inset(true), 12.0);
+    }
+
+    #[test]
+    fn the_pill_flares_on_both_sides() {
+        let wing = area(941.0, 1055.0, 38.0, 25.0);
+        assert_eq!(panel_frame(wing, false), area(935.0, 1055.0, 50.0, 25.0));
+        assert_eq!(wing_inset(false), 6.0);
     }
 
     #[test]

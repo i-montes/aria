@@ -5,7 +5,7 @@
 
 use super::face_layers::FaceLayers;
 use crate::face_motion::Motion;
-use aria_mac::wing::{wing_frame, Area};
+use aria_mac::wing::{panel_frame, wing_frame, wing_inset, Area, BOTTOM, FLARE};
 use objc2::rc::Retained;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
@@ -13,9 +13,9 @@ use objc2_app_kit::{
     NSWindowOcclusionState, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGAffineTransform, CGPoint};
-use objc2_core_graphics::CGColor;
+use objc2_core_graphics::{CGColor, CGMutablePath};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
-use objc2_quartz_core::CACornerMask;
+use objc2_quartz_core::CAShapeLayer;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -23,8 +23,6 @@ use std::time::{Duration, Instant};
 
 /// How big the face is in the wing (as in the Omarchy bar).
 const FACE: f64 = 22.0;
-/// The wing's bottom corner(s), rounded so it reads as part of the notch.
-const CORNER: f64 = 10.0;
 /// How often the screens are looked at again (a display plugged in, the lid closed).
 const PLACE_EVERY: Duration = Duration::from_secs(2);
 
@@ -85,7 +83,7 @@ impl FaceWing {
     /// The wing, on screen; `None` when there is no screen to put it on. `on_click` toggles the dock.
     pub fn new(mtm: MainThreadMarker, on_click: Box<dyn Fn()>) -> Option<Rc<FaceWing>> {
         let (area, notch) = wing_frame(&aria_mac::screens())?;
-        let rect = ns_rect(area);
+        let rect = ns_rect(panel_frame(area, notch));
         let panel: Retained<NSPanel> = unsafe {
             msg_send![
                 NSPanel::alloc(mtm),
@@ -138,23 +136,23 @@ impl FaceWing {
         Some(wing)
     }
 
-    /// Moves the wing to `area` and shapes it: one rounded bottom corner beside a notch, both for the pill.
+    /// Moves the wing to `area` and shapes it as the notch is shaped: beside a notch it reaches under it (so the
+    /// bottom edge runs on from the notch's), curves out into the screen's top edge and rounds its bottom outer corner;
+    /// the pill does both on each side.
     fn put(&self, area: Area, notch: bool) {
         if self.placed.get() == Some((area, notch)) {
             return;
         }
         self.placed.set(Some((area, notch)));
-        self.panel.setFrame_display(ns_rect(area), true);
+        let panel = panel_frame(area, notch);
+        self.panel.setFrame_display(ns_rect(panel), true);
         let Some(host) = self.view.layer() else { return };
-        host.setCornerRadius(CORNER.min(area.height / 2.0));
-        // The view's layer is not flipped: its bottom edge is its minimum y.
-        host.setMaskedCorners(if notch {
-            CACornerMask::LayerMaxXMinYCorner
-        } else {
-            CACornerMask::LayerMinXMinYCorner | CACornerMask::LayerMaxXMinYCorner
-        });
+        let mask = CAShapeLayer::new();
+        mask.setPath(Some(&outline(panel.width, panel.height, notch)));
+        // SAFETY: the mask is a fresh layer with no superlayer, as `mask` requires.
+        unsafe { host.setMask(Some(&mask)) };
         let root = self.face.root();
-        root.setPosition(CGPoint::new(area.width / 2.0, area.height / 2.0));
+        root.setPosition(CGPoint::new(wing_inset(notch) + area.width / 2.0, area.height / 2.0));
         let k = FACE / 96.0;
         root.setAffineTransform(CGAffineTransform { a: k, b: 0.0, c: 0.0, d: k, tx: 0.0, ty: 0.0 });
     }
@@ -187,4 +185,31 @@ impl FaceWing {
 /// A seed for the face's randomness: the clock, so two docks do not glance alike.
 fn seed() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64)
+}
+
+/// The wing's outline in its panel (the view's layer: y up, origin at the bottom left). On the outer side: the screen's
+/// top edge curves down into the side (concave, as the notch meets the menu bar), and the side rounds into the bottom
+/// edge (convex). Beside a notch the inner side is straight (it is hidden under the notch); the pill curves on both.
+fn outline(w: f64, h: f64, notch: bool) -> objc2_core_foundation::CFRetained<CGMutablePath> {
+    let (f, b) = (FLARE, BOTTOM.min(h - FLARE));
+    let p = CGMutablePath::new();
+    let none = std::ptr::null();
+    // SAFETY (every call): a null transform is allowed and means none.
+    unsafe {
+        CGMutablePath::move_to_point(Some(&p), none, 0.0, h);
+        CGMutablePath::add_line_to_point(Some(&p), none, w, h);
+        CGMutablePath::add_quad_curve_to_point(Some(&p), none, w - f, h, w - f, h - f);
+        CGMutablePath::add_line_to_point(Some(&p), none, w - f, b);
+        CGMutablePath::add_quad_curve_to_point(Some(&p), none, w - f, 0.0, w - f - b, 0.0);
+        if notch {
+            CGMutablePath::add_line_to_point(Some(&p), none, 0.0, 0.0);
+        } else {
+            CGMutablePath::add_line_to_point(Some(&p), none, f + b, 0.0);
+            CGMutablePath::add_quad_curve_to_point(Some(&p), none, f, 0.0, f, b);
+            CGMutablePath::add_line_to_point(Some(&p), none, f, h - f);
+            CGMutablePath::add_quad_curve_to_point(Some(&p), none, f, h, 0.0, h);
+        }
+    }
+    CGMutablePath::close_subpath(Some(&p));
+    p
 }
