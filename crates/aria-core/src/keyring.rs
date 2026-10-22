@@ -54,13 +54,27 @@ fn failed(what: &str, output: &std::process::Output) -> KeyringError {
 
 /// Runs `program` with `args`, `input` on its stdin (or nothing), and returns its output.
 fn run(program: &Path, args: &[&str], input: Option<&str>) -> Result<std::process::Output, KeyringError> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| KeyringError::Unavailable(format!("{}: {e}", program.display())))?;
+    let spawn = || {
+        Command::new(program)
+            .args(args)
+            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    };
+    // "Text file busy" (ETXTBSY): a program just written is still open for writing in a process another thread forked
+    // a moment ago; it clears as soon as that process execs, so a few short retries get past it.
+    let mut attempt = spawn();
+    for _ in 0..5 {
+        match &attempt {
+            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                attempt = spawn();
+            }
+            _ => break,
+        }
+    }
+    let mut child = attempt.map_err(|e| KeyringError::Unavailable(format!("{}: {e}", program.display())))?;
     if let Some(input) = input {
         let mut stdin = child.stdin.take().expect("piped");
         stdin.write_all(input.as_bytes()).map_err(|e| KeyringError::Failed(e.to_string()))?;

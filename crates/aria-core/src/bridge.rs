@@ -201,6 +201,8 @@ pub enum DockMessage {
     ChatState {
         workdir: String,
         running: bool,
+        /// Pi is compacting with no run of its own (a compaction Aria asked for): the page shows it as working.
+        compacting: bool,
         model: Option<String>,
         thinking: Option<String>,
         context: Option<f64>,
@@ -443,12 +445,13 @@ mod tests {
             value(DockMessage::ChatState {
                 workdir: "/home/u/Projects".into(),
                 running: false,
+                compacting: false,
                 model: Some("opencode-go/glm-5.3".into()),
                 thinking: None,
                 context: Some(30.0),
                 problem: None
             }),
-            json!({"type": "chatState", "workdir": "/home/u/Projects", "running": false, "model": "opencode-go/glm-5.3", "thinking": null, "context": 30.0, "problem": null})
+            json!({"type": "chatState", "workdir": "/home/u/Projects", "running": false, "compacting": false, "model": "opencode-go/glm-5.3", "thinking": null, "context": 30.0, "problem": null})
         );
         assert_eq!(
             value(DockMessage::ChatEvent { event: json!({"type": "agent_start"}) }),
