@@ -170,6 +170,7 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         PageMessage::ChatSend { .. }
         | PageMessage::ChatAbort
         | PageMessage::ChatLoad { .. }
+        | PageMessage::ChatEarlier { .. }
         | PageMessage::EnginesRestart
         | PageMessage::ChatShown { .. }
         | PageMessage::ChatClearQueue { .. }

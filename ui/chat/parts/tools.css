@@ -133,3 +133,7 @@
 @media (prefers-reduced-motion: reduce) {
   .p-tools, .p-tools * { animation: none !important; }
 }
+/* a step whose detail is markdown (the earlier conversation's summary): the chat's markdown, a size down */
+.p-tools-lines.p-tools-md { display: block; font-size: 12.5px; line-height: 1.6; color: #B4B4BC; }
+.p-tools-md .p-md-h { font-size: 13px; }
+.p-tools-md > * + * { margin-top: 6px; }

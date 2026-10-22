@@ -378,6 +378,7 @@
   "chat.undo": "Undo",
   "chat.tab.moreNeeds": "+{n} · a hidden session needs you",
   "chat.problem.workdir-unavailable": "Aria could not create its working folder. Check the projects folder in the settings.",
+  "chat.problem.session-closed": "This conversation was closed.",
   "chat.problem.pi-settings-invalid": "The engine's settings file (~/.aria/agent/settings.json) does not parse. Fix it or delete it, and Aria writes it again.",
   "chat.problem.settings-invalid": "Aria could not use ~/.aria/settings.json, so the chat did not start (Aria will not overwrite it). Fix it, or open the settings and save them again.",
   "chat.problem.settings-unreadable": "Aria could not read ~/.aria/settings.json, so the chat did not start. Check that file's permissions.",

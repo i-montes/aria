@@ -17,6 +17,7 @@ every time a session starts; an extension the owner edited there is kept (see `c
 | `background` | Aria's own: under Aria's dock (`ARIA_JOBS_SOCK`), the tools `background_agent`, `background_list`, `background_output`, `background_stop` (and `background_run` with `PI_SANDBOX=0`); a hidden `[background]` line while something runs; an `aria-background` message when a job ends |
 | `connectors` | Aria's own: every MCP tool call that writes asks first on the chat's permission card (`kind: "connector"`), by the access level of its connector in Aria's settings (`aria.json` `connectors`: Read only refuses writes, Ask asks, Allow runs them); reads run, codemode's nested calls are gated the same, `engram` never is; "don't ask again" lasts the session |
 | `install` | Aria's own: the `install` tool puts in a skill, an MCP server or a Pi package the user asked for, after the user confirms it on the permission card; the `install-from-link` skill (`agent-files/skills/`) tells the model how to read a link |
+| `rotate` | Aria's own: the command `/aria-rotate` (Aria sends it after a compaction, while the tab is quiet) continues the conversation in a new session file whose header names the old one and whose model context is the same: the latest compaction's summary, framed as Pi frames it, as a visible `aria-earlier` message (`details`: the old session id and the raw summary), then everything Pi kept (messages and custom messages, context edits applied); no model turn; without a compaction it does nothing |
 
 Tests: `bun test extensions`.
 

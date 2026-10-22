@@ -1,6 +1,6 @@
 // Run: bun test ui/chat/parts
 import { describe, expect, test } from 'bun:test'
-import { TEXTS, callDiff, clipResult, renderTools, toolChip, toolKind, toolLabel } from './tools.js'
+import { TEXTS, callDiff, clipResult, renderToolStep, renderTools, toolChip, toolKind, toolLabel } from './tools.js'
 
 const t = (key, vars = {}) => (TEXTS.en[key] ?? key).replace(/\{(\w+)\}/g, (m, name) => (name in vars ? String(vars[name]) : m))
 const call = (over = {}) => ({ id: 'c1', name: 'bash', args: { command: 'ls' }, status: 'done', summary: 'ls', result: 'a\nb', ...over })
@@ -287,5 +287,34 @@ describe('a row stays one line, as in the design', () => {
     expect(rule('.p-tools-cmd')).toContain('flex: 1 1 0')
     expect(rule('.p-tools-cmd')).toContain('white-space: nowrap')
     expect(rule('.p-tools-cmd')).toContain('text-overflow: ellipsis')
+  })
+})
+
+describe('one step on its own (the earlier summary)', () => {
+  const tt = (key) => key
+  const step = { id: 'e1', think: true, label: 'Summary', text: 'First line.\nSecond line.', status: 'done' }
+
+  test('a thinking step may carry its own label', () => {
+    expect(toolLabel(step, tt)).toBe('Summary')
+    expect(toolLabel({ ...step, label: undefined }, tt)).toBe('chat.tools.thinking')
+  })
+
+  test('is the same row, folded or open, without the group around it', () => {
+    const folded = renderToolStep({ call: step }, {}, tt)
+    expect(folded).toContain('data-chat="toggle-tool-row" data-id="e1" aria-expanded="false"')
+    expect(folded).not.toContain('p-tools-head')
+    const open = renderToolStep({ call: step }, { openRows: new Set(['e1']) }, tt)
+    expect(open).toContain('aria-expanded="true"')
+    expect(open).toContain('Second line.')
+  })
+})
+
+describe('a step with its own chip and markup', () => {
+  test('an empty chip leaves the chip out; html replaces the lines inside the same fold', () => {
+    const step = { id: 'e2', think: true, label: 'Summary', chip: '', html: '<p class="p-md-p">x</p>', text: '## raw', status: 'done' }
+    const html = renderToolStep({ call: step }, { openRows: new Set(['e2']) }, (k) => k)
+    expect(html).not.toContain('p-tools-cmd')
+    expect(html).toContain('<div class="p-tools-detail is-open"><div class="p-tools-clip"><div class="p-tools-lines p-tools-md p-md"><p class="p-md-p">x</p></div>')
+    expect(html).not.toContain('## raw')
   })
 })

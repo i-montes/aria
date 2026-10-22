@@ -659,6 +659,8 @@ mod tests {
         assert!(extensions.join("lib/agent-dir.ts").is_file(), "the shared helper");
         assert!(extensions.join("subagent-mode/SUBAGENT.md").is_file(), "the files an extension reads");
         assert!(!extensions.join("sandbox/policy.test.ts").exists(), "no tests");
+        assert!(extensions.join("rotate/index.ts").is_file(), "Aria's own rotation command");
+        assert!(!extensions.join("rotate/seed.test.ts").exists(), "no tests");
         assert!(!extensions.join("README.md").exists(), "no readme");
     }
 

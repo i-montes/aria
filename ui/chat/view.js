@@ -23,7 +23,7 @@ import { formatElapsed } from './parts/working.js'
 import {
   MAX_SESSIONS, addSession, applyStatus, closeSession, createTabs, renameSession, selectSession, setTitleIfEmpty, toSaved, undoClose,
 } from './sessions.js'
-import { addNote, addNotice, addQueued, addUser, answerDialog, tookBack, answersForCard, clearQueue, createChat, reduce } from './state.js'
+import { addNote, addNotice, addQueued, addUser, answerDialog, askEarlier, tookBack, answersForCard, clearQueue, createChat, reduce } from './state.js'
 import { threadItems, groupOpen } from './thread.js'
 
 /** `/home/ana/Projects` -> `~/Projects` (Linux and Mac homes); anything else stays as it is. */
@@ -144,6 +144,18 @@ function keepingFocus(container, redraw) {
 /** The composer/question swap (chat.css): the rows fold in 380 ms; the design hands the keyboard back at 420 ms. */
 const SWAP_MS = 480
 
+/** A page of earlier messages went above the thread: the groups opened or folded by hand (kept by message index) move
+ * down with their entries. Open rows are kept by call id and stay as they are. */
+export function shiftExpanded(ex, by) {
+  if (!by) return ex
+  for (const name of ['open', 'closed', 'more']) {
+    const moved = [...ex[name]].map((i) => i + by).filter((i) => i >= 0)
+    ex[name].clear()
+    for (const i of moved) ex[name].add(i)
+  }
+  return ex
+}
+
 /** The saved tabs to wake when the dock starts, so each one's conversation is there before the dock opens: the active
  * tab first (its Pi is the one wanted soonest), then the others in their order. */
 /** The composer's subagents hint: the session's `parallel` subagents only. A background subagent's watch agent is
@@ -203,6 +215,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   // redraw cannot, or a stream of tokens (one redraw a frame) pulls back the first pixels of every scroll up.
   let following = true
   let listTop = 0
+  // Older messages put above the thread keep the reader where they were: { session, offset }, the offset being their
+  // distance from the thread's end. Only that tab's thread uses it; another tab drawn first drops it.
+  let anchor = null
   let banner = ''
 
   const chatOf = (id) => chats.get(id) ?? createChat()
@@ -315,7 +330,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       patchItems(list, connectHtml ? [...items, connectHtml] : items)
     })
     tickElapsed() // a working line drawn just now shows its start time until the timer reaches it
-    if (following || (ui.connect && ui.connect.justOpened)) list.scrollTop = list.scrollHeight
+    const kept = anchor?.session === tabs.active ? anchor.offset : null
+    anchor = null
+    if (kept !== null) {
+      list.scrollTop = list.scrollHeight - kept
+      listTop = list.scrollTop
+    } else if (following || (ui.connect && ui.connect.justOpened)) list.scrollTop = list.scrollHeight
     if (ui.connect) ui.connect.justOpened = false
   }
 
@@ -1532,6 +1552,13 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
         }
         return drawThread()
       }
+      case 'chat-earlier': {
+        const [next, message] = askEarlier(current())
+        if (!message) return
+        chats.set(tabs.active, next)
+        post(message)
+        return drawThread()
+      }
       case 'toggle-tool-row': {
         const set = expanded().rows
         if (!set.delete(id)) set.add(id)
@@ -1670,6 +1697,16 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       }
       const before = chatOf(session)
       chats.set(session, reduce(before, message))
+      // The pages shown go away when a history comes again: the groups' indexes move back up.
+      if (message.type === 'chatEvent' && message.event?.type === 'history' && before.earlier.count && expandedOf.has(session)) {
+        shiftExpanded(expandedOf.get(session), -before.earlier.count)
+      }
+      if (message.type === 'chatEvent' && message.event?.type === 'earlier') {
+        const added = chatOf(session).messages.length - before.messages.length
+        if (expandedOf.has(session)) shiftExpanded(expandedOf.get(session), added)
+        const list = session === tabs.active ? $('chat-list') : null
+        if (list && added) anchor = { session, offset: list.scrollHeight - list.scrollTop }
+      }
       if (sentWith.has(session)) sentWith.set(session, releaseAccepted(sentWith.get(session), message))
       // A refused message goes back to the composer (when it is empty), so nothing looks sent that was not.
       const giveBack = chatOf(session).giveBack

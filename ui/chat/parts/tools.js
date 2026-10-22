@@ -6,6 +6,8 @@
 //           calls: [{ id, name, args, status: 'running'|'done'|'error', summary, result }
 //                   | { id, think: true, text }],  a reasoning step: the "Thinking" row
 //           live?: boolean }                    true while the run is going (any running call counts too)
+//         a reasoning step may carry its own `label` instead of "Thinking", its own `chip` ('' for none) and, as its
+//         detail, TRUSTED `html` (already escaped by the caller, e.g. markdown.js) instead of its text's lines
 // Ui:     { open?: Set<number>|boolean,         is the group expanded (a Set holds message indexes)
 //           openRows?: Set<string>,             call ids whose result is shown
 //           moreOpen?: Set<number>|boolean,     all changed-file chips instead of the first three
@@ -112,7 +114,7 @@ const argPath = (args) => {
 
 /** The row's title: what the tool does ("Read file", "Write 3 lines"). */
 export function toolLabel(call, t) {
-  if (call.think) return t('chat.tools.thinking')
+  if (call.think) return call.label || t('chat.tools.thinking')
   const name = call.name
   switch (toolKind(name)) {
     case 'run': {
@@ -270,12 +272,15 @@ function detailLines(call, t) {
 function row(call, openRows, animate, t) {
   const kind = call.think ? 'think' : toolKind(call.name)
   const open = openRows.has(call.id)
-  const chip = toolChip(call)
+  const chip = typeof call.chip === 'string' ? call.chip : toolChip(call)
   const status = call.status === 'running' || call.status === 'error' ? call.status : 'done'
   const sr = status === 'done' ? '' : `<span class="p-tools-sr">${esc(t(`chat.tools.status_${status}`))}</span>`
-  const lines = detailLines(call, t)
-    .map((l) => `<span class="p-tools-line${l.tone ? ` is-${l.tone}` : ''}">${esc(l.text)}</span>`)
-    .join('')
+  const lines = typeof call.html === 'string'
+    ? ''
+    : detailLines(call, t)
+      .map((l) => `<span class="p-tools-line${l.tone ? ` is-${l.tone}` : ''}">${esc(l.text)}</span>`)
+      .join('')
+  const detail = typeof call.html === 'string' ? `<div class="p-tools-lines p-tools-md p-md">${call.html}</div>` : `<div class="p-tools-lines">${lines}</div>`
   return `
     <div class="p-tools-item${animate ? ' is-animated' : ''}">
       <button type="button" class="p-tools-row status-${status}${open ? ' is-open' : ''}" data-chat="toggle-tool-row" data-id="${esc(call.id)}" aria-expanded="${open}">
@@ -283,7 +288,7 @@ function row(call, openRows, animate, t) {
         <span class="p-tools-label">${esc(toolLabel(call, t))}${sr}</span>${chip ? `
         <span class="p-tools-cmd${kind === 'tool' || kind === 'think' ? ' is-sans' : ''}" title="${esc(chip)}">${esc(chip)}</span>` : ''}
       </button>
-      <div class="p-tools-detail${open ? ' is-open' : ''}"><div class="p-tools-clip"><div class="p-tools-lines">${lines}</div></div></div>
+      <div class="p-tools-detail${open ? ' is-open' : ''}"><div class="p-tools-clip">${detail}</div></div>
     </div>`
 }
 
@@ -344,3 +349,8 @@ export function renderTools(props, ui, t) {
       </div></div>
     </div>`
 }
+
+/** One step on its own, without the group's header: the same row, folded or open (`ui.openRows`), for a text the
+ * thread folds outside a turn (the earlier conversation's summary). */
+export const renderToolStep = ({ call }, ui, t) =>
+  `<div class="p-tools p-tools-step"><div class="p-tools-list">${row(call, ui?.openRows ?? new Set(), false, t)}</div></div>`

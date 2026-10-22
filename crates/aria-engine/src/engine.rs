@@ -140,14 +140,25 @@ impl Engine {
 
     /// Sends a command and returns its id; the response arrives as `EngineEvent::Response`.
     pub fn send(&self, kind: &str, fields: Value) -> Result<String, EngineError> {
-        let id = NEXT_ID.fetch_add(1, Ordering::SeqCst).to_string();
-        self.write_line(&protocol::command(kind, &id, fields))?;
+        let id = Engine::new_id();
+        self.send_as(&id, kind, fields)?;
         Ok(id)
+    }
+
+    /// A fresh command id, for a command whose id must be known before it is sent (see `send_as`): its response can
+    /// then never come back before the caller has noted the id.
+    pub fn new_id() -> String {
+        NEXT_ID.fetch_add(1, Ordering::SeqCst).to_string()
+    }
+
+    /// Sends a command under an id from `new_id`; the response arrives as `EngineEvent::Response`.
+    pub fn send_as(&self, id: &str, kind: &str, fields: Value) -> Result<(), EngineError> {
+        self.write_line(&protocol::command(kind, id, fields))
     }
 
     /// Sends a command and waits for its response.
     pub fn request(&self, kind: &str, fields: Value, timeout: Duration) -> Result<Response, EngineError> {
-        let id = NEXT_ID.fetch_add(1, Ordering::SeqCst).to_string();
+        let id = Engine::new_id();
         let (sender, receiver) = mpsc::channel();
         self.pending.lock().unwrap().insert(id.clone(), sender);
         if let Err(error) = self.write_line(&protocol::command(kind, &id, fields)) {

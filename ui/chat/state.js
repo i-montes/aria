@@ -11,8 +11,12 @@ import { parseCardTitle } from './parts/cards.js'
 //   { kind: 'notice', tone: 'info'|'warn'|'error', key?, vars?, text? }
 //   { kind: 'note', label, text?, key?, vars? }   a one-line fact (model changed, stopped, sandbox answer, a background job ended…)
 //   { kind: 'divider', key, vars? }                 a separator (the context was compacted)
+//   { kind: 'earlier', id, summary }                what came before this session's history, as its summary (a
+//                                                   compaction's, or the `aria-earlier` message a rotation starts with)
 //   { kind: 'jev', mode, action }                   the router's route line before an answer
 //   { kind: 'answers', answers: [{ header, selected, talk }] }   what you answered to a question card
+// `earlier` pages back through older history: { more, cursor, loading, count, stale } (count: the entries prepended so
+// far; stale: a history came while a page was on its way, so that page belongs to the paging before it and is dropped).
 // `queue` holds messages waiting behind the run ({ text, steer?, files?, raw? }); `phase` names what the run is doing now.
 //
 // Attachments: the dock adds a line per file to the message it gives Pi (`[attached: …]`), so Pi's echo, its queue and
@@ -28,8 +32,11 @@ export function createChat() {
     stoppedByWatchdog: false,
     // Until Pi sends the session's history (empty for a new one) the thread shows that it is loading, timed from here.
     loaded: false, loadingSince: Date.now(),
+    earlier: { ...NO_EARLIER },
   }
 }
+
+const NO_EARLIER = { more: false, cursor: null, loading: false, count: 0, stale: false }
 
 const RESULT_LIMIT = 4000
 
@@ -212,10 +219,18 @@ function backgroundNote(message) {
 
 const TONES = { warning: 'warn', error: 'error' }
 
+/** The summary of what came before, or null: a compaction's (not rotated yet) or a rotation's seed message, whose
+ * `details.summary` is the raw summary (its `content` is Pi's framing of it, which the page never shows). */
+function earlierSummary(message) {
+  if (message?.role === 'compactionSummary') return String(message.summary ?? '')
+  if (message?.role === 'custom' && message.customType === 'aria-earlier') return String(message.details?.summary ?? '')
+  return null
+}
+
 function fromHistory(messages) {
   let entries = []
   const calls = new Map()
-  for (const message of messages ?? []) {
+  for (const [at, message] of (messages ?? []).entries()) {
     if (message.role === 'user') {
       entries.push(userEntry(textOf(message.content)))
     } else if (message.role === 'assistant') {
@@ -235,6 +250,9 @@ function fromHistory(messages) {
         entries = addSteps(entries, thinkSteps(thinking))
         if (text) entries.push({ kind: 'assistant', text, thinking: '', done: true, texts: { 0: text }, thoughts: {} })
       }
+    } else if (earlierSummary(message) !== null) {
+      // A stable id (the old session it summarises, or its place), so a history sent again keeps it open.
+      entries.push({ kind: 'earlier', id: `earlier-${message.details?.from ?? at}`, summary: earlierSummary(message) })
     } else if (message.role === 'custom') {
       const note = backgroundNote(message)
       if (note) entries.push(note)
@@ -360,15 +378,28 @@ function reduceEvent(state, event) {
       // goes in front, and so do notices that came first. While only a reply streams (no message of the owner on the
       // page), it is left alone.
       const past = fromHistory(event.messages)
-      state = { ...state, loaded: true }
+      // Pages shown before it are dropped: the paging starts again from this history, whose summary replaces any shown.
+      const shown = state.messages.slice(state.earlier.count).filter((m) => m.kind !== 'earlier' || !past.some((p) => p.kind === 'earlier'))
+      state = { ...withMessages(state, shown), loaded: true, turnFrom: Math.max(0, (state.turnFrom ?? 0) - state.earlier.count), earlier: { ...NO_EARLIER, more: past[0]?.kind === 'earlier', loading: state.earlier.loading, stale: state.earlier.loading } }
       if (!state.messages.length) return withMessages(state, past)
       const first = state.messages.find((m) => m.kind === 'user')
       if (!first) return state.running || state.messages.some((m) => m.kind === 'assistant' && !m.done) ? state : withMessages(state, [...past, ...state.messages])
       const at = past.findLastIndex((m) => m.kind === 'user' && m.text === first.text)
       return withMessages(state, [...(at >= 0 ? past.slice(0, at) : past), ...state.messages])
     }
+    case 'earlier': {
+      // A page of older messages goes above what is shown; indexes into the thread move with it.
+      // A page asked before a history came again belongs to the paging before it: dropped (ask again).
+      if (state.earlier.stale) return { ...state, earlier: { ...state.earlier, loading: false, stale: false } }
+      const page = fromHistory(event.messages)
+      return {
+        ...withMessages(state, [...page, ...state.messages]),
+        turnFrom: (state.turnFrom ?? 0) + page.length,
+        earlier: { more: event.more === true, cursor: event.cursor ?? null, loading: false, count: state.earlier.count + page.length, stale: false },
+      }
+    }
     case 'session_reset':
-      return { ...withMessages(state, []), queue: [], delivered: [], dialogs: [] }
+      return { ...withMessages(state, []), queue: [], delivered: [], dialogs: [], earlier: { ...NO_EARLIER } }
     default:
       return state
   }
@@ -429,6 +460,13 @@ const marked = (file) => ('image' in file ? file : { ...file, image: String(file
 const withFiles = (entry, files) => (files?.length ? { ...entry, files: files.map(marked) } : entry)
 /** `files`: what the message carries ([{ name, mime, size }]), drawn as chips before the dock has answered. */
 export const addUser = (state, text, files) => push(state, withFiles({ kind: 'user', text }, files))
+/** "Show earlier": `[state, message]`, the message to post (`chatEarlier`, with the last cursor once there is one), or
+ * null while a page is on its way or when there is nothing older. */
+export function askEarlier(state) {
+  const { more, loading, cursor } = state.earlier
+  if (!more || loading) return [state, null]
+  return [{ ...state, earlier: { ...state.earlier, loading: true } }, cursor ? { type: 'chatEarlier', cursor } : { type: 'chatEarlier' }]
+}
 /** A notice from the page itself (an attachment refused). */
 export const addNotice = (state, tone, key, vars) => push(state, notice(tone, vars ? { key, vars } : { key }))
 /** A one-line fact in the thread that did not come from Pi (a provider was connected). */

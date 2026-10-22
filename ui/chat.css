@@ -125,3 +125,6 @@ body.open.mode-chat .chat { animation: enter 300ms var(--content) both; }
 
 /* Files dragged over the chat view: a subtle accent border (solid fills stay; only borders take the accent). */
 .chat-view-chat.is-dropping { outline: 1px solid var(--accent-border); outline-offset: -1px; border-radius: 12px; }
+/* "Show earlier" above the first message; the earlier summary's row sits right under its divider. */
+.thread-earlier-more { display: flex; justify-content: center; }
+.thread-earlier .p-tools-step { padding-bottom: 0; }

@@ -8,9 +8,11 @@ import { renderDivider } from './parts/divider.js'
 import { messageDomId } from './parts/index.js'
 import { renderJev } from './parts/jev.js'
 import { renderNote } from './parts/note.js'
+import { renderMarkdown } from './parts/markdown.js'
 import { renderPermission } from './parts/permission.js'
+import { renderPill } from './parts/pill.js'
 import { renderQuota } from './parts/quota.js'
-import { renderTools } from './parts/tools.js'
+import { renderToolStep, renderTools } from './parts/tools.js'
 import { renderUser } from './parts/user.js'
 import { renderWorking } from './parts/working.js'
 
@@ -68,6 +70,13 @@ function renderEntry(state, entry, index, ui, t) {
       return `<div class="thread-item">${renderNote({ label: entry.label, text: entry.key ? t(entry.key, entry.vars) : entry.text }, {}, t)}</div>`
     case 'divider':
       return `<div class="thread-item">${renderDivider({ text: t(entry.key, entry.vars) }, {}, t)}</div>`
+    case 'earlier': {
+      // The chat's divider, and the summary folded under it as a tool row (open on click, by its id). Pi's summaries are
+      // markdown (## Goal, ## Progress…): no chip, and the open row shows them through the chat's markdown.
+      const open = (ui.openRows ?? new Set()).has(entry.id)
+      const step = { id: entry.id, think: true, label: t('chat.earlier.summary'), chip: '', html: renderMarkdown(entry.summary), status: 'done' }
+      return cached(entry, String(open), t, () => `<div class="thread-item thread-earlier">${renderDivider({ text: t('chat.earlier.divider') }, {}, t)}${entry.summary.trim() ? renderToolStep({ call: step }, { openRows: open ? new Set([entry.id]) : new Set() }, t) : ''}</div>`)
+    }
     case 'answers':
       return `<div class="thread-item">${renderAnswers({ answers: entry.answers }, {}, t)}</div>`
     case 'notice':
@@ -90,8 +99,13 @@ export function threadItems(state, ui = {}, t) {
   // A session whose history has not arrived yet is loading, not new (unless its Pi cannot start: the problem shows).
   const loading = blank && state.loaded === false && !state.problem
   const empty = blank && !loading ? renderEmptyThread(t) : ''
+  // "Show earlier" above the first message while older history is left; a pill with nothing to press while it loads.
+  const paging = state.earlier ?? {}
+  const earlier = paging.more
+    ? `<div class="thread-item thread-earlier-more">${paging.loading ? renderPill({ label: t('chat.earlier.loading'), static: true }, {}, t) : renderPill({ label: t('chat.earlier.show'), action: 'chat-earlier' }, {}, t)}</div>`
+    : ''
   const loader = loading ? `<div class="thread-item thread-working">${renderWorking({ label: t('chat.loading'), startedAt: state.loadingSince }, steady(state.loadingSince), t)}</div>` : ''
-  return [empty, loader, ...entries, ...cards, working, ...queued].filter(Boolean)
+  return [empty, loader, earlier, ...entries, ...cards, working, ...queued].filter(Boolean)
 }
 
 export const renderThread = (state, ui = {}, t) => threadItems(state, ui, t).join('')

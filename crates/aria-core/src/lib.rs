@@ -5,6 +5,7 @@ pub mod agent_config;
 pub mod auth;
 pub mod bridge;
 pub mod files;
+pub mod history;
 pub mod json_file;
 pub mod keyring;
 pub mod mcp;

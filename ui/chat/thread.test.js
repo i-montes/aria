@@ -199,3 +199,64 @@ describe('attachments in the thread', () => {
     expect(html).not.toContain('attach-remove')
   })
 })
+
+describe('earlier in this conversation', () => {
+  // A summary as Pi writes it (pi-coding-agent's compaction prompt: ## Goal, ## Progress, ### Done, ## Next Steps…).
+  const piSummary = '## Goal\nMake RELEASE optional.\n\n## Progress\n### Done\n- [x] **env.ts** reads it lazily\n\n## Next Steps\n1. Update the docs'
+  const seed = { role: 'custom', customType: 'aria-earlier', content: 'framed <summary>x</summary>', display: true, details: { from: 'a', summary: piSummary } }
+  const kept = [{ role: 'user', content: 'and now?' }]
+  const withSeed = () => reduce(createChat(), ev({ type: 'history', messages: [seed, ...kept] }))
+
+  test('the earlier entry is the chat\'s divider with the summary folded under it as a tool row', () => {
+    const state = withSeed()
+    const html = renderThread(state, {}, t)
+    expect(html).toContain('class="p-divider"')
+    expect(html).toContain('Earlier in this conversation')
+    const id = state.messages[0].id
+    expect(html).toContain(`data-chat="toggle-tool-row" data-id="${id}" aria-expanded="false"`)
+    expect(html).toContain('<div class="p-tools-detail">') // folded: the detail is there, closed
+    expect(html).not.toContain('p-tools-cmd') // no chip: it would show "## Goal"
+    expect(html).not.toContain('##')
+    expect(html).not.toContain('framed')
+  })
+
+  test('opened, the row shows the whole summary', () => {
+    const state = withSeed()
+    const html = renderThread(state, { openRows: new Set([state.messages[0].id]) }, t)
+    expect(html).toContain('aria-expanded="true"')
+    expect(html).toContain('<div class="p-tools-detail is-open">')
+    // the chat's markdown, not the raw text: headings, a list, bold; no markers left
+    expect(html).toContain('p-tools-md p-md')
+    expect(html).toContain('<p class="p-md-h p-md-h2">Goal</p>')
+    expect(html).toContain('<strong>env.ts</strong>')
+    expect(html).toContain('Update the docs')
+    expect(html).not.toContain('##')
+    expect(html).not.toContain('**')
+  })
+
+  test('"Show earlier" sits above the first message while there is more, and says it is loading once asked', () => {
+    const state = withSeed()
+    const items = threadItems(state, {}, t)
+    expect(items[0]).toContain('data-chat="chat-earlier"')
+    expect(items[0]).toContain('Show earlier')
+    const loading = threadItems({ ...state, earlier: { ...state.earlier, loading: true } }, {}, t)[0]
+    expect(loading).toContain('Loading earlier messages')
+    expect(loading).not.toContain('data-chat="chat-earlier"')
+  })
+
+  test('no button without more to show', () => {
+    const state = reduce(withSeed(), ev({ type: 'earlier', messages: [{ role: 'user', content: 'first' }], cursor: { segment: 0, index: 0 }, more: false }))
+    expect(renderThread(state, {}, t)).not.toContain('chat-earlier')
+    expect(renderThread(reduce(createChat(), ev({ type: 'history', messages: kept })), {}, t)).not.toContain('chat-earlier')
+  })
+
+  test('both languages have the texts', () => {
+    const { en, es } = chatTexts()
+    expect(es['chat.earlier.divider']).toBe('Antes en esta conversación')
+    expect(es['chat.earlier.show']).toBe('Ver lo anterior')
+    for (const key of ['chat.earlier.divider', 'chat.earlier.show', 'chat.earlier.loading', 'chat.earlier.summary']) {
+      expect(en[key]).toBeTruthy()
+      expect(es[key]).toBeTruthy()
+    }
+  })
+})
