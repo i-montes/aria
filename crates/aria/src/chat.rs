@@ -1375,7 +1375,7 @@ impl Chat {
                                 inner.watch.clone().filter(|_| raw["toolName"] == "parallel")
                             };
                             if let Some(watch) = watch {
-                                watch.expect_tasks(&raw["args"]);
+                                watch.expect_tasks(raw["toolCallId"].as_str(), &raw["args"]);
                             }
                         }
                         Some("message_end") if raw["message"]["role"] == "assistant" => {
@@ -1740,7 +1740,7 @@ impl Launcher for SessionLauncher {
         let watch = self.chat.inner.lock().map(|inner| inner.watch.clone()).unwrap_or(None);
         if let Some(watch) = watch {
             let args = json!({"task": job.task, "agent": job.title});
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| watch.expect_tasks(&args)));
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| watch.expect_tasks(None, &args)));
         }
     }
 }
