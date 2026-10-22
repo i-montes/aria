@@ -270,18 +270,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn on_change_hears_each_change_once() {
+    fn a_face_is_told_once_per_change() {
+        // A state of its own: the suites' other chats report to the shared one at the same time.
+        let mut state = State { sessions: HashMap::new(), last_active: Instant::now(), written: None };
+        state.sessions.insert("a".into(), Activity { asking: true, ..Activity::default() });
+        assert_eq!(write_if_changed(&mut state), Some(Face::Asking));
+        assert_eq!(write_if_changed(&mut state), None, "the same face is not told again");
+        state.sessions.remove("a");
+        assert_eq!(write_if_changed(&mut state), Some(Face::Idle));
+    }
+
+    #[test]
+    fn a_listener_hears_the_face_now_when_it_starts() {
         let heard = std::sync::Arc::new(Mutex::new(Vec::<&'static str>::new()));
         let into = heard.clone();
         on_change(Box::new(move |word| into.lock().unwrap().push(word)));
-        let session = "face-listener-test";
-        report(session, Activity { asking: true, ..Activity::default() });
-        report(session, Activity { asking: true, ..Activity::default() });
-        forget(session);
-        let heard = heard.lock().unwrap().clone();
-        assert!(heard.len() >= 2, "the face at registration, then asking: {heard:?}");
-        assert!(heard.contains(&"asking"), "{heard:?}");
-        assert!(heard.windows(2).all(|w| w[0] != w[1]), "once per change: {heard:?}");
+        let first = heard.lock().unwrap().first().copied();
+        assert!(
+            first.is_some_and(|w| PRIORITY.iter().chain([Face::Sleeping].iter()).any(|f| f.word() == w)),
+            "{first:?}"
+        );
     }
 
     fn running(tools: &[&str]) -> Activity {
