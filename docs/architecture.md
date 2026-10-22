@@ -145,6 +145,18 @@ or Pi refuses the prompt, records the result and posts a notification unless the
 extension's tools create, list, change and delete tasks through the session's jobs socket; the page's `/schedules`
 panel pauses and deletes them ([design](superpowers/specs/2026-10-21-schedules-design.md)).
 
+## The live trace (`/debug`)
+
+`/debug true` in a tab (`ui/chat/view.js`) sends `traceSet` to that tab's chat; from its next `agent_start` the chat
+feeds every Pi event to a `Trace` (`crates/aria/src/trace.rs`, pure): one span per assistant message (`message_start` →
+`message_end`, with the model, usage and cost Pi reports), one per tool call and per compaction. Subagents stream their
+own calls, with times, ids and usage, to the session's watch socket (`extensions/subagent-watch/child.ts`); the watch
+(`crates/aria/src/watch.rs`) keeps them as spans, and the trace puts each subagent under the `parallel` call that named
+it. The chat sends the whole tree as `chatTrace` at most every 250 ms, and once more when the turn settles. The page
+draws it with `ui/chat/parts/trace.js` in a panel left of the column and asks the dock to widen its surface (`wide`:
+700 → 1,060 px, `crates/aria/src/dock`). Nothing is written to disk; the trace holds the current turn only
+([design](superpowers/specs/2026-10-22-trace-design.md)).
+
 ## Data and safety
 
 - Keys live in the system keyring (`aria-core/src/keyring.rs`: Apple's `security` on macOS, `secret-tool` on Linux).

@@ -243,6 +243,16 @@ A tab continues in a new Pi session file after each compaction (see the
 - A successful scheduled run was checked live only with the fake Pi (a real one needs a key); the late start, the tab,
   Pi's grants and a refused run's record were checked live on macOS. Not yet tried on Omarchy.
 
+## The live trace (`/debug`)
+
+- The wide surface was not seen live: on Omarchy the GTK side (`set_size_request` and the input region over both
+  columns) was written on the Mac and not compiled there yet; on macOS the panel's frame change was built and type-checked
+  but not opened by hand. The panel itself was checked in headless Chrome at 1,060 px, and the fields the trace reads were
+  checked against Pi 1.3.0's event types; a turn with a real model was not traced yet (the scratch home has no keys
+  since they moved to the keyring).
+- Only the current turn is kept: no saved traces, no past turns, no comparing runs, no export.
+- A subagent's own subagents appear only as far as they reach the session's watch socket.
+
 ## Known limits of the page (from the review, deferred)
 
 - The thread is redrawn on every streamed fragment, so text cannot be selected or copied while a run streams; the other regions only redraw when they change.

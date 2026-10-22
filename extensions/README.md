@@ -12,7 +12,7 @@ every time a session starts; an extension the owner edited there is kept (see `c
 | `autocompact` | compacts the context at a set percent (`/autocompact`) |
 | `ask-user` | the `ask_user` tool: 1–4 questions with options |
 | `subagent-mode` | subagents (`pi --mode json` children) get a lean prompt (`SUBAGENT.md`) |
-| `subagent-watch` | children stream what they do to a socket so it can be watched |
+| `subagent-watch` | children stream what they do to a socket so it can be watched (and traced: `child.ts` sends times, call ids and usage for `/debug`) |
 | `clock` | Aria's own: each user message gets a hidden `[now]` line with the local date, time, weekday and time zone |
 | `background` | Aria's own: under Aria's dock (`ARIA_JOBS_SOCK`), the tools `background_agent`, `background_list`, `background_output`, `background_stop` (and `background_run` with `PI_SANDBOX=0`); a hidden `[background]` line while something runs; an `aria-background` message when a job ends |
 | `connectors` | Aria's own: every MCP tool call that writes asks first on the chat's permission card (`kind: "connector"`), by the access level of its connector in Aria's settings (`aria.json` `connectors`: Read only refuses writes, Ask asks, Allow runs them); reads run, codemode's nested calls are gated the same, `engram` never is; "don't ask again" lasts the session |

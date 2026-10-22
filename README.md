@@ -17,7 +17,7 @@ A personal assistant that lives on your desktop. Press **Super + A** (**Option +
 - **Providers**: OpenCode Go, Anthropic with an API key, or your Claude plan (`/connect` from the chat), with the quota of
   each window on hand and, on OpenCode Go, a fallback to a free model when a quota runs out.
 - **Messages while it works**: Enter puts yours in at the run's next step; Alt+Enter keeps it for when the run ends.
-  The `/` menu has Pi's own commands (`/compact`, `/session`, `/copy`, `/export`, `/reload`) and your skills.
+  The `/` menu has Pi's own commands (`/compact`, `/session`, `/copy`, `/export`, `/reload`), Aria's (`/debug`, `/schedules`, `/memory`) and your skills.
 - **The owner's extensions**: a sandbox for every command (bubblewrap on Omarchy; on macOS every command asks first), a
   router that picks the model and the expert, subagents you can watch (Alt+A), questions, autocompaction, and a check of
   the pages agents build in a headless browser.
@@ -29,6 +29,9 @@ A personal assistant that lives on your desktop. Press **Super + A** (**Option +
 - **Scheduled tasks**: ask "every day at 7:30 give me my Notion tasks" and Aria does it by itself, in the task's own tab
   with a desktop notification, with the permissions you gave it (anything else is refused, never asked); a time missed
   while the computer slept or Aria was off runs once when it is back. `/schedules` lists, pauses and deletes them.
+- **A live trace to evaluate the agent**: `/debug true` in a tab opens a waterfall to the left of the chat with every LLM
+  call, tool call and subagent of the turn, with its time, tokens and cost, the slowest call marked and each step's
+  input, output or error a click away; `/debug false` closes it.
 - **Updates that never cut a run**: the dock restarts into a new version once it is hidden and idle.
 
 ## Install
