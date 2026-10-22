@@ -5,6 +5,26 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.7.0 — 2026-10-21
+
+### New
+
+- show the earlier-conversation summary and page back through older history
+- rotate a tab's Pi session after a compaction and answer chatEarlier
+- the rotate extension and its /aria-rotate command
+- tab segments in sessions.json and the earlier-history reader
+
+### Fixed
+
+- a compaction Aria asks for with no run shows as working, and a later state no longer hides it
+- the session grants survive a rotation
+- earlier pages keep custom messages and branch summaries; a bad cursor reads nothing
+- a rotation keeps the tab's model, records a switch whose answer was lost, and messages wait through compactions
+- the earlier summary as markdown, and paging review fixes
+- a closed or stopped tab drops what it held during a rotation
+- hold the tab's messages and restarts during a rotation
+- carry the whole kept context and Pi's summary framing
+
 ## 0.6.0 — 2026-10-21
 
 ### New
