@@ -377,7 +377,10 @@ impl Dock {
         if self.wide.replace(wide) == wide {
             return;
         }
-        self.window.set_size_request(super::surface_width(wide), 100);
+        // Only the width changes: the height asked for is the focused monitor's usable one (`build_window`,
+        // `place_on_focused_monitor`), so the page keeps laying out at its real height before the next map.
+        let (_, height) = self.window.size_request();
+        self.window.set_size_request(super::surface_width(wide), height);
         self.refresh_input_region();
     }
 
