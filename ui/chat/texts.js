@@ -27,10 +27,11 @@ import * as subagents from './parts/subagents.js'
 import * as tabs from './parts/tabs.js'
 import * as tasks from './parts/tasks.js'
 import * as tools from './parts/tools.js'
+import * as trace from './parts/trace.js'
 import * as user from './parts/user.js'
 import * as working from './parts/working.js'
 
-export const PARTS = [answers, assistant, attachments, background, commands, composer, connect, divider, doc, files, index, jev, memory, models, note, permission, phases, pill, question, quota, quotabars, schedules, session, subagents, tabs, tasks, tools, user, working]
+export const PARTS = [answers, assistant, attachments, background, commands, composer, connect, divider, doc, files, index, jev, memory, models, note, permission, phases, pill, question, quota, quotabars, schedules, session, subagents, tabs, tasks, tools, trace, user, working]
 
 const OWN = {
   en: {
