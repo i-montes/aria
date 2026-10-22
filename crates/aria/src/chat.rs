@@ -2,6 +2,7 @@
 //! messages into Pi commands and Pi's events into dock messages, and asks for attention with a
 //! desktop notification when an extension dialog arrives while the dock is hidden.
 
+use crate::face;
 use crate::jobs::{Job, JobState, Jobs};
 use crate::jobs_socket::{self, AgentLaunch, JobsSocket, Launcher};
 use aria_core::agent;
@@ -233,8 +234,10 @@ struct Inner {
     /// When the current Pi last said anything (an event, a reply, a UI request): the turn watchdog's clock.
     last_activity: Option<Instant>,
     /// The tool executions under way (by `toolCallId`, nested ones too): while any is open the watchdog waits, since a
-    /// long build or test is silent and has its own timeouts.
-    tools: HashSet<String>,
+    /// long build or test is silent and has its own timeouts. The value is the tool's name (what the face shows).
+    tools: HashMap<String, String>,
+    /// How the last run ended (for the face), cleared when the next starts.
+    outcome: Option<(face::Outcome, Instant)>,
     /// Pi is compacting the context inside the run (`compaction_start` … `compaction_end`, silent meanwhile): the
     /// watchdog waits, as for a tool.
     compacting: bool,
@@ -1333,6 +1336,24 @@ impl Chat {
             self.ctx.notifier.dismiss(&self.session);
         }
         self.emit(DockMessage::ChatDialogClosed { id: id.to_string() });
+        self.report_face();
+    }
+
+    /// What this session is doing, for Aria's face in the bar.
+    fn report_face(&self) {
+        let activity = {
+            let inner = self.inner.lock().unwrap();
+            let mut tools: Vec<String> = inner.tools.values().cloned().collect();
+            tools.sort();
+            face::Activity {
+                running: inner.running,
+                tools,
+                asking: !inner.dialogs.is_empty(),
+                scheduled: inner.scheduled_run,
+                outcome: inner.outcome,
+            }
+        };
+        face::report(&self.session, activity);
     }
 
     /// Consumes one Pi's events until it exits.
@@ -1359,6 +1380,7 @@ impl Chat {
                                 inner.running = true;
                                 inner.watchdog_fired = false;
                                 inner.tools.clear();
+                                inner.outcome = None;
                                 inner.compacting = false;
                             }
                             self.release_soon();
@@ -1388,7 +1410,10 @@ impl Chat {
                         Some("tool_execution_start") => {
                             let watch = {
                                 let mut inner = self.inner.lock().unwrap();
-                                inner.tools.insert(raw["toolCallId"].as_str().unwrap_or_default().to_string());
+                                inner.tools.insert(
+                                    raw["toolCallId"].as_str().unwrap_or_default().to_string(),
+                                    raw["toolName"].as_str().unwrap_or_default().to_string(),
+                                );
                                 inner.watch.clone().filter(|_| raw["toolName"] == "parallel")
                             };
                             if let Some(watch) = watch {
@@ -1418,6 +1443,13 @@ impl Chat {
                                 inner.running = false;
                                 inner.tools.clear();
                                 inner.compacting = false;
+                                inner.outcome = if raw["aborted"] == true {
+                                    None
+                                } else if inner.last_failed {
+                                    Some((face::Outcome::Failed, Instant::now()))
+                                } else {
+                                    Some((face::Outcome::Done, Instant::now()))
+                                };
                                 let restart = std::mem::take(&mut inner.restart_pending);
                                 (inner.dialogs.keys().cloned().collect::<Vec<_>>(), restart)
                             };
@@ -1440,6 +1472,7 @@ impl Chat {
                         _ => {}
                     }
                     self.emit(DockMessage::ChatEvent { event: for_page(raw) });
+                    self.report_face();
                 }
                 EngineEvent::UiRequest { id, method, raw } if is_dialog(&method) => self.open_dialog(id, method, raw),
                 EngineEvent::UiRequest { raw, .. } => {
@@ -1512,6 +1545,7 @@ impl Chat {
         if hidden {
             self.ctx.notifier.send(&self.session, NOTIFICATION_TITLE, &dialog_body(&raw));
         }
+        self.report_face();
         if let Some(timeout) = raw["timeout"].as_u64() {
             // Pi resolves the dialog by itself when its timeout runs out; the page and the notification follow.
             let (chat, id) = (self.clone(), id.clone());
@@ -1639,6 +1673,9 @@ impl Chat {
                 return;
             }
             inner.engine = None;
+            if inner.running {
+                inner.outcome = Some((face::Outcome::Failed, Instant::now()));
+            }
             inner.running = false;
             inner.tools.clear();
             inner.compacting = false;
@@ -1657,6 +1694,7 @@ impl Chat {
         }
         self.emit(DockMessage::ChatEngine { state: "exited".into() });
         self.emit(DockMessage::ChatEvent { event: json!({"type": "engine_exited", "code": code}) });
+        self.report_face();
         // A compaction it held for is over.
         self.release_soon();
     }
@@ -1709,6 +1747,7 @@ impl Chat {
             inner.closed = true;
             inner.held.clear();
         }
+        face::forget(&self.session);
         self.stop(true);
     }
 
@@ -2521,6 +2560,47 @@ mod tests {
         wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
         std::thread::sleep(Duration::from_millis(400));
         assert!(!drain(&h).iter().any(is_trace));
+    }
+
+    #[test]
+    fn the_face_follows_the_run() {
+        let h = harness();
+        silent_run(&h);
+        let session = h.chat.session.clone();
+        let face_is = |want: face::Face| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while face::session_now(&session) != Some(want) {
+                assert!(Instant::now() < deadline, "the face is {:?}, not {want:?}", face::session_now(&session));
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        face_is(face::Face::Thinking);
+        h.chat.test_send_raw("tool_start");
+        face_is(face::Face::Working);
+        h.chat.test_send_raw("tool_end");
+        face_is(face::Face::Thinking);
+        h.chat.test_send_raw("settle_done");
+        face_is(face::Face::Done);
+        h.chat.test_send_raw("start");
+        face_is(face::Face::Thinking);
+        h.chat.test_send_raw("settle");
+        face_is(face::Face::Idle); // an aborted run is not done
+        h.chat.test_send_raw("start");
+        h.chat.test_send_raw("crash");
+        face_is(face::Face::Error);
+    }
+
+    #[test]
+    fn a_question_makes_the_face_ask_until_the_run_ends() {
+        let h = harness();
+        silent_run(&h);
+        let session = h.chat.session.clone();
+        h.chat.test_send_raw("ask_card");
+        wait_for(&h, "the dialog", |m| matches!(m, DockMessage::ChatDialog { .. }));
+        assert_eq!(face::session_now(&session), Some(face::Face::Asking));
+        h.chat.test_send_raw("settle");
+        wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
+        assert_eq!(face::session_now(&session), Some(face::Face::Idle));
     }
 
     #[test]

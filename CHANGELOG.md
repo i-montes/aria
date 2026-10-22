@@ -124,6 +124,6 @@ First put in by hand as a test, then taken out with `aria bar remove` and put ba
 
 | File | What | Backup | Revert |
 |---|---|---|---|
-| `~/.config/omarchy/plugins/aria.face/` (`manifest.json`, `Face.qml`) | the bar widget the binary carries: the idle face (glances, blinks, yawns, rolls) animated per frame; its colour follows the word in `$XDG_RUNTIME_DIR/aria/face`; a click runs `aria toggle` (new) | none, new | `aria bar remove`, or `sh install/install.sh --uninstall` |
+| `~/.config/omarchy/plugins/aria.face/` (`manifest.json`, `Face.qml`) | the bar widget the binary carries: all eleven faces animated per frame, playing the word in `$XDG_RUNTIME_DIR/aria/face`; a click runs `aria toggle` (new) | none, new | `aria bar remove`, or `sh install/install.sh --uninstall` |
 | `~/.config/omarchy/shell.json` | `{ "id": "aria.face" }` in `bar.layout.center`, right after `omarchy.weather`, put there by `omarchy plugin enable` after `omarchy-shell shell rescanPlugins` (the right section was tried first, but the bar always pins the tray before every other widget there) | `~/.config/omarchy/shell.json.bak.<epoch>`, one each time it is placed | `aria bar remove` (runs `omarchy plugin disable aria.face`), or copy a backup back (the shell reloads it on save) |
-| `$XDG_RUNTIME_DIR/aria/face` | the face's state, one word (runtime only; gone at logout) | not applicable | `rm` it; the face stays idle |
+| `$XDG_RUNTIME_DIR/aria/face` (`~/.aria/run/face` on macOS, where nothing reads it yet) | the face's state, one word, written by the dock whenever what its tabs do changes it (runtime only; gone at logout) | not applicable | stop the dock; `rm` it and the face stays idle |

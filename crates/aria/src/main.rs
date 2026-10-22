@@ -10,6 +10,7 @@ mod attachments;
 mod chat;
 mod control;
 mod dock;
+mod face;
 mod handlers;
 mod jobs;
 mod jobs_socket;
@@ -93,6 +94,7 @@ fn run_dock() {
             std::process::exit(1);
         }
     };
+    face::start();
 
     // A restart into a new version keeps this process and its children: the old page's WebKit processes are reaped as
     // they end, before the new page starts its own.

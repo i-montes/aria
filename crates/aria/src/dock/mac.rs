@@ -308,6 +308,7 @@ impl Dock {
         crate::note(&format!("{previous:?} + {event:?} -> {next:?} ({command:?})"));
         match command {
             Command::Show => {
+                crate::face::seen(); // the person is looking: a failure has been seen, and Aria is awake
                 self.generation.set(self.generation.get() + 1);
                 let was_notice = self.notice_visible.replace(false);
                 self.notice_generation.set(self.notice_generation.get() + 1);

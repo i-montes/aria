@@ -143,6 +143,8 @@ while IFS= read -r line; do
       printf '{"type":"abort_seen"}\n' ;;
     settle)
       printf '{"type":"agent_settled","aborted":true}\n' ;;
+    settle_done)
+      printf '{"type":"agent_settled","aborted":false}\n' ;;
     ask_card)
       printf '{"type":"extension_ui_request","id":"c1","method":"select","title":"{\\"aria\\":1,\\"kind\\":\\"sandbox\\",\\"summary\\":\\"Wants to run rm -rf build\\"}","options":["Allow once","Block"]}\n' ;;
     args)

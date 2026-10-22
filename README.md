@@ -32,6 +32,9 @@ A personal assistant that lives on your desktop. Press **Super + A** (**Option +
 - **A live trace to evaluate the agent**: `/debug true` in a tab opens a waterfall to the left of the chat with every LLM
   call, tool call and subagent of the turn, with its time, tokens and cost, the slowest call marked and each step's
   input, output or error a click away; `/debug false` closes it.
+- **Aria's face in the Omarchy bar**, next to the weather: it shows what Aria is doing on its own, from every tab at
+  once (thinking, reading with a book, editing or running a command at a laptop, subagents at work, a question waiting
+  for you, a scheduled run, done, failed, asleep after ten quiet minutes); a click opens the dock.
 - **Updates that never cut a run**: the dock restarts into a new version once it is hidden and idle.
 
 ## Install
