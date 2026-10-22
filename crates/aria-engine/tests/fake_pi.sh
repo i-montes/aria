@@ -18,12 +18,17 @@ while IFS= read -r line; do
       printf '{"type":"response","id":"%s","command":"get_state","success":true,"data":{"isStreaming":false,"thinkingLevel":"medium","model":{"provider":"opencode-go","id":"deepseek-v4.1-flash"},"sessionId":"%s","sessionFile":"%s"}}\n' "$id" "$sid" "${sdir:+$sdir/$sid.jsonl}" ;;
     prompt)
       # The rotate extension's command: no model turn; the session moves to a new id.
+      # It answers after a moment, as Pi does once the new session is up; a prompt that comes meanwhile says so.
+      flag="${sdir:-.}/.fake-rotating-$$"
       if [ "$(field message "$line")" = "/aria-rotate" ]; then
         rotations=$((rotations + 1)); sid="rotated-$rotations"
+        mkdir -p "$(dirname "$flag")" && : > "$flag"
         printf '{"type":"rotate_seen","session":"%s"}\n' "$sid"
-        printf '{"type":"response","id":"%s","command":"prompt","success":true,"data":{"disposition":"handled"}}\n' "$id"
+        ( sleep 0.3; rm -f "$flag"
+          printf '{"type":"response","id":"%s","command":"prompt","success":true,"data":{"disposition":"handled"}}\n' "$id" ) &
         continue
       fi
+      [ -e "$flag" ] && printf '{"type":"prompt_during_rotation"}\n'
       if [ "$(field message "$line")" = "FAIL" ]; then
         printf '{"type":"response","id":"%s","command":"prompt","success":false,"error":"Cannot submit a prompt while compaction is in progress"}\n' "$id"
         continue
@@ -59,7 +64,7 @@ while IFS= read -r line; do
       # Pi's manual compaction says so as events before it answers.
       printf '{"type":"compact_seen"}\n'
       printf '{"type":"compaction_start","reason":"manual"}\n'
-      printf '{"type":"compaction_end","reason":"manual","aborted":false,"willRetry":false}\n'
+      printf '{"type":"compaction_end","reason":"manual","result":{"summary":"S"},"aborted":false,"willRetry":false}\n'
       printf '{"type":"response","id":"%s","command":"compact","success":true,"data":{"tokensBefore":150000,"estimatedTokensAfter":32000,"instructions":"%s"}}\n' "$id" "$(field customInstructions "$line")" ;;
     export_html)
       printf '{"type":"response","id":"%s","command":"export_html","success":false,"error":"Nothing to export"}\n' "$id" ;;
@@ -87,7 +92,9 @@ while IFS= read -r line; do
     compaction_start)
       printf '{"type":"compaction_start","reason":"threshold"}\n' ;;
     compaction_end)
-      printf '{"type":"compaction_end","reason":"threshold","aborted":false,"willRetry":false}\n' ;;
+      printf '{"type":"compaction_end","reason":"threshold","result":{"summary":"S"},"aborted":false,"willRetry":false}\n' ;;
+    compaction_failed)
+      printf '{"type":"compaction_end","reason":"threshold","aborted":false,"willRetry":false,"errorMessage":"no model"}\n' ;;
     abort)
       printf '{"type":"abort_seen"}\n' ;;
     settle)
