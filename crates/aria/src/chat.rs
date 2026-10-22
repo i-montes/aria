@@ -226,8 +226,13 @@ struct Inner {
     /// A rotation is under way (`/aria-rotate` and recording its segment). Pi tears its session down to switch, so
     /// what would reach it meanwhile is held in `held` and runs, in order, when the rotation ends.
     rotating: bool,
-    /// The page's messages (and restarts) that came during a rotation, oldest first.
+    /// The page's messages (and restarts) that came during a rotation or a compaction, oldest first.
     held: std::collections::VecDeque<PageMessage>,
+    /// What was held is being sent now (one replay at a time): later messages queue behind it, and a stop meanwhile
+    /// stops Pi and drops what is still held.
+    replaying: bool,
+    /// How long `/aria-rotate` may take (tests shorten it); `ROTATE_TIMEOUT` when unset.
+    rotate_timeout: Option<Duration>,
     /// The tab was closed for good: nothing held runs and no Pi starts for it again.
     closed: bool,
 }
@@ -247,6 +252,7 @@ impl Drop for RotationEnd {
         let dropped: Vec<PageMessage> = {
             let mut inner = self.chat.inner.lock().unwrap_or_else(|e| e.into_inner());
             inner.rotating = false;
+            inner.replaying = false;
             inner.held.drain(..).collect()
         };
         crate::note(&format!(
@@ -270,11 +276,42 @@ fn waits_for_rotation(message: &PageMessage) -> bool {
     )
 }
 
-/// The tab is quiet: its Pi runs, with no run going, no prompt waiting to be accepted, no dialog open and no
-/// compaction under way.
+/// Must this page message wait in `held`? During a rotation: everything that reaches Pi's session or restarts it, and
+/// `chatLoad` (its `get_messages` could read a half-seeded session). During a compaction the tab has not asked for
+/// itself: what Pi would refuse meanwhile ("Cannot submit a prompt while compaction is in progress"). While anything is
+/// held or replayed: those too, so they keep their order.
+fn must_wait(inner: &Inner, message: &PageMessage) -> bool {
+    match message {
+        PageMessage::ChatLoad { .. } => inner.rotating || inner.replaying,
+        message if waits_for_rotation(message) => holding(inner),
+        _ => false,
+    }
+}
+
+fn holding(inner: &Inner) -> bool {
+    inner.rotating || inner.replaying || !inner.held.is_empty() || compaction_holds(inner)
+}
+
+/// Pi compacts and the tab has no prompt of its own waiting on that compaction.
+fn compaction_holds(inner: &Inner) -> bool {
+    inner.compacting && inner.pending_prompts.is_empty()
+}
+
+/// Notes a prompt as sent before anything slow happens (attachments, the model list, the send itself): from then on
+/// the tab is not quiet, so no rotation or compaction starts under it. The id is the one the prompt is sent with.
+fn reserve_prompt(inner: &mut Inner, text: &str) -> String {
+    let id = Engine::new_id();
+    inner.pending_prompts.insert(id.clone(), text.to_string());
+    id
+}
+
+/// The tab is quiet: its Pi runs, with no run going, no prompt waiting to be accepted, no dialog open, no compaction
+/// under way and no replay of held messages. Messages still held do not count: a rotation due after a compaction
+/// goes first, so they reach the new segment.
 fn quiet(inner: &Inner) -> bool {
     inner.engine.is_some()
         && !inner.rotating
+        && !inner.replaying
         && !inner.running
         && !inner.compacting
         && !inner.restart_pending
@@ -285,12 +322,21 @@ fn quiet(inner: &Inner) -> bool {
 /// What `get_state` tells about the model and thinking level. `running` is deliberately not taken from
 /// it: the events (`agent_start`, `agent_settled`) own that, and a late reply must not undo them.
 fn apply_state(inner: &mut Inner, data: &Value) {
-    let model = data["model"]["provider"].as_str().zip(data["model"]["id"].as_str()).map(|(p, id)| format!("{p}/{id}"));
-    inner.model = model.or(inner.model.take());
+    inner.model = model_of(data).or(inner.model.take());
     inner.thinking = data["thinkingLevel"].as_str().map(str::to_string);
     if let Some(file) = data["sessionFile"].as_str().filter(|file| !file.is_empty()) {
         inner.session_file = Some(PathBuf::from(file));
     }
+}
+
+/// The `provider/id` of the model a `get_state` reply names.
+fn model_of(state: &Value) -> Option<String> {
+    state["model"]["provider"].as_str().zip(state["model"]["id"].as_str()).map(|(p, id)| format!("{p}/{id}"))
+}
+
+/// The session id a `get_state` reply names.
+fn session_of(state: &Value) -> Option<&str> {
+    state["sessionId"].as_str().filter(|id| !id.is_empty())
 }
 
 #[derive(Clone)]
@@ -365,27 +411,36 @@ impl Chat {
     }
 
     pub fn handle(&self, message: PageMessage) {
-        let stopped = {
+        let (stopped, rotating, reserved) = {
             let mut inner = self.inner.lock().unwrap();
-            if inner.rotating && waits_for_rotation(&message) {
+            if must_wait(&inner, &message) {
                 inner.held.push_back(message);
                 return;
             }
-            // Stop during a rotation: Pi has nothing running; the held messages never start.
-            if inner.rotating && matches!(message, PageMessage::ChatAbort) {
+            // Stop: the held prompts never start (whatever else was held still runs).
+            let stopped: Vec<PageMessage> = if matches!(message, PageMessage::ChatAbort) {
                 let (sends, rest) = std::mem::take(&mut inner.held).into_iter().partition(|held| {
                     matches!(held, PageMessage::ChatSend { .. } | PageMessage::ChatClearQueue { .. })
                 });
                 inner.held = rest;
-                Some(sends)
+                Vec::from(sends)
             } else {
-                None
-            }
+                Vec::new()
+            };
+            // Under the same lock as the hold check: a rotation cannot start between the two.
+            let reserved = match &message {
+                PageMessage::ChatSend { text, .. } => Some(reserve_prompt(&mut inner, text)),
+                _ => None,
+            };
+            (stopped, inner.rotating, reserved)
         };
-        match stopped {
-            Some(sends) => self.give_back(sends, "Stopped before it was sent"),
-            None => self.dispatch(message),
+        self.give_back(stopped, "Stopped before it was sent");
+        // Stop during a rotation: Pi has nothing running, and the rotation is not cut. Otherwise (a replay of what was
+        // held under way, a compaction) the stop reaches Pi.
+        if rotating && matches!(message, PageMessage::ChatAbort) {
+            return;
         }
+        self.dispatch(message, reserved);
     }
 
     /// Held messages that will never be sent: each prompt leaves the thread and its text goes back to the composer, as
@@ -400,11 +455,13 @@ impl Chat {
         }
     }
 
-    fn dispatch(&self, message: PageMessage) {
+    /// `reserved` is the id a `ChatSend` was noted under (`reserve_prompt`); one is taken here when it has none.
+    fn dispatch(&self, message: PageMessage, reserved: Option<String>) {
         match message {
             PageMessage::ChatLoad { fresh } => self.load(fresh),
             PageMessage::ChatSend { text, behavior, attachments } => {
-                self.send_prompt(&text, behavior.as_deref(), &attachments)
+                let id = reserved.unwrap_or_else(|| reserve_prompt(&mut self.inner.lock().unwrap(), &text));
+                self.send_prompt(id, &text, behavior.as_deref(), &attachments)
             }
             PageMessage::ChatClearQueue { steer, keep } => {
                 if let Some(engine) = self.current_engine() {
@@ -642,17 +699,27 @@ impl Chat {
         }
     }
 
-    /// Sends a message. Its attachments are saved first (a message that cannot be saved is refused, and its text goes back
-    /// to the composer, as Pi's own refusals do); images go to Pi as images only when the session's model can see them.
-    fn send_prompt(&self, text: &str, behavior: Option<&str>, attachments: &[Attachment]) {
+    /// Sends a message under `id` (already in `pending_prompts`; taken out again when it is not sent). Its attachments are
+    /// saved first (a message that cannot be saved is refused, and its text goes back to the composer, as Pi's own
+    /// refusals do); images go to Pi as images only when the session's model can see them.
+    fn send_prompt(&self, id: String, text: &str, behavior: Option<&str>, attachments: &[Attachment]) {
+        let unsent = || {
+            self.inner.lock().unwrap().pending_prompts.remove(&id);
+        };
         let refuse = |error: &str| {
+            unsent();
             self.emit(DockMessage::ChatEvent {
                 event: json!({"type": "command_failed", "command": "prompt", "error": error, "text": text}),
             })
         };
         let engine = match self.ensure_engine() {
-            Ok(engine) => engine,
+            Ok(engine) => {
+                // A Pi started just now forgot the prompts of the one before, this one's note included.
+                self.inner.lock().unwrap().pending_prompts.insert(id.clone(), text.to_string());
+                engine
+            }
             Err(code) => {
+                unsent();
                 self.emit(self.state_message(Some(code)));
                 // A message with files is refused like any failed prompt: its text and files go back to the composer.
                 if !attachments.is_empty() {
@@ -680,12 +747,9 @@ impl Chat {
         if let Some(behavior) = behavior {
             fields["streamingBehavior"] = json!(behavior);
         }
-        match engine.send("prompt", fields) {
-            Ok(id) => {
-                // The page's own text: what its thread and queue show, and what a refusal gives back.
-                self.inner.lock().unwrap().pending_prompts.insert(id, text.to_string());
-            }
-            Err(_) => refuse("Pi is no longer running"),
+        // The page's own text is noted under `id`: what its thread and queue show, and what a refusal gives back.
+        if engine.send_as(&id, "prompt", fields).is_err() {
+            refuse("Pi is no longer running");
         }
     }
 
@@ -848,6 +912,7 @@ impl Chat {
                 return;
             }
             apply_state(&mut self.inner.lock().unwrap(), &response.data);
+            self.reconcile(&response.data);
             self.emit(self.state_message(None));
         }
         if let Some(response) = ask("get_messages") {
@@ -931,32 +996,94 @@ impl Chat {
         });
     }
 
-    /// The rotation is over: what was held runs, in order (later arrivals still queue behind it), then the tab may be
-    /// quiet again.
+    /// The rotation is over: what was held runs, then the tab may be quiet again.
     fn rotation_ended(&self) {
+        self.inner.lock().unwrap().rotating = false;
+        self.release_held();
+    }
+
+    /// Something that held the page's messages may have ended (a compaction, a run's start or end, Pi's exit): what is
+    /// held runs, on its own thread.
+    fn release_soon(&self) {
+        if self.inner.lock().unwrap().held.is_empty() {
+            return;
+        }
+        let chat = self.clone();
+        std::thread::spawn(move || chat.release_held());
+    }
+
+    /// What was held runs, in order, once nothing holds it (later arrivals queue behind it), then the tab may be quiet
+    /// again. One replay at a time: a call while another replays leaves the work to it. A prompt sent after another
+    /// one of the replay, or while a run goes, is queued as a follow-up, as the page's own queue does (Pi refuses a
+    /// plain prompt while it streams). A closed tab drops what it held, and no Pi starts for it.
+    fn release_held(&self) {
+        let (mut owner, mut prompted) = (false, false);
         loop {
-            let next = {
+            let (next, reserved) = {
                 let mut inner = self.inner.lock().unwrap();
                 if inner.closed {
-                    // A closed tab: what it held is dropped, and no Pi starts for it.
                     inner.held.clear();
-                    inner.rotating = false;
+                    inner.replaying = false;
                     return;
                 }
-                match inner.held.pop_front() {
-                    Some(message) => message,
-                    None => {
-                        inner.rotating = false;
-                        break;
-                    }
+                if !owner && inner.replaying {
+                    return;
                 }
+                if inner.rotating || compaction_holds(&inner) {
+                    // Held again (a compaction began meanwhile): its end releases the rest.
+                    if owner {
+                        inner.replaying = false;
+                    }
+                    return;
+                }
+                let Some(mut message) = inner.held.pop_front() else {
+                    inner.replaying = false;
+                    break;
+                };
+                owner = true;
+                inner.replaying = true;
+                let mut reserved = None;
+                if let PageMessage::ChatSend { text, behavior, .. } = &mut message {
+                    if behavior.is_none() && (prompted || inner.running) {
+                        *behavior = Some("followUp".into());
+                    }
+                    prompted = true;
+                    reserved = Some(reserve_prompt(&mut inner, text));
+                }
+                (message, reserved)
             };
-            self.dispatch(next);
+            self.dispatch(next, reserved);
         }
         self.when_quiet();
     }
 
-    /// Sends `/aria-rotate`; when Pi then runs on another session, that session becomes the tab's current segment. Any
+    /// Pi's live session, from a `get_state` reply: when it is not the tab's current segment (a rotation whose answer
+    /// was lost, or that failed after Pi switched), it becomes it. Returns that session id.
+    fn reconcile(&self, state: &Value) -> Option<String> {
+        let segment = session_of(state)?.to_string();
+        let recorded = {
+            let _file = SESSIONS_FILE.lock().unwrap_or_else(|e| e.into_inner());
+            if self.current_segment() == segment {
+                return Some(segment);
+            }
+            sessions::append_segment(&self.ctx.paths, &self.session, &segment)
+        };
+        match recorded {
+            Ok(true) => crate::note(&format!("tab {}: the conversation continues in session {segment}", self.session)),
+            Ok(false) => crate::note(&format!(
+                "tab {}: the tab is not in sessions.json, so session {segment} was not recorded",
+                self.session
+            )),
+            Err(error) => {
+                crate::note(&format!("tab {}: session {segment} could not be recorded: {error}", self.session))
+            }
+        }
+        Some(segment)
+    }
+
+    /// Sends `/aria-rotate`; when Pi then runs on another session, that session becomes the tab's current segment, and
+    /// the tab's model and thinking level are set again (Pi's new session starts from the settings' default ones). Pi's
+    /// session is read after the command whatever its answer, so a switch whose answer was lost is still recorded. Any
     /// failure is logged and waits for the next compaction.
     fn rotate(&self, engine: &Engine) {
         let fail = |why: String| {
@@ -978,33 +1105,81 @@ impl Chat {
         if !known {
             return fail(format!("Pi has no /{ROTATE_COMMAND} command"));
         }
-        match engine.request("prompt", json!({"message": format!("/{ROTATE_COMMAND}")}), ROTATE_TIMEOUT) {
-            Ok(response) if response.success => {}
-            Ok(response) => return fail(response.error.unwrap_or_else(|| "the command failed".into())),
-            Err(error) => return fail(error.to_string()),
-        }
-        let state = match engine.request("get_state", json!({}), REQUEST_TIMEOUT) {
-            Ok(response) if response.success => response.data,
-            Ok(_) => return fail("no state after the command".into()),
-            Err(error) => return fail(error.to_string()),
+        let state = |engine: &Engine| {
+            engine.request("get_state", json!({}), REQUEST_TIMEOUT).ok().filter(|r| r.success).map(|r| r.data)
         };
-        if self.is_current(engine) {
-            apply_state(&mut self.inner.lock().unwrap(), &state);
-        }
-        let Some(segment) = state["sessionId"].as_str().filter(|id| !id.is_empty()) else {
-            return fail("Pi did not say its session".into());
-        };
-        let recorded = {
-            let _file = SESSIONS_FILE.lock().unwrap_or_else(|e| e.into_inner());
-            if self.current_segment() == segment {
-                return fail("Pi stayed on the same session".into());
+        // What the tab runs with now, as Pi says (`/effort` may have changed the level), else as Aria last knew it.
+        let (model, thinking) = match state(engine) {
+            Some(before) => (model_of(&before), before["thinkingLevel"].as_str().map(str::to_string)),
+            None => {
+                let inner = self.inner.lock().unwrap();
+                (inner.model.clone(), inner.thinking.clone())
             }
-            sessions::append_segment(&self.ctx.paths, &self.session, segment)
         };
-        match recorded {
-            Ok(true) => crate::note(&format!("tab {}: the conversation continues in session {segment}", self.session)),
-            Ok(false) => fail(format!("the tab is not in sessions.json, so session {segment} was not recorded")),
-            Err(error) => fail(format!("session {segment} could not be recorded: {error}")),
+        let before = self.current_segment();
+        let timeout = self.inner.lock().unwrap().rotate_timeout.unwrap_or(ROTATE_TIMEOUT);
+        let answer = match engine.request("prompt", json!({"message": format!("/{ROTATE_COMMAND}")}), timeout) {
+            Ok(response) if response.success => None,
+            Ok(response) => Some(response.error.unwrap_or_else(|| "the command failed".into())),
+            Err(error) => Some(error.to_string()),
+        };
+        let Some(after) = state(engine) else {
+            return fail(answer.unwrap_or_else(|| "no state after the command".into()));
+        };
+        if !self.is_current(engine) {
+            return fail("Pi stopped meanwhile".into());
+        }
+        apply_state(&mut self.inner.lock().unwrap(), &after);
+        let Some(segment) = self.reconcile(&after) else {
+            return fail(answer.unwrap_or_else(|| "Pi did not say its session".into()));
+        };
+        if segment == before {
+            return fail(answer.unwrap_or_else(|| "Pi stayed on the same session".into()));
+        }
+        if let Some(why) = answer {
+            crate::note(&format!("tab {}: /{ROTATE_COMMAND} answered badly ({why}) but Pi switched", self.session));
+        }
+        self.keep_model(engine, &after, model, thinking);
+    }
+
+    /// After a rotation: the model and thinking level the tab had are set again where the new session differs, and the
+    /// page gets the state and the context's fill.
+    fn keep_model(&self, engine: &Engine, after: &Value, model: Option<String>, thinking: Option<String>) {
+        let mut changed = false;
+        if let Some((provider, model_id)) =
+            model.as_deref().filter(|m| model_of(after).as_deref() != Some(*m)).and_then(agent::split_model)
+        {
+            match engine.request("set_model", json!({"provider": provider, "modelId": model_id}), REQUEST_TIMEOUT) {
+                Ok(response) if response.success => changed = true,
+                _ => crate::note(&format!("tab {}: the model could not be set again after the rotation", self.session)),
+            }
+        }
+        // After the model: setting a model can change the level Pi allows.
+        if let Some(level) = thinking.filter(|level| !level.is_empty()) {
+            let now = match changed {
+                true => engine.request("get_state", json!({}), REQUEST_TIMEOUT).ok().map(|r| r.data),
+                false => Some(after.clone()),
+            };
+            if now.is_none_or(|now| now["thinkingLevel"].as_str() != Some(&level)) {
+                match engine.request("set_thinking_level", json!({"level": level}), REQUEST_TIMEOUT) {
+                    Ok(response) if response.success => changed = true,
+                    _ => crate::note(&format!(
+                        "tab {}: the thinking level could not be set again after the rotation",
+                        self.session
+                    )),
+                }
+            }
+        }
+        if changed {
+            if let Some(state) = engine.request("get_state", json!({}), REQUEST_TIMEOUT).ok().filter(|r| r.success) {
+                if self.is_current(engine) {
+                    apply_state(&mut self.inner.lock().unwrap(), &state.data);
+                }
+            }
+        }
+        if self.is_current(engine) {
+            self.emit(self.state_message(None));
+            self.refresh_context(engine);
         }
     }
 
@@ -1127,11 +1302,14 @@ impl Chat {
                 EngineEvent::Event(raw) => {
                     match raw["type"].as_str() {
                         Some("agent_start") => {
-                            let mut inner = self.inner.lock().unwrap();
-                            inner.running = true;
-                            inner.watchdog_fired = false;
-                            inner.tools.clear();
-                            inner.compacting = false;
+                            {
+                                let mut inner = self.inner.lock().unwrap();
+                                inner.running = true;
+                                inner.watchdog_fired = false;
+                                inner.tools.clear();
+                                inner.compacting = false;
+                            }
+                            self.release_soon();
                         }
                         Some("compaction_start") => self.inner.lock().unwrap().compacting = true,
                         // A compaction (automatic or asked) rotates the tab once it is quiet: now, or when its run
@@ -1145,7 +1323,9 @@ impl Chat {
                                     inner.rotate_due = true;
                                 }
                             }
+                            // A rotation that starts now keeps holding what the compaction held.
                             self.when_quiet();
+                            self.release_soon();
                         }
                         // The last tool ending restarts the watchdog's clock (this event already set it).
                         Some("tool_execution_end") => {
@@ -1187,6 +1367,7 @@ impl Chat {
                                 self.refresh_quota(false);
                                 self.when_quiet();
                             }
+                            self.release_soon();
                         }
                         _ => {}
                     }
@@ -1291,6 +1472,8 @@ impl Chat {
         }
         self.emit(DockMessage::ChatEngine { state: "exited".into() });
         self.emit(DockMessage::ChatEvent { event: json!({"type": "engine_exited", "code": code}) });
+        // A compaction it held for is over.
+        self.release_soon();
     }
 
     /// The folder this chat's running Pi works in (None when no Pi runs).
@@ -1300,11 +1483,12 @@ impl Chat {
     }
 
     /// Restart for a changed credential or package: at once when idle, when the current run settles otherwise.
-    /// During a rotation the restart waits for it to end, so the segment Pi switched to is recorded first.
+    /// During a rotation the restart waits for it to end, so the segment Pi switched to is recorded first (and behind
+    /// what a compaction holds, in order).
     pub fn restart_when_idle(&self) {
         {
             let mut inner = self.inner.lock().unwrap();
-            if inner.rotating {
+            if holding(&inner) {
                 inner.held.push_back(PageMessage::EnginesRestart);
                 return;
             }
@@ -1343,11 +1527,11 @@ impl Chat {
         self.stop(true);
     }
 
-    /// A run is going, a dialog waits for an answer, or the session is rotating.
+    /// A run is going, a dialog waits for an answer, or the session is rotating (or sending what it held).
     fn busy(&self) -> bool {
         let inner = self.inner.lock().unwrap();
-        // A rotation too: an update's stop must not cut it before its segment is recorded.
-        inner.running || inner.rotating || !inner.dialogs.is_empty()
+        // A rotation too: an update's stop must not cut it before its segment is recorded; and the replay of what it held.
+        inner.running || inner.rotating || inner.replaying || !inner.dialogs.is_empty()
     }
 
     /// The returned thread is closing Pi; joining it waits until Pi is gone.
@@ -1369,6 +1553,8 @@ impl Chat {
             ((open, dismiss), engine)
         };
         self.close_stale(stale);
+        // A compaction it held for is over.
+        self.release_soon();
         let engine = engine?;
         let closing = std::thread::spawn(move || {
             if group {
@@ -3917,6 +4103,149 @@ mod tests {
         ready(&h);
         std::thread::sleep(Duration::from_millis(300));
         assert!(drain(&h).iter().all(|m| !event_of(m, "compact_seen") && !event_of(m, "rotate_seen")));
+    }
+
+    #[test]
+    fn a_tab_keeps_its_model_and_thinking_level_across_a_rotation() {
+        let h = harness();
+        save_tab(&h, &[]);
+        ready(&h);
+        h.chat.handle(PageMessage::SetModel { id: 3, model: "opencode-go/kimi-k3".into() });
+        wait_for(&h, "the model set", |m| matches!(m, DockMessage::Saved { id: 3 }));
+        wait_for(&h, "Pi on the model", |m| event_of(m, "model_set"));
+        // `/effort` in Pi: Aria is not told.
+        let engine = h.chat.current_engine().unwrap();
+        engine.send("set_thinking_level", json!({"level": "high"})).unwrap();
+        wait_for(&h, "Pi on the level", |m| event_of(m, "thinking_set"));
+
+        h.chat.test_send_raw("compaction_end");
+        wait_for(&h, "the rotation", |m| event_of(m, "rotate_seen"));
+        let model = wait_for(&h, "the model set again", |m| event_of(m, "model_set"));
+        assert!(matches!(model, DockMessage::ChatEvent { ref event } if event["model"] == "opencode-go/kimi-k3"));
+        let level = wait_for(&h, "the level set again", |m| event_of(m, "thinking_set"));
+        assert!(matches!(level, DockMessage::ChatEvent { ref event } if event["level"] == "high"));
+        wait_for(
+            &h,
+            "the page told",
+            |m| matches!(m, DockMessage::ChatState { model: Some(m), thinking: Some(t), .. } if m == "opencode-go/kimi-k3" && t == "high"),
+        );
+        eventually("the new segment is recorded", || stored_segments(&h) == ["s1", "rotated-1"]);
+    }
+
+    #[test]
+    fn a_rotation_answered_after_its_wait_is_still_recorded_and_a_later_pi_uses_it() {
+        let h = harness();
+        save_tab(&h, &[]);
+        ready(&h);
+        h.chat.inner.lock().unwrap().rotate_timeout = Some(Duration::from_millis(200));
+        h.chat.test_send_raw("rotate_late");
+        h.chat.test_send_raw("compaction_end");
+        wait_for(&h, "the rotation", |m| event_of(m, "rotate_seen"));
+        eventually("the new segment is recorded", || stored_segments(&h) == ["s1", "rotated-1"]);
+        h.chat.shutdown();
+        ready(&h);
+        assert_eq!(session_id_arg(&h), "rotated-1");
+    }
+
+    #[test]
+    fn a_session_pi_moved_to_unannounced_is_recorded_at_the_next_state_read() {
+        let h = harness();
+        save_tab(&h, &[]);
+        ready(&h);
+        h.chat.test_send_raw("move_session");
+        wait_for(&h, "the move", |m| event_of(m, "moved"));
+        assert_eq!(stored_segments(&h), ["s1"]);
+        // A reloaded page: the running Pi is asked its state again.
+        h.chat.handle(PageMessage::ChatLoad { fresh: true });
+        eventually("the session Pi is on is recorded", || stored_segments(&h) == ["s1", "moved-1"]);
+        h.chat.shutdown();
+        ready(&h);
+        assert_eq!(session_id_arg(&h), "moved-1");
+    }
+
+    #[test]
+    fn a_prompt_sent_during_an_aria_started_compaction_is_answered_after_it() {
+        let h = harness();
+        save_tab(&h, &[]);
+        segment_file_of_size(&h, "s1", 9 * 1024 * 1024);
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
+        wait_for(&h, "the compaction", |m| event_of(m, "compaction_start"));
+        send(&h, "meanwhile");
+        wait_for(&h, "the held prompt's run", |m| event_of(m, "agent_settled"));
+        assert_eq!(stored_segments(&h), ["s1", "rotated-1"], "the rotation went first");
+        std::thread::sleep(Duration::from_millis(200));
+        let rest = drain(&h);
+        assert!(rest.iter().all(|m| !event_of(m, "prompt_during_compaction")), "nothing reached Pi mid-compaction");
+        assert!(rest.iter().all(|m| !event_of(m, "command_failed")), "the prompt was not refused");
+        assert!(h.chat.inner.lock().unwrap().held.is_empty());
+    }
+
+    #[test]
+    fn two_prompts_held_during_a_rotation_go_one_after_the_other() {
+        let h = harness();
+        save_tab(&h, &[]);
+        ready(&h);
+        h.chat.test_send_raw("compaction_end");
+        wait_for(&h, "the rotation", |m| event_of(m, "rotate_seen"));
+        send(&h, "one");
+        send(&h, "two");
+        let queued = wait_for(&h, "the second as a follow-up", |m| event_of(m, "queued_as"));
+        assert!(
+            matches!(queued, DockMessage::ChatEvent { ref event } if event["behavior"] == "followUp" && event["message"] == "two")
+        );
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(drain(&h).iter().all(|m| !event_of(m, "queued_as") && !event_of(m, "command_failed")));
+    }
+
+    #[test]
+    fn stop_during_the_replay_stops_pi_and_drops_what_is_still_held() {
+        let h = harness();
+        ready(&h);
+        {
+            let mut inner = h.chat.inner.lock().unwrap();
+            inner.replaying = true;
+            inner.held.push_back(PageMessage::ChatSend { text: "later".into(), behavior: None, attachments: vec![] });
+        }
+        h.chat.handle(PageMessage::ChatAbort);
+        let given = wait_for(&h, "the prompt given back", |m| event_of(m, "command_failed"));
+        assert!(matches!(given, DockMessage::ChatEvent { ref event } if event["text"] == "later"));
+        wait_for(&h, "Pi stopped", |m| event_of(m, "abort_seen"));
+        assert!(h.chat.inner.lock().unwrap().held.is_empty());
+    }
+
+    #[test]
+    fn a_send_counts_as_waiting_from_the_moment_it_starts() {
+        let h = harness();
+        // Pi is not running: the send waits on the start, the slow part.
+        let starting = h.chat.spawn_lock.lock().unwrap();
+        let chat = h.chat.clone();
+        let sender = std::thread::spawn(move || {
+            chat.handle(PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] })
+        });
+        eventually("the prompt is noted before Pi starts", || !h.chat.inner.lock().unwrap().pending_prompts.is_empty());
+        drop(starting);
+        sender.join().unwrap();
+        wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
+        eventually("accepted, no longer waiting", || h.chat.inner.lock().unwrap().pending_prompts.is_empty());
+    }
+
+    #[test]
+    fn a_send_that_cannot_start_pi_leaves_nothing_waiting() {
+        let h = harness_with(false);
+        send(&h, "x");
+        assert!(h.chat.inner.lock().unwrap().pending_prompts.is_empty());
+    }
+
+    #[test]
+    fn a_rotation_holds_the_page_load_but_not_an_answer() {
+        let h = harness();
+        h.chat.inner.lock().unwrap().rotating = true;
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
+        h.chat.handle(PageMessage::UiAnswer { id: "gone".into(), value: None, confirmed: None, cancelled: Some(true) });
+        assert_eq!(h.chat.inner.lock().unwrap().held.len(), 1, "only the load waits");
+        assert!(drain(&h).iter().all(|m| !matches!(m, DockMessage::ChatState { .. })));
+        h.chat.rotation_ended();
+        wait_for(&h, "the load once the rotation ended", |m| matches!(m, DockMessage::ChatState { .. }));
     }
 
     #[test]
