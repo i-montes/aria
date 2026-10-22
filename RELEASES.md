@@ -5,6 +5,14 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.7.1 — 2026-10-21
+
+### Fixed
+
+- a rotation's start never decides, even when nothing was handed over
+- a restart into a new version reaps the old page's WebKit processes as they end, instead of leaving them as zombies
+- a session rotation hands the switch to the free model over, so a renewed quota still brings the paid model back
+
 ## 0.7.0 — 2026-10-21
 
 ### New
