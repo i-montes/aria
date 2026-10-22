@@ -8,7 +8,7 @@
 // PI_QUOTA_FALLBACK=0 turns it off.
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { fetchGoUsage } from '../jev-router/usage.ts'
-import { handOver, takeOver } from '../lib/rotation.ts'
+import { handOver, isRotating, takeOver } from '../lib/rotation.ts'
 import { confirmFreeSwitch } from './ask.ts'
 import { decide, freeModel, readCachedUsage, shortDate, switchThreshold, writeCachedUsage, type ModelLike } from './fallback.ts'
 
@@ -60,10 +60,9 @@ export default function (pi: ExtensionAPI) {
   pi.on('session_shutdown', () => handOver(SWITCHED_FROM, switchedFrom))
   pi.on('session_start', async (event: any, ctx: any) => {
     const handed = takeOver<ModelLike | null>(SWITCHED_FROM, event)
-    if (handed !== undefined) {
-      switchedFrom = handed
-      return
-    }
+    if (handed !== undefined) switchedFrom = handed
+    // Even with nothing handed over (an older instance), a rotation's start leaves the model to Aria.
+    if (event?.reason === 'new' && isRotating()) return
     await check(ctx)
   })
   pi.on('before_agent_start', async (_event: any, ctx: any) => {
