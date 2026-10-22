@@ -59,12 +59,30 @@ impl SessionList {
             .filter(|entry| valid_id(&entry.id) && seen.insert(entry.id.clone()))
             .take(MAX_SESSIONS)
             .map(|mut entry| {
-                entry.segments.retain(|segment| valid_id(segment));
+                entry.segments.retain(|segment| {
+                    let valid = valid_id(segment);
+                    if !valid {
+                        note_dropped(&entry.id, segment);
+                    }
+                    valid
+                });
                 entry
             })
             .collect();
         let active = self.active.filter(|id| sessions.iter().any(|entry| &entry.id == id));
         SessionList { sessions, active }
+    }
+}
+
+/// A stored segment id Pi would refuse is dropped from its tab's chain: said in the dock's log, once per process (every
+/// read of `sessions.json` sanitizes it again until the next save).
+fn note_dropped(tab: &str, segment: &str) {
+    static NOTED: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+    let mut noted = NOTED.lock().unwrap_or_else(|e| e.into_inner());
+    if noted.get_or_insert_with(Default::default).insert(format!("{tab}\0{segment}")) {
+        eprintln!(
+            "aria: tab {tab}: its stored segment {segment:?} is not a valid session id and was dropped from its chain"
+        );
     }
 }
 
