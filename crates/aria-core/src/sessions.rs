@@ -17,6 +17,9 @@ pub struct SessionEntry {
     /// The tab's Pi session ids, oldest first. Empty (every tab written before segments existed) means `[id]`.
     #[serde(default)]
     pub segments: Vec<String>,
+    /// The scheduled task this tab runs (`crate::schedules`); such tabs do not count against `MAX_SESSIONS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
 }
 
 /// The tab's segments, oldest first: `segments`, or the tab's own id when it has none.
@@ -50,14 +53,22 @@ pub fn valid_id(id: &str) -> bool {
 }
 
 impl SessionList {
-    /// At most `MAX_SESSIONS` entries with valid, distinct ids; `active` must be one of them.
+    /// Entries with valid, distinct ids: at most `MAX_SESSIONS` regular ones, and every scheduled one; `active` must be one
+    /// of them.
     pub fn sanitized(self) -> SessionList {
         let mut seen = std::collections::HashSet::new();
+        let mut regular = 0;
         let sessions: Vec<SessionEntry> = self
             .sessions
             .into_iter()
             .filter(|entry| valid_id(&entry.id) && seen.insert(entry.id.clone()))
-            .take(MAX_SESSIONS)
+            .filter(|entry| {
+                if entry.schedule.is_some() {
+                    return true;
+                }
+                regular += 1;
+                regular <= MAX_SESSIONS
+            })
             .map(|mut entry| {
                 entry.segments.retain(|segment| {
                     let valid = valid_id(segment);
@@ -108,6 +119,35 @@ pub fn save(paths: &AriaPaths, list: &SessionList) -> io::Result<()> {
     write_json_atomic(&paths.sessions(), &value, 0o600)
 }
 
+/// The tabs a page save keeps: the page's, minus scheduled ones whose task is gone, plus the scheduled tabs on disk the page
+/// did not send (the dock made them; the page may not know them yet) whose task still exists.
+pub fn merge_scheduled(from_page: Vec<SessionEntry>, on_disk: &SessionList, tasks: &[String]) -> Vec<SessionEntry> {
+    let alive = |entry: &SessionEntry| entry.schedule.as_ref().is_none_or(|task| tasks.contains(task));
+    let mut merged: Vec<SessionEntry> = from_page.into_iter().filter(alive).collect();
+    for kept in on_disk.sessions.iter().filter(|e| e.schedule.is_some() && alive(e)) {
+        if !merged.iter().any(|entry| entry.id == kept.id) {
+            merged.push(kept.clone());
+        }
+    }
+    merged
+}
+
+/// Adds a scheduled task's tab (never the active one). `false` when it is already there.
+pub fn add_scheduled(paths: &AriaPaths, id: &str, title: &str, schedule: &str) -> io::Result<bool> {
+    let mut list = load(paths);
+    if list.sessions.iter().any(|entry| entry.id == id) {
+        return Ok(false);
+    }
+    list.sessions.push(SessionEntry {
+        id: id.to_string(),
+        title: title.to_string(),
+        segments: Vec::new(),
+        schedule: Some(schedule.to_string()),
+    });
+    save(paths, &list)?;
+    Ok(true)
+}
+
 /// Record `segment` as the tab's new current segment and save. `false` when the tab is not in the list or `segment` is
 /// already its current one (nothing written); an id Pi would refuse is an `InvalidInput` error.
 pub fn append_segment(paths: &AriaPaths, tab: &str, segment: &str) -> io::Result<bool> {
@@ -138,8 +178,52 @@ mod tests {
         (dir, paths)
     }
 
+    fn scheduled(id: &str, task: &str) -> SessionEntry {
+        SessionEntry { schedule: Some(task.into()), ..entry(id, "Notion tasks") }
+    }
+
+    #[test]
+    fn scheduled_tabs_do_not_count_against_eight() {
+        let mut sessions: Vec<SessionEntry> = (0..8).map(|n| entry(&format!("t{n}"), "x")).collect();
+        sessions.push(scheduled("sched-1", "s-aaaaaaaaaaaa"));
+        sessions.push(entry("t9", "the ninth regular tab"));
+        sessions.push(scheduled("sched-2", "s-bbbbbbbbbbbb"));
+        let list = SessionList { sessions, active: None }.sanitized();
+        let ids: Vec<&str> = list.sessions.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids.len(), 10);
+        assert!(ids.contains(&"sched-1") && ids.contains(&"sched-2") && !ids.contains(&"t9"), "{ids:?}");
+    }
+
+    #[test]
+    fn a_page_save_keeps_a_scheduled_tab_it_did_not_send() {
+        let on_disk =
+            SessionList { sessions: vec![entry("aa", "A"), scheduled("sched-1", "s-aaaaaaaaaaaa")], active: None };
+        let merged = merge_scheduled(vec![entry("aa", "A")], &on_disk, &["s-aaaaaaaaaaaa".to_string()]);
+        assert_eq!(merged.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), vec!["aa", "sched-1"]);
+    }
+
+    #[test]
+    fn a_scheduled_tab_of_a_deleted_task_is_dropped() {
+        let on_disk = SessionList { sessions: vec![scheduled("sched-1", "s-gone00000000")], active: None };
+        let from_page = vec![entry("aa", "A"), scheduled("sched-2", "s-gone11111111")];
+        let merged = merge_scheduled(from_page, &on_disk, &[]);
+        assert_eq!(merged.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), vec!["aa"]);
+    }
+
+    #[test]
+    fn add_scheduled_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = AriaPaths::new(dir.path().to_path_buf());
+        assert!(add_scheduled(&paths, "sched-1", "Notion tasks", "s-aaaaaaaaaaaa").unwrap());
+        assert!(!add_scheduled(&paths, "sched-1", "Notion tasks", "s-aaaaaaaaaaaa").unwrap());
+        let list = load(&paths);
+        assert_eq!(list.sessions.len(), 1);
+        assert_eq!(list.sessions[0].schedule.as_deref(), Some("s-aaaaaaaaaaaa"));
+        assert_eq!(list.active, None, "a scheduled tab never takes the active place");
+    }
+
     fn entry(id: &str, title: &str) -> SessionEntry {
-        SessionEntry { id: id.into(), title: title.into(), segments: vec![] }
+        SessionEntry { id: id.into(), title: title.into(), segments: vec![], schedule: None }
     }
 
     #[test]

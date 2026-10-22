@@ -1795,15 +1795,17 @@ impl Sessions {
                 let entries = entries
                     .into_iter()
                     .map(|mut entry| {
-                        entry.segments = stored
-                            .sessions
-                            .iter()
-                            .find(|kept| kept.id == entry.id)
-                            .map(|kept| kept.segments.clone())
-                            .unwrap_or_default();
+                        let kept = stored.sessions.iter().find(|kept| kept.id == entry.id);
+                        entry.segments = kept.map(|kept| kept.segments.clone()).unwrap_or_default();
+                        // Nor which tabs are a scheduled task's: the dock made them.
+                        entry.schedule = entry.schedule.or_else(|| kept.and_then(|kept| kept.schedule.clone()));
                         entry
                     })
                     .collect();
+                // The scheduled tabs the page has not seen yet stay; those of a deleted task go.
+                let tasks: Vec<String> =
+                    aria_core::schedules::load(&self.ctx.paths).into_iter().map(|task| task.id).collect();
+                let entries = sessions::merge_scheduled(entries, &stored, &tasks);
                 let _ = sessions::save(&self.ctx.paths, &SessionList { sessions: entries, active });
             }
             // Credentials or packages changed.
@@ -2930,6 +2932,7 @@ mod tests {
             id: "aa".into(),
             title: "Fix the build".into(),
             segments: vec![],
+            schedule: None,
         }];
         s.sessions.handle(PageMessage::SessionsSave { sessions: entries.clone(), active: Some("aa".into()) });
         s.sessions.handle(PageMessage::SessionsLoad { id: 9 });
@@ -2940,6 +2943,34 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_page_save_keeps_the_scheduled_tab_of_a_live_task() {
+        use aria_core::schedules::{self, Grants, Task, When};
+        let s = sessions_harness();
+        let task = Task {
+            id: "s-aaaaaaaaaaaa".into(),
+            title: "Notion tasks".into(),
+            prompt: "p".into(),
+            when: When { at: "07:30".into(), days: vec!["mon".into()], date: None },
+            grants: Grants::default(),
+            enabled: true,
+            created: 0,
+            last_run: None,
+            last_result: None,
+        };
+        schedules::save(&s.h.paths, &[task]).unwrap();
+        aria_core::sessions::add_scheduled(&s.h.paths, "sched-1", "Notion tasks", "s-aaaaaaaaaaaa").unwrap();
+        let regular = aria_core::sessions::SessionEntry {
+            id: "aa".into(),
+            title: "Fix".into(),
+            segments: vec![],
+            schedule: None,
+        };
+        s.sessions.handle(PageMessage::SessionsSave { sessions: vec![regular], active: Some("aa".into()) });
+        let ids: Vec<String> = aria_core::sessions::load(&s.h.paths).sessions.into_iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec!["aa".to_string(), "sched-1".to_string()]);
     }
 
     #[test]
@@ -3876,8 +3907,12 @@ mod tests {
                 .unwrap();
             eventually("it ended", || jobs.get(&job.id).is_some_and(|j| j.state != crate::jobs::JobState::Running));
         }
-        let entries =
-            vec![aria_core::sessions::SessionEntry { id: "aa".into(), title: "Kept".into(), segments: vec![] }];
+        let entries = vec![aria_core::sessions::SessionEntry {
+            id: "aa".into(),
+            title: "Kept".into(),
+            segments: vec![],
+            schedule: None,
+        }];
         aria_core::sessions::save(&s.h.paths, &SessionList { sessions: entries, active: None }).unwrap();
         s.sessions.forget_gone_sessions();
         assert_eq!(jobs.events("aa").len(), 1, "an open tab keeps its event for its Pi");
@@ -3925,6 +3960,7 @@ mod tests {
             id: "s1".into(),
             title: "Tab".into(),
             segments: segments.iter().map(|s| s.to_string()).collect(),
+            schedule: None,
         };
         sessions::save(&h.paths, &SessionList { sessions: vec![entry], active: Some("s1".into()) }).unwrap();
     }
@@ -4306,6 +4342,7 @@ mod tests {
             id: id.into(),
             title: title.into(),
             segments: segments.iter().map(|s| s.to_string()).collect(),
+            schedule: None,
         };
         sessions::save(&s.h.paths, &SessionList { sessions: vec![entry("aa", "Old", &["aa", "x-2"])], active: None })
             .unwrap();

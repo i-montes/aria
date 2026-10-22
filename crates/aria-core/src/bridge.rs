@@ -412,7 +412,7 @@ mod tests {
         assert_eq!(
             page(r#"{"type":"sessionsSave","sessions":[{"id":"a1","title":"Fix"}],"active":"a1"}"#),
             PageMessage::SessionsSave {
-                sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into(), segments: vec![] }],
+                sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into(), segments: vec![], schedule: None }],
                 active: Some("a1".into())
             }
         );
@@ -431,7 +431,7 @@ mod tests {
         assert_eq!(
             value(DockMessage::Sessions {
                 id: 3,
-                sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into(), segments: vec![] }],
+                sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into(), segments: vec![], schedule: None }],
                 active: None
             }),
             json!({"type": "sessions", "id": 3, "sessions": [{"id": "a1", "title": "Fix", "segments": []}], "active": null})
