@@ -2,6 +2,7 @@
 //! a `type` tag. The page sends `PageMessage`s; the dock answers with `DockMessage`s. Requests that
 //! expect an answer carry an `id` that the answer repeats.
 
+use crate::history::EarlierCursor;
 use crate::quota::Window as QuotaWindow;
 use crate::sessions::SessionEntry;
 use crate::shortcut::{InUse, Platform, Shortcut};
@@ -58,6 +59,13 @@ pub enum PageMessage {
     ChatLoad {
         #[serde(default)]
         fresh: bool,
+    },
+    /// The page of earlier messages before `cursor` (none: the newest earlier page), read from the tab's segment files;
+    /// answered with an `earlier` chat event.
+    #[serde(rename = "chatEarlier")]
+    ChatEarlier {
+        #[serde(default)]
+        cursor: Option<EarlierCursor>,
     },
     /// Cancel a queued message: Pi can only empty its queue, so the others are queued again, in order: those in `steer`
     /// for the next gap between steps, those in `keep` for when the run ends.
@@ -334,6 +342,12 @@ mod tests {
         assert_eq!(page(r#"{"type":"chatAbort"}"#), PageMessage::ChatAbort);
         assert_eq!(page(r#"{"type":"chatLoad"}"#), PageMessage::ChatLoad { fresh: false });
         assert_eq!(page(r#"{"type":"chatLoad","fresh":true}"#), PageMessage::ChatLoad { fresh: true });
+        assert_eq!(page(r#"{"type":"chatEarlier"}"#), PageMessage::ChatEarlier { cursor: None });
+        assert_eq!(page(r#"{"type":"chatEarlier","cursor":null}"#), PageMessage::ChatEarlier { cursor: None });
+        assert_eq!(
+            page(r#"{"type":"chatEarlier","cursor":{"segment":1,"index":40}}"#),
+            PageMessage::ChatEarlier { cursor: Some(EarlierCursor { segment: 1, index: 40 }) }
+        );
         assert_eq!(page(r#"{"type":"installClaudeBridge","id":12}"#), PageMessage::InstallClaudeBridge { id: 12 });
         assert_eq!(page(r#"{"type":"enginesRestart"}"#), PageMessage::EnginesRestart);
         assert_eq!(page(r#"{"type":"mcpScan","id":7}"#), PageMessage::McpScan { id: 7 });
@@ -396,7 +410,7 @@ mod tests {
         assert_eq!(
             page(r#"{"type":"sessionsSave","sessions":[{"id":"a1","title":"Fix"}],"active":"a1"}"#),
             PageMessage::SessionsSave {
-                sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into() }],
+                sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into(), segments: vec![] }],
                 active: Some("a1".into())
             }
         );
@@ -415,10 +429,10 @@ mod tests {
         assert_eq!(
             value(DockMessage::Sessions {
                 id: 3,
-                sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into() }],
+                sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into(), segments: vec![] }],
                 active: None
             }),
-            json!({"type": "sessions", "id": 3, "sessions": [{"id": "a1", "title": "Fix"}], "active": null})
+            json!({"type": "sessions", "id": 3, "sessions": [{"id": "a1", "title": "Fix", "segments": []}], "active": null})
         );
     }
 

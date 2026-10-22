@@ -2417,7 +2417,11 @@ mod tests {
     #[test]
     fn the_session_list_persists_across_restarts() {
         let s = sessions_harness();
-        let entries = vec![aria_core::sessions::SessionEntry { id: "aa".into(), title: "Fix the build".into() }];
+        let entries = vec![aria_core::sessions::SessionEntry {
+            id: "aa".into(),
+            title: "Fix the build".into(),
+            segments: vec![],
+        }];
         s.sessions.handle(PageMessage::SessionsSave { sessions: entries.clone(), active: Some("aa".into()) });
         s.sessions.handle(PageMessage::SessionsLoad { id: 9 });
         match s.messages.recv_timeout(Duration::from_secs(5)).unwrap() {
@@ -3343,7 +3347,8 @@ mod tests {
                 .unwrap();
             eventually("it ended", || jobs.get(&job.id).is_some_and(|j| j.state != crate::jobs::JobState::Running));
         }
-        let entries = vec![aria_core::sessions::SessionEntry { id: "aa".into(), title: "Kept".into() }];
+        let entries =
+            vec![aria_core::sessions::SessionEntry { id: "aa".into(), title: "Kept".into(), segments: vec![] }];
         aria_core::sessions::save(&s.h.paths, &SessionList { sessions: entries, active: None }).unwrap();
         s.sessions.forget_gone_sessions();
         assert_eq!(jobs.events("aa").len(), 1, "an open tab keeps its event for its Pi");
