@@ -3417,6 +3417,7 @@ mod tests {
         let grants: Value = serde_json::from_slice(&raw).unwrap();
         assert_eq!(grants["connectors"], json!({"notion": "read"}));
         assert_eq!(grants["sandbox"], json!({"askToLeave": false, "extraWritable": []}));
+        assert_eq!(grants["noAsk"], true, "nothing is ever asked in a scheduled tab");
         let _ = engine_state; // used by the other scheduler tests
     }
 

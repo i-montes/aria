@@ -44,7 +44,8 @@ function levelOf(server: string): AccessLevel {
   const levels = ariaConfig().connectors
   if (Object.hasOwn(levels, server)) return levels[server]
   const keys = Object.keys(levels).filter((k) => asInToolName(k) === asInToolName(server))
-  return keys.length === 1 ? levels[keys[0]] : 'ask'
+  // A scheduled task's tab: a connector its grants do not list is read-only, never asked about.
+  return keys.length === 1 ? levels[keys[0]] : ariaConfig().noAsk ? 'read' : 'ask'
 }
 
 export default function connectors(pi: ExtensionAPI) {

@@ -16,6 +16,7 @@ const TODAY = {
   sandbox: { extraWritable: [], askToLeave: true, jevReview: true },
   subagents: { saveSessions: false, turnLimit: null, planExecute: true },
   connectors: {},
+  noAsk: false,
 }
 
 let dir = ''
@@ -100,6 +101,13 @@ describe("a scheduled tab's fixed permissions (ARIA_GRANTS)", () => {
       expect(config.sandbox.askToLeave).toBe(true)
       expect(config.sandbox.extraWritable).toEqual([])
     }
+  })
+
+  test('a scheduled tab never asks: noAsk comes only from the grants', () => {
+    write({ noAsk: true })
+    expect(ariaConfig().noAsk).toBe(false)
+    process.env.ARIA_GRANTS = JSON.stringify({ noAsk: true })
+    expect(ariaConfig().noAsk).toBe(true)
   })
 
   test('a granted level outside read, ask and allow reads as ask', () => {

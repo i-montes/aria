@@ -322,3 +322,17 @@ describe('the connectors extension', () => {
     expect(d.asked[0].title).toBe('Notion wants to create pages\ntitle: Weekly notes')
   })
 })
+
+describe('a scheduled tab (ARIA_GRANTS noAsk)', () => {
+  test('a connector its grants do not list is read-only, and nothing is asked', async () => {
+    const saved = process.env.ARIA_GRANTS
+    process.env.ARIA_GRANTS = JSON.stringify({ noAsk: true, connectors: { notion: 'read' } })
+    const pi = await started()
+    const d = dock(ONCE)
+    const out = await pi.fire('tool_call', call('mcp__my_docs__createDoc'), d.ctx)
+    if (saved === undefined) delete process.env.ARIA_GRANTS
+    else process.env.ARIA_GRANTS = saved
+    expect(out?.block).toBe(true)
+    expect(d.asked).toHaveLength(0)
+  })
+})
