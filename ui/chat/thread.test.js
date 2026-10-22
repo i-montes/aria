@@ -153,6 +153,27 @@ describe("the turn's group opens while Aria works and folds when it answers", ()
     const state = { ...working, turnFrom: 1, messages: [group, { kind: 'user', text: 'again' }] }
     expect(isOpen(renderThread(state, {}, t))).toBe(false)
   })
+
+  const pulses = (html) => (html.match(/p-tools-pulse/g) ?? []).length
+  const second = { kind: 'tools', calls: [{ id: 'c2', name: 'bash', args: {}, status: 'done', summary: 'ls', result: '' }] }
+  const message = { kind: 'assistant', text: 'Found it, now checking the tests.', done: true }
+
+  test('a message to the owner closes the chain before it: only the group after it is live', () => {
+    const html = renderThread({ ...working, messages: [group, message, second] }, {}, t)
+    expect(pulses(html)).toBe(1)
+    const groups = html.match(/class="p-tools(?: [^"]*)?"/g)
+    expect(groups).toEqual(['class="p-tools"', 'class="p-tools is-open is-live"'])
+  })
+
+  test('a message after the last group closes it too, and nothing pulses', () => {
+    const html = renderThread({ ...working, messages: [group, message] }, {}, t)
+    expect(pulses(html)).toBe(0)
+    expect(isOpen(html)).toBe(false)
+  })
+
+  test('a group closed by a message can still be opened by hand', () => {
+    expect(isOpen(renderThread({ ...working, messages: [group, message] }, { expanded: new Set([0]) }, t))).toBe(true)
+  })
 })
 
 describe('the thread as items', () => {
