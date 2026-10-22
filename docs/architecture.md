@@ -132,6 +132,19 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 | `jobs` | every session's background jobs, dismissed ones included (not wrapped in a session) |
 | `jobOutput` | the answer to `jobOutput`: the lines (none for a subagent, which keeps no output) |
 
+## Scheduled tasks
+
+`aria-core/src/schedules.rs` holds a task (prompt, local time on some days or one date, fixed grants) and the one rule
+for when it runs: its latest time at or before now, on today's date, later than its last run and its creation. The dock
+asks once a second (main's tick, off the UI thread, `ScheduleStore::take_due` in `crates/aria/src/schedule_store.rs`,
+which writes `lastRun` before the run starts), so a time missed while the computer slept or Aria was off runs once when
+it is back. A due task runs in its own tab (`sessions.json` entry with `schedule`; the tab id is the task id; such tabs
+do not count against the eight): `Sessions::start_scheduled` shows a `scheduled_run` message, sends the prompt to the
+tab's Pi, which runs with `ARIA_GRANTS` (its connector levels, no asking to leave the sandbox), and when the run settles,
+or Pi refuses the prompt, records the result and posts a notification unless the person is looking. The `schedule`
+extension's tools create, list, change and delete tasks through the session's jobs socket; the page's `/schedules`
+panel pauses and deletes them ([design](superpowers/specs/2026-10-21-schedules-design.md)).
+
 ## Data and safety
 
 - Keys live in the system keyring (`aria-core/src/keyring.rs`: Apple's `security` on macOS, `secret-tool` on Linux).

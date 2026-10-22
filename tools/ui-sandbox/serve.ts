@@ -52,6 +52,10 @@ const sandbox = `<script>
       else if (m.type === 'mcpScan') r({ type: 'mcpFound', servers: FOUND.filter((f) => !SERVERS.includes(f.importAs)) })
       else if (m.type === 'mcpImport') { const picked = FOUND.filter((f) => m.ids.includes(f.id) && f.importable); if (!picked.length) r({ type: 'error', code: 'nothing-to-import' }); else { SERVERS.push(...picked.map((f) => f.importAs)); r({ type: 'saved' }) } }
       else if (m.type === 'sessionsLoad') r({ type: 'sessions', sessions: [{ id: 's1', title: 'Fix the failing build' }], active: 's1' })
+      // Scheduled tasks: one daily task the panel lists, pauses, resumes and deletes.
+      else if (m.type === 'schedulesList') r({ type: 'schedules', tasks: window.sim.schedules })
+      else if (m.type === 'scheduleUpdate') { window.sim.schedules = window.sim.schedules.map((x) => (x.id === m.schedule ? { ...x, enabled: m.enabled, next: m.enabled ? x.next : null } : x)); r({ type: 'schedules', tasks: window.sim.schedules }) }
+      else if (m.type === 'scheduleDelete') { window.sim.schedules = window.sim.schedules.filter((x) => x.id !== m.schedule); r({ type: 'schedules', tasks: window.sim.schedules }) }
       else if (m.type === 'saveSettings') { settings = m.settings; r({ type: 'saved' }); setTimeout(platform, 30) }
       else if (m.type === 'checkKey') r({ type: 'keyResult', ok: true, error: null })
       else if (m.type === 'saveKey') r({ type: 'keyResult', ok: m.key !== 'bad', error: m.key === 'bad' ? 'key-rejected' : null })
@@ -100,7 +104,7 @@ const sandbox = `<script>
   }
   const card = (c) => JSON.stringify({ aria: 1, ...c })
   const sim = {
-    model: 'opencode-go/deepseek-v4.1-flash', context: 18, n: 0, timer: null, active: 's1', queue: [], steering: [],
+    model: 'opencode-go/deepseek-v4.1-flash', context: 18, n: 0, timer: null, active: 's1', queue: [], steering: [], schedules: [{ id: 's-notion0000', title: 'Notion tasks', prompt: 'Give me my Notion tasks', when: { at: '07:30', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'], date: null }, grants: { connectors: { notion: 'read' }, writable: [] }, enabled: true, next: Date.now() + 3600e3, lastResult: { at: Date.now() - 86400e3, ok: true, summary: '3 tasks for today' } }],
     jobs: [], // the background work the dock would hold; jobStop moves a job to Finished
     job: (x) => ({ number: 1, session: sim.active, kind: 'process', command: null, task: null, folder: '~/Projects/aria', state: 'running', startedAt: Date.now() - 12 * 60000, endedAt: null, url: null, exit: null, isolation: null, worktree: null, writes: false, result: null, conflict: false, dismissed: false, ...x }),
     files: 0,

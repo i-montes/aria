@@ -13,6 +13,7 @@ import * as files from './parts/files.js'
 import * as index from './parts/index.js'
 import * as jev from './parts/jev.js'
 import * as memory from './parts/memory.js'
+import * as schedules from './parts/schedules.js'
 import * as models from './parts/models.js'
 import * as note from './parts/note.js'
 import * as permission from './parts/permission.js'
@@ -29,7 +30,7 @@ import * as tools from './parts/tools.js'
 import * as user from './parts/user.js'
 import * as working from './parts/working.js'
 
-export const PARTS = [answers, assistant, attachments, background, commands, composer, connect, divider, doc, files, index, jev, memory, models, note, permission, phases, pill, question, quota, quotabars, session, subagents, tabs, tasks, tools, user, working]
+export const PARTS = [answers, assistant, attachments, background, commands, composer, connect, divider, doc, files, index, jev, memory, models, note, permission, phases, pill, question, quota, quotabars, schedules, session, subagents, tabs, tasks, tools, user, working]
 
 const OWN = {
   en: {
@@ -57,6 +58,7 @@ const OWN = {
     'chat.toast.needs': 'needs your answer',
     'chat.memory.open': 'Memory',
     'chat.cmd.memory': 'Open the memory panel',
+    'chat.cmd.schedules': 'Scheduled tasks: when each runs, pause or delete them',
     'chat.cmd.model': 'Switch the model',
     'chat.cmd.connect': 'Connect a provider (Anthropic, OpenCode Go)',
     'chat.cmd.compact': 'Compact the context (optionally say what to keep)',
@@ -100,6 +102,7 @@ const OWN = {
     'chat.toast.needs': 'necesita tu respuesta',
     'chat.memory.open': 'Memoria',
     'chat.cmd.memory': 'Abrir el panel de memoria',
+    'chat.cmd.schedules': 'Tareas programadas: cuándo corre cada una, pausarlas o borrarlas',
     'chat.cmd.model': 'Cambiar de modelo',
     'chat.cmd.connect': 'Conectar un proveedor (Anthropic, OpenCode Go)',
     'chat.cmd.compact': 'Compactar el contexto (opcional: qué conservar)',

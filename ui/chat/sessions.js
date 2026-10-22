@@ -5,22 +5,31 @@
 export const MAX_SESSIONS = 8
 const TITLE_LIMIT = 28
 
-const entry = (id, title = '') => ({ id, title, status: 'idle', unread: false })
+// A scheduled task's tab carries `schedule` (its task id): the dock made it, it does not count against the eight, and
+// the bar shows it only while it has something to show (`shownSessions`).
+const entry = (id, title = '', schedule = undefined) => ({ id, title, status: 'idle', unread: false, ...(schedule ? { schedule } : {}) })
 const withSessions = (tabs, sessions) => ({ ...tabs, sessions })
 const find = (tabs, id) => tabs.sessions.find((s) => s.id === id)
 
-/** `saved` is `{ sessions: [{ id, title }], active }` from `~/.aria/sessions.json`, or nothing. */
+/** `saved` is `{ sessions: [{ id, title, schedule? }], active }` from `~/.aria/sessions.json`, or nothing. There is
+ * always a regular tab, and a regular tab is active when the saved one is not there. */
 export function createTabs(saved, makeId) {
-  const sessions = (saved?.sessions ?? []).map((s) => entry(s.id, s.title ?? ''))
-  if (!sessions.length) sessions.push(entry(makeId()))
-  const active = sessions.some((s) => s.id === saved?.active) ? saved.active : sessions[0].id
+  const sessions = (saved?.sessions ?? []).map((s) => entry(s.id, s.title ?? '', s.schedule))
+  if (!sessions.some((s) => !s.schedule)) sessions.push(entry(makeId()))
+  const active = sessions.some((s) => s.id === saved?.active && !s.schedule) ? saved.active : sessions.find((s) => !s.schedule).id
   return { sessions, active, closed: null }
 }
 
-export const toSaved = (tabs) => ({ sessions: tabs.sessions.map(({ id, title }) => ({ id, title })), active: tabs.active })
+export const toSaved = (tabs) => ({
+  sessions: tabs.sessions.map(({ id, title, schedule }) => (schedule ? { id, title, schedule } : { id, title })),
+  active: tabs.active,
+})
+
+/** The tabs the person opened (the scheduled ones aside). */
+export const regularCount = (tabs) => tabs.sessions.filter((s) => !s.schedule).length
 
 export function addSession(tabs, id) {
-  if (tabs.sessions.length >= MAX_SESSIONS) return tabs
+  if (regularCount(tabs) >= MAX_SESSIONS) return tabs
   return { ...withSessions(tabs, [...tabs.sessions, entry(id)]), active: id, closed: null }
 }
 
@@ -76,6 +85,31 @@ export function applyStatus(tabs, id, chat, isActive) {
   if (isActive && !chat.dialogs.length && !chat.running) unread = false
   if (status === current.status && unread === current.unread) return tabs
   return withSessions(tabs, tabs.sessions.map((s) => (s.id === id ? { ...s, status, unread } : s)))
+}
+
+/** A scheduled task's tab the dock just made: added at the end, never taking the focus. */
+export function addScheduled(tabs, id, title, schedule) {
+  if (find(tabs, id)) return tabs
+  return withSessions(tabs, [...tabs.sessions, entry(id, title, schedule)])
+}
+
+/** The tabs the bar shows: every regular one, and a scheduled one while it is active, unread, working or waiting. */
+export const shownSessions = (tabs) =>
+  tabs.sessions.filter((s) => !s.schedule || s.id === tabs.active || s.unread || s.status === 'working' || s.status === 'needs')
+
+/** Closing a scheduled tab only hides it (its task stays): it is read, and the focus goes back to a regular tab. */
+export function hideScheduled(tabs, id) {
+  const sessions = tabs.sessions.map((s) => (s.id === id ? { ...s, unread: false, status: 'idle' } : s))
+  const active = tabs.active === id ? (sessions.find((s) => !s.schedule)?.id ?? tabs.active) : tabs.active
+  return { ...withSessions(tabs, sessions), active }
+}
+
+/** A deleted task's tab goes for good. */
+export function removeSession(tabs, id) {
+  if (!find(tabs, id)) return tabs
+  const rest = tabs.sessions.filter((s) => s.id !== id)
+  const active = tabs.active === id ? (rest.find((s) => !s.schedule)?.id ?? rest[0]?.id) : tabs.active
+  return { ...withSessions(tabs, rest), active }
 }
 
 /** The bar shows `max` tabs; the active one always does (it takes the last slot); the rest overflow. */

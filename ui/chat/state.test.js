@@ -814,3 +814,12 @@ describe('earlier: review fixes', () => {
     expect(askEarlier(state)[1]).toEqual({ type: 'chatEarlier' })
   })
 })
+
+describe('scheduled runs', () => {
+  test('a scheduled run is a bubble marked with its time, and the echo of its prompt is dropped', () => {
+    let state = run(createChat(), ev({ type: 'scheduled_run', text: 'Give me my tasks', at: '07:30', late: true }))
+    expect(state.messages).toEqual([{ kind: 'user', text: 'Give me my tasks', scheduled: { at: '07:30', late: true } }])
+    state = reduce(state, ev({ type: 'message_start', message: { role: 'user', content: 'Give me my tasks' } }))
+    expect(state.messages).toHaveLength(1)
+  })
+})

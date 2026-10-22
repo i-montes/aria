@@ -114,6 +114,9 @@ pub fn is_chat(message: &PageMessage) -> bool {
             | PageMessage::SessionsLoad { .. }
             | PageMessage::SessionsSave { .. }
             | PageMessage::SessionClose { .. }
+            | PageMessage::SchedulesList { .. }
+            | PageMessage::ScheduleUpdate { .. }
+            | PageMessage::ScheduleDelete { .. }
             | PageMessage::EnginesRestart
             | PageMessage::ChatShown { .. }
             | PageMessage::JobStop { .. }
@@ -184,6 +187,9 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         | PageMessage::SessionsLoad { .. }
         | PageMessage::SessionsSave { .. }
         | PageMessage::SessionClose { .. }
+        | PageMessage::SchedulesList { .. }
+        | PageMessage::ScheduleUpdate { .. }
+        | PageMessage::ScheduleDelete { .. }
         | PageMessage::JobStop { .. }
         | PageMessage::JobOutput { .. }
         | PageMessage::JobDismiss { .. } => {}

@@ -69,3 +69,6 @@
 @keyframes p-tabs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 @keyframes p-tabs-pop { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .p-tabs, .p-tabs * { animation: none !important; transition: none !important; } }
+
+/* A scheduled task's tab: a small clock before its title. */
+.p-tabs-clock { display: inline-flex; flex: none; margin-right: 4px; color: #B9A8FF; }

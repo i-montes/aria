@@ -41,3 +41,17 @@ describe('ask_user in the dock', () => {
     expect(out.content[0].text).not.toContain('The user wrote')
   })
 })
+
+describe('ask_user in a scheduled tab', () => {
+  test('asks nobody and tells the model to decide', async () => {
+    const saved = process.env.ARIA_GRANTS
+    process.env.ARIA_GRANTS = JSON.stringify({ noAsk: true })
+    let asked = false
+    const ctx = { mode: 'rpc', hasUI: true, ui: { input: async () => { asked = true; return '[]' } } }
+    const out = await tool().execute('1', params, new AbortController().signal, () => {}, ctx)
+    if (saved === undefined) delete process.env.ARIA_GRANTS
+    else process.env.ARIA_GRANTS = saved
+    expect(asked).toBe(false)
+    expect(out.content[0].text).toContain('scheduled')
+  })
+})

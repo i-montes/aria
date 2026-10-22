@@ -453,7 +453,7 @@ export default function (pi: ExtensionAPI) {
       }
       // Planning re-reads the whole session on a pricier model: in a long session that is costly.
       const used = ctx.getContextUsage?.()?.tokens
-      if (mode !== 'plan' && typeof used === 'number' && used > LARGE_CONTEXT_TOKENS && ctx.hasUI) {
+      if (mode !== 'plan' && typeof used === 'number' && used > LARGE_CONTEXT_TOKENS && ctx.hasUI && !ariaConfig().noAsk) {
         const k = Math.round(used / 1000)
         const go = await ctx.ui.confirm(
           `This session is already at ~${k}k tokens`,

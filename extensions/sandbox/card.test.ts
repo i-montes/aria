@@ -34,3 +34,15 @@ describe("the chat's permission card", () => {
     expect(canAsk(undefined)).toBe(false)
   })
 })
+
+describe('a scheduled tab (ARIA_GRANTS noAsk)', () => {
+  test('nobody can be asked there', () => {
+    const saved = process.env.ARIA_GRANTS
+    const rpc = { hasUI: true, mode: 'rpc' }
+    expect(canAsk(rpc)).toBe(true)
+    process.env.ARIA_GRANTS = JSON.stringify({ noAsk: true })
+    expect(canAsk(rpc)).toBe(false)
+    if (saved === undefined) delete process.env.ARIA_GRANTS
+    else process.env.ARIA_GRANTS = saved
+  })
+})

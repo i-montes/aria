@@ -16,6 +16,7 @@ pub mod persona;
 pub mod pi;
 pub mod providers;
 pub mod quota;
+pub mod schedules;
 pub mod sessions;
 pub mod settings;
 pub mod shortcut;

@@ -75,7 +75,7 @@ function cached(entry, key, t, render) {
 function renderEntry(state, entry, index, ui, t) {
   switch (entry.kind) {
     case 'user':
-      return cached(entry, String(index), t, () => `<div class="thread-item" id="${messageDomId(index)}">${renderUser({ text: entry.text, files: entry.files }, {}, t)}</div>`)
+      return cached(entry, String(index), t, () => `<div class="thread-item" id="${messageDomId(index)}">${renderUser({ text: entry.text, files: entry.files, scheduled: entry.scheduled }, {}, t)}</div>`)
     case 'assistant':
       return entry.text ? cached(entry, '', t, () => `<div class="thread-item">${renderAssistant({ text: entry.text }, {}, t)}</div>`) : ''
     case 'tools': {

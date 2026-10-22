@@ -4,6 +4,11 @@ import { createChat } from './state.js'
 import {
   addSession, applyStatus, closeSession, createTabs, MAX_SESSIONS, renameSession, selectSession, setTitleIfEmpty, titleFromMessage,
   toSaved, undoClose, visibleTabs,
+  addScheduled,
+  hideScheduled,
+  regularCount,
+  removeSession,
+  shownSessions,
 } from './sessions.js'
 
 let counter = 0
@@ -176,5 +181,51 @@ describe('what fits in the bar', () => {
 
   test('few tabs have no overflow', () => {
     expect(visibleTabs(many(2, 's0')).overflow).toEqual([])
+  })
+})
+
+describe('scheduled tabs', () => {
+  const base = () => createTabs({ sessions: [{ id: 'a', title: 'A' }], active: 'a' }, () => 'new')
+
+  test('they do not count against the eight, and come in without taking the focus', () => {
+    let tabs = base()
+    for (let n = 0; n < 7; n++) tabs = addSession(tabs, `r${n}`)
+    tabs = addScheduled(tabs, 's-1', 'Notion tasks', 's-1')
+    expect(tabs.sessions).toHaveLength(9)
+    expect(regularCount(tabs)).toBe(8)
+    expect(tabs.active).toBe('r6')
+    expect(addSession(tabs, 'r9')).toBe(tabs)
+    expect(addScheduled(tabs, 's-1', 'Notion tasks', 's-1')).toBe(tabs)
+  })
+
+  test('a scheduled tab shows only while it has news, works or is active', () => {
+    let tabs = addScheduled(base(), 's-1', 'Notion tasks', 's-1')
+    expect(shownSessions(tabs).map((s) => s.id)).toEqual(['a'])
+    tabs = { ...tabs, sessions: tabs.sessions.map((s) => (s.id === 's-1' ? { ...s, unread: true, status: 'done' } : s)) }
+    expect(shownSessions(tabs).map((s) => s.id)).toEqual(['a', 's-1'])
+    tabs = hideScheduled(selectSession(tabs, 's-1'), 's-1')
+    expect(tabs.active).toBe('a')
+    expect(shownSessions(tabs).map((s) => s.id)).toEqual(['a'])
+  })
+
+  test('they are saved with their task and come back', () => {
+    const tabs = addScheduled(base(), 's-1', 'Notion tasks', 's-1')
+    const saved = toSaved(tabs)
+    expect(saved.sessions[1]).toEqual({ id: 's-1', title: 'Notion tasks', schedule: 's-1' })
+    expect(saved.sessions[0]).toEqual({ id: 'a', title: 'A' })
+    expect(createTabs(saved, () => 'x').sessions[1].schedule).toBe('s-1')
+  })
+
+  test('a list of only scheduled tabs gets a regular one, and it is the active one', () => {
+    const tabs = createTabs({ sessions: [{ id: 's-1', title: 'Notion tasks', schedule: 's-1' }], active: 's-1' }, () => 'fresh')
+    expect(tabs.sessions.map((s) => s.id)).toEqual(['s-1', 'fresh'])
+    expect(tabs.active).toBe('fresh')
+  })
+
+  test('a deleted task removes its tab', () => {
+    let tabs = selectSession(addScheduled(base(), 's-1', 'Notion tasks', 's-1'), 's-1')
+    tabs = removeSession(tabs, 's-1')
+    expect(tabs.sessions.map((s) => s.id)).toEqual(['a'])
+    expect(tabs.active).toBe('a')
   })
 })

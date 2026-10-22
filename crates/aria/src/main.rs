@@ -14,6 +14,7 @@ mod jobs;
 mod jobs_socket;
 mod keyring_cli;
 mod lines;
+mod schedule_store;
 mod ui;
 mod visibility;
 mod watch;
@@ -105,6 +106,9 @@ fn run_dock() {
     // are cloned into the handlers, the chat and the jobs).
     let initial = aria_core::settings::load(&paths).ok().flatten();
     let (paths, vault) = keyring_cli::open_for_dock(paths, initial.as_ref());
+    // The scheduled tasks: changed through every session's jobs socket, run by the scheduler on the tick.
+    let schedules = schedule_store::ScheduleStore::open(paths.clone());
+    let scheduling = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let vault: keyring_cli::Shared = Arc::new(std::sync::Mutex::new(vault));
     keyring_cli::spawn_sync(vault.clone());
     let mut settings_watch = chat::SettingsWatch::new(paths.settings());
@@ -163,6 +167,7 @@ fn run_dock() {
                 path_var: std::env::var("PATH").unwrap_or_default(),
                 quota_fetcher: Arc::new(aria_core::quota::real_fetcher),
                 jobs: jobs.clone(),
+                schedules: schedules.clone(),
             },
             Arc::new(move |message| {
                 let _ = sender.send(message);
@@ -315,6 +320,24 @@ fn run_dock() {
         if ticks.is_multiple_of(WATCHDOG_TICKS) {
             let sessions = chat_for_settings.clone();
             std::thread::spawn(move || sessions.check_stalled(Instant::now()));
+        }
+        // Once a second, the scheduled tasks: each due one runs in its own tab (a time missed while the computer slept or
+        // Aria was off runs once, and only today's), and a run that waited for its busy tab starts once it is free. Off
+        // the UI thread, one check at a time: starting a tab's Pi takes a moment.
+        if ticks.is_multiple_of(60) && !scheduling.swap(true, Ordering::SeqCst) {
+            let (sessions, schedules, scheduling) = (chat_for_settings.clone(), schedules.clone(), scheduling.clone());
+            std::thread::spawn(move || {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis() as i64);
+                for (task, due_at) in schedules.take_due(now, &aria_core::schedules::SystemClock) {
+                    let late = if aria_core::schedules::late(due_at, now) { ", late" } else { "" };
+                    note(&format!("running the scheduled task {} ({}){late}", task.id, task.title));
+                    sessions.start_scheduled(&task, due_at);
+                }
+                sessions.flush_scheduled();
+                scheduling.store(false, Ordering::SeqCst);
+            });
         }
         // A dock that just hid with a question still open needs its notification.
         let visible = visible_now.load(Ordering::SeqCst);

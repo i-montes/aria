@@ -170,11 +170,28 @@ pub struct ChatCtx {
     /// The dock's background work, every session's. One for the dock's whole life: its spawner thread is the parent
     /// every job is tied to (`PR_SET_PDEATHSIG`), so the last clone going away ends them all.
     pub jobs: Jobs,
+    /// The scheduled tasks every session's jobs socket can change.
+    pub schedules: crate::schedule_store::ScheduleStore,
+}
+
+/// A scheduled task's tab: its task, and the grants its Pi runs with (`ARIA_GRANTS`, docs/superpowers/specs/
+/// 2026-10-21-schedules-design.md).
+#[derive(Clone)]
+struct Scheduled {
+    task: String,
+    title: String,
+    grants: String,
 }
 
 #[derive(Default)]
 struct Inner {
     engine: Option<Arc<Engine>>,
+    scheduled: Option<Scheduled>,
+    /// A scheduled run is going: when it settles it is recorded and, unless seen, notified.
+    scheduled_run: bool,
+    /// The last answer's text and whether it ended in an error (a scheduled run's summary).
+    last_answer: String,
+    last_failed: bool,
     /// Bumped for every Pi that starts, so a dying Pi cannot clear its successor.
     generation: u64,
     running: bool,
@@ -449,6 +466,7 @@ impl Chat {
     fn give_back(&self, held: impl IntoIterator<Item = PageMessage>, why: &str) {
         for message in held {
             if let PageMessage::ChatSend { text, .. } = message {
+                self.prompt_failed(why);
                 self.emit(DockMessage::ChatEvent {
                     event: json!({"type": "command_failed", "command": "prompt", "error": why, "text": text}),
                 });
@@ -623,7 +641,13 @@ impl Chat {
         }
         let path = jobs_socket::socket_path(&self.ctx.run_dir, &self.session);
         let launcher = Arc::new(SessionLauncher { chat: self.clone() });
-        let socket = match JobsSocket::bind(&path, self.session.clone(), self.ctx.jobs.clone(), launcher) {
+        let socket = match JobsSocket::bind(
+            &path,
+            self.session.clone(),
+            self.ctx.jobs.clone(),
+            launcher,
+            self.ctx.schedules.clone(),
+        ) {
             Ok(socket) => socket,
             Err(error) => {
                 eprintln!("aria: no background work for session {}: the jobs socket: {error}", self.session);
@@ -658,6 +682,10 @@ impl Chat {
         let mut env = pi::session_env(&self.ctx.paths, &self.ctx.path_var, &workdir);
         if let Some(path) = watch {
             env.push(("PI_WATCH_SOCK".into(), path));
+        }
+        // A scheduled task's agents run under its grants too, never the person's wider settings.
+        if let Some(grants) = self.inner.lock().unwrap().scheduled.as_ref().map(|s| s.grants.clone()) {
+            env.push(("ARIA_GRANTS".into(), grants));
         }
         let mut unset = pi::unset_for_pi(std::env::vars());
         // No background work inside background work.
@@ -709,6 +737,7 @@ impl Chat {
         };
         let refuse = |error: &str| {
             unsent();
+            self.prompt_failed(error);
             self.emit(DockMessage::ChatEvent {
                 event: json!({"type": "command_failed", "command": "prompt", "error": error, "text": text}),
             })
@@ -722,6 +751,7 @@ impl Chat {
             Err(code) => {
                 unsent();
                 self.emit(self.state_message(Some(code)));
+                self.prompt_failed(&format!("Pi could not start ({code})"));
                 // A message with files is refused like any failed prompt: its text and files go back to the composer.
                 if !attachments.is_empty() {
                     refuse("Pi could not start, so the message was not sent");
@@ -832,6 +862,10 @@ impl Chat {
         }
         if let Some(path) = self.jobs_socket() {
             spec.env.push(("ARIA_JOBS_SOCK".into(), path.display().to_string()));
+        }
+        let grants = self.inner.lock().unwrap().scheduled.as_ref().map(|s| s.grants.clone());
+        if let Some(grants) = grants {
+            spec.env.push(("ARIA_GRANTS".into(), grants));
         }
         let spec_args = spec.args.clone();
         let (engine, events) = Engine::spawn(spec).map_err(|_| "pi-failed")?;
@@ -1344,7 +1378,23 @@ impl Chat {
                                 watch.expect_tasks(&raw["args"]);
                             }
                         }
+                        Some("message_end") if raw["message"]["role"] == "assistant" => {
+                            let text = raw["message"]["content"]
+                                .as_array()
+                                .map(|blocks| {
+                                    blocks.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("")
+                                })
+                                .unwrap_or_default();
+                            let mut inner = self.inner.lock().unwrap();
+                            if !text.trim().is_empty() {
+                                inner.last_answer = text;
+                            }
+                            inner.last_failed = raw["message"]["stopReason"] == "error";
+                        }
                         Some("agent_settled") => {
+                            if std::mem::take(&mut self.inner.lock().unwrap().scheduled_run) {
+                                self.finish_scheduled(None, raw["aborted"] == true);
+                            }
                             // Pi drops a run's dialogs silently when the run is aborted: they go here too.
                             let (open, restart) = {
                                 let mut inner = self.inner.lock().unwrap();
@@ -1381,6 +1431,9 @@ impl Chat {
                 EngineEvent::Response { id, success, command, error } => {
                     // A refused prompt names its text, so the page can take it back out of the thread or the queue.
                     let text = id.and_then(|id| self.inner.lock().unwrap().pending_prompts.remove(&id));
+                    if !success && command == "prompt" {
+                        self.prompt_failed(error.as_deref().unwrap_or("Pi refused the message"));
+                    }
                     if !success {
                         self.emit(DockMessage::ChatEvent {
                             event: json!({"type": "command_failed", "command": command, "error": error, "text": text}),
@@ -1465,6 +1518,8 @@ impl Chat {
             inner.notified.clear();
             (open, dismiss)
         };
+        // A scheduled run Pi died in ends as failed, so the person's next turn there is never taken for it.
+        self.prompt_failed("Pi stopped before the run finished");
         if dismiss {
             self.ctx.notifier.dismiss(&self.session);
         }
@@ -1529,6 +1584,52 @@ impl Chat {
     }
 
     /// A run is going, a dialog waits for an answer, or the session is rotating (or sending what it held).
+    /// Makes this the tab of `task`: its Pi (at its next start) runs with the task's fixed permissions. `servers` are the
+    /// connectors in `mcp.json`: each one not granted is read-only.
+    fn set_scheduled(&self, task: &aria_core::schedules::Task, servers: &[String]) {
+        let connectors: serde_json::Map<String, Value> = servers
+            .iter()
+            .map(|name| (name.clone(), json!(task.grants.connectors.get(name).map_or("read", String::as_str))))
+            .collect();
+        let grants = json!({
+            "connectors": connectors,
+            "sandbox": {"askToLeave": false, "extraWritable": task.grants.writable},
+            "noAsk": true,
+        });
+        self.inner.lock().unwrap().scheduled =
+            Some(Scheduled { task: task.id.clone(), title: task.title.clone(), grants: grants.to_string() });
+    }
+
+    /// A prompt that never became a run (Pi refused it, or could not start): a scheduled run it was ends as failed.
+    fn prompt_failed(&self, why: &str) {
+        if std::mem::take(&mut self.inner.lock().unwrap().scheduled_run) {
+            self.finish_scheduled(Some(why), false);
+        }
+    }
+
+    /// A scheduled run settled (or never started, `failure` says why): its result goes to the task, and a notification
+    /// unless the person is looking.
+    fn finish_scheduled(&self, failure: Option<&str>, aborted: bool) {
+        let (scheduled, answer, failed) = {
+            let inner = self.inner.lock().unwrap();
+            (inner.scheduled.clone(), inner.last_answer.clone(), inner.last_failed || failure.is_some())
+        };
+        let Some(scheduled) = scheduled else { return };
+        let answer = failure.map_or(answer, str::to_string);
+        let first = answer.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or_default();
+        let summary: String =
+            if first.is_empty() { "No answer".to_string() } else { first.chars().take(140).collect() };
+        let ok = !aborted && !failed;
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+        self.ctx
+            .schedules
+            .record(&scheduled.task, aria_core::schedules::RunResult { at, ok, summary: summary.clone() });
+        if !self.seen() {
+            let body = if ok { summary } else { format!("It did not finish: {summary}") };
+            self.ctx.notifier.send(&self.session, &format!("Aria · {}", scheduled.title), &body);
+        }
+    }
+
     fn busy(&self) -> bool {
         let inner = self.inner.lock().unwrap();
         // A rotation too: an update's stop must not cut it before its segment is recorded; and the replay of what it held.
@@ -1667,6 +1768,9 @@ pub struct Sessions {
     closed: Arc<Mutex<HashSet<String>>>,
     /// The turn watchdog's limit as last read from the settings.
     turn_limit: Arc<Mutex<Duration>>,
+    /// Scheduled runs waiting for their tab to be free: the task's id and the time it was due (the task is read again
+    /// when the tab is free, so a pause, a change or a delete meanwhile counts).
+    pending: Arc<Mutex<Vec<(String, i64)>>>,
 }
 
 /// Watches `settings.json` by content: a change from the settings screen, from `/effort` or `/autocompact` in Pi, or
@@ -1740,7 +1844,7 @@ impl Sessions {
     pub fn new(ctx: ChatCtx, emit: Emit) -> Sessions {
         let notifier: Arc<dyn Notifier> = Arc::new(CountingNotifier::new(ctx.notifier.clone()));
         let ctx = Arc::new(ChatCtx { notifier, ..ctx });
-        Sessions {
+        let sessions = Sessions {
             ctx,
             emit,
             chats: Arc::new(Mutex::new(HashMap::new())),
@@ -1748,7 +1852,99 @@ impl Sessions {
             turn_limit: Arc::new(Mutex::new(Duration::from_secs(
                 u64::from(aria_core::settings::Models::default().turn_timeout_minutes) * 60,
             ))),
+            pending: Arc::default(),
+        };
+        // A deleted task takes its tab with it; a changed one gives its tab's Pi the new grants when its run settles.
+        let closer = sessions.clone();
+        sessions.ctx.schedules.on_delete(move |id| closer.close_scheduled(id));
+        let refresher = sessions.clone();
+        sessions.ctx.schedules.on_update(move |id| refresher.refresh_scheduled(id));
+        let emit = sessions.emit.clone();
+        sessions.ctx.schedules.on_awaiting(move |id| emit(DockMessage::ScheduleAwaiting { schedule: id.to_string() }));
+        sessions
+    }
+
+    /// Runs a due task in its tab: the tab is made the first time (and the page told), the run shows as the person's
+    /// message (`scheduled_run`), and its prompt goes to the tab's Pi. A tab still busy keeps it until `flush_scheduled`.
+    pub fn start_scheduled(&self, task: &aria_core::schedules::Task, due_at: i64) {
+        let Some(chat) = self.chat(&task.id) else { return };
+        if chat.busy() {
+            let mut pending = self.pending.lock().unwrap();
+            pending.retain(|(waiting, _)| *waiting != task.id);
+            pending.push((task.id.clone(), due_at));
+            return;
         }
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+        let late = aria_core::schedules::late(due_at, now);
+        {
+            let _file = SESSIONS_FILE.lock().unwrap_or_else(|e| e.into_inner());
+            if let Err(error) = sessions::add_scheduled(&self.ctx.paths, &task.id, &task.title, &task.id) {
+                crate::note(&format!("the tab of the scheduled task {} could not be saved: {error}", task.id));
+            }
+        }
+        (self.emit)(DockMessage::ScheduleTab {
+            id: task.id.clone(),
+            title: task.title.clone(),
+            schedule: task.id.clone(),
+        });
+        chat.set_scheduled(task, &aria_core::mcp::servers(&self.ctx.paths));
+        {
+            let mut inner = chat.inner.lock().unwrap();
+            inner.scheduled_run = true;
+            inner.last_answer.clear();
+            inner.last_failed = false;
+        }
+        chat.emit(DockMessage::ChatEvent {
+            event: json!({"type": "scheduled_run", "text": task.prompt, "at": task.when.at, "late": late}),
+        });
+        chat.handle(PageMessage::ChatSend { text: task.prompt.clone(), behavior: None, attachments: Vec::new() });
+    }
+
+    /// Starts the scheduled runs whose tab is free now (called once a second), each from its task as it is now: one
+    /// deleted, paused or waiting for approval meanwhile does not run.
+    pub fn flush_scheduled(&self) {
+        let waiting = std::mem::take(&mut *self.pending.lock().unwrap());
+        for (id, due_at) in waiting {
+            match self.ctx.schedules.get(&id) {
+                Some(task) if task.enabled && !task.awaiting => self.start_scheduled(&task, due_at),
+                _ => {}
+            }
+        }
+    }
+
+    /// A deleted task's tab: its Pi and everything it started stop, the tab leaves `sessions.json`, and the page is told.
+    fn close_scheduled(&self, id: &str) {
+        self.closed.lock().unwrap().insert(id.to_string());
+        self.pending.lock().unwrap().retain(|(task, _)| task != id);
+        let chat = self.chats.lock().unwrap().remove(id);
+        if let Some(chat) = chat {
+            chat.close_for_good();
+            chat.forget_watch();
+            chat.forget_jobs();
+        }
+        self.close_jobs(id.to_string());
+        {
+            let _file = SESSIONS_FILE.lock().unwrap_or_else(|e| e.into_inner());
+            let mut list = sessions::load(&self.ctx.paths);
+            list.sessions.retain(|entry| entry.id != id);
+            let _ = sessions::save(&self.ctx.paths, &list);
+        }
+        (self.emit)(DockMessage::ScheduleRemoved { id: id.to_string() });
+    }
+
+    /// A changed task: its tab's Pi starts again with the new grants, when its run settles.
+    fn refresh_scheduled(&self, id: &str) {
+        let chat = self.chats.lock().unwrap().get(id).cloned();
+        let (Some(chat), Some(task)) = (chat, self.ctx.schedules.get(id)) else { return };
+        chat.set_scheduled(&task, &aria_core::mcp::servers(&self.ctx.paths));
+        chat.restart_when_idle();
+    }
+
+    fn schedules_answer(&self, id: u64) {
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+        (self.emit)(DockMessage::Schedules { id, tasks: json!(self.ctx.schedules.list(now)) });
     }
 
     fn chat(&self, session: &str) -> Option<Chat> {
@@ -1763,7 +1959,12 @@ impl Sessions {
             let tagged: Emit = Arc::new(move |message| {
                 emit(DockMessage::Session { session: tag.clone(), message: Box::new(message) })
             });
-            Chat::new(self.ctx.clone(), tagged, session.to_string())
+            let chat = Chat::new(self.ctx.clone(), tagged, session.to_string());
+            // A scheduled task's tab keeps its grants whoever starts its Pi (the page's preload, the person, a run).
+            if let Some(task) = self.ctx.schedules.get(session) {
+                chat.set_scheduled(&task, &aria_core::mcp::servers(&self.ctx.paths));
+            }
+            chat
         });
         Some(chat.clone())
     }
@@ -1795,15 +1996,16 @@ impl Sessions {
                 let entries = entries
                     .into_iter()
                     .map(|mut entry| {
-                        entry.segments = stored
-                            .sessions
-                            .iter()
-                            .find(|kept| kept.id == entry.id)
-                            .map(|kept| kept.segments.clone())
-                            .unwrap_or_default();
+                        let kept = stored.sessions.iter().find(|kept| kept.id == entry.id);
+                        entry.segments = kept.map(|kept| kept.segments.clone()).unwrap_or_default();
+                        // Nor which tabs are a scheduled task's: the dock made them.
+                        entry.schedule = entry.schedule.or_else(|| kept.and_then(|kept| kept.schedule.clone()));
                         entry
                     })
                     .collect();
+                // The scheduled tabs the page has not seen yet stay; those of a deleted task go.
+                let tasks = self.ctx.schedules.ids();
+                let entries = sessions::merge_scheduled(entries, &stored, &tasks);
                 let _ = sessions::save(&self.ctx.paths, &SessionList { sessions: entries, active });
             }
             // Credentials or packages changed.
@@ -1828,6 +2030,20 @@ impl Sessions {
                 self.ctx.jobs.stop(&job);
             }
             PageMessage::JobDismiss { job } => self.ctx.jobs.dismiss(&job),
+            PageMessage::SchedulesList { id } => self.schedules_answer(id),
+            // The person's switch: resuming a task that waits for them approves it.
+            PageMessage::ScheduleUpdate { id, schedule, enabled } => {
+                if let Err(error) = self.ctx.schedules.set_enabled_by_person(&schedule, enabled) {
+                    crate::note(&format!("a scheduled task could not be changed: {error}"));
+                }
+                self.schedules_answer(id);
+            }
+            PageMessage::ScheduleDelete { id, schedule } => {
+                if let Err(error) = self.ctx.schedules.delete(&schedule) {
+                    crate::note(&format!("a scheduled task could not be deleted: {error}"));
+                }
+                self.schedules_answer(id);
+            }
             PageMessage::JobOutput { id, job, lines } => {
                 let lines = self.ctx.jobs.output(&job, lines.unwrap_or(PAGE_OUTPUT_LINES)).unwrap_or_default();
                 (self.emit)(DockMessage::JobOutput { id, lines });
@@ -2062,6 +2278,7 @@ mod tests {
             path_var: "/usr/bin:/bin".into(),
             quota_fetcher,
             jobs: Jobs::new(dir.path().join("jobs.json"), Arc::new(|| {})),
+            schedules: crate::schedule_store::ScheduleStore::open(paths.clone()),
         };
         Harness {
             _turn: turn,
@@ -2412,6 +2629,7 @@ mod tests {
             path_var: "/nonexistent".into(),
             quota_fetcher: Arc::new(|_| None),
             jobs: h.chat.ctx.jobs.clone(),
+            schedules: h.chat.ctx.schedules.clone(),
         };
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);
@@ -2622,7 +2840,11 @@ mod tests {
     }
 
     fn sessions_harness() -> SessionsHarness {
-        let h = harness();
+        sessions_harness_with(true)
+    }
+
+    fn sessions_harness_with(install_pi: bool) -> SessionsHarness {
+        let h = harness_with(install_pi);
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);
         let emit: Emit = Arc::new(move |m| {
@@ -2638,6 +2860,7 @@ mod tests {
             path_var: "/usr/bin:/bin".into(),
             quota_fetcher: Arc::new(|_| None),
             jobs: h.chat.ctx.jobs.clone(),
+            schedules: h.chat.ctx.schedules.clone(),
         };
         let sessions = Sessions::new(ctx, emit);
         SessionsHarness { h, sessions, messages }
@@ -2930,6 +3153,7 @@ mod tests {
             id: "aa".into(),
             title: "Fix the build".into(),
             segments: vec![],
+            schedule: None,
         }];
         s.sessions.handle(PageMessage::SessionsSave { sessions: entries.clone(), active: Some("aa".into()) });
         s.sessions.handle(PageMessage::SessionsLoad { id: 9 });
@@ -2940,6 +3164,280 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    fn now_ms() -> i64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+    }
+
+    /// A task in the harness's store: every day at 07:30, Notion read-only.
+    fn scheduled_task(s: &SessionsHarness) -> aria_core::schedules::Task {
+        std::fs::write(s.h.paths.mcp(), r#"{"mcpServers":{"notion":{"url":"https://n"}}}"#).unwrap();
+        s.sessions
+            .ctx
+            .schedules
+            .create(&json!({"title": "Notion tasks", "prompt": "Give me my TASKS", "at": "07:30", "connectors": {"notion": "read"}}), 0)
+            .unwrap()
+    }
+
+    fn engine_state(m: &DockMessage, state: &str) -> bool {
+        matches!(m, DockMessage::ChatEngine { state: got } if got == state)
+    }
+
+    #[test]
+    fn a_due_task_creates_its_tab_and_sends_its_prompt() {
+        let s = sessions_harness();
+        let task = scheduled_task(&s);
+        s.sessions.start_scheduled(&task, now_ms());
+        let tab = loop {
+            if let DockMessage::ScheduleTab { id, title, schedule } =
+                s.messages.recv_timeout(Duration::from_secs(5)).unwrap()
+            {
+                break (id, title, schedule);
+            }
+        };
+        assert_eq!(tab, (task.id.clone(), "Notion tasks".to_string(), task.id.clone()));
+        let run = wait_session(&s, "the scheduled run", &task.id, |m| event_of(m, "scheduled_run"));
+        match run {
+            DockMessage::ChatEvent { event } => {
+                assert_eq!(event["text"], "Give me my TASKS");
+                assert_eq!(event["late"], false);
+            }
+            _ => unreachable!(),
+        }
+        wait_session(&s, "its run", &task.id, settled);
+        let entry = aria_core::sessions::load(&s.h.paths).sessions.into_iter().find(|e| e.id == task.id).unwrap();
+        assert_eq!(entry.schedule.as_deref(), Some(task.id.as_str()));
+    }
+
+    #[test]
+    fn the_settled_run_is_recorded_and_notified() {
+        let s = sessions_harness();
+        s.h.visible.store(false, Ordering::SeqCst);
+        let task = scheduled_task(&s);
+        s.sessions.start_scheduled(&task, now_ms());
+        wait_session(&s, "its run", &task.id, settled);
+        let recorded = || s.sessions.ctx.schedules.get(&task.id).and_then(|t| t.last_result);
+        for _ in 0..100 {
+            if recorded().is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let result = recorded().expect("the run is recorded");
+        assert!(result.ok);
+        assert_eq!(result.summary, "Here are 3 tasks for today");
+        assert!(
+            s.h.notifier.log().contains(&"send:Aria · Notion tasks:Here are 3 tasks for today".to_string()),
+            "{:?}",
+            s.h.notifier.log()
+        );
+    }
+
+    #[test]
+    fn a_run_pi_refuses_is_recorded_as_failed_and_notified() {
+        let s = sessions_harness();
+        s.h.visible.store(false, Ordering::SeqCst);
+        std::fs::write(s.h.paths.mcp(), r#"{"mcpServers":{}}"#).unwrap();
+        let task =
+            s.sessions.ctx.schedules.create(&json!({"title": "Refused", "prompt": "FAIL", "at": "07:30"}), 0).unwrap();
+        s.sessions.start_scheduled(&task, now_ms());
+        wait_session(&s, "the refusal", &task.id, |m| event_of(m, "command_failed"));
+        let recorded = || s.sessions.ctx.schedules.get(&task.id).and_then(|t| t.last_result);
+        for _ in 0..100 {
+            if recorded().is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let result = recorded().expect("a refused run is recorded");
+        assert!(!result.ok);
+        assert!(result.summary.contains("compaction"), "{}", result.summary);
+        assert!(
+            s.h.notifier.log().iter().any(|line| line.starts_with("send:Aria · Refused:It did not finish")),
+            "{:?}",
+            s.h.notifier.log()
+        );
+    }
+
+    #[test]
+    fn a_writing_task_waits_and_the_page_is_asked_to_show_it() {
+        let s = sessions_harness();
+        std::fs::write(s.h.paths.mcp(), r#"{"mcpServers":{"notion":{"url":"https://n"}}}"#).unwrap();
+        let task = s
+            .sessions
+            .ctx
+            .schedules
+            .create(&json!({"title": "Write", "prompt": "p", "at": "07:30", "connectors": {"notion": "allow"}}), 0)
+            .unwrap();
+        let shown = loop {
+            if let DockMessage::ScheduleAwaiting { schedule } = s.messages.recv_timeout(Duration::from_secs(5)).unwrap()
+            {
+                break schedule;
+            }
+        };
+        assert_eq!(shown, task.id);
+        s.sessions.handle(PageMessage::ScheduleUpdate { id: 3, schedule: task.id.clone(), enabled: true });
+        let approved = s.sessions.ctx.schedules.get(&task.id).unwrap();
+        assert!(approved.enabled && !approved.awaiting, "the person's switch approves it");
+    }
+
+    fn recorded(s: &SessionsHarness, id: &str) -> aria_core::schedules::RunResult {
+        for _ in 0..150 {
+            if let Some(result) = s.sessions.ctx.schedules.get(id).and_then(|t| t.last_result) {
+                return result;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("the run of {id} was never recorded")
+    }
+
+    #[test]
+    fn a_run_whose_pi_cannot_start_is_recorded_as_failed() {
+        let s = sessions_harness_with(false);
+        std::fs::write(s.h.paths.mcp(), r#"{"mcpServers":{}}"#).unwrap();
+        let task =
+            s.sessions.ctx.schedules.create(&json!({"title": "No Pi", "prompt": "p", "at": "07:30"}), 0).unwrap();
+        s.sessions.start_scheduled(&task, 0);
+        let result = recorded(&s, &task.id);
+        assert!(!result.ok && result.summary.contains("could not start"), "{}", result.summary);
+    }
+
+    #[test]
+    fn a_run_whose_pi_dies_is_recorded_as_failed_and_the_next_turn_is_not_the_tasks() {
+        let s = sessions_harness();
+        std::fs::write(s.h.paths.mcp(), r#"{"mcpServers":{}}"#).unwrap();
+        let task = s
+            .sessions
+            .ctx
+            .schedules
+            .create(&json!({"title": "Crash", "prompt": "CRASH now", "at": "07:30"}), 0)
+            .unwrap();
+        s.sessions.start_scheduled(&task, 0);
+        let result = recorded(&s, &task.id);
+        assert!(!result.ok && result.summary.contains("stopped"), "{}", result.summary);
+        // The person's next message in that tab is theirs, not the task's.
+        s.sessions.handle(in_session(
+            &task.id,
+            PageMessage::ChatSend { text: "Give me my TASKS".into(), behavior: None, attachments: vec![] },
+        ));
+        wait_session(&s, "the person's run", &task.id, settled);
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !s.sessions.ctx.schedules.get(&task.id).unwrap().last_result.unwrap().ok,
+            "still the task's own failure"
+        );
+    }
+
+    #[test]
+    fn a_waiting_run_reads_its_task_again_when_its_tab_is_free() {
+        let s = sessions_harness();
+        let task = scheduled_task(&s);
+        s.sessions.handle(in_session(
+            &task.id,
+            PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] },
+        ));
+        wait_session(&s, "the first run settled", &task.id, settled);
+        s.sessions.test_send_raw(&task.id, "start"); // the person's run, still going
+        wait_session(&s, "the run", &task.id, |m| event_of(m, "agent_start"));
+        s.sessions.start_scheduled(&task, now_ms() - 10 * 60_000);
+        s.sessions.ctx.schedules.update(&json!({"id": task.id, "enabled": false})).unwrap(); // paused while it waits
+        s.sessions.test_send_raw(&task.id, "settle");
+        wait_session(&s, "settled", &task.id, settled);
+        s.sessions.flush_scheduled();
+        std::thread::sleep(Duration::from_millis(200));
+        let ran = std::iter::from_fn(|| s.messages.try_recv().ok())
+            .any(|m| matches!(m, DockMessage::Session { ref message, .. } if event_of(message, "scheduled_run")));
+        assert!(!ran, "a task paused while it waited does not run");
+    }
+
+    #[test]
+    fn a_scheduled_tabs_background_agents_get_its_grants() {
+        let s = sessions_harness();
+        let task = scheduled_task(&s);
+        let chat = s.sessions.chat(&task.id).unwrap();
+        chat.inner.lock().unwrap().model = Some("opencode-go/glm".into());
+        let (_, _, env, _, _) = chat.agent_launch("session").expect("a launch");
+        let grants = env.iter().find(|(k, _)| k == "ARIA_GRANTS").map(|(_, v)| v.clone()).expect("ARIA_GRANTS");
+        let grants: Value = serde_json::from_str(&grants).unwrap();
+        assert_eq!(grants["connectors"], json!({"notion": "read"}));
+        let regular = s.sessions.chat("aa").unwrap();
+        regular.inner.lock().unwrap().model = Some("opencode-go/glm".into());
+        let (_, _, env, _, _) = regular.agent_launch("session").unwrap();
+        assert!(!env.iter().any(|(k, _)| k == "ARIA_GRANTS"), "a regular tab's agents keep the person's settings");
+    }
+
+    #[test]
+    fn a_task_due_mid_run_waits_for_the_run() {
+        let s = sessions_harness();
+        let task = scheduled_task(&s);
+        s.sessions.handle(in_session(
+            &task.id,
+            PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] },
+        ));
+        wait_session(&s, "the first run settled", &task.id, settled);
+        s.sessions.test_send_raw(&task.id, "start"); // the person's run, still going
+        wait_session(&s, "the run", &task.id, |m| event_of(m, "agent_start"));
+        s.sessions.start_scheduled(&task, now_ms());
+        std::thread::sleep(Duration::from_millis(200));
+        let early = std::iter::from_fn(|| s.messages.try_recv().ok())
+            .any(|m| matches!(m, DockMessage::Session { ref message, .. } if event_of(message, "scheduled_run")));
+        assert!(!early, "it waits while the tab is busy");
+        s.sessions.test_send_raw(&task.id, "settle");
+        wait_session(&s, "settled", &task.id, settled);
+        s.sessions.flush_scheduled();
+        wait_session(&s, "the scheduled run, after", &task.id, |m| event_of(m, "scheduled_run"));
+    }
+
+    #[test]
+    fn deleting_a_running_task_stops_it_and_removes_its_tab() {
+        let s = sessions_harness();
+        let task = scheduled_task(&s);
+        s.sessions.start_scheduled(&task, now_ms());
+        wait_session(&s, "its run", &task.id, settled);
+        s.sessions.ctx.schedules.delete(&task.id).unwrap();
+        let removed = loop {
+            if let DockMessage::ScheduleRemoved { id } = s.messages.recv_timeout(Duration::from_secs(5)).unwrap() {
+                break id;
+            }
+        };
+        assert_eq!(removed, task.id);
+        assert!(!aria_core::sessions::load(&s.h.paths).sessions.iter().any(|e| e.id == task.id));
+        assert!(s.sessions.chat(&task.id).is_none(), "the tab is closed for good");
+    }
+
+    #[test]
+    fn the_tab_pi_gets_its_grants() {
+        use base64::Engine as _;
+        let s = sessions_harness();
+        let task = scheduled_task(&s);
+        s.sessions.start_scheduled(&task, now_ms());
+        wait_session(&s, "its run", &task.id, settled);
+        s.sessions.test_send_raw(&task.id, "env_grants");
+        let env = wait_session(&s, "the env", &task.id, |m| event_of(m, "env"));
+        let DockMessage::ChatEvent { event } = env else { unreachable!() };
+        let raw = base64::engine::general_purpose::STANDARD.decode(event["grants"].as_str().unwrap()).unwrap();
+        let grants: Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(grants["connectors"], json!({"notion": "read"}));
+        assert_eq!(grants["sandbox"], json!({"askToLeave": false, "extraWritable": []}));
+        assert_eq!(grants["noAsk"], true, "nothing is ever asked in a scheduled tab");
+        let _ = engine_state; // used by the other scheduler tests
+    }
+
+    #[test]
+    fn a_page_save_keeps_the_scheduled_tab_of_a_live_task() {
+        let s = sessions_harness();
+        let task = scheduled_task(&s);
+        aria_core::sessions::add_scheduled(&s.h.paths, &task.id, "Notion tasks", &task.id).unwrap();
+        let regular = aria_core::sessions::SessionEntry {
+            id: "aa".into(),
+            title: "Fix".into(),
+            segments: vec![],
+            schedule: None,
+        };
+        s.sessions.handle(PageMessage::SessionsSave { sessions: vec![regular], active: Some("aa".into()) });
+        let ids: Vec<String> = aria_core::sessions::load(&s.h.paths).sessions.into_iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec!["aa".to_string(), task.id.clone()]);
     }
 
     #[test]
@@ -3667,6 +4165,7 @@ mod tests {
             path_var: "/usr/bin:/bin".into(),
             quota_fetcher: Arc::new(|_| None),
             jobs: h.chat.ctx.jobs.clone(),
+            schedules: h.chat.ctx.schedules.clone(),
         };
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);
@@ -3876,8 +4375,12 @@ mod tests {
                 .unwrap();
             eventually("it ended", || jobs.get(&job.id).is_some_and(|j| j.state != crate::jobs::JobState::Running));
         }
-        let entries =
-            vec![aria_core::sessions::SessionEntry { id: "aa".into(), title: "Kept".into(), segments: vec![] }];
+        let entries = vec![aria_core::sessions::SessionEntry {
+            id: "aa".into(),
+            title: "Kept".into(),
+            segments: vec![],
+            schedule: None,
+        }];
         aria_core::sessions::save(&s.h.paths, &SessionList { sessions: entries, active: None }).unwrap();
         s.sessions.forget_gone_sessions();
         assert_eq!(jobs.events("aa").len(), 1, "an open tab keeps its event for its Pi");
@@ -3925,6 +4428,7 @@ mod tests {
             id: "s1".into(),
             title: "Tab".into(),
             segments: segments.iter().map(|s| s.to_string()).collect(),
+            schedule: None,
         };
         sessions::save(&h.paths, &SessionList { sessions: vec![entry], active: Some("s1".into()) }).unwrap();
     }
@@ -4306,6 +4810,7 @@ mod tests {
             id: id.into(),
             title: title.into(),
             segments: segments.iter().map(|s| s.to_string()).collect(),
+            schedule: None,
         };
         sessions::save(&s.h.paths, &SessionList { sessions: vec![entry("aa", "Old", &["aa", "x-2"])], active: None })
             .unwrap();

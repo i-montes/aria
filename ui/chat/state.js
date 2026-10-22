@@ -278,6 +278,10 @@ function reduceEvent(state, event) {
       if (!event.aborted || state.stoppedByWatchdog) return settled
       return push(settled, { kind: 'note', label: 'aria', key: 'chat.stoppedByYou' })
     }
+    case 'scheduled_run':
+      // A scheduled task's prompt, sent by the dock: shown as the person's message, with its time. Pi's echo of it is
+      // dropped below like any echo of a message already shown.
+      return push(state, { kind: 'user', text: event.text ?? '', scheduled: { at: event.at, late: !!event.late } })
     case 'message_start':
       if (event.message?.role === 'assistant') {
         return push(state, { kind: 'assistant', text: '', thinking: '', done: false, texts: {}, thoughts: {} })

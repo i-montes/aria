@@ -21,8 +21,10 @@ export interface AriaConfig {
   style: string
   sandbox: { extraWritable: string[]; askToLeave: boolean; jevReview: boolean }
   subagents: { saveSessions: boolean; turnLimit: number | null; planExecute: boolean }
-  /** The access level per connector (MCP server name); a connector not listed is 'ask'. */
+  /** The access level per connector (MCP server name); a connector not listed is 'ask' ('read' when `noAsk`). */
   connectors: Record<string, AccessLevel>
+  /** A scheduled task's tab, which runs unattended: nobody is ever asked anything (only `ARIA_GRANTS` sets it). */
+  noAsk: boolean
 }
 
 export type AccessLevel = 'read' | 'ask' | 'allow'
@@ -40,6 +42,7 @@ export const DEFAULTS: AriaConfig = {
   sandbox: { extraWritable: [], askToLeave: true, jevReview: true },
   subagents: { saveSessions: false, turnLimit: null, planExecute: true },
   connectors: {},
+  noAsk: false,
 }
 
 /** Fields that may also be null. */
@@ -99,5 +102,30 @@ export function ariaConfig(): AriaConfig {
   } catch {
     // no file (the owner's own Pi) or a broken one: today's values
   }
-  return merge(DEFAULTS, found, '') as AriaConfig
+  // `noAsk` is never read from aria.json: only the dock's grants for a scheduled tab set it.
+  return withGrants({ ...(merge(DEFAULTS, found, '') as AriaConfig), noAsk: false })
+}
+
+/**
+ * A scheduled task's tab runs with fixed permissions (`ARIA_GRANTS`, set by the dock when it starts that tab's Pi): its
+ * connector levels replace the ones in aria.json, and its sandbox never asks to leave. Anything that is not of the
+ * expected shape is ignored, so a bad value can only leave the config as it was, never widen it.
+ */
+function withGrants(config: AriaConfig): AriaConfig {
+  let grants: unknown
+  try {
+    grants = JSON.parse(process.env.ARIA_GRANTS ?? '')
+  } catch {
+    return config
+  }
+  if (!isObject(grants)) return config
+  const out: AriaConfig = { ...config, sandbox: { ...config.sandbox } }
+  if (isObject(grants.connectors)) out.connectors = merge({}, grants.connectors, 'connectors') as Record<string, AccessLevel>
+  if (grants.noAsk === true) out.noAsk = true
+  const sandbox = isObject(grants.sandbox) ? grants.sandbox : {}
+  if (typeof sandbox.askToLeave === 'boolean') out.sandbox.askToLeave = sandbox.askToLeave
+  if (Array.isArray(sandbox.extraWritable) && sandbox.extraWritable.every((dir) => typeof dir === 'string')) {
+    out.sandbox.extraWritable = sandbox.extraWritable as string[]
+  }
+  return out
 }
