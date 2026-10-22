@@ -57,6 +57,11 @@ impl AriaPaths {
         self.root.join("sessions.json")
     }
 
+    /// The scheduled tasks (`crate::schedules`).
+    pub fn schedules(&self) -> PathBuf {
+        self.root.join("schedules.json")
+    }
+
     /// The background jobs the dock ran: what each one was and how it ended, kept across restarts.
     pub fn jobs(&self) -> PathBuf {
         self.root.join("jobs.json")
