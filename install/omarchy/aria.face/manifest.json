@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "aria.face",
+  "name": "Aria",
+  "version": "0.1.0",
+  "author": "Aria",
+  "license": "MIT",
+  "description": "Aria's face in the bar: what Aria is doing, animated; a click opens the dock.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Face.qml"
+  },
+  "barWidget": {
+    "displayName": "Aria",
+    "description": "Aria's face: its state at a glance; a click opens the dock.",
+    "category": "AI",
+    "allowMultiple": false
+  }
+}

@@ -40,7 +40,7 @@ A personal assistant that lives on your desktop. Press **Super + A** (**Option +
 curl -fsSL https://<your site>/install.sh | sh
 ```
 
-The installer detects the system. It needs **Node 22.19 or newer** (it checks, and says so if not). It puts the `aria` binary in `~/.local/bin`, creates `~/.aria/`, installs the pinned Pi engine in `~/.aria/pi/<version>` and the pinned `agent-browser` the agents check the pages they build with (`~/.aria/agent-browser/<version>`, linked as `~/.aria/bin/agent-browser`, with its Chrome in `~/.agent-browser/browsers`; if that step fails the installer only warns), and installs a login item: a **systemd user unit** on Omarchy, a **LaunchAgent** (`~/Library/LaunchAgents/com.aria.dock.plist`) on macOS. On Omarchy it adds Aria's system libraries, asking for `sudo` only if they are missing, and it **never edits `~/.config/hypr/`**: Aria registers `Super + A` (or the shortcut chosen in the settings) with Hyprland itself each time it starts. On macOS it needs no `sudo`, no Accessibility permission and no system configuration: `Option + Space` (or the chosen one) is registered with Carbon, and the dock runs as an accessory app (no Dock icon).
+The installer detects the system. It needs **Node 22.19 or newer** (it checks, and says so if not). It puts the `aria` binary in `~/.local/bin`, creates `~/.aria/`, installs the pinned Pi engine in `~/.aria/pi/<version>` and the pinned `agent-browser` the agents check the pages they build with (`~/.aria/agent-browser/<version>`, linked as `~/.aria/bin/agent-browser`, with its Chrome in `~/.agent-browser/browsers`; if that step fails the installer only warns), and installs a login item: a **systemd user unit** on Omarchy, a **LaunchAgent** (`~/Library/LaunchAgents/com.aria.dock.plist`) on macOS. On Omarchy it adds Aria's system libraries, asking for `sudo` only if they are missing, and, when the Omarchy shell is there, puts Aria's face in its bar next to the weather (`aria bar install`, through Omarchy's own `omarchy plugin enable`). It **never edits `~/.config/hypr/`**: Aria registers `Super + A` (or the shortcut chosen in the settings) with Hyprland itself each time it starts. On macOS it needs no `sudo`, no Accessibility permission and no system configuration: `Option + Space` (or the chosen one) is registered with Carbon, and the dock runs as an accessory app (no Dock icon).
 
 Run it again to update. An update does not cut a run: the running dock restarts into the new version once it is hidden and no session is working (`--restart-now` restarts it at once). To remove Aria: `sh install.sh --uninstall` (it asks before deleting `~/.aria`). The browser `agent-browser` downloaded stays in `~/.agent-browser/browsers`; delete it by hand if you want it gone. Add `--dry-run` to any command to see what would happen without changing anything.
 
@@ -50,6 +50,7 @@ Run it again to update. An update does not cut a run: the running dock restarts 
 |---|---|
 | `aria toggle` / `aria show` | Opens or closes the dock (the shortcut does the same) / only opens it; starts it first if it is not running |
 | `aria start` / `aria quit` | Starts the dock under its login service / stops it (its background work and engines first). In the dock, Cmd+Q asks first and quits on a second press |
+| `aria bar install` / `remove` | Puts Aria's face in the Omarchy bar, next to the weather, or takes it out (the installer runs both; nothing happens without the Omarchy shell) |
 | `aria keyring status` | Whether the keys are in the keyring, and which (names only) |
 | `aria keyring off` / `on` | Moves every key back into plain files in `~/.aria` and turns the keyring off / turns it on again (the dock moves them at its next start) |
 | `aria secret --home <root> <account>` | Prints one key from the keyring: what the `!aria secret …` commands in Pi's files run |
@@ -85,6 +86,7 @@ sh install/install.sh --local target/release/aria
 | `~/.aria/bin/` | `pi` (a shim to the pinned version, for Pi's own subagents), `node` (a link the service uses), `engram` and `agent-browser` |
 | `~/.local/bin/aria` | The binary |
 | `~/.config/systemd/user/aria.service` | Starts the dock at login on Omarchy |
+| `~/.config/omarchy/plugins/aria.face/` | Aria's face in the Omarchy bar (a Quickshell widget the binary carries, from `install/omarchy/`); `shell.json` gets its place, with a `shell.json.bak.<epoch>` backup first |
 | `~/Library/LaunchAgents/com.aria.dock.plist` | Starts the dock at login on macOS; output in `~/.aria/logs/aria.log` |
 | `~/.aria/run/control.sock` | The socket `aria toggle` talks to on macOS (on Omarchy it is `$XDG_RUNTIME_DIR/aria/control.sock`) |
 

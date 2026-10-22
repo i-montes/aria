@@ -27,6 +27,12 @@ for step in 'sudo pacman -S --needed gtk3 webkit2gtk-4.1 gtk-layer-shell bubblew
 done
 [ "$ordered" = 1 ] && pass "install dry run lists its steps in order"
 
+# Aria's face goes in the Omarchy bar right after the new binary is in place (the binary carries the widget)
+out=$(sh "$installer" --dry-run --local /tmp/fake-aria 2>&1)
+at_binary=$(line_of "$out" "would: install -Dm755 /tmp/fake-aria")
+at_bar=$(line_of "$out" "would: $HOME/.local/bin/aria bar install")
+[ -n "$at_binary" ] && [ -n "$at_bar" ] && [ "$at_bar" -gt "$at_binary" ] && pass "install puts Aria's face in the Omarchy bar after the binary" || fail "install does not run 'aria bar install' after the binary"
+
 # the packages the owner's extensions use are installed in Aria's Pi, pinned (pi-packages)
 tmp=$(mktemp -d)
 out=$(ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria 2>&1)
@@ -127,6 +133,9 @@ rm -r "$tmp"
 out=$(sh "$installer" --dry-run --uninstall 2>&1)
 printf '%s\n' "$out" | grep -qF 'would: systemctl --user disable --now aria.service' && pass "uninstall stops the unit" || fail "uninstall does not stop the unit"
 printf '%s\n' "$out" | grep -qF 'hl.unbind' && pass "uninstall removes the runtime hotkey" || fail "uninstall does not unbind SUPER + A"
+at_bar=$(line_of "$out" "would: $HOME/.local/bin/aria bar remove")
+at_rm=$(line_of "$out" "would: rm -f")
+[ -n "$at_bar" ] && [ -n "$at_rm" ] && [ "$at_bar" -lt "$at_rm" ] && pass "uninstall takes Aria's face out of the Omarchy bar before deleting the binary" || fail "uninstall does not run 'aria bar remove' before deleting the binary"
 
 # the unit embedded in the script is the one in the repo
 if sh "$installer" --print-unit | diff -u "$here/aria.service" - >/dev/null; then pass "embedded unit matches install/aria.service"; else fail "embedded unit differs from install/aria.service"; fi

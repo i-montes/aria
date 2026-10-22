@@ -3,6 +3,7 @@
 //! is not running. `aria update-ready` (run by the installer after it replaced the files) asks the running dock to
 //! restart into the new binary as soon as it is hidden and no session has a run going; it fails when no dock answers,
 //! and the installer then restarts the service itself.
+//! `aria bar install|remove` puts Aria's face in the Omarchy bar or takes it out (the installer runs it).
 //! `aria --version` prints the version.
 
 mod attachments;
@@ -14,6 +15,7 @@ mod jobs;
 mod jobs_socket;
 mod keyring_cli;
 mod lines;
+mod omarchy_bar;
 mod schedule_store;
 mod trace;
 mod ui;
@@ -69,10 +71,11 @@ fn main() {
             std::process::exit(keyring_cli::secret_command(&args));
         }
         Some("keyring") => std::process::exit(keyring_cli::keyring_command(std::env::args().nth(2).as_deref())),
+        Some("bar") => std::process::exit(omarchy_bar::bar_command(std::env::args().nth(2).as_deref())),
         Some("--version" | "-V" | "version") => println!("aria {}", env!("CARGO_PKG_VERSION")),
         None => run_dock(),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show|start|quit|keyring|secret|update-ready|--version]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show|start|quit|keyring|secret|bar|update-ready|--version]");
             std::process::exit(2);
         }
     }

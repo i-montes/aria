@@ -15,7 +15,8 @@
 # starts the dock at login; on macOS it installs a LaunchAgent and needs no system packages. Both put
 # the `aria` binary in ~/.local/bin, create ~/.aria, and install the pinned Pi under
 # ~/.aria/pi/<version> (Node 22.19 or newer is required). On Omarchy it never writes to
-# ~/.config/hypr/: the dock registers SUPER + A with Hyprland itself, every time it starts. On macOS
+# ~/.config/hypr/: the dock registers SUPER + A with Hyprland itself, every time it starts. With the Omarchy shell it puts
+# Aria's face in the bar (~/.config/omarchy/plugins/aria.face, placed with `omarchy plugin enable`). On macOS
 # the shortcut is Option + Space, registered by the dock with Carbon (no Accessibility permission).
 set -eu
 
@@ -431,6 +432,18 @@ restart_dock() {
   fi
 }
 
+# Aria's face in the Omarchy bar, next to the weather: the binary carries the widget and puts it in the shell's plugins
+# (`aria bar install`, which backs up shell.json and places it with Omarchy's own command). Skipped where there is no
+# Omarchy shell; a failure only warns, since the dock works without it.
+install_bar_widget() {
+  [ "$PLATFORM" = Darwin ] && return
+  if [ "$DRY_RUN" = 1 ]; then
+    say "would: $BIN_DIR/aria bar install (Aria's face in the Omarchy bar, when the Omarchy shell is there)"
+    return
+  fi
+  "$BIN_DIR/aria" bar install || warn "Aria's face could not be put in the Omarchy bar; the dock works without it"
+}
+
 do_install() {
   detect_platform
   # Refuse a bad --local before anything else, so a mistake changes nothing.
@@ -456,6 +469,7 @@ do_install() {
   install_engram
   install_agent_browser
   install_binary
+  install_bar_widget
   write_unit
   restart_dock "$was_active"
 }
@@ -503,6 +517,7 @@ do_uninstall() {
     run rm -f "$AGENT_DIR/$AGENT" "$BIN_DIR/aria"
   else
     run systemctl --user disable --now "$UNIT" || true
+    if [ "$DRY_RUN" = 1 ] || [ -x "$BIN_DIR/aria" ]; then run "$BIN_DIR/aria" bar remove || true; fi
     run rm -f "$UNIT_DIR/$UNIT" "$BIN_DIR/aria"
     run systemctl --user daemon-reload
     if [ "$DRY_RUN" = 1 ] || [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then

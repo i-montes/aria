@@ -117,3 +117,13 @@ and never writes them.
 | `~/.aria/mcp.json` | the servers the person picks in "Your other MCP servers" are added as entries (under a name Pi accepts, `-2`, `-3`… when taken), only on the person's click; every other entry and key stays, mode 0600 | none; the entries are new and the rest of the file is kept | remove the imported entries from `mcpServers` (the next Pi start drops them) |
 | Hyprland / Carbon (runtime only, nothing on disk) | the bind is now the `shortcut` setting, or the first free fallback (`SUPER + SHIFT + A`, `SUPER + ALT + A`; macOS `Control + Option + Space`, `Command + Option + Space`) when it is taken | not applicable | set `shortcut` back to `""`, or stop the dock; on Hyprland `hyprctl eval 'hl.unbind("<the shortcut>")'` |
 | `rustup` target `aarch64-apple-darwin` and mise's `zig@0.14.1` (developer machines that run `sh tools/check-macos.sh`) | the Rust standard library for the Mac target and zig as its C compiler, installed on first use | none, new | `rustup target remove aarch64-apple-darwin`; `mise uninstall zig@0.14.1` |
+
+## 2026-10-22 — Aria's face in the Omarchy bar (`aria bar install`, run by the installer)
+
+First put in by hand as a test, then taken out with `aria bar remove` and put back by `sh install/install.sh --local`.
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| `~/.config/omarchy/plugins/aria.face/` (`manifest.json`, `Face.qml`) | the bar widget the binary carries: the idle face (glances, blinks, yawns, rolls) animated per frame; its colour follows the word in `$XDG_RUNTIME_DIR/aria/face`; a click runs `aria toggle` (new) | none, new | `aria bar remove`, or `sh install/install.sh --uninstall` |
+| `~/.config/omarchy/shell.json` | `{ "id": "aria.face" }` in `bar.layout.center`, right after `omarchy.weather`, put there by `omarchy plugin enable` after `omarchy-shell shell rescanPlugins` (the right section was tried first, but the bar always pins the tray before every other widget there) | `~/.config/omarchy/shell.json.bak.<epoch>`, one each time it is placed | `aria bar remove` (runs `omarchy plugin disable aria.face`), or copy a backup back (the shell reloads it on save) |
+| `$XDG_RUNTIME_DIR/aria/face` | the face's state, one word (runtime only; gone at logout) | not applicable | `rm` it; the face stays idle |
