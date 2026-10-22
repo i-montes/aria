@@ -1591,8 +1591,11 @@ impl Chat {
             .iter()
             .map(|name| (name.clone(), json!(task.grants.connectors.get(name).map_or("read", String::as_str))))
             .collect();
-        let grants =
-            json!({"connectors": connectors, "sandbox": {"askToLeave": false, "extraWritable": task.grants.writable}});
+        let grants = json!({
+            "connectors": connectors,
+            "sandbox": {"askToLeave": false, "extraWritable": task.grants.writable},
+            "noAsk": true,
+        });
         self.inner.lock().unwrap().scheduled =
             Some(Scheduled { task: task.id.clone(), title: task.title.clone(), grants: grants.to_string() });
     }
