@@ -248,6 +248,7 @@ fn listeners() -> &'static Mutex<Vec<Listener>> {
 }
 
 /// Hears every new face (the macOS wing plays it), starting with the one now.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // Omarchy's bar reads the file instead
 pub fn on_change(listener: Listener) {
     let now = {
         let state = state().lock().unwrap_or_else(|e| e.into_inner());
