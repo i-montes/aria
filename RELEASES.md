@@ -5,6 +5,12 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.7.2 — 2026-10-21
+
+### Fixed
+
+- only the group being worked on is live; a message to the owner folds the chain before it and stops its pulse
+
 ## 0.7.1 — 2026-10-21
 
 ### Fixed

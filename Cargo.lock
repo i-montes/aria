@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "aria"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "aria-core",
  "aria-engine",
@@ -33,7 +33,7 @@ dependencies = [
 
 [[package]]
 name = "aria-core"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base64",
  "include_dir",
@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "aria-engine"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "libc",
  "serde_json",
@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "aria-hyprland"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "aria-core",
  "serde_json",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "aria-mac"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "aria-core",
  "objc2",
