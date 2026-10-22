@@ -242,8 +242,6 @@ A tab continues in a new Pi session file after each compaction (see the
 - Tasks are changed by asking Aria; the `/schedules` panel only pauses, resumes and deletes them.
 - A successful scheduled run was checked live only with the fake Pi (a real one needs a key); the late start, the tab,
   Pi's grants and a refused run's record were checked live on macOS. Not yet tried on Omarchy.
-- `chat::tests::a_compaction_with_no_run_shows_in_the_state` fails about one full `cargo test` run in two (on main
-  too): a timing flake to look at.
 
 ## Known limits of the page (from the review, deferred)
 

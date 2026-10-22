@@ -3689,8 +3689,11 @@ mod tests {
         h.chat.test_send_raw("compaction_start");
         wait_for(&h, "the compaction", |m| event_of(m, "compaction_start"));
         h.chat.handle(PageMessage::ChatLoad { fresh: false });
-        let state = wait_for(&h, "a state", |m| matches!(m, DockMessage::ChatState { .. }));
-        assert!(matches!(state, DockMessage::ChatState { compacting: true, running: false, .. }), "{state:?}");
+        // The first load can send a second state (once Pi is up) that waits in the backlog: that one is from before the
+        // compaction, so the test waits for the state that says it compacts rather than taking whichever comes first.
+        wait_for(&h, "a state that says it compacts", |m| {
+            matches!(m, DockMessage::ChatState { compacting: true, running: false, .. })
+        });
         h.chat.test_send_raw("compaction_end");
         wait_for(&h, "the compaction's end", |m| event_of(m, "compaction_end"));
         // A state already on its way when the compaction ended can still say it is on: the one asked a moment later is over.
