@@ -5,6 +5,27 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.8.0 — 2026-10-22
+
+### New
+
+- scheduled tabs and the /schedules panel
+- run scheduled tasks in their own tabs
+- schedule tools
+- schedule ops on the session socket
+- a scheduled tab's fixed permissions (ARIA_GRANTS)
+- scheduled tabs beside the eight
+- scheduled tasks and when they run
+
+### Fixed
+
+- scheduled tabs sleep until their run, and /schedules approves a task that writes
+- nothing is ever asked in a scheduled tab (noAsk): unlisted connectors read, ask_user and confirmations decline
+- a scheduled task's background agents run under its grants
+- a waiting run reads its task again, and a run whose Pi cannot start or dies is recorded as failed
+- a scheduled tab never changes tasks, and a task that writes waits for the person's approval
+- a scheduled run whose prompt Pi refuses is recorded as failed and notified
+
 ## 0.7.2 — 2026-10-21
 
 ### Fixed
