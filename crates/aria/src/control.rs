@@ -100,6 +100,52 @@ pub fn reexec() -> std::io::Error {
     Command::new(exe).args(std::env::args_os().skip(1)).exec()
 }
 
+/// The processes whose parent is `pid`, read from `proc` (`/proc`): each `<pid>/stat` names its parent as the second
+/// field after the command, which sits in parentheses and may itself hold spaces or parentheses.
+#[cfg(target_os = "linux")]
+pub fn children_of(pid: u32, proc: &Path) -> Vec<u32> {
+    let Ok(entries) = std::fs::read_dir(proc) else { return Vec::new() };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|child| {
+            let Ok(stat) = std::fs::read_to_string(proc.join(child.to_string()).join("stat")) else { return false };
+            let after_command = stat.rsplit_once(')').map(|(_, rest)| rest).unwrap_or("");
+            after_command.split_whitespace().nth(1).and_then(|ppid| ppid.parse::<u32>().ok()) == Some(pid)
+        })
+        .collect()
+}
+
+/// After `reexec`, the processes the old binary started are still this process's children, but nothing in the new one
+/// waits for them: the WebKit processes of the old page end with it and would stay as zombies. Called once at start,
+/// before anything is spawned, so every child is one of those; a thread reaps each as it ends (or gives up after
+/// `patience`).
+#[cfg(target_os = "linux")]
+pub fn reap_inherited(patience: Duration) {
+    reap(children_of(std::process::id(), Path::new("/proc")), patience);
+}
+
+/// Reaps each of `pids` (children of this process nobody else waits for) as it ends, on a thread of its own.
+#[cfg(target_os = "linux")]
+fn reap(pids: Vec<u32>, patience: Duration) {
+    if pids.is_empty() {
+        return;
+    }
+    std::thread::spawn(move || {
+        let mut left = pids;
+        let deadline = std::time::Instant::now() + patience;
+        while !left.is_empty() && std::time::Instant::now() < deadline {
+            left.retain(|&pid| {
+                let mut status = 0;
+                // SAFETY: waitpid on one pid this process inherited; WNOHANG never blocks.
+                let reaped = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+                reaped == 0 // still running: keep waiting; reaped, or no longer our child (-1): done
+            });
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    });
+}
+
 /// `aria toggle` / `aria show`: send `command`, starting `exe` (detached) first when no dock is running.
 pub fn command_or_start(path: &Path, exe: &Path, command: &str) -> Result<(), ControlError> {
     if send(path, command).is_ok() {
@@ -122,6 +168,52 @@ pub fn command_or_start(path: &Path, exe: &Path, command: &str) -> Result<(), Co
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_children_of_a_process_are_read_from_proc_even_with_odd_command_names() {
+        let proc = tempfile::tempdir().unwrap();
+        for (pid, stat) in [
+            ("10", "10 (aria) S 1 10 10 0"),
+            ("11", "11 (WebKitWebProces) Z 10 10 10 0"),
+            ("12", "12 (odd (name) here) S 10 10 10 0"),
+            ("13", "13 (bash) S 99 13 13 0"),
+        ] {
+            std::fs::create_dir(proc.path().join(pid)).unwrap();
+            std::fs::write(proc.path().join(pid).join("stat"), stat).unwrap();
+        }
+        std::fs::create_dir(proc.path().join("self")).unwrap();
+        let mut children = super::children_of(10, proc.path());
+        children.sort();
+        assert_eq!(children, vec![11, 12]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_child_nobody_waits_for_is_reaped_once_it_ends() {
+        // A child this test forgets stands for one the old binary started.
+        let child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        std::mem::forget(child);
+        let zombie = || {
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .map(|stat| stat.rsplit_once(')').map(|(_, rest)| rest.trim_start().starts_with('Z')).unwrap_or(false))
+                .unwrap_or(false)
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !zombie() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(zombie(), "the forgotten child ends as a zombie");
+        assert!(super::children_of(std::process::id(), Path::new("/proc")).contains(&pid));
+        // Only this pid: the other tests' children run beside it, and their own `wait` must get their status.
+        super::reap(vec![pid], Duration::from_secs(5));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::path::Path::new(&format!("/proc/{pid}")).exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists(), "the zombie is reaped");
+    }
+
     use super::*;
     use std::os::unix::net::UnixListener;
 

@@ -89,6 +89,11 @@ fn run_dock() {
         }
     };
 
+    // A restart into a new version keeps this process and its children: the old page's WebKit processes are reaped as
+    // they end, before the new page starts its own.
+    #[cfg(target_os = "linux")]
+    control::reap_inherited(Duration::from_secs(120));
+
     // WebKitGTK needs its renderer flag before GTK starts; on Mac this creates the app object.
     ui::init();
 
