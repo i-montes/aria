@@ -466,6 +466,7 @@ impl Chat {
     fn give_back(&self, held: impl IntoIterator<Item = PageMessage>, why: &str) {
         for message in held {
             if let PageMessage::ChatSend { text, .. } = message {
+                self.prompt_failed(why);
                 self.emit(DockMessage::ChatEvent {
                     event: json!({"type": "command_failed", "command": "prompt", "error": why, "text": text}),
                 });
@@ -732,6 +733,7 @@ impl Chat {
         };
         let refuse = |error: &str| {
             unsent();
+            self.prompt_failed(error);
             self.emit(DockMessage::ChatEvent {
                 event: json!({"type": "command_failed", "command": "prompt", "error": error, "text": text}),
             })
@@ -1386,7 +1388,7 @@ impl Chat {
                         }
                         Some("agent_settled") => {
                             if std::mem::take(&mut self.inner.lock().unwrap().scheduled_run) {
-                                self.finish_scheduled(raw["aborted"] == true);
+                                self.finish_scheduled(None, raw["aborted"] == true);
                             }
                             // Pi drops a run's dialogs silently when the run is aborted: they go here too.
                             let (open, restart) = {
@@ -1424,6 +1426,9 @@ impl Chat {
                 EngineEvent::Response { id, success, command, error } => {
                     // A refused prompt names its text, so the page can take it back out of the thread or the queue.
                     let text = id.and_then(|id| self.inner.lock().unwrap().pending_prompts.remove(&id));
+                    if !success && command == "prompt" {
+                        self.prompt_failed(error.as_deref().unwrap_or("Pi refused the message"));
+                    }
                     if !success {
                         self.emit(DockMessage::ChatEvent {
                             event: json!({"type": "command_failed", "command": command, "error": error, "text": text}),
@@ -1585,13 +1590,22 @@ impl Chat {
             Some(Scheduled { task: task.id.clone(), title: task.title.clone(), grants: grants.to_string() });
     }
 
-    /// A scheduled run settled: its result goes to the task, and a notification unless the person is looking.
-    fn finish_scheduled(&self, aborted: bool) {
+    /// A prompt that never became a run (Pi refused it, or could not start): a scheduled run it was ends as failed.
+    fn prompt_failed(&self, why: &str) {
+        if std::mem::take(&mut self.inner.lock().unwrap().scheduled_run) {
+            self.finish_scheduled(Some(why), false);
+        }
+    }
+
+    /// A scheduled run settled (or never started, `failure` says why): its result goes to the task, and a notification
+    /// unless the person is looking.
+    fn finish_scheduled(&self, failure: Option<&str>, aborted: bool) {
         let (scheduled, answer, failed) = {
             let inner = self.inner.lock().unwrap();
-            (inner.scheduled.clone(), inner.last_answer.clone(), inner.last_failed)
+            (inner.scheduled.clone(), inner.last_answer.clone(), inner.last_failed || failure.is_some())
         };
         let Some(scheduled) = scheduled else { return };
+        let answer = failure.map_or(answer, str::to_string);
         let first = answer.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or_default();
         let summary: String =
             if first.is_empty() { "No answer".to_string() } else { first.chars().take(140).collect() };
@@ -3186,6 +3200,32 @@ mod tests {
         assert_eq!(result.summary, "Here are 3 tasks for today");
         assert!(
             s.h.notifier.log().contains(&"send:Aria · Notion tasks:Here are 3 tasks for today".to_string()),
+            "{:?}",
+            s.h.notifier.log()
+        );
+    }
+
+    #[test]
+    fn a_run_pi_refuses_is_recorded_as_failed_and_notified() {
+        let s = sessions_harness();
+        s.h.visible.store(false, Ordering::SeqCst);
+        std::fs::write(s.h.paths.mcp(), r#"{"mcpServers":{}}"#).unwrap();
+        let task =
+            s.sessions.ctx.schedules.create(&json!({"title": "Refused", "prompt": "FAIL", "at": "07:30"}), 0).unwrap();
+        s.sessions.start_scheduled(&task, false);
+        wait_session(&s, "the refusal", &task.id, |m| event_of(m, "command_failed"));
+        let recorded = || s.sessions.ctx.schedules.get(&task.id).and_then(|t| t.last_result);
+        for _ in 0..100 {
+            if recorded().is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let result = recorded().expect("a refused run is recorded");
+        assert!(!result.ok);
+        assert!(result.summary.contains("compaction"), "{}", result.summary);
+        assert!(
+            s.h.notifier.log().iter().any(|line| line.starts_with("send:Aria · Refused:It did not finish")),
             "{:?}",
             s.h.notifier.log()
         );
