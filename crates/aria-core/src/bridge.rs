@@ -260,6 +260,9 @@ pub enum DockMessage {
     /// A deleted task's tab is gone.
     #[serde(rename = "scheduleRemoved")]
     ScheduleRemoved { id: String },
+    /// A task the model made or widened to write waits for the person: the page shows it in `/schedules`, to approve.
+    #[serde(rename = "scheduleAwaiting")]
+    ScheduleAwaiting { schedule: String },
     /// Every session's background jobs (crates/aria/src/jobs.rs `Job`, camelCase): running and queued first, then
     /// finished, newest first. Sent whenever they change (at most four times a second) and on any session's `chatLoad`.
     #[serde(rename = "jobs")]

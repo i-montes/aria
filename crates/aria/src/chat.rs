@@ -1848,6 +1848,8 @@ impl Sessions {
         sessions.ctx.schedules.on_delete(move |id| closer.close_scheduled(id));
         let refresher = sessions.clone();
         sessions.ctx.schedules.on_update(move |id| refresher.refresh_scheduled(id));
+        let emit = sessions.emit.clone();
+        sessions.ctx.schedules.on_awaiting(move |id| emit(DockMessage::ScheduleAwaiting { schedule: id.to_string() }));
         sessions
     }
 
@@ -2011,8 +2013,9 @@ impl Sessions {
             }
             PageMessage::JobDismiss { job } => self.ctx.jobs.dismiss(&job),
             PageMessage::SchedulesList { id } => self.schedules_answer(id),
+            // The person's switch: resuming a task that waits for them approves it.
             PageMessage::ScheduleUpdate { id, schedule, enabled } => {
-                if let Err(error) = self.ctx.schedules.update(&json!({"id": schedule, "enabled": enabled})) {
+                if let Err(error) = self.ctx.schedules.set_enabled_by_person(&schedule, enabled) {
                     crate::note(&format!("a scheduled task could not be changed: {error}"));
                 }
                 self.schedules_answer(id);
@@ -3229,6 +3232,28 @@ mod tests {
             "{:?}",
             s.h.notifier.log()
         );
+    }
+
+    #[test]
+    fn a_writing_task_waits_and_the_page_is_asked_to_show_it() {
+        let s = sessions_harness();
+        std::fs::write(s.h.paths.mcp(), r#"{"mcpServers":{"notion":{"url":"https://n"}}}"#).unwrap();
+        let task = s
+            .sessions
+            .ctx
+            .schedules
+            .create(&json!({"title": "Write", "prompt": "p", "at": "07:30", "connectors": {"notion": "allow"}}), 0)
+            .unwrap();
+        let shown = loop {
+            if let DockMessage::ScheduleAwaiting { schedule } = s.messages.recv_timeout(Duration::from_secs(5)).unwrap()
+            {
+                break schedule;
+            }
+        };
+        assert_eq!(shown, task.id);
+        s.sessions.handle(PageMessage::ScheduleUpdate { id: 3, schedule: task.id.clone(), enabled: true });
+        let approved = s.sessions.ctx.schedules.get(&task.id).unwrap();
+        assert!(approved.enabled && !approved.awaiting, "the person's switch approves it");
     }
 
     #[test]

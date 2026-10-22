@@ -275,7 +275,13 @@ fn answer(session: &Session, op: Option<&str>, request: &Value) -> Result<Fields
                 Ok(fields(json!({"already": true})))
             }
         }
-        // Scheduled tasks are the dock's, not the session's: any tab can make or change them (the task id is `task`).
+        // Scheduled tasks are the dock's, not the session's: a tab the person talks in can make or change them (the task
+        // id is `task`); a scheduled task's own tab, which runs unattended, never can.
+        Some("schedule_create" | "schedule_update" | "schedule_delete")
+            if session.schedules.get(&session.name).is_some() =>
+        {
+            Err("a scheduled task cannot make or change scheduled tasks".into())
+        }
         Some("schedule_create") => {
             let task = session.schedules.create(request, now_ms())?;
             Ok(fields(json!({"task": task})))
@@ -541,6 +547,19 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
             .clone();
         let paused = c.ask(json!({"id": 2, "op": "schedule_update", "task": id, "enabled": false}));
         assert_eq!(paused["task"]["enabled"], false, "{paused}");
+    }
+
+    #[test]
+    fn a_scheduled_tab_cannot_change_tasks() {
+        let s = setup(false);
+        let task = s.schedules.create(&json!({"title": "t", "prompt": "p", "at": "07:30"}), 0).unwrap();
+        let socket = bind(&s, &task.id);
+        let mut c = Client::connect(&socket);
+        for op in ["schedule_create", "schedule_update", "schedule_delete"] {
+            let answer = c.ask(json!({"id": 1, "op": op, "task": task.id, "title": "t", "prompt": "p", "at": "07:30"}));
+            assert_eq!(answer["ok"], false, "{op}: {answer}");
+        }
+        assert_eq!(c.ask(json!({"id": 2, "op": "schedule_list"}))["ok"], true, "it may still list");
     }
 
     fn eventually(what: &str, test: impl Fn() -> bool) {

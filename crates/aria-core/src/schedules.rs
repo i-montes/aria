@@ -27,6 +27,9 @@ pub struct Task {
     #[serde(default)]
     pub grants: Grants,
     pub enabled: bool,
+    /// Made or widened to write by the model: paused until the person approves it in `/schedules`.
+    #[serde(default)]
+    pub awaiting: bool,
     pub created: i64,
     pub last_run: Option<i64>,
     pub last_result: Option<RunResult>,
@@ -205,6 +208,11 @@ pub fn validate(task: &Task, servers: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether a task can change anything: a connector it may write to, or a folder it may write in.
+pub fn writes(task: &Task) -> bool {
+    task.grants.connectors.values().any(|level| level == "allow") || !task.grants.writable.is_empty()
+}
+
 /// `s-` and 12 lowercase letters or digits.
 pub fn new_id() -> String {
     use rand::Rng;
@@ -306,6 +314,7 @@ mod tests {
             when: When { at: at.into(), days: days.iter().map(|d| d.to_string()).collect(), date: None },
             grants: Grants::default(),
             enabled: true,
+            awaiting: false,
             created: wed(0, 0) - 7 * DAY,
             last_run: None,
             last_result: None,

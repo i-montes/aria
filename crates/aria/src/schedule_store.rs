@@ -14,6 +14,7 @@ pub struct ScheduleStore {
     tasks: Arc<Mutex<Vec<Task>>>,
     on_delete: OnDelete,
     on_update: OnDelete,
+    on_awaiting: OnDelete,
 }
 
 fn strings(value: &Value) -> Option<Vec<String>> {
@@ -36,6 +37,7 @@ impl ScheduleStore {
             tasks: Arc::new(Mutex::new(tasks)),
             on_delete: Arc::default(),
             on_update: Arc::default(),
+            on_awaiting: Arc::default(),
         }
     }
 
@@ -49,16 +51,37 @@ impl ScheduleStore {
         *self.on_update.lock().unwrap() = Some(Box::new(f));
     }
 
+    /// What runs when a task waits for the person's approval (the page opens `/schedules`).
+    pub fn on_awaiting(&self, f: impl Fn(&str) + Send + 'static) {
+        *self.on_awaiting.lock().unwrap() = Some(Box::new(f));
+    }
+
+    fn tell(hook: &OnDelete, id: &str) {
+        if let Some(f) = hook.lock().unwrap().as_ref() {
+            f(id);
+        }
+    }
+
     fn servers(&self) -> Vec<String> {
         aria_core::mcp::servers(&self.paths)
     }
 
-    /// Checks a task as it would be kept: the core rules, and every writable folder there.
-    fn check(&self, task: &Task) -> Result<(), String> {
+    /// Checks a task as it would be kept: the core rules, and every writable folder there and narrow enough. Folders are
+    /// kept by their real path, so a link cannot be pointed elsewhere later.
+    fn check(&self, task: &mut Task) -> Result<(), String> {
         schedules::validate(task, &self.servers())?;
-        if let Some(missing) = task.grants.writable.iter().find(|dir| !std::path::Path::new(dir).is_dir()) {
-            return Err(format!("{missing} is not a folder"));
+        let mut real = Vec::new();
+        for dir in &task.grants.writable {
+            let path = std::fs::canonicalize(dir).map_err(|_| format!("{dir} is not a folder"))?;
+            if !path.is_dir() {
+                return Err(format!("{dir} is not a folder"));
+            }
+            if let Some(why) = too_wide(&path, &self.paths.root) {
+                return Err(format!("{dir}: {why}"));
+            }
+            real.push(path.display().to_string());
         }
+        task.grants.writable = real;
         Ok(())
     }
 
@@ -105,13 +128,16 @@ impl ScheduleStore {
             when: When { at: String::new(), days: DAYS.iter().map(|d| d.to_string()).collect(), date: None },
             grants: Grants::default(),
             enabled: true,
+            awaiting: false,
             created: now,
             last_run: None,
             last_result: None,
         };
         Self::apply(&mut task, input)?;
-        task.enabled = true;
-        self.check(&task)?;
+        self.check(&mut task)?;
+        // A task that can write waits for the person: the model asked for it, the person approves it in /schedules.
+        task.awaiting = schedules::writes(&task);
+        task.enabled = !task.awaiting;
         let mut tasks = self.tasks.lock().unwrap();
         if tasks.len() >= MAX_TASKS {
             return Err(format!("there are already {MAX_TASKS} scheduled tasks"));
@@ -120,6 +146,10 @@ impl ScheduleStore {
         next.push(task.clone());
         self.save(&next)?;
         *tasks = next;
+        drop(tasks);
+        if task.awaiting {
+            Self::tell(&self.on_awaiting, &task.id);
+        }
         Ok(task)
     }
 
@@ -127,17 +157,51 @@ impl ScheduleStore {
         let id = input["id"].as_str().ok_or("id is missing")?;
         let mut tasks = self.tasks.lock().unwrap();
         let at = tasks.iter().position(|t| t.id == id).ok_or_else(|| format!("there is no task {id}"))?;
-        let mut task = tasks[at].clone();
+        let before = tasks[at].clone();
+        let mut task = before.clone();
         Self::apply(&mut task, input)?;
-        self.check(&task)?;
+        self.check(&mut task)?;
+        if before.awaiting && task.enabled {
+            return Err("only the person can approve it, with Approve in /schedules".into());
+        }
+        // A change that lets it write more, or a new prompt for a task that writes, waits for the person again.
+        let allowed = |t: &Task| -> Vec<String> {
+            t.grants.connectors.iter().filter(|(_, l)| *l == "allow").map(|(n, _)| n.clone()).collect()
+        };
+        let widened = allowed(&task).iter().any(|n| !allowed(&before).contains(n))
+            || task.grants.writable.iter().any(|w| !before.grants.writable.contains(w));
+        let reworded = task.prompt != before.prompt;
+        let waits = schedules::writes(&task) && (widened || reworded);
+        if waits {
+            task.awaiting = true;
+            task.enabled = false;
+        }
         let mut next = tasks.clone();
         next[at] = task.clone();
         self.save(&next)?;
         *tasks = next;
         drop(tasks);
-        if let Some(f) = self.on_update.lock().unwrap().as_ref() {
-            f(&task.id);
+        Self::tell(&self.on_update, &task.id);
+        if waits {
+            Self::tell(&self.on_awaiting, &task.id);
         }
+        Ok(task)
+    }
+
+    /// The person's own switch (`/schedules`): resuming a task that waits approves it.
+    pub fn set_enabled_by_person(&self, id: &str, enabled: bool) -> Result<Task, String> {
+        let mut tasks = self.tasks.lock().unwrap();
+        let at = tasks.iter().position(|t| t.id == id).ok_or_else(|| format!("there is no task {id}"))?;
+        let mut next = tasks.clone();
+        next[at].enabled = enabled;
+        if enabled {
+            next[at].awaiting = false;
+        }
+        let task = next[at].clone();
+        self.save(&next)?;
+        *tasks = next;
+        drop(tasks);
+        Self::tell(&self.on_update, &task.id);
         Ok(task)
     }
 
@@ -151,9 +215,7 @@ impl ScheduleStore {
             self.save(&next)?;
             *tasks = next;
         }
-        if let Some(f) = self.on_delete.lock().unwrap().as_ref() {
-            f(id);
-        }
+        Self::tell(&self.on_delete, id);
         Ok(())
     }
 
@@ -220,6 +282,40 @@ impl ScheduleStore {
     }
 }
 
+/// Why a folder is too much to let a task write in: the root, the home or one of its parents, Aria's own home, a folder of
+/// secrets or one that starts programs at login. None when it is narrow enough.
+fn too_wide(path: &std::path::Path, aria_root: &std::path::Path) -> Option<&'static str> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).and_then(|h| std::fs::canonicalize(h).ok());
+    if path == std::path::Path::new("/") || home.as_ref().is_some_and(|h| h.starts_with(path)) {
+        return Some("the whole disk or the home folder");
+    }
+    if std::fs::canonicalize(aria_root).is_ok_and(|root| path.starts_with(&root) || root.starts_with(path)) {
+        return Some("Aria's own folder");
+    }
+    const GUARDED: [&str; 15] = [
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".config/gh",
+        ".docker",
+        ".codex",
+        ".kube",
+        ".config/gcloud",
+        ".config/opencode",
+        ".local/share/opencode",
+        ".pi",
+        "Library/LaunchAgents",
+        "Library/Keychains",
+        ".config/autostart",
+        ".config/systemd",
+    ];
+    let home = home?;
+    GUARDED
+        .iter()
+        .any(|g| path.starts_with(home.join(g)))
+        .then_some("a folder of secrets or of programs that start by themselves")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,10 +352,11 @@ mod tests {
 
     #[test]
     fn a_writable_folder_must_exist() {
-        let (dir, store) = store();
+        let (_dir, store) = store();
         let missing = json!({"title": "t", "prompt": "p", "at": "07:30", "writable": ["/no/such/folder"]});
         assert!(store.create(&missing, 0).is_err());
-        let here = json!({"title": "t", "prompt": "p", "at": "07:30", "writable": [dir.path()]});
+        let elsewhere = tempfile::tempdir().unwrap();
+        let here = json!({"title": "t", "prompt": "p", "at": "07:30", "writable": [elsewhere.path()]});
         assert!(store.create(&here, 0).is_ok());
     }
 
@@ -303,6 +400,86 @@ mod tests {
         store.create(&json!({"title": "t", "prompt": "p", "at": "07:30"}), 0).unwrap();
         let listed = store.list(0);
         assert!(listed[0]["next"].as_i64().is_some(), "{listed:?}");
+    }
+
+    #[test]
+    fn a_read_only_task_starts_at_once() {
+        let (_dir, store) = store();
+        let task = store
+            .create(&json!({"title": "t", "prompt": "p", "at": "07:30", "connectors": {"notion": "read"}}), 0)
+            .unwrap();
+        assert!(task.enabled && !task.awaiting);
+    }
+
+    #[test]
+    fn a_writing_task_from_the_model_waits_for_the_person() {
+        let (_dir, store) = store();
+        let dir = tempfile::tempdir().unwrap(); // a folder outside Aria's home
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let seen = told.clone();
+        store.on_awaiting(move |id| seen.lock().unwrap().push(id.to_string()));
+        let allow = store
+            .create(&json!({"title": "t", "prompt": "p", "at": "07:30", "connectors": {"notion": "allow"}}), 0)
+            .unwrap();
+        assert!(!allow.enabled && allow.awaiting);
+        let writes =
+            store.create(&json!({"title": "t", "prompt": "p", "at": "07:30", "writable": [dir.path().join("out")]}), 0);
+        assert!(writes.is_err(), "the folder must exist");
+        std::fs::create_dir(dir.path().join("out")).unwrap();
+        let writes = store
+            .create(&json!({"title": "t", "prompt": "p", "at": "07:30", "writable": [dir.path().join("out")]}), 0)
+            .unwrap();
+        assert!(writes.awaiting);
+        assert_eq!(*told.lock().unwrap(), vec![allow.id.clone(), writes.id.clone()]);
+    }
+
+    #[test]
+    fn widening_a_task_or_changing_a_writing_one_makes_it_wait_again() {
+        let (_dir, store) = store();
+        let task = store.create(&json!({"title": "t", "prompt": "p", "at": "07:30"}), 0).unwrap();
+        let moved = store.update(&json!({"id": task.id, "at": "08:00"})).unwrap();
+        assert!(moved.enabled && !moved.awaiting, "a read-only change applies");
+        let widened = store.update(&json!({"id": task.id, "connectors": {"notion": "allow"}})).unwrap();
+        assert!(widened.awaiting && !widened.enabled);
+        store.set_enabled_by_person(&task.id, true).unwrap();
+        let reworded = store.update(&json!({"id": task.id, "prompt": "write everything"})).unwrap();
+        assert!(reworded.awaiting, "a writing task's new prompt needs the person again");
+    }
+
+    #[test]
+    fn only_the_person_approves() {
+        let (_dir, store) = store();
+        let task = store
+            .create(&json!({"title": "t", "prompt": "p", "at": "07:30", "connectors": {"notion": "allow"}}), 0)
+            .unwrap();
+        assert!(store.update(&json!({"id": task.id, "enabled": true})).unwrap_err().contains("approve"));
+        let approved = store.set_enabled_by_person(&task.id, true).unwrap();
+        assert!(approved.enabled && !approved.awaiting);
+        let paused = store.update(&json!({"id": task.id, "enabled": false})).unwrap();
+        assert!(!paused.enabled && !paused.awaiting, "the model may pause");
+        assert!(store.update(&json!({"id": task.id, "enabled": true})).is_ok(), "and resume what the person approved");
+    }
+
+    #[test]
+    fn a_writable_folder_that_is_too_wide_or_secret_is_refused() {
+        let (dir, store) = store();
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+        let refused = |folder: &std::path::Path| {
+            store.create(&json!({"title": "t", "prompt": "p", "at": "07:30", "writable": [folder]}), 0).is_err()
+        };
+        assert!(refused(std::path::Path::new("/")));
+        assert!(refused(&home));
+        assert!(refused(home.parent().unwrap()), "an ancestor of the home");
+        assert!(refused(dir.path()), "Aria's own home");
+        if home.join(".ssh").is_dir() {
+            assert!(refused(&home.join(".ssh")));
+        }
+        let link = dir.path().join("../link-to-root");
+        let _ = std::os::unix::fs::symlink("/", &link);
+        if link.exists() {
+            assert!(refused(&link), "a link is judged by where it points");
+            let _ = std::fs::remove_file(&link);
+        }
     }
 
     #[test]
