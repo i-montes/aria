@@ -26,9 +26,6 @@ use webkit2gtk::{
     WebContext, WebContextExt, WebView, WebViewExt,
 };
 
-/// The surface covers the design's 700 px veil; only the 470 px dock column takes input.
-const SURFACE_WIDTH: i32 = 700;
-const DOCK_WIDTH: i32 = 470;
 /// The close transition (140 ms + 20 ms delay in dock.css) plus a frame of margin.
 const CLOSE_MS: u64 = 180;
 /// The page, loaded at start and again after its web process dies.
@@ -61,6 +58,8 @@ pub struct Dock {
     reloaded: Cell<bool>,
     /// While the first-run notice is on screen the surface is mapped but lets every click through.
     click_through: Rc<Cell<bool>>,
+    /// The trace panel is shown: the surface is wide and the panel takes input too (`super::input_width`).
+    wide: Rc<Cell<bool>>,
     notice_visible: Cell<bool>,
     notice_generation: Cell<u64>,
     notice_wanted: Cell<bool>,
@@ -105,10 +104,11 @@ impl Dock {
 
         // Clicks pass through the clear part of the veil; only the dock column takes them.
         let click_through = Rc::new(Cell::new(false));
+        let wide = Rc::new(Cell::new(false));
         {
-            let click_through = click_through.clone();
+            let (click_through, wide) = (click_through.clone(), wide.clone());
             window.connect_size_allocate(move |window, allocation| {
-                apply_input_region(window, allocation.width(), allocation.height(), click_through.get());
+                apply_input_region(window, allocation.width(), allocation.height(), click_through.get(), wide.get());
             });
         }
         window.realize();
@@ -127,6 +127,7 @@ impl Dock {
             reloads: Cell::new(0),
             reloaded: Cell::new(false),
             click_through,
+            wide,
             notice_visible: Cell::new(false),
             notice_generation: Cell::new(0),
             notice_wanted: Cell::new(false),
@@ -142,6 +143,7 @@ impl Dock {
                 Ok(PageMessage::Ready) => dock.page_ready(),
                 Ok(PageMessage::Opened) => dock.feed(Event::Opened),
                 Ok(PageMessage::CloseRequest) => dock.feed(Event::Escape),
+                Ok(PageMessage::Wide { on }) => dock.set_wide(on),
                 Ok(message) => (dock.on_message)(message, &dock),
                 Err(error) => eprintln!("aria: ignoring a page message: {error}"),
             }
@@ -271,7 +273,23 @@ impl Dock {
 
     fn refresh_input_region(&self) {
         let allocation = self.window.allocation();
-        apply_input_region(&self.window, allocation.width(), allocation.height(), self.click_through.get());
+        apply_input_region(
+            &self.window,
+            allocation.width(),
+            allocation.height(),
+            self.click_through.get(),
+            self.wide.get(),
+        );
+    }
+
+    /// The trace panel came or went: the surface grows or shrinks toward the left (it is anchored on the right), and
+    /// the panel takes clicks while it is there.
+    fn set_wide(&self, wide: bool) {
+        if self.wide.replace(wide) == wide {
+            return;
+        }
+        self.window.set_size_request(super::surface_width(wide), 100);
+        self.refresh_input_region();
     }
 
     /// Opens the dock when it is not open (`aria show`); does nothing when it already is.
@@ -351,12 +369,13 @@ impl Dock {
     }
 }
 
-/// Only the dock column takes input (nothing at all while `click_through`).
-fn apply_input_region(window: &gtk::Window, width: i32, height: i32, click_through: bool) {
+/// Only the dock column (and the trace panel while `wide`) takes input; nothing at all while `click_through`.
+fn apply_input_region(window: &gtk::Window, width: i32, height: i32, click_through: bool, wide: bool) {
     let region = if click_through {
         gtk::cairo::Region::create()
     } else {
-        gtk::cairo::Region::create_rectangle(&gtk::cairo::RectangleInt::new(width - DOCK_WIDTH, 0, DOCK_WIDTH, height))
+        let taken = super::input_width(wide).min(width);
+        gtk::cairo::Region::create_rectangle(&gtk::cairo::RectangleInt::new(width - taken, 0, taken, height))
     };
     window.input_shape_combine_region(Some(&region));
 }
@@ -371,7 +390,7 @@ fn build_window() -> gtk::Window {
     }
     window.set_keyboard_mode(KeyboardMode::None);
     // set_size_request, not set_default_size (see the module comment). The compositor sets the height.
-    window.set_size_request(SURFACE_WIDTH, 100);
+    window.set_size_request(super::SURFACE_NARROW, 100);
     window.set_app_paintable(true);
     if let Some(visual) = WidgetExt::screen(&window).and_then(|screen| screen.rgba_visual()) {
         window.set_visual(Some(&visual));

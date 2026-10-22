@@ -40,7 +40,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// The surface covers the design's 700 px veil; the page draws the dock column inside it.
-const SURFACE_WIDTH: f64 = 700.0;
 /// The close transition (140 ms + 20 ms delay in dock.css) plus a frame of margin.
 const CLOSE_MS: u64 = 180;
 /// The page, loaded at start and again after its web process dies.
@@ -85,6 +84,8 @@ pub struct Dock {
     previous_app: RefCell<Option<Retained<NSRunningApplication>>>,
     /// Is the dock on screen? Read by the chat (a prompt that nobody can see needs a notification).
     visible: Arc<AtomicBool>,
+    /// The trace panel is shown: the surface is wide (`super::surface_width`).
+    wide: Cell<bool>,
     on_message: OnMessage,
 }
 
@@ -93,7 +94,7 @@ impl Dock {
     /// (everything except `ready`, `opened` and `closeRequest`).
     pub fn new(visible: Arc<AtomicBool>, on_message: OnMessage) -> Rc<Dock> {
         let mtm = MainThreadMarker::new().expect("the dock is created on the main thread");
-        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(SURFACE_WIDTH, 800.0));
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(super::SURFACE_NARROW as f64, 800.0));
         let panel: Retained<DockPanel> = unsafe {
             msg_send![
                 DockPanel::alloc(mtm),
@@ -174,6 +175,7 @@ impl Dock {
             notice_wanted: Cell::new(false),
             previous_app: RefCell::new(None),
             visible,
+            wide: Cell::new(false),
             on_message,
         });
         *dock_cell.borrow_mut() = Some(Rc::downgrade(&dock));
@@ -388,14 +390,25 @@ impl Dock {
         *self.previous_app.borrow_mut() = Some(app);
     }
 
+    /// The trace panel came or went: the surface grows or shrinks toward the left, its right edge where it is.
+    fn set_wide(&self, wide: bool) {
+        if self.wide.replace(wide) == wide {
+            return;
+        }
+        let frame = self.panel.frame();
+        let width = super::surface_width(wide) as f64;
+        let right = frame.origin.x + frame.size.width;
+        let next = NSRect::new(NSPoint::new(right - width, frame.origin.y), NSSize::new(width, frame.size.height));
+        self.panel.setFrame_display(next, true);
+    }
+
     /// Moves the panel to the visible part of the screen under the pointer; returns its name.
     fn place_on_focused_screen(&self) -> String {
         let Some(screen) = aria_mac::focused_screen() else { return "(main screen)".into() };
         let visible = screen.visible;
-        let frame = NSRect::new(
-            NSPoint::new(visible.x + visible.width - SURFACE_WIDTH, visible.y),
-            NSSize::new(SURFACE_WIDTH, visible.height),
-        );
+        let width = super::surface_width(self.wide.get()) as f64;
+        let frame =
+            NSRect::new(NSPoint::new(visible.x + visible.width - width, visible.y), NSSize::new(width, visible.height));
         self.panel.setFrame_display(frame, true);
         screen.name
     }
@@ -408,6 +421,7 @@ impl Dock {
             PageMessage::Ready => self.page_ready(),
             PageMessage::Opened => self.feed(Event::Opened),
             PageMessage::CloseRequest => self.feed(Event::Escape),
+            PageMessage::Wide { on } => self.set_wide(on),
             other => (self.on_message)(other, self),
         }
     }

@@ -1,7 +1,7 @@
 //! The dock window: the floating surface that hosts the web UI, per platform.
 //!
-//! Both platforms have the same job: a 700 px surface on the right of the focused screen, with the
-//! 470 px dock column taking the keyboard when it opens, hosting the embedded `ui/` page and carrying
+//! Both platforms have the same job: a 700 px surface on the right of the focused screen (1,060 px while the active
+//! tab's `/debug` trace panel is shown, `wide`), with the 470 px dock column taking the keyboard when it opens, hosting the embedded `ui/` page and carrying
 //! the messages of `aria_core::bridge`.
 //!
 //! - `gtk` is the Omarchy one: a GTK3 layer-shell surface with WebKitGTK (Linux).
@@ -20,6 +20,33 @@ pub use mac::Dock;
 use aria_core::bridge::DockMessage;
 use include_dir::{include_dir, Dir};
 use std::time::{Duration, Instant};
+
+/// The surface's width: the 470 px column and its veil, or wide enough for the trace panel left of the column.
+pub(crate) const SURFACE_NARROW: i32 = 700;
+pub(crate) const SURFACE_WIDE: i32 = 1060;
+/// The dock column, and the trace panel with its gap (ui/dock.css: 560 + 16 px).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // only the GTK surface sets an input region
+pub(crate) const COLUMN: i32 = 470;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) const TRACE_COLUMN: i32 = 576;
+
+pub(crate) fn surface_width(wide: bool) -> i32 {
+    if wide {
+        SURFACE_WIDE
+    } else {
+        SURFACE_NARROW
+    }
+}
+
+/// How much of the surface, from its right edge, takes clicks: the column, and the trace panel while wide.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn input_width(wide: bool) -> i32 {
+    if wide {
+        COLUMN + TRACE_COLUMN
+    } else {
+        COLUMN
+    }
+}
 
 /// The page, embedded in the binary and served as `aria://app/<path>`.
 pub(crate) static UI: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../ui");
@@ -98,7 +125,21 @@ impl Replay {
 
 #[cfg(test)]
 mod tests {
-    use super::{stays_in_app, Recovery, Replay};
+    use super::{input_width, stays_in_app, surface_width, Recovery, Replay};
+
+    #[test]
+    fn the_surface_is_700_or_1060() {
+        assert_eq!(surface_width(false), 700);
+        assert_eq!(surface_width(true), 1060);
+    }
+
+    #[test]
+    fn input_covers_the_column_or_column_and_trace() {
+        assert_eq!(input_width(false), 470);
+        assert_eq!(input_width(true), 1046);
+        assert!(input_width(true) <= surface_width(true));
+    }
+
     use aria_core::bridge::DockMessage;
     use std::time::{Duration, Instant};
 
