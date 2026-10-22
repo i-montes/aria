@@ -241,17 +241,14 @@ impl ScheduleStore {
         self.tasks.lock().unwrap().iter().find(|t| t.id == id).cloned()
     }
 
-    /// The tasks due now, each with whether it is late. Their `lastRun` is saved before they are returned, so a crash never
-    /// runs one twice; a one-off task is paused once taken.
-    pub fn take_due(&self, now: i64, clock: &dyn Clock) -> Vec<(Task, bool)> {
+    /// The tasks due now, each with the time it was due. Their `lastRun` is saved before they are returned, so a crash
+    /// never runs one twice; a one-off task is paused once taken.
+    pub fn take_due(&self, now: i64, clock: &dyn Clock) -> Vec<(Task, i64)> {
         let mut tasks = self.tasks.lock().unwrap();
-        let due: Vec<(Task, bool)> = tasks
+        let due: Vec<(Task, i64)> = tasks
             .iter()
-            .filter(|task| schedules::due(task, now, clock))
-            .map(|task| {
-                let late = schedules::occurrence(task, now, clock).is_some_and(|at| schedules::late(at, now));
-                (task.clone(), late)
-            })
+            .filter(|task| schedules::due(task, now, clock) && !task.awaiting)
+            .filter_map(|task| schedules::occurrence(task, now, clock).map(|at| (task.clone(), at)))
             .collect();
         if due.is_empty() {
             return due;
@@ -490,7 +487,7 @@ mod tests {
         let due = store.take_due(now, &SystemClock);
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].0.id, task.id);
-        assert!(!due[0].1, "on time");
+        assert!(!aria_core::schedules::late(due[0].1, now), "on time");
         assert_eq!(aria_core::schedules::load(&store.paths)[0].last_run, Some(now), "written before it runs");
         assert!(store.take_due(now + 1_000, &SystemClock).is_empty(), "never twice");
     }

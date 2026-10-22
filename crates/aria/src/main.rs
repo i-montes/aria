@@ -330,14 +330,10 @@ fn run_dock() {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_millis() as i64);
-                for (task, late) in schedules.take_due(now, &aria_core::schedules::SystemClock) {
-                    note(&format!(
-                        "running the scheduled task {} ({}){}",
-                        task.id,
-                        task.title,
-                        if late { ", late" } else { "" }
-                    ));
-                    sessions.start_scheduled(&task, late);
+                for (task, due_at) in schedules.take_due(now, &aria_core::schedules::SystemClock) {
+                    let late = if aria_core::schedules::late(due_at, now) { ", late" } else { "" };
+                    note(&format!("running the scheduled task {} ({}){late}", task.id, task.title));
+                    sessions.start_scheduled(&task, due_at);
                 }
                 sessions.flush_scheduled();
                 scheduling.store(false, Ordering::SeqCst);

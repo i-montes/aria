@@ -39,6 +39,12 @@ while IFS= read -r line; do
         printf '{"type":"response","id":"%s","command":"prompt","success":false,"error":"Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry."}\n' "$id"
         continue
       fi
+      # A run that dies half-way (Pi crashed).
+      case "$(field message "$line")" in *CRASH*)
+        printf '{"type":"response","id":"%s","command":"prompt","success":true,"data":{"disposition":"started"}}\n' "$id"
+        printf '{"type":"agent_start"}\n'
+        exit 3 ;;
+      esac
       if [ "$(field message "$line")" = "FAIL" ]; then
         printf '{"type":"response","id":"%s","command":"prompt","success":false,"error":"Cannot submit a prompt while compaction is in progress"}\n' "$id"
         continue

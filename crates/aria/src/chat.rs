@@ -747,6 +747,7 @@ impl Chat {
             Err(code) => {
                 unsent();
                 self.emit(self.state_message(Some(code)));
+                self.prompt_failed(&format!("Pi could not start ({code})"));
                 // A message with files is refused like any failed prompt: its text and files go back to the composer.
                 if !attachments.is_empty() {
                     refuse("Pi could not start, so the message was not sent");
@@ -1513,6 +1514,8 @@ impl Chat {
             inner.notified.clear();
             (open, dismiss)
         };
+        // A scheduled run Pi died in ends as failed, so the person's next turn there is never taken for it.
+        self.prompt_failed("Pi stopped before the run finished");
         if dismiss {
             self.ctx.notifier.dismiss(&self.session);
         }
@@ -1758,8 +1761,9 @@ pub struct Sessions {
     closed: Arc<Mutex<HashSet<String>>>,
     /// The turn watchdog's limit as last read from the settings.
     turn_limit: Arc<Mutex<Duration>>,
-    /// Scheduled runs waiting for their tab to be free, with whether they are late.
-    pending: Arc<Mutex<Vec<(aria_core::schedules::Task, bool)>>>,
+    /// Scheduled runs waiting for their tab to be free: the task's id and the time it was due (the task is read again
+    /// when the tab is free, so a pause, a change or a delete meanwhile counts).
+    pending: Arc<Mutex<Vec<(String, i64)>>>,
 }
 
 /// Watches `settings.json` by content: a change from the settings screen, from `/effort` or `/autocompact` in Pi, or
@@ -1855,14 +1859,17 @@ impl Sessions {
 
     /// Runs a due task in its tab: the tab is made the first time (and the page told), the run shows as the person's
     /// message (`scheduled_run`), and its prompt goes to the tab's Pi. A tab still busy keeps it until `flush_scheduled`.
-    pub fn start_scheduled(&self, task: &aria_core::schedules::Task, late: bool) {
+    pub fn start_scheduled(&self, task: &aria_core::schedules::Task, due_at: i64) {
         let Some(chat) = self.chat(&task.id) else { return };
         if chat.busy() {
             let mut pending = self.pending.lock().unwrap();
-            pending.retain(|(waiting, _)| waiting.id != task.id);
-            pending.push((task.clone(), late));
+            pending.retain(|(waiting, _)| *waiting != task.id);
+            pending.push((task.id.clone(), due_at));
             return;
         }
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+        let late = aria_core::schedules::late(due_at, now);
         {
             let _file = SESSIONS_FILE.lock().unwrap_or_else(|e| e.into_inner());
             if let Err(error) = sessions::add_scheduled(&self.ctx.paths, &task.id, &task.title, &task.id) {
@@ -1887,18 +1894,22 @@ impl Sessions {
         chat.handle(PageMessage::ChatSend { text: task.prompt.clone(), behavior: None, attachments: Vec::new() });
     }
 
-    /// Starts the scheduled runs whose tab is free now (called once a second).
+    /// Starts the scheduled runs whose tab is free now (called once a second), each from its task as it is now: one
+    /// deleted, paused or waiting for approval meanwhile does not run.
     pub fn flush_scheduled(&self) {
         let waiting = std::mem::take(&mut *self.pending.lock().unwrap());
-        for (task, late) in waiting {
-            self.start_scheduled(&task, late);
+        for (id, due_at) in waiting {
+            match self.ctx.schedules.get(&id) {
+                Some(task) if task.enabled && !task.awaiting => self.start_scheduled(&task, due_at),
+                _ => {}
+            }
         }
     }
 
     /// A deleted task's tab: its Pi and everything it started stop, the tab leaves `sessions.json`, and the page is told.
     fn close_scheduled(&self, id: &str) {
         self.closed.lock().unwrap().insert(id.to_string());
-        self.pending.lock().unwrap().retain(|(task, _)| task.id != id);
+        self.pending.lock().unwrap().retain(|(task, _)| task != id);
         let chat = self.chats.lock().unwrap().remove(id);
         if let Some(chat) = chat {
             chat.close_for_good();
@@ -2822,7 +2833,11 @@ mod tests {
     }
 
     fn sessions_harness() -> SessionsHarness {
-        let h = harness();
+        sessions_harness_with(true)
+    }
+
+    fn sessions_harness_with(install_pi: bool) -> SessionsHarness {
+        let h = harness_with(install_pi);
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);
         let emit: Emit = Arc::new(move |m| {
@@ -3144,6 +3159,10 @@ mod tests {
         }
     }
 
+    fn now_ms() -> i64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+    }
+
     /// A task in the harness's store: every day at 07:30, Notion read-only.
     fn scheduled_task(s: &SessionsHarness) -> aria_core::schedules::Task {
         std::fs::write(s.h.paths.mcp(), r#"{"mcpServers":{"notion":{"url":"https://n"}}}"#).unwrap();
@@ -3162,7 +3181,7 @@ mod tests {
     fn a_due_task_creates_its_tab_and_sends_its_prompt() {
         let s = sessions_harness();
         let task = scheduled_task(&s);
-        s.sessions.start_scheduled(&task, false);
+        s.sessions.start_scheduled(&task, now_ms());
         let tab = loop {
             if let DockMessage::ScheduleTab { id, title, schedule } =
                 s.messages.recv_timeout(Duration::from_secs(5)).unwrap()
@@ -3189,7 +3208,7 @@ mod tests {
         let s = sessions_harness();
         s.h.visible.store(false, Ordering::SeqCst);
         let task = scheduled_task(&s);
-        s.sessions.start_scheduled(&task, false);
+        s.sessions.start_scheduled(&task, now_ms());
         wait_session(&s, "its run", &task.id, settled);
         let recorded = || s.sessions.ctx.schedules.get(&task.id).and_then(|t| t.last_result);
         for _ in 0..100 {
@@ -3215,7 +3234,7 @@ mod tests {
         std::fs::write(s.h.paths.mcp(), r#"{"mcpServers":{}}"#).unwrap();
         let task =
             s.sessions.ctx.schedules.create(&json!({"title": "Refused", "prompt": "FAIL", "at": "07:30"}), 0).unwrap();
-        s.sessions.start_scheduled(&task, false);
+        s.sessions.start_scheduled(&task, now_ms());
         wait_session(&s, "the refusal", &task.id, |m| event_of(m, "command_failed"));
         let recorded = || s.sessions.ctx.schedules.get(&task.id).and_then(|t| t.last_result);
         for _ in 0..100 {
@@ -3256,6 +3275,75 @@ mod tests {
         assert!(approved.enabled && !approved.awaiting, "the person's switch approves it");
     }
 
+    fn recorded(s: &SessionsHarness, id: &str) -> aria_core::schedules::RunResult {
+        for _ in 0..150 {
+            if let Some(result) = s.sessions.ctx.schedules.get(id).and_then(|t| t.last_result) {
+                return result;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("the run of {id} was never recorded")
+    }
+
+    #[test]
+    fn a_run_whose_pi_cannot_start_is_recorded_as_failed() {
+        let s = sessions_harness_with(false);
+        std::fs::write(s.h.paths.mcp(), r#"{"mcpServers":{}}"#).unwrap();
+        let task =
+            s.sessions.ctx.schedules.create(&json!({"title": "No Pi", "prompt": "p", "at": "07:30"}), 0).unwrap();
+        s.sessions.start_scheduled(&task, 0);
+        let result = recorded(&s, &task.id);
+        assert!(!result.ok && result.summary.contains("could not start"), "{}", result.summary);
+    }
+
+    #[test]
+    fn a_run_whose_pi_dies_is_recorded_as_failed_and_the_next_turn_is_not_the_tasks() {
+        let s = sessions_harness();
+        std::fs::write(s.h.paths.mcp(), r#"{"mcpServers":{}}"#).unwrap();
+        let task = s
+            .sessions
+            .ctx
+            .schedules
+            .create(&json!({"title": "Crash", "prompt": "CRASH now", "at": "07:30"}), 0)
+            .unwrap();
+        s.sessions.start_scheduled(&task, 0);
+        let result = recorded(&s, &task.id);
+        assert!(!result.ok && result.summary.contains("stopped"), "{}", result.summary);
+        // The person's next message in that tab is theirs, not the task's.
+        s.sessions.handle(in_session(
+            &task.id,
+            PageMessage::ChatSend { text: "Give me my TASKS".into(), behavior: None, attachments: vec![] },
+        ));
+        wait_session(&s, "the person's run", &task.id, settled);
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !s.sessions.ctx.schedules.get(&task.id).unwrap().last_result.unwrap().ok,
+            "still the task's own failure"
+        );
+    }
+
+    #[test]
+    fn a_waiting_run_reads_its_task_again_when_its_tab_is_free() {
+        let s = sessions_harness();
+        let task = scheduled_task(&s);
+        s.sessions.handle(in_session(
+            &task.id,
+            PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] },
+        ));
+        wait_session(&s, "the first run settled", &task.id, settled);
+        s.sessions.test_send_raw(&task.id, "start"); // the person's run, still going
+        wait_session(&s, "the run", &task.id, |m| event_of(m, "agent_start"));
+        s.sessions.start_scheduled(&task, now_ms() - 10 * 60_000);
+        s.sessions.ctx.schedules.update(&json!({"id": task.id, "enabled": false})).unwrap(); // paused while it waits
+        s.sessions.test_send_raw(&task.id, "settle");
+        wait_session(&s, "settled", &task.id, settled);
+        s.sessions.flush_scheduled();
+        std::thread::sleep(Duration::from_millis(200));
+        let ran = std::iter::from_fn(|| s.messages.try_recv().ok())
+            .any(|m| matches!(m, DockMessage::Session { ref message, .. } if event_of(message, "scheduled_run")));
+        assert!(!ran, "a task paused while it waited does not run");
+    }
+
     #[test]
     fn a_task_due_mid_run_waits_for_the_run() {
         let s = sessions_harness();
@@ -3267,7 +3355,7 @@ mod tests {
         wait_session(&s, "the first run settled", &task.id, settled);
         s.sessions.test_send_raw(&task.id, "start"); // the person's run, still going
         wait_session(&s, "the run", &task.id, |m| event_of(m, "agent_start"));
-        s.sessions.start_scheduled(&task, false);
+        s.sessions.start_scheduled(&task, now_ms());
         std::thread::sleep(Duration::from_millis(200));
         let early = std::iter::from_fn(|| s.messages.try_recv().ok())
             .any(|m| matches!(m, DockMessage::Session { ref message, .. } if event_of(message, "scheduled_run")));
@@ -3282,7 +3370,7 @@ mod tests {
     fn deleting_a_running_task_stops_it_and_removes_its_tab() {
         let s = sessions_harness();
         let task = scheduled_task(&s);
-        s.sessions.start_scheduled(&task, false);
+        s.sessions.start_scheduled(&task, now_ms());
         wait_session(&s, "its run", &task.id, settled);
         s.sessions.ctx.schedules.delete(&task.id).unwrap();
         let removed = loop {
@@ -3300,7 +3388,7 @@ mod tests {
         use base64::Engine as _;
         let s = sessions_harness();
         let task = scheduled_task(&s);
-        s.sessions.start_scheduled(&task, false);
+        s.sessions.start_scheduled(&task, now_ms());
         wait_session(&s, "its run", &task.id, settled);
         s.sessions.test_send_raw(&task.id, "env_grants");
         let env = wait_session(&s, "the env", &task.id, |m| event_of(m, "env"));
