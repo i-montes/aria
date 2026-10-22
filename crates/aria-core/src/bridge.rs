@@ -143,6 +143,12 @@ pub enum PageMessage {
     /// Hide a finished job from the background list.
     #[serde(rename = "jobDismiss")]
     JobDismiss { job: String },
+    /// `/debug true|false` in a tab (wrapped in `session`): trace its turns, or stop and drop the trace.
+    #[serde(rename = "traceSet")]
+    TraceSet { on: bool },
+    /// The active tab's trace panel is shown: the dock's surface widens to the left (or narrows back).
+    #[serde(rename = "wide")]
+    Wide { on: bool },
 }
 
 /// A file attached to a chat message: its name as the person had it, its media type and its bytes in base64.
@@ -227,6 +233,10 @@ pub enum DockMessage {
     SettingsChanged,
     #[serde(rename = "chatAgents")]
     ChatAgents { agents: Value },
+    /// A traced tab's current turn as a tree (crates/aria/src/trace.rs), or `null` before its first turn and when
+    /// tracing stops. At most four times a second, and once when the turn settles.
+    #[serde(rename = "chatTrace")]
+    ChatTrace { trace: Value },
     #[serde(rename = "chatQuota")]
     ChatQuota { windows: Vec<QuotaWindow> },
     /// An extension dialog; `hidden` says the owner could not see the chat when it arrived.
@@ -332,6 +342,14 @@ mod tests {
             PageMessage::StartMcpOAuth { id: 5, service: "notion".into() }
         );
         assert_eq!(page(r#"{"type":"openUrl","url":"https://x"}"#), PageMessage::OpenUrl { url: "https://x".into() });
+    }
+
+    #[test]
+    fn trace_messages_have_their_names() {
+        assert_eq!(page(r#"{"type":"traceSet","on":true}"#), PageMessage::TraceSet { on: true });
+        assert_eq!(page(r#"{"type":"wide","on":false}"#), PageMessage::Wide { on: false });
+        let value = serde_json::to_value(DockMessage::ChatTrace { trace: Value::Null }).unwrap();
+        assert_eq!(value, json!({"type": "chatTrace", "trace": null}));
     }
 
     #[test]

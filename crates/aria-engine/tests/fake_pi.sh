@@ -58,6 +58,14 @@ while IFS= read -r line; do
       [ -n "$behavior" ] && printf '{"type":"queued_as","behavior":"%s","message":"%s"}\n' "$behavior" "$(field message "$line")"
       printf '{"type":"response","id":"%s","command":"prompt","success":true,"data":{"disposition":"started"}}\n' "$id"
       printf '{"type":"agent_start"}\n'
+      # A traced turn (the /debug trace): the person's message, one LLM call with usage, one tool call.
+      if [ "$(field message "$line")" = "TRACE" ]; then
+        printf '{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"TRACE"}]}}\n'
+        printf '{"type":"message_start","message":{"role":"assistant"}}\n'
+        printf '{"type":"message_end","message":{"role":"assistant","model":"fake-model","content":[{"type":"text","text":"ok"}],"usage":{"input":10,"output":2,"cacheRead":0,"cacheWrite":0,"totalTokens":12,"cost":{"input":0.005,"output":0.005,"cacheRead":0,"cacheWrite":0,"total":0.01}},"stopReason":"toolUse"}}\n'
+        printf '{"type":"tool_execution_start","toolCallId":"c1","toolName":"bash","args":{"command":"ls"}}\n'
+        printf '{"type":"tool_execution_end","toolCallId":"c1","toolName":"bash","isError":false,"result":{"content":[{"type":"text","text":"a b"}]}}\n'
+      fi
       printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"hi"}}\n'
       # A scheduled task's prompt (it says TASKS) gets a whole answer, as a run's summary is its first line.
       case "$(field message "$line")" in *TASKS*)

@@ -27,6 +27,13 @@ pub type Emit = Arc<dyn Fn(DockMessage) + Send + Sync>;
 
 const NOTIFICATION_TITLE: &str = "Aria needs an answer";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// A traced tab's tree goes to the page at most this often while it changes (and once more when the turn settles).
+const TRACE_EVERY: Duration = Duration::from_millis(250);
+
+/// Wall-clock ms: the trace's times (a subagent's lines carry the same clock).
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+}
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a compaction may take: a model call over the whole context.
 const COMPACT_TIMEOUT: Duration = Duration::from_secs(600);
@@ -252,6 +259,13 @@ struct Inner {
     rotate_timeout: Option<Duration>,
     /// The tab was closed for good: nothing held runs and no Pi starts for it again.
     closed: bool,
+    /// `/debug` is on in this tab: its turns are traced (in memory only).
+    trace_on: bool,
+    /// The current turn's trace (from its `agent_start`; kept after it settles, until the next one).
+    trace: Option<crate::trace::Trace>,
+    /// When the trace was last sent, and whether a send is already waiting for the throttle.
+    trace_sent: Option<Instant>,
+    trace_pending: bool,
 }
 
 /// Runs when the rotation thread ends, however it ends: normally, the held work runs; after a panic, `rotating` is
@@ -511,6 +525,7 @@ impl Chat {
             // `/reload`: this tab's Pi starts again (reading its extensions, skills and templates), after its run.
             PageMessage::EnginesRestart => self.restart_after_run(),
             PageMessage::SetModel { id, model } => self.set_model(id, model),
+            PageMessage::TraceSet { on } => self.trace_set(on),
             PageMessage::ChatEarlier { cursor } => {
                 let chat = self.clone();
                 std::thread::spawn(move || {
@@ -556,6 +571,7 @@ impl Chat {
                 Arc::new(move || {
                     if let Some(watch) = seen.get().and_then(std::sync::Weak::upgrade) {
                         chat.emit(DockMessage::ChatAgents { agents: watch.agents() });
+                        chat.trace_changed();
                     }
                 }),
             )
@@ -1335,6 +1351,7 @@ impl Chat {
             }
             match event {
                 EngineEvent::Event(raw) => {
+                    self.trace_event(&raw);
                     match raw["type"].as_str() {
                         Some("agent_start") => {
                             {
@@ -1441,6 +1458,9 @@ impl Chat {
                     }
                 }
                 EngineEvent::Exited { code } => {
+                    if current {
+                        self.trace_settle(true);
+                    }
                     self.exited(generation, code);
                     break;
                 }
@@ -1501,6 +1521,115 @@ impl Chat {
             });
         }
         self.emit(DockMessage::ChatDialog { id, method, request: raw, hidden });
+    }
+
+    /// `/debug` in this tab: on answers with the current trace (`null` before a traced turn); off drops it.
+    fn trace_set(&self, on: bool) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.trace_on = on;
+            if !on {
+                inner.trace = None;
+            }
+            inner.trace_sent = Some(Instant::now());
+        }
+        self.emit(DockMessage::ChatTrace { trace: self.trace_tree().unwrap_or(Value::Null) });
+    }
+
+    /// One of Pi's events for the trace: `agent_start` starts a turn's, `agent_settled` ends it, the rest feed it.
+    fn trace_event(&self, raw: &Value) {
+        let changed = {
+            let mut inner = self.inner.lock().unwrap();
+            if !inner.trace_on {
+                return;
+            }
+            let now = now_ms();
+            match raw["type"].as_str() {
+                Some("agent_start") => {
+                    inner.trace = Some(crate::trace::Trace::new(now));
+                    true
+                }
+                Some("agent_settled") => {
+                    let failed = inner.last_failed || raw["aborted"] == true;
+                    drop(inner);
+                    // `last_failed` is set by this same event's `message_end`, which came before it.
+                    self.trace_settle(failed);
+                    return;
+                }
+                _ => inner.trace.as_mut().is_some_and(|t| t.feed(raw, now)),
+            }
+        };
+        if changed {
+            self.trace_changed();
+        }
+    }
+
+    /// The turn ended (or its Pi died): the root ends and the trace goes out at once.
+    fn trace_settle(&self, failed: bool) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let Some(trace) = inner.trace.as_mut().filter(|t| t.running()) else { return };
+            trace.settle(failed, now_ms());
+        }
+        self.trace_send();
+    }
+
+    /// The trace changed: it goes out now, or once the 250 ms since the last send are over (one wait at a time).
+    fn trace_changed(&self) {
+        let wait = {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.trace.is_none() || inner.closed {
+                return;
+            }
+            if inner.trace_pending {
+                return;
+            }
+            let since = inner.trace_sent.map(|at| at.elapsed()).unwrap_or(TRACE_EVERY);
+            if since >= TRACE_EVERY {
+                None
+            } else {
+                inner.trace_pending = true;
+                Some(TRACE_EVERY - since)
+            }
+        };
+        match wait {
+            None => self.trace_send(),
+            Some(wait) => {
+                let chat = self.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(wait);
+                    chat.inner.lock().unwrap().trace_pending = false;
+                    chat.trace_send();
+                });
+            }
+        }
+    }
+
+    /// The current tree with this turn's subagents, if there is a trace.
+    fn trace_tree(&self) -> Option<Value> {
+        let (watch, has) = {
+            let inner = self.inner.lock().unwrap();
+            (inner.watch.clone(), inner.trace.is_some())
+        };
+        if !has {
+            return None;
+        }
+        let agents = watch.map(|w| w.trace_agents()).unwrap_or_default();
+        let inner = self.inner.lock().unwrap();
+        inner.trace.as_ref().map(|t| t.tree(&agents, now_ms()))
+    }
+
+    fn trace_send(&self) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if !inner.trace_on || inner.closed {
+                return;
+            }
+            inner.trace_sent = Some(Instant::now());
+        }
+        if let Some(tree) = self.trace_tree() {
+            self.emit(DockMessage::ChatTrace { trace: tree });
+        }
     }
 
     fn exited(&self, generation: u64, code: Option<i32>) {
@@ -1686,6 +1815,12 @@ impl Chat {
     #[cfg(test)]
     fn test_spawn_args(&self) -> Vec<String> {
         self.inner.lock().unwrap().spawn_args.clone()
+    }
+
+    /// Feeds one event to the trace as if Pi had sent it (tests).
+    #[cfg(test)]
+    fn test_trace_event(&self, raw: Value) {
+        self.trace_event(&raw);
     }
 
     #[cfg(test)]
@@ -2331,6 +2466,103 @@ mod tests {
 
     fn send(h: &Harness, text: &str) {
         h.chat.handle(PageMessage::ChatSend { text: text.into(), behavior: None, attachments: vec![] });
+    }
+
+    fn is_trace(message: &DockMessage) -> bool {
+        matches!(message, DockMessage::ChatTrace { .. })
+    }
+
+    fn trace_of(message: &DockMessage) -> Value {
+        match message {
+            DockMessage::ChatTrace { trace } => trace.clone(),
+            _ => Value::Null,
+        }
+    }
+
+    #[test]
+    fn trace_a_traced_run_sends_its_trace() {
+        let h = harness();
+        h.chat.handle(PageMessage::TraceSet { on: true });
+        let first = wait_for(&h, "the answer to on", is_trace);
+        assert!(trace_of(&first).is_null(), "no turn yet");
+        send(&h, "TRACE");
+        let done = wait_for(&h, "a settled trace", |m| trace_of(m)["status"] == "done");
+        let tree = trace_of(&done);
+        let children = tree["children"].as_array().unwrap();
+        let llm = children.iter().find(|s| s["id"] == "llm-1").expect("an llm span");
+        assert_eq!(llm["cost"], 0.01);
+        assert!(children.iter().any(|s| s["id"] == "tool-c1" && s["status"] == "done"));
+        assert_eq!(tree["input"], "TRACE");
+    }
+
+    #[test]
+    fn trace_untraced_runs_send_no_trace() {
+        let h = harness();
+        send(&h, "TRACE");
+        wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(!drain(&h).iter().any(is_trace));
+    }
+
+    #[test]
+    fn trace_off_drops_the_trace() {
+        let h = harness();
+        h.chat.handle(PageMessage::TraceSet { on: true });
+        send(&h, "TRACE");
+        wait_for(&h, "a settled trace", |m| trace_of(m)["status"] == "done");
+        h.chat.handle(PageMessage::TraceSet { on: false });
+        wait_for(&h, "the null of off", |m| is_trace(m) && trace_of(m).is_null());
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !drain(&h).iter().any(|m| is_trace(m) && !trace_of(m).is_null()),
+            "nothing after off, not even a late send"
+        );
+        send(&h, "TRACE");
+        wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(!drain(&h).iter().any(is_trace));
+    }
+
+    #[test]
+    fn trace_on_mid_turn_waits_for_the_next_turn() {
+        let h = harness();
+        silent_run(&h);
+        h.chat.handle(PageMessage::TraceSet { on: true });
+        let first = wait_for(&h, "the answer to on", is_trace);
+        assert!(trace_of(&first).is_null(), "a turn already under way is not traced");
+        h.chat.test_send_raw("start");
+        let next = wait_for(&h, "the next turn's trace", |m| trace_of(m)["status"] == "running");
+        assert_eq!(trace_of(&next)["children"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn trace_a_restart_mid_turn_fails_the_root() {
+        let h = harness();
+        h.chat.handle(PageMessage::TraceSet { on: true });
+        wait_for(&h, "the answer to on", is_trace);
+        send(&h, "CRASH");
+        wait_for(&h, "a failed trace", |m| trace_of(m)["status"] == "failed");
+    }
+
+    #[test]
+    fn trace_changes_are_throttled() {
+        let h = harness();
+        h.chat.handle(PageMessage::TraceSet { on: true });
+        silent_run(&h);
+        wait_for(&h, "the turn's first trace", |m| trace_of(m)["status"] == "running");
+        std::thread::sleep(Duration::from_millis(300));
+        drain(&h);
+        for i in 0..20 {
+            h.chat.test_trace_event(
+                json!({"type": "tool_execution_start", "toolCallId": format!("c{i}"), "toolName": "bash", "args": {}}),
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        let early = drain(&h).into_iter().filter(is_trace).count();
+        assert!(early <= 1, "{early} traces within 100 ms");
+        let last =
+            wait_for(&h, "the throttled trace", |m| trace_of(m)["children"].as_array().is_some_and(|c| c.len() == 20));
+        assert!(is_trace(&last));
     }
 
     #[test]
@@ -3164,10 +3396,6 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-    }
-
-    fn now_ms() -> i64 {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
     }
 
     /// A task in the harness's store: every day at 07:30, Notion read-only.

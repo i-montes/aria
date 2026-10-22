@@ -138,8 +138,9 @@ impl Trace {
         }
     }
 
-    pub fn started_ms(&self) -> i64 {
-        self.started_ms
+    /// The turn has not settled yet.
+    pub fn running(&self) -> bool {
+        self.root.get("status") == Some(&json!("running"))
     }
 
     fn rel(&self, at_ms: i64) -> i64 {
@@ -455,7 +456,9 @@ mod tests {
         assert_eq!(child(&tree, "tool-c1")["status"], "failed");
         assert_eq!(child(&tree, "tool-c1")["end"], 1200);
         let mut t = Trace::new(0);
+        assert!(t.running());
         t.settle(true, 5);
+        assert!(!t.running());
         assert_eq!(t.tree(&[], 5)["status"], "failed");
     }
 
