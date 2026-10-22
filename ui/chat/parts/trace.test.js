@@ -67,6 +67,11 @@ describe('the timeline', () => {
     expect(html.match(/chat\.trace\.slowest/g)).toHaveLength(1)
     expect(html).toMatch(/data-id="tool-c1"[\s\S]*?chat\.trace\.slowest/)
   })
+  test('a call with subagents under it is not the slowest (its time is theirs)', () => {
+    const long = tree()
+    long.children[2].end = 30000
+    expect(slowestId(long)).toBe('tool-c1')
+  })
   test('a_running_bar_reaches_now', () => {
     const html = renderTrace({ tree: tree(), now: 20000 }, {}, t)
     // llm-2 runs from 16 s to now (20 s) on a 20 s axis: 80% to 100%

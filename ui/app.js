@@ -205,6 +205,7 @@ const onboarding = createOnboarding({
 
 const chat = createChatView({
   root: document.getElementById('chat'),
+  traceRoot: document.getElementById('trace'),
   t,
   send: post,
   request,

@@ -15,11 +15,26 @@ button { font: inherit; color: inherit; }
 .veil {
   position: absolute; inset: 0;
   background: linear-gradient(to left,
-    rgba(4, 4, 5, 0.94) 0, rgba(4, 4, 5, 0.94) 43%, rgba(4, 4, 5, 0.80) 53%, rgba(4, 4, 5, 0.55) 63%,
-    rgba(4, 4, 5, 0.28) 71%, rgba(4, 4, 5, 0.10) 77%, rgba(4, 4, 5, 0) 81%);
+    rgba(4, 4, 5, 0.94) 0, rgba(4, 4, 5, 0.94) 301px, rgba(4, 4, 5, 0.80) 371px, rgba(4, 4, 5, 0.55) 441px,
+    rgba(4, 4, 5, 0.28) 497px, rgba(4, 4, 5, 0.10) 539px, rgba(4, 4, 5, 0) 567px);
   opacity: 0; transition: opacity 140ms var(--in) 20ms;
 }
 body.open .veil { opacity: 1; transition: opacity 180ms ease-out; }
+
+/* Wide (a `/debug` tab, crates/aria/src/dock): the surface is 1,060 px and dark behind the column and the trace
+   panel, easing out over its last stretch. */
+body.wide .veil {
+  background: linear-gradient(to left, rgba(4, 4, 5, 0.94) 0, rgba(4, 4, 5, 0.94) 990px, rgba(4, 4, 5, 0.6) 1060px);
+}
+
+/* The trace panel: 560 px, 16 px left of the column, as tall as the chat. */
+.trace {
+  position: absolute; top: 26px; bottom: 24px; right: 486px; width: 560px;
+  opacity: 0; transform: translateX(24px);
+  transition: opacity 120ms var(--in), transform 140ms var(--in);
+}
+.trace[hidden] { display: none; }
+body.open.wide .trace { opacity: 1; transform: none; transition: opacity 200ms var(--out), transform 240ms var(--out); }
 
 /* The 470 px dock column on the right. */
 aside {

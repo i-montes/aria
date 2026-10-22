@@ -775,6 +775,71 @@ const script = `(async () => {
   function sim_ask() { window.sim.sess('s1', { type: 'chatDialog', id: 'ask1', method: 'input', request: { title: JSON.stringify({ aria: 1, kind: 'question', questions: [{ question: 'Which fallback?', header: 'Fallback', options: [{ label: 'Git hash' }, { label: 'Version' }] }, { question: 'Which checks?', header: 'Checks', options: [{ label: 'Unit' }, { label: 'Lint' }] }] }) }, hidden: false }) }
 })()`
 const reply = await send('Runtime.evaluate', { expression: script, awaitPromise: true, returnByValue: true })
+// The `/debug` trace panel, on a surface as wide as the dock makes it (1,060 px).
+await send('Emulation.setDeviceMetricsOverride', { width: 1060, height: 900, deviceScaleFactor: 1, mobile: false })
+const traceReply = await send('Runtime.evaluate', { awaitPromise: true, returnByValue: true, expression: `(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+  const $ = (s) => document.querySelector(s)
+  const out = []
+  const check = (name, ok, detail = '') => out.push(['trace: ' + name, !!ok, String(detail)])
+  // back from the settings the main checks ended in
+  $('#flow [data-action="settings-save"]')?.click(); await wait(250)
+  $('#flow [data-action="settings-home"]')?.click(); await wait(120)
+  $('#flow [data-action="settings-exit"]')?.click(); await wait(200)
+  check('the chat is on screen', document.body.classList.contains('mode-chat'), document.body.className + ' ' + [...document.querySelectorAll('#flow [data-action]')].map((e) => e.dataset.action).slice(0, 8).join())
+  window.__sent.length = 0
+  const i = $('#chat-input'); i.focus(); i.value = '/debug true'; i.dispatchEvent(new Event('input', { bubbles: true }))
+  i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); await wait(80)
+  const traceSet = window.__sent.find((m) => m.type === 'session' && m.message.type === 'traceSet')
+  check('/debug true sends traceSet on for the tab', traceSet?.message.on === true && traceSet.session === 's1', JSON.stringify(window.__sent))
+  check('and asks the dock to widen', window.__sent.some((m) => m.type === 'wide' && m.on === true))
+  check('the empty panel shows before the first turn', !$('#trace').hidden && $('#trace').textContent.includes('next turn'), $('#trace').textContent)
+  const tree = { id: 'root', kind: 'agent', name: 'Aria', status: 'running', start: 0, now: 21000, input: 'Launch the pricing page', dropped: 0, children: [
+    { id: 'llm-1', kind: 'llm', name: 'LLM call', detail: 'opus', status: 'done', start: 100, end: 6900, tokensIn: 18000, tokensOut: 600, cost: 0.12 },
+    { id: 'tool-p', kind: 'tool', name: 'parallel', status: 'done', start: 7000, end: 15000, children: [
+      { id: 'agent-1', kind: 'agent', name: 'researcher', detail: 'find pricing pages', status: 'done', start: 7100, end: 14900, children: [
+        { id: 'agent-1-llm-1', kind: 'llm', name: 'LLM call', status: 'done', start: 7200, end: 9000, cost: 0.01 },
+        { id: 'agent-1-tool-a', kind: 'tool', name: 'web_search', detail: 'Linear pricing', status: 'done', start: 9100, end: 12000 },
+        { id: 'agent-1-tool-b', kind: 'tool', name: 'web_search', detail: 'Notion pricing', status: 'done', start: 9200, end: 14800 } ] } ] },
+    { id: 'tool-c1', kind: 'tool', name: 'bash', detail: 'pnpm test checkout', status: 'failed', start: 15100, end: 19000, error: '2 of 14 checkout tests fail', input: '{"command":"pnpm test checkout"}' },
+    { id: 'llm-2', kind: 'llm', name: 'LLM call', status: 'running', start: 19100 } ] }
+  window.aria.receive({ type: 'session', session: 's1', message: { type: 'chatTrace', trace: tree } }); await wait(80)
+  const box = $('#trace').getBoundingClientRect()
+  const column = $('aside').getBoundingClientRect()
+  check('the panel sits left of the column, fully on screen', box.left >= 0 && box.right <= column.left && column.left - box.right >= 12, JSON.stringify([box.left, box.right, column.left]))
+  check('the finished subagent folds with its count', !!$('#trace [data-id="agent-1"] .p-trace-count') && !$('#trace [data-id="agent-1-tool-a"]'), $('#trace [data-id="agent-1"]')?.textContent)
+  check('the figures add the whole run', $('#trace [data-figure="llm"] .p-trace-fvalue')?.textContent === '3' && $('#trace [data-figure="errors"] .p-trace-fvalue')?.textContent === '1')
+  $('#trace [data-chat="trace-fold"][data-id="agent-1"]').click(); await wait(40)
+  check('a click on the chevron unfolds it', !!$('#trace [data-id="agent-1-tool-b"]'))
+  $('#trace [data-chat="trace-row"][data-id="tool-c1"]').click(); await wait(40)
+  check('a click on the failed row opens its details with the error', $('#trace .p-trace-card')?.textContent.includes('2 of 14 checkout tests fail'), $('#trace .p-trace-card')?.textContent)
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await wait(40)
+  check('Esc closes the details, not the dock', !$('#trace .p-trace-card') && window.__sent.every((m) => m.type !== 'closeRequest'), JSON.stringify([!!$('#trace .p-trace-card'), window.__sent.map((m) => m.type), document.body.className]))
+  const row = $('#trace [data-chat="trace-row"][data-id="root"]'); row.focus()
+  row.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })); await wait(30)
+  check('arrows move between the rows', document.activeElement?.dataset?.id === 'llm-1', document.activeElement?.outerHTML?.slice(0, 80))
+  const bar = $('#trace [data-bar="llm-2"]')
+  const w1 = getComputedStyle(bar).width
+  await wait(700)
+  const w2 = getComputedStyle($('#trace [data-bar="llm-2"]')).width
+  check('the running bar grows by itself', parseFloat(w2) > parseFloat(w1), w1 + ' -> ' + w2)
+  check('the redraws keep the same elements (no animation starts over)', bar === $('#trace [data-bar="llm-2"]') && bar.isConnected)
+  window.__sent.length = 0
+  $('[data-chat="add"]')?.click(); await wait(120)
+  check('a tab without a trace narrows the dock and hides the panel', window.__sent.some((m) => m.type === 'wide' && m.on === false) && $('#trace').hidden)
+  $('[data-chat="select"][data-session="s1"]')?.click(); await wait(120)
+  check('back on the traced tab the panel returns', window.__sent.some((m) => m.type === 'wide' && m.on === true) && !$('#trace').hidden)
+  const again = $('#chat-input'); again.focus(); again.value = '/debug false'; again.dispatchEvent(new Event('input', { bubbles: true }))
+  again.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); await wait(80)
+  check('/debug false hides the panel and narrows the dock', $('#trace').hidden && !document.body.classList.contains('wide') && window.__sent.some((m) => m.type === 'session' && m.message.type === 'traceSet' && m.message.on === false))
+  // the real-key checks that follow start in the settings
+  $('[data-chat="settings"]')?.click(); await wait(250)
+  return out
+})()` })
+const traceChecks: [string, boolean, string][] = Array.isArray(traceReply?.result?.value)
+  ? traceReply.result.value
+  : [['trace: the checks ran', false, JSON.stringify(traceReply?.exceptionDetails ?? traceReply).slice(0, 400)]]
+await send('Emulation.clearDeviceMetricsOverride')
 
 // Real key presses (the browser's own button activation, which page events cannot reach): Enter starts recording the
 // shortcut, Alt + Space records it without its release clicking the row again, Esc cancels without closing the dock.
@@ -788,7 +853,7 @@ const realKey = async (type: 'keyDown' | 'keyUp', key: string, modifiers = 0) =>
 const tap = async (key: string, modifiers = 0) => { await realKey('keyDown', key, modifiers); await realKey('keyUp', key, modifiers); await Bun.sleep(60) }
 const row = () => evaluate(`(() => { const b = document.querySelector('#flow [data-action="key-capture"]'); return b && { recording: b.classList.contains('recording'), keys: [...b.querySelectorAll('kbd')].map((k) => k.textContent).join(' + '), open: document.body.classList.contains('open') } })()`)
 await evaluate(`(async () => { const w = (ms) => new Promise((r) => setTimeout(r, ms)); document.querySelector('#flow [data-action="settings-home"]')?.click(); await w(80); document.querySelector('#flow [data-action="settings-open"][data-value="assistant"]')?.click(); await w(120); document.querySelector('#flow [data-action="key-capture"]')?.focus() })()`)
-const realChecks: [string, boolean, string][] = []
+const realChecks: [string, boolean, string][] = [...traceChecks]
 await tap('Enter')
 const started = await row()
 realChecks.push(['real keys: Enter on the row starts recording', !!started?.recording, JSON.stringify(started)])

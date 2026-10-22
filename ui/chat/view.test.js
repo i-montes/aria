@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { createChat } from './state.js'
 import { chatTexts } from './texts.js'
-import { hasParallelAgents, insertFile, shiftExpanded, keepRenameField, pickerQuery, renderDialog, renderPath, renderProblem, renderUndo, preloadOrder, shortPath } from './view.js'
+import { debugArg, hasParallelAgents, insertFile, shiftExpanded, keepRenameField, pickerQuery, renderDialog, renderPath, renderProblem, renderUndo, preloadOrder, shortPath } from './view.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const ev = (event) => ({ type: 'chatEvent', event })
@@ -180,5 +180,29 @@ describe('a history after earlier pages', () => {
     shiftExpanded(ex, -4)
     expect([...ex.open]).toEqual([2])
     expect([...ex.closed]).toEqual([])
+  })
+})
+
+describe('/debug', () => {
+  test('true, on, false, off, or alone to toggle', () => {
+    expect(debugArg('/debug true')).toBe(true)
+    expect(debugArg('/debug on')).toBe(true)
+    expect(debugArg('/debug  TRUE ')).toBe(true)
+    expect(debugArg('/debug false')).toBe(false)
+    expect(debugArg('/debug off')).toBe(false)
+    expect(debugArg('/debug')).toBe(null)
+  })
+  test('anything else is not the command', () => {
+    expect(debugArg('/debugger')).toBe(undefined)
+    expect(debugArg('/debug maybe')).toBe(undefined)
+    expect(debugArg('debug true')).toBe(undefined)
+    expect(debugArg('/compact')).toBe(undefined)
+  })
+  test('it is described in both languages', () => {
+    const texts = chatTexts()
+    for (const key of ['chat.cmd.debug', 'chat.debug.on', 'chat.debug.off']) {
+      expect(texts.en[key]).toBeTruthy()
+      expect(texts.es[key]).toBeTruthy()
+    }
   })
 })

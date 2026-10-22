@@ -61,3 +61,40 @@ export function patchItems(container, items, make = element) {
   lastItems.set(container, items)
   return changed
 }
+
+/**
+ * Puts new markup into a container by updating the elements already there wherever they match (same tag, and the
+ * same `data-id` when they carry one): their attributes and text change in place, so an animation that is running
+ * does not start again and a CSS transition moves a bar instead of redrawing it. Anything that does not match is
+ * replaced. For a view redrawn many times a second (the `/debug` trace).
+ */
+export function morphHtml(container, html) {
+  const fresh = document.createElement('template')
+  fresh.innerHTML = html
+  morphChildren(container, fresh.content)
+}
+
+function morphChildren(into, from) {
+  const next = [...from.childNodes]
+  const old = [...into.childNodes]
+  next.forEach((node, i) => {
+    const prev = old[i]
+    if (!prev) into.appendChild(node)
+    else if (!morphNode(prev, node)) into.replaceChild(node, prev)
+  })
+  for (const extra of old.slice(next.length)) extra.remove()
+}
+
+/** Updates `prev` to look like `node`; false when they are not the same kind of node and `prev` must be replaced. */
+function morphNode(prev, node) {
+  if (prev.nodeType !== node.nodeType) return false
+  if (prev.nodeType !== Node.ELEMENT_NODE) {
+    if (prev.nodeValue !== node.nodeValue) prev.nodeValue = node.nodeValue
+    return true
+  }
+  if (prev.tagName !== node.tagName || prev.getAttribute('data-id') !== node.getAttribute('data-id')) return false
+  for (const { name } of [...prev.attributes]) if (!node.hasAttribute(name)) prev.removeAttribute(name)
+  for (const { name, value } of [...node.attributes]) if (prev.getAttribute(name) !== value) prev.setAttribute(name, value)
+  morphChildren(prev, node)
+  return true
+}

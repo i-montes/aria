@@ -4,7 +4,7 @@
   --trace-llm: #A78BFA; --trace-llm-bg: rgba(167, 139, 250, 0.30);
   --trace-tool: #2DD4BF; --trace-tool-bg: rgba(45, 212, 191, 0.24);
   --trace-failed: #F87171; --trace-failed-bg: rgba(248, 113, 113, 0.30);
-  --trace-name: 200px; --trace-meta: 92px;
+  --trace-name: 228px; --trace-meta: 112px;
   position: relative; height: 100%; box-sizing: border-box; display: flex; flex-direction: column;
   background: #111114; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 16px; overflow: hidden;
   font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: #EDEDEF; font-size: 13px;
@@ -49,9 +49,9 @@
 .kind-agent .p-trace-icon svg { stroke: #B4B4BC; }
 .kind-llm .p-trace-icon svg { stroke: var(--trace-llm); fill: rgba(167, 139, 250, 0.25); }
 .kind-tool .p-trace-icon svg { stroke: var(--trace-tool); }
-.p-trace-label { color: #EDEDEF; overflow: hidden; text-overflow: ellipsis; }
+.p-trace-label { flex: 0 1 auto; min-width: 4ch; color: #EDEDEF; overflow: hidden; text-overflow: ellipsis; }
 .kind-agent > .p-trace-name .p-trace-label { font-weight: 600; }
-.p-trace-detail { min-width: 0; color: #8A8A94; overflow: hidden; text-overflow: ellipsis; }
+.p-trace-detail { flex: 0 100 auto; min-width: 0; color: #8A8A94; overflow: hidden; text-overflow: ellipsis; } /* gives way first */
 .p-trace-count { flex: none; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10.5px; padding: 0 5px; border-radius: 5px; background: rgba(255, 255, 255, 0.07); color: #B4B4BC; }
 .p-trace-tag { flex: none; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: 0.04em; text-transform: uppercase; padding: 0 5px; border-radius: 5px; color: #FBBF24; background: rgba(251, 191, 36, 0.12); }
 

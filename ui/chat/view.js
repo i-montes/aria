@@ -2,7 +2,7 @@
 // cards, panels) and wires them to the bridge, plus the few pure helpers it keeps (tested without a
 // browser). Conversations live in `state.js`, the tabs in `sessions.js`, the HTML of each element in
 // `parts/` and `thread.js`. Everything dynamic is escaped with `esc`.
-import { patchHtml, patchItems } from './patch.js'
+import { morphHtml, patchHtml, patchItems } from './patch.js'
 import { esc } from '../onboarding/components.js'
 import { renderAgentSession } from './parts/session.js'
 import { hasLiveWork, isFailed, renderJobRows, renderStrip, resultAgent } from './parts/background.js'
@@ -20,6 +20,7 @@ import { renderQuotaBars } from './parts/quotabars.js'
 import { jobAgent, parallelAgents, renderSubagents } from './parts/subagents.js'
 import { renderSessionTabs } from './parts/tabs.js'
 import { renderTasks } from './parts/tasks.js'
+import { autoCollapsed, renderTrace, visibleRows } from './parts/trace.js'
 import { formatElapsed } from './parts/working.js'
 import {
   MAX_SESSIONS, addScheduled, addSession, applyStatus, closeSession, createTabs, hideScheduled, regularCount, removeSession, renameSession,
@@ -170,7 +171,19 @@ export const preloadOrder = (tabs) => {
   return ids.includes(tabs?.active) ? [tabs.active, ...ids.filter((id) => id !== tabs.active)] : ids
 }
 
-export function createChatView({ root, t, send, request, onSettings, makeId = () => crypto.randomUUID() }) {
+/** `/debug true|on` → true, `/debug false|off` → false, `/debug` alone → null (toggle); anything else is not it. */
+export function debugArg(text) {
+  const m = /^\/debug(?:\s+(\S+))?\s*$/i.exec(String(text ?? '').trim())
+  if (!m) return undefined
+  if (!m[1]) return null
+  const word = m[1].toLowerCase()
+  if (word === 'true' || word === 'on') return true
+  if (word === 'false' || word === 'off') return false
+  return undefined
+}
+
+/** `traceRoot` (optional) is the panel left of the chat column where a `/debug` tab's trace is drawn. */
+export function createChatView({ root, traceRoot = null, t, send, request, onSettings, makeId = () => crypto.randomUUID() }) {
   let tabs = createTabs(null, makeId)
   const chats = new Map() // session id -> its conversation (state.js)
   const drafts = new Map() // session id -> what was typed and not sent
@@ -196,6 +209,9 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   let undoTimer = null
   let toastTimer = null
   let tick = null
+  // `/debug`, per session: { tree, receivedAt, folds: Map<id, folded?>, open, focus }. Absent = off.
+  const traces = new Map()
+  let wideSent = false
   let pendingClose = null // a closed tab whose Pi is only stopped when its undo window is over
   let fileToken = 0
   let fileTimer = null
@@ -284,6 +300,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
   }
 
   function tickElapsed() {
+    if (traces.get(tabs.active)?.tree?.status === 'running') drawTrace()
     if (!input) return
     drawBackground() // the pills' minutes
     if (ui.view === 'agents') drawViews() // the list's minutes (drawn only when they changed)
@@ -576,6 +593,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     drawComposer()
     drawViews()
     drawToast()
+    drawTrace()
     if (ui.renaming) root.querySelector('[data-chat-rename]')?.focus()
   }
 
@@ -663,6 +681,130 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
 
   // ---- tabs ------------------------------------------------------------------------------------
 
+  // ---- the trace (`/debug`) ---------------------------------------------------------------------
+
+  /** `/debug`: on, off, or the other one (`null`) for the active tab; the dock answers with `chatTrace`. */
+  function setDebug(want) {
+    const session = tabs.active
+    const on = want === null ? !traces.has(session) : want
+    if (on && !traces.has(session)) traces.set(session, { tree: null, receivedAt: 0, folds: new Map(), open: null, focus: null })
+    if (!on) traces.delete(session)
+    post({ type: 'traceSet', on }, session)
+    chats.set(session, addNote(chatOf(session), 'aria', t(on ? 'chat.debug.on' : 'chat.debug.off')))
+    render()
+  }
+
+  /** The dock's `chatTrace` for a session. A tree for a tab the page does not know is traced (a reloaded page) turns
+   * its panel back on. */
+  function receiveTrace(session, tree) {
+    let trace = traces.get(session)
+    if (!trace) {
+      if (!tree) return
+      trace = { tree: null, receivedAt: 0, folds: new Map(), open: null, focus: null }
+      traces.set(session, trace)
+    }
+    trace.tree = tree ?? null
+    trace.receivedAt = performance.now()
+    if (session === tabs.active) drawTrace()
+  }
+
+  const traceNow = (trace) => {
+    const tree = trace?.tree
+    if (!tree) return 0
+    return tree.status === 'running' ? Number(tree.now ?? 0) + (performance.now() - trace.receivedAt) : Number(tree.now ?? 0)
+  }
+
+  /** The folded agents: those folded by hand, and the finished subagents nobody unfolded. */
+  function traceCollapsed(trace) {
+    const touched = new Set(trace.folds.keys())
+    const out = autoCollapsed(trace.tree, touched)
+    for (const [id, folded] of trace.folds) if (folded) out.add(id)
+    return out
+  }
+
+  function drawTrace() {
+    if (!traceRoot) return
+    const trace = traces.get(tabs.active)
+    const on = !!trace
+    if (on !== wideSent) {
+      wideSent = on
+      send({ type: 'wide', on })
+    }
+    traceRoot.ownerDocument?.body?.classList.toggle('wide', on)
+    traceRoot.hidden = !on
+    if (!on) {
+      traceRoot.innerHTML = ''
+      return
+    }
+    const focused = traceRoot.contains(document.activeElement) ? document.activeElement?.closest?.('[data-id]')?.dataset.id : null
+    const scroller = traceRoot.querySelector('.p-trace-body')
+    const top = scroller?.scrollTop ?? 0
+    morphHtml(traceRoot, renderTrace({ tree: trace.tree, now: traceNow(trace), collapsed: traceCollapsed(trace), open: trace.open, focus: trace.focus }, {}, t))
+    const body = traceRoot.querySelector('.p-trace-body')
+    if (body) body.scrollTop = top
+    if (focused) traceRoot.querySelector(`[data-chat="trace-row"][data-id="${CSS.escape(focused)}"]`)?.focus()
+  }
+
+  function traceFold(trace, id, folded) {
+    const now = traceCollapsed(trace).has(id)
+    trace.folds.set(id, folded === undefined ? !now : folded)
+  }
+
+  /** The trace panel's keys: the rows are a tree (arrows, Home, End), Enter or Space opens a step's details. */
+  function onTraceKey(event) {
+    const trace = traces.get(tabs.active)
+    if (!trace?.tree) return
+    const rows = visibleRows(trace.tree, traceCollapsed(trace))
+    const at = Math.max(0, rows.findIndex((r) => r.span.id === (event.target.closest?.('[data-id]')?.dataset.id ?? trace.focus)))
+    const row = rows[at]
+    const hasKids = Array.isArray(row?.span.children) && row.span.children.length > 0
+    const folded = traceCollapsed(trace).has(row?.span.id)
+    let next = null
+    switch (event.key) {
+      case 'ArrowDown': next = rows[Math.min(rows.length - 1, at + 1)]; break
+      case 'ArrowUp': next = rows[Math.max(0, at - 1)]; break
+      case 'Home': next = rows[0]; break
+      case 'End': next = rows[rows.length - 1]; break
+      case 'ArrowRight':
+        if (hasKids && folded) traceFold(trace, row.span.id, false)
+        else if (hasKids) next = rows[at + 1]
+        break
+      case 'ArrowLeft':
+        if (hasKids && !folded) traceFold(trace, row.span.id, true)
+        else next = rows.slice(0, at).reverse().find((r) => r.level === row.level - 1) ?? null
+        break
+      case 'Enter':
+      case ' ':
+        trace.open = trace.open === row.span.id ? null : row.span.id
+        trace.focus = row.span.id
+        break
+      default:
+        return
+    }
+    event.preventDefault()
+    event.stopPropagation() // the page's own arrows move between its controls
+    if (next) trace.focus = next.span.id
+    drawTrace()
+    traceRoot.querySelector(`[data-chat="trace-row"][data-id="${CSS.escape(trace.focus ?? row.span.id)}"]`)?.focus()
+  }
+
+  if (traceRoot) {
+    traceRoot.addEventListener('click', (event) => {
+      const el = event.target.closest('[data-chat]')
+      const trace = traces.get(tabs.active)
+      if (!el || !trace) return
+      const id = el.dataset.id
+      if (el.dataset.chat === 'trace-fold') traceFold(trace, id)
+      else if (el.dataset.chat === 'trace-row') {
+        trace.open = trace.open === id ? null : id
+        trace.focus = id
+      } else if (el.dataset.chat === 'trace-close') trace.open = null
+      else return
+      drawTrace()
+    })
+    traceRoot.addEventListener('keydown', onTraceKey)
+  }
+
   /** Shows another session: its draft, its conversation, and a `chatLoad` so its Pi (and any dialog) wakes up. */
   function switchTo(next) {
     if (next === tabs.active) return
@@ -713,6 +855,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     send({ type: 'sessionClose', session: id })
     chats.delete(id)
     drafts.delete(id)
+    traces.delete(id)
     attached.delete(id)
     reading.delete(id)
     sentWith.delete(id)
@@ -798,6 +941,12 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       return openConnect(connect[1])
     }
     if (/^\/model(\s|$)/.test(text)) return // the model picker answers this one
+    const debug = debugArg(text)
+    if (debug !== undefined) {
+      clearDraft()
+      drawComposer()
+      return setDebug(debug)
+    }
     const own = /^\/(compact|session|copy|export|reload)(?:\s+([\s\S]*))?$/.exec(text)
     if (own) {
       clearDraft()
@@ -1016,6 +1165,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       { name: 'copy', description: t('chat.cmd.copy'), source: 'aria' },
       { name: 'export', description: t('chat.cmd.export'), source: 'aria' },
       { name: 'reload', description: t('chat.cmd.reload'), source: 'aria' },
+      { name: 'debug', description: t('chat.cmd.debug'), source: 'aria' },
     ]
     if (asked.kind === 'command') {
       let items = commandsBy.get(session)
@@ -1726,6 +1876,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       tabs = removeSession(tabs, id)
       chats.delete(id)
       drafts.delete(id)
+      traces.delete(id)
       save()
       if (ui.view === 'schedules') refreshSchedules()
       render()
@@ -1751,6 +1902,7 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
     receive(session, message) {
       // A late reply for a tab that is gone (closed, its undo window over) must not bring its state back.
       if (!tabs.sessions.some((s) => s.id === session) && tabs.closed?.entry?.id !== session) return
+      if (message.type === 'chatTrace') return receiveTrace(session, message.trace)
       // A new Pi (a restart, another model) can offer other commands: ask again.
       if ((message.type === 'chatState' && message.model !== chatOf(session).model) || (message.type === 'chatEngine' && message.state !== 'ready')) {
         commandsBy.delete(session)
@@ -1823,6 +1975,13 @@ export function createChatView({ root, t, send, request, onSettings, makeId = ()
       }
       if (ui.connect) {
         closeConnect()
+        return true
+      }
+      const trace = traces.get(tabs.active)
+      if (trace?.open) {
+        trace.open = null
+        drawTrace()
+        traceRoot?.querySelector(`[data-chat="trace-row"][data-id="${CSS.escape(trace.focus ?? '')}"]`)?.focus()
         return true
       }
       if (ui.view !== 'chat') {

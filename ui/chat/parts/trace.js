@@ -150,7 +150,8 @@ export function slowestId(root) {
   let most = -1
   if (!root) return null
   walk(root, (s) => {
-    if ((s.kind === 'llm' || s.kind === 'tool') && s.status !== 'running' && typeof s.end === 'number') {
+    // A call with subagents under it (`parallel`) lasts as long as they do: its time is theirs, not its own.
+    if ((s.kind === 'llm' || s.kind === 'tool') && !kids(s).length && s.status !== 'running' && typeof s.end === 'number') {
       const took = s.end - s.start
       if (took > most) {
         most = took
