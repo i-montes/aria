@@ -5,6 +5,9 @@
 /// Carbon's key codes and the order of registration: platform-free, so its tests run on every platform.
 pub mod carbon;
 
+/// Where Aria's face goes (beside the notch, or a pill): platform-free, so its tests run on every platform.
+pub mod wing;
+
 #[cfg(target_os = "macos")]
 mod hotkey;
 #[cfg(target_os = "macos")]
@@ -13,4 +16,4 @@ mod screen;
 #[cfg(target_os = "macos")]
 pub use hotkey::{change_hotkey, install_hotkey};
 #[cfg(target_os = "macos")]
-pub use screen::{focused_screen, Screen};
+pub use screen::{focused_screen, screens, Screen};

@@ -52,6 +52,32 @@ pub fn focused_screen() -> Option<Screen> {
     })
 }
 
+/// Every screen as the face's wing needs it (`wing::wing_frame` decides where the wing goes).
+pub fn screens() -> Vec<crate::wing::ScreenInfo> {
+    let Some(mtm) = MainThreadMarker::new() else { return Vec::new() };
+    let main = NSScreen::mainScreen(mtm).map(|m| m.frame());
+    let area =
+        |r: NSRect| crate::wing::Area { x: r.origin.x, y: r.origin.y, width: r.size.width, height: r.size.height };
+    NSScreen::screens(mtm)
+        .iter()
+        .map(|screen| {
+            let frame = screen.frame();
+            let notch_top = screen.safeAreaInsets().top;
+            // Where the notch ends: the screen's right edge less the area right of the notch (its width, so it holds
+            // whether AppKit gives that area in the screen's coordinates or the global ones).
+            let notch_right = (notch_top > 0.0)
+                .then(|| frame.origin.x + frame.size.width - screen.auxiliaryTopRightArea().size.width);
+            crate::wing::ScreenInfo {
+                frame: area(frame),
+                visible: area(screen.visibleFrame()),
+                notch_top,
+                notch_right,
+                main: main == Some(frame),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
