@@ -5,6 +5,19 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.12.0 — 2026-10-22
+
+### New
+
+- Aria's face beside the notch
+- where Aria's face goes beside the notch
+- tell listeners when the face changes
+- the face's motion as a pure engine
+
+### Fixed
+
+- the face's listeners are macOS's; Linux builds without a warning
+
 ## 0.11.0 — 2026-10-22
 
 ### New
