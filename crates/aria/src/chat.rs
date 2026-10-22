@@ -3195,7 +3195,7 @@ mod tests {
         assert!(matches!(state, DockMessage::ChatState { compacting: true, running: false, .. }), "{state:?}");
         h.chat.test_send_raw("compaction_end");
         wait_for(&h, "the compaction's end", |m| event_of(m, "compaction_end"));
-        // The event reaches the page before the chat records it: a state asked a moment later says it is over.
+        // A state already on its way when the compaction ended can still say it is on: the one asked a moment later is over.
         std::thread::sleep(Duration::from_millis(100));
         h.chat.handle(PageMessage::ChatLoad { fresh: false });
         wait_for(&h, "a state without the compaction", |m| {
