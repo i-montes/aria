@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { createChat } from './state.js'
 import { chatTexts } from './texts.js'
-import { debugArg, hasParallelAgents, insertFile, shiftExpanded, keepRenameField, pickerQuery, renderDialog, renderPath, renderProblem, renderUndo, preloadOrder, shortPath } from './view.js'
+import { debugArg, insertDictation, hasParallelAgents, insertFile, shiftExpanded, keepRenameField, pickerQuery, renderDialog, renderPath, renderProblem, renderUndo, preloadOrder, shortPath } from './view.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const ev = (event) => ({ type: 'chatEvent', event })
@@ -204,5 +204,18 @@ describe('/debug', () => {
       expect(texts.en[key]).toBeTruthy()
       expect(texts.es[key]).toBeTruthy()
     }
+  })
+})
+
+describe('dictated text', () => {
+  test('goes in at the cursor with a space before it when needed', () => {
+    expect(insertDictation('', 0, 'hola')).toEqual({ value: 'hola', cursor: 4 })
+    expect(insertDictation('dime', 4, 'hola')).toEqual({ value: 'dime hola', cursor: 9 })
+    expect(insertDictation('dime ', 5, 'hola')).toEqual({ value: 'dime hola', cursor: 9 })
+    expect(insertDictation('ab', 1, 'x')).toEqual({ value: 'a xb', cursor: 3 })
+  })
+  test('nothing said leaves the input as it was', () => {
+    expect(insertDictation('dime', 2, '')).toEqual({ value: 'dime', cursor: 2 })
+    expect(insertDictation('dime', 2, '   ')).toEqual({ value: 'dime', cursor: 2 })
   })
 })

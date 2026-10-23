@@ -236,6 +236,39 @@ const script = `(async () => {
   $('#flow [data-action="settings-exit"]')?.click(); await wait(150)
   check('leaving the settings goes back to the chat', document.body.classList.contains('mode-chat'))
 
+  // 0. dictation: the microphone, the voice model's strip, recording, Esc, Alt+D, the text at the cursor, Enter
+  {
+    const mic = () => $('#chat-dictate')
+    window.__sent.length = 0
+    typeIn('dime')
+    mic().click(); await wait(60)
+    check('dictation: the microphone asks the dock to start', sent().some((m) => m.type === 'dictationStart'))
+    check('dictation: without the model, a strip offers it with its size', $('.p-composer-dictation')?.textContent.includes('574 MB'), $('.p-composer-dictation')?.textContent)
+    $('[data-chat="dictate-download"]').click(); await wait(300)
+    check('dictation: Download asks for it, then it records', sent().some((m) => m.type === 'dictationDownload') && mic()?.classList.contains('is-recording') && !$('.p-composer-dictation'))
+    await wait(1100)
+    check('dictation: recording shows the seconds', mic()?.textContent.includes('0:01'), mic()?.textContent)
+    key($('#chat-input'), 'Escape'); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await wait(80)
+    check('dictation: Esc cancels and writes nothing', sent().some((m) => m.type === 'dictationCancel') && !mic()?.classList.contains('is-recording') && $('#chat-input').value === 'dime', $('#chat-input').value)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: '∂', code: 'KeyD', altKey: true, bubbles: true, cancelable: true })); await wait(60)
+    check('dictation: Alt+D starts', mic()?.classList.contains('is-recording'))
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: '∂', code: 'KeyD', altKey: true, bubbles: true, cancelable: true })); await wait(300)
+    check('dictation: Alt+D again stops and the text goes in at the cursor, with a space', $('#chat-input').value === 'dime hola desde el sandbox' && document.activeElement === $('#chat-input'), $('#chat-input').value)
+    window.sim.dictText = ''
+    mic().click(); await wait(60); mic().click(); await wait(300)
+    check('dictation: nothing said leaves the input as it was', $('#chat-input').value === 'dime hola desde el sandbox', $('#chat-input').value)
+    window.sim.dictText = 'y envíalo'
+    window.__sent.length = 0
+    mic().click(); await wait(60)
+    key($('#chat-input'), 'Enter'); await wait(400)
+    const sentText = sent().find((m) => m.type === 'chatSend')?.text
+    check('dictation: Enter while recording stops, then sends the text with what was dictated', sentText === 'dime hola desde el sandbox y envíalo', sentText)
+    window.sim.dictText = undefined
+    sess({ type: 'dictationState', state: 'error', error: 'microphone-denied' }); await wait(60)
+    check('dictation: an error is a note, and the microphone is idle again', $('#chat-list').textContent.includes('Privacy') || $('#chat-list').textContent.includes('Privacidad'))
+    await reset()
+  }
+
   // 1. the textarea survives a run starting, text appearing and the model changing
   typeIn('half-typed')
   const mark = $('#chat-input'); mark.__mark = 1

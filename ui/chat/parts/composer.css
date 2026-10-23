@@ -46,3 +46,18 @@
 .p-composer-attach { background: var(--surface, #16161a); color: #B4B4BC; }
 .p-composer-attach:hover { border-color: var(--accent-border, #B9A8FF); color: #F4F4F5; }
 .p-composer-files { padding: 0 2px; }
+
+/* Dictation: the microphone (red and pulsing while it records, with the time), the voice model's strip. */
+.p-composer-dictate { gap: 6px; width: auto; min-width: 44px; flex: 0 0 auto; padding: 0 12px; background: var(--surface, #16161a); color: #B4B4BC; }
+.p-composer-dictate:hover:not(:disabled) { border-color: var(--accent-border, #B9A8FF); color: #F4F4F5; }
+.p-composer-dictate.is-recording { color: #FF8F87; background: rgba(255, 143, 135, 0.14); animation: p-composer-rec 1.4s ease-in-out infinite; }
+.p-composer-dictate.is-transcribing { opacity: 0.6; cursor: progress; }
+.p-composer-rec { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+@keyframes p-composer-rec { 50% { background: rgba(255, 143, 135, 0.28); } }
+.p-composer-dictation { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; padding: 8px 10px; border-radius: 10px; background: rgba(185, 168, 255, 0.08); color: #D4D4D8; font-size: 12.5px; }
+.p-composer-dictation > span:first-child { flex: 1; min-width: 180px; }
+.p-composer-chip { border: 1px solid rgba(185, 168, 255, 0.5); background: rgba(185, 168, 255, 0.16); color: #F4F4F5; border-radius: 7px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.p-composer-chip.is-quiet { background: transparent; border-color: rgba(255, 255, 255, 0.14); color: #B4B4BC; }
+.p-composer-bar { flex: 1; min-width: 120px; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.p-composer-bar > span { display: block; height: 100%; background: #B9A8FF; }
+@media (prefers-reduced-motion: reduce) { .p-composer-dictate.is-recording { animation: none; } }

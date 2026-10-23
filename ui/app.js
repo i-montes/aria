@@ -268,6 +268,11 @@ document.addEventListener('keydown', (event) => {
     }, QUIT_WINDOW_MS)
     return
   }
+  // Alt+D: dictate, or stop and write it (by the key's place: Option+D types a character on a Mac).
+  if (event.altKey && event.code === 'KeyD' && state.mode === 'chat') {
+    event.preventDefault()
+    return chat.toggleDictation()
+  }
   // Alt+A: the subagents view and back (the design's shortcut).
   if (event.altKey && event.key.toLowerCase() === 'a' && state.mode === 'chat') {
     event.preventDefault()

@@ -67,6 +67,13 @@ const sandbox = `<script>
       else if (m.type === 'session') {
         const inner = m.message
         const w = (x) => window.aria.receive({ type: 'session', session: m.session, message: { id: inner.id, ...x } })
+        // Dictation, as the dock answers it: no model until downloaded, a second's tick while recording, then the text.
+        const ds = (x) => sim.sess(m.session, { type: 'dictationState', ...x })
+        const record = () => { ds({ state: 'recording', seconds: 0 }); sim.dictSecs = 0; clearInterval(sim.dictTimer); sim.dictTimer = setInterval(() => ds({ state: 'recording', seconds: ++sim.dictSecs }), 1000) }
+        if (inner.type === 'dictationStart') { if (!sim.voiceModel) ds({ state: 'needsModel', size: 574041195 }); else record() }
+        else if (inner.type === 'dictationDownload') { ds({ state: 'downloading', progress: 0.5 }); setTimeout(() => { sim.voiceModel = true; record() }, 150) }
+        else if (inner.type === 'dictationCancel') { clearInterval(sim.dictTimer); ds({ state: 'idle' }) }
+        else if (inner.type === 'dictationStop') { clearInterval(sim.dictTimer); ds({ state: 'transcribing' }); setTimeout(() => { sim.sess(m.session, { type: 'dictationText', text: sim.dictText ?? 'hola desde el sandbox' }); ds({ state: 'idle' }) }, 120) }
         if (inner.type === 'listCommands') w({ type: 'commands', commands: COMMANDS })
         else if (inner.type === 'listFiles') w({ type: 'files', files: FILES.filter((f) => f.includes(inner.query)) })
         else if (inner.type === 'listModels') w({ type: 'models', models: MODELS })

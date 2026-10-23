@@ -182,6 +182,16 @@ export function debugArg(text) {
   return undefined
 }
 
+/** Dictated `text` put in `value` at `cursor`, with a space before it unless one is there (or it starts the input). */
+export function insertDictation(value, cursor, text) {
+  const said = String(text ?? '').trim()
+  if (!said) return { value, cursor }
+  const before = value.slice(0, cursor)
+  const gap = before && !/\s$/.test(before) ? ' ' : ''
+  const next = `${before}${gap}${said}${value.slice(cursor)}`
+  return { value: next, cursor: before.length + gap.length + said.length }
+}
+
 /** `traceRoot` (optional) is the panel left of the chat column where a `/debug` tab's trace is drawn. */
 export function createChatView({ root, traceRoot = null, t, send, request, onSettings, makeId = () => crypto.randomUUID() }) {
   let tabs = createTabs(null, makeId)
@@ -209,6 +219,11 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
   let undoTimer = null
   let toastTimer = null
   let tick = null
+  // Dictation, per session: the dock's last `dictationState` ({ state, seconds, size, progress }); and whether Enter was
+  // pressed while recording (the text is sent as soon as it is in).
+  const dictations = new Map()
+  const sendDictated = new Set()
+  const dictationOf = (session = tabs.active) => dictations.get(session) ?? { state: 'idle' }
   // `/debug`, per session: { tree, receivedAt, folds: Map<id, folded?>, open, focus }. Absent = off.
   const traces = new Map()
   // What the dock was last told about its width; null until the first draw, which always tells it (a reloaded page
@@ -478,6 +493,7 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
       model: modelLabel(model) || undefined,
       modelTitle: model ?? undefined,
       attachments: files.map(({ id, name, mime, size }) => ({ id, name, mime, size })),
+      dictation: dictationOf(),
     }
     const key = JSON.stringify(props)
     if (input && key === composerKey) return
@@ -497,7 +513,12 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
       else if (old) old.remove()
       else if (fresh) el.querySelector('.p-composer')?.appendChild(fresh)
     }
-    // The chips above the box (the box itself, with the textarea and the file input, stays).
+    // The voice model's strip and the chips above the box (the box itself, with the textarea and the file input, stays).
+    const oldStrip = el.querySelector('.p-composer-dictation')
+    const freshStrip = next.querySelector('.p-composer-dictation')
+    if (oldStrip && freshStrip) oldStrip.replaceWith(freshStrip)
+    else if (oldStrip) oldStrip.remove()
+    else if (freshStrip) el.querySelector('.p-composer')?.prepend(freshStrip)
     const oldFiles = el.querySelector('.p-composer-files')
     const freshFiles = next.querySelector('.p-composer-files')
     if (oldFiles && freshFiles) oldFiles.replaceWith(freshFiles)
@@ -683,6 +704,46 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
 
   // ---- tabs ------------------------------------------------------------------------------------
 
+  // ---- dictation -------------------------------------------------------------------------------
+
+  /** The microphone (or Alt+D): start, or stop and write what was said. */
+  function toggleDictation() {
+    const d = dictationOf()
+    if (d.state === 'recording') return post({ type: 'dictationStop' })
+    if (d.state === 'transcribing' || d.state === 'downloading') return
+    post({ type: 'dictationStart' })
+  }
+
+  /** What the dock says about a tab's dictation: its state, a note for an error, the text when it ends. */
+  function receiveDictation(session, message) {
+    if (message.type === 'dictationText') {
+      const text = message.text ?? ''
+      if (session === tabs.active && input) {
+        const at = input.selectionStart ?? input.value.length
+        const next = insertDictation(input.value, at, text)
+        input.value = next.value
+        input.setSelectionRange(next.cursor, next.cursor)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        input.focus()
+      } else {
+        const draft = drafts.get(session) ?? ''
+        drafts.set(session, insertDictation(draft, draft.length, text).value)
+      }
+      if (sendDictated.delete(session) && session === tabs.active && text.trim()) submit(false)
+      return
+    }
+    const { type: _type, ...state } = message
+    if (state.state === 'error') {
+      sendDictated.delete(session)
+      chats.set(session, addNote(chatOf(session), 'aria', t(`chat.dictation.error.${state.error}`)))
+      dictations.set(session, { state: 'idle' })
+      return render()
+    }
+    if (state.state === 'idle') sendDictated.delete(session)
+    dictations.set(session, state)
+    if (session === tabs.active) drawComposer()
+  }
+
   // ---- the trace (`/debug`) ---------------------------------------------------------------------
 
   /** `/debug`: on, off, or the other one (`null`) for the active tab; the dock answers with `chatTrace`. */
@@ -858,6 +919,7 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
     chats.delete(id)
     drafts.delete(id)
     traces.delete(id)
+    dictations.delete(id)
     attached.delete(id)
     reading.delete(id)
     sentWith.delete(id)
@@ -1244,6 +1306,11 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
+      // While dictating: stop, and send once the text is in.
+      if (dictationOf().state === 'recording') {
+        sendDictated.add(tabs.active)
+        return post({ type: 'dictationStop' })
+      }
       submit(event.altKey)
     } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.stopPropagation() // the arrows move the caret here, not focus between controls
@@ -1685,6 +1752,11 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
         event.preventDefault() // a link opens in the browser, never inside the dock
         return send({ type: 'openUrl', url: el.dataset.url })
       case 'send': return submit()
+      case 'dictate': return toggleDictation()
+      case 'dictate-download': return post({ type: 'dictationDownload' })
+      case 'dictate-later':
+        dictations.set(tabs.active, { state: 'idle' })
+        return drawComposer()
       case 'stop': return stop()
       case 'attach': return $('chat-file')?.click()
       case 'attach-remove': return removeFile(id)
@@ -1905,6 +1977,7 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
       // A late reply for a tab that is gone (closed, its undo window over) must not bring its state back.
       if (!tabs.sessions.some((s) => s.id === session) && tabs.closed?.entry?.id !== session) return
       if (message.type === 'chatTrace') return receiveTrace(session, message.trace)
+      if (message.type === 'dictationState' || message.type === 'dictationText') return receiveDictation(session, message)
       // A new Pi (a restart, another model) can offer other commands: ask again.
       if ((message.type === 'chatState' && message.model !== chatOf(session).model) || (message.type === 'chatEngine' && message.state !== 'ready')) {
         commandsBy.delete(session)
@@ -1970,6 +2043,10 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
      * closed, and the stop button stops it.
      */
     escape() {
+      if (dictationOf().state === 'recording') {
+        post({ type: 'dictationCancel' })
+        return true
+      }
       if (picker) {
         dismissed = { kind: picker.kind, text: input?.value ?? '' }
         closePicker()
@@ -1997,6 +2074,8 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
       }
       return false
     },
+    /** Alt+D: dictate, or stop and write it. */
+    toggleDictation,
     /** Alt+A: the subagents view and back. */
     toggleAgents() {
       if (ui.view !== 'agents' && ui.view !== 'session') ui.job = null
