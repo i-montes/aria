@@ -52,6 +52,10 @@ Tests: `bun test extensions`.
   - `jev-router/modes.ts`: `/plan` asks the brainstorming questions in batches of up to 4 independent ones, not one
     per call (the owner asked for it), and then goes straight to writing-plans: no spec to write or review (the owner
     asked for it, 2026-10-22).
+  - `lib/jev.ts`: every question to Jev (the router's, the sandbox review's) goes to the free model; when it answers
+    429, the free one is paused until the hour its retry delay names (`jev-free-paused.json` in the agent folder, shared
+    by every session), the paid `opencode/jev-1.13` answers meanwhile, and the person is told once (or why the paid one
+    did not answer).
   - `jev-router/route.ts`, `index.ts`: focused work that changes things gets `methodNote`: for code in a project with tests, the outcome and its test first, seen failing, then passing; anything else is done and checked once (never naming a method).
   - `jev-router/route.ts`, `index.ts`: Jev also asks whether the work is sizable; sizable work that changes things gets
     `plan=offer`, the assistant offers once to plan it first and, accepted, starts plan mode with `start_plan`.

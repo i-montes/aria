@@ -1,8 +1,10 @@
 // What the router asks Jev about each new user message, and how the answers become a hint line the
 // conversation model follows. The conversation stays on one model; only the hint changes.
+import { FREE_JEV } from '../lib/jev.ts'
 
-// Only the free Jev: the same OpenCode key also reaches the paid one.
-export const CLASSIFIER = { provider: 'opencode', id: 'jev-1.13-free' } as const
+// The free Jev, as the evals ask it; the extensions go through lib/jev.ts, which falls back to the paid one while the
+// free one's quota is spent.
+export const CLASSIFIER = FREE_JEV
 
 export type Route = 'quick' | 'focused' | 'parallel' | 'think'
 
