@@ -5,6 +5,14 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.13.2 — 2026-10-22
+
+### Fixed
+
+- Aria is signed ad hoc as com.aria.dock on macOS, its Info.plist bound
+- the microphone takes one click: its button changes in place as the seconds tick
+- a second or less of voice, or silence, is not transcribed; Whisper's made-up closings are dropped
+
 ## 0.13.1 — 2026-10-22
 
 ### Fixed
