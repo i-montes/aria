@@ -832,6 +832,53 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
     }
 
     #[test]
+    fn a_subagent_that_commits_waits_for_its_folder_instead_of_taking_a_worktree() {
+        use crate::jobs::JobState;
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let s = setup(true);
+        // A fake `pi` that stays running, so the first writer holds the repository.
+        let pi = s.dir.path().join("pi");
+        std::fs::write(&pi, "#!/bin/sh\nsleep 30\n").unwrap();
+        let (_repo_dir, root) = crate::worktree::tests::repo();
+        let socket = bind(&s, "s1");
+        let mut c = Client::connect(&socket);
+        let folder = root.to_str().unwrap();
+        let mut start = |id: u64, extra: Value| {
+            let mut request = json!({"id": id, "op": "start", "kind": "agent", "task": "slice it",
+                "title": "slice", "folder": folder, "writes": true});
+            for (key, value) in extra.as_object().unwrap() {
+                request[key] = value.clone();
+            }
+            let started = c.ask(request);
+            assert_eq!(started["ok"], true, "{started}");
+            started["job"]["id"].as_str().unwrap().to_string()
+        };
+        let holder = start(1, json!({"isolation": "folder"}));
+        assert_eq!(s.jobs.get(&holder).unwrap().isolation.as_deref(), Some("folder"));
+        // The contrast: without `commits`, "auto" gives way to a worktree when the repository is taken.
+        let plain = start(2, json!({"isolation": "auto"}));
+        let plain = s.jobs.get(&plain).unwrap();
+        assert_eq!(plain.isolation.as_deref(), Some("worktree"));
+        assert!(plain.worktree.is_some());
+        // With `commits`, the same request waits for the folder, whether `isolation` is "auto" or missing.
+        let auto = start(3, json!({"isolation": "auto", "commits": true}));
+        let missing = start(4, json!({"commits": true}));
+        for id in [&auto, &missing] {
+            let job = s.jobs.get(id).unwrap();
+            assert_eq!(job.state, JobState::Queued, "{job:?}");
+            assert_eq!(job.worktree, None);
+        }
+        s.jobs.stop(&holder);
+        eventually("the first to commit gets the folder", || {
+            s.jobs.get(&auto).is_some_and(|j| j.state == JobState::Running)
+        });
+        let job = s.jobs.get(&auto).unwrap();
+        assert_eq!((job.isolation.as_deref(), job.worktree), (Some("folder"), None));
+        assert_eq!(s.jobs.get(&missing).unwrap().state, JobState::Queued, "the folder has one writer at a time");
+        s.jobs.stop_all();
+    }
+
+    #[test]
     fn without_a_launcher_answer_an_agent_is_refused() {
         let s = setup(false);
         let socket = bind(&s, "s1");
