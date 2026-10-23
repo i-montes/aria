@@ -86,6 +86,14 @@ describe('the background extension', () => {
     expect(dock!.lines.filter((l) => l.op === 'start').length).toBe(starts)
   })
 
+  test('background_agent sends commits: true when asked and commits: false otherwise', async () => {
+    const pi = await withDock((req) => (req.op === 'start' ? { ok: true, job: job({ kind: 'agent', title: req.title, state: 'running', number: 5, id: 'j5' }) } : undefined))
+    await pi.run('background_agent', { task: 'Phase A of the slice.', title: 'Slice phase A', commits: true }, rpc)
+    await pi.run('background_agent', { task: 'Look into the logs.', title: 'Read the logs' }, rpc)
+    const starts = dock!.lines.filter((l) => l.op === 'start')
+    expect(starts.map((l) => l.commits)).toEqual([true, false])
+  })
+
   test('without ARIA_JOBS_SOCK every tool refuses with "Background work needs Aria\'s dock."', async () => {
     process.env.PI_SANDBOX = '0'
     const pi = fakePi()

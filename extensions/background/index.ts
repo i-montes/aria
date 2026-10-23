@@ -23,6 +23,7 @@ const AGENT_DESCRIPTION = [
   '`title`: at most 6 words, in the person\'s language. `folder`: the project it works in (absolute or ~/…; default: your folder), inside the projects folder.',
   '`writes: false` for research or a review (it runs without the folder lock and changes no files). `isolation: "worktree"` for a large job (its own git worktree; the changes come back when it ends); "auto" (default) uses the folder, or a worktree when the folder is taken.',
   'While a writing subagent works in a folder (not a worktree), do not edit files in that folder yourself until it ends.',
+  '`commits: true` only when a slice brief asks for it: the subagent then commits in the folder (never a worktree).',
   '`model: "heavy"` for heavy work (planning-grade model); "session" (default) uses the model of this chat.',
 ].join('\n')
 
@@ -147,6 +148,7 @@ export default function background(pi: ExtensionAPI) {
         folder: str('The project it works in: absolute or ~/…, inside the projects folder. Default: your folder.'),
         writes: { type: 'boolean', description: 'false for research or a review: it changes no files. Default true.' },
         isolation: { type: 'string', enum: ['auto', 'folder', 'worktree'], description: '"worktree" for a large job; "auto" (default) uses the folder, or a worktree when the folder is taken.' },
+        commits: { type: 'boolean', description: 'true only for a slice phase: the subagent commits locally in the folder as its brief says. Implies isolation "folder". Default false.' },
         model: { type: 'string', enum: ['session', 'heavy'], description: '"heavy" for heavy work; "session" (default) is this chat\'s model.' },
       },
       ['task', 'title'],
@@ -166,6 +168,7 @@ export default function background(pi: ExtensionAPI) {
           folder,
           writes: params.writes ?? true,
           isolation: params.isolation ?? 'auto',
+          commits: params.commits ?? false,
           model: params.model ?? 'session',
         })
       } catch (e) {
