@@ -16,7 +16,7 @@ import { renderMemory, initialMemoryUi, reduceMemoryUi } from './parts/memory.js
 import { renderSchedules } from './parts/schedules.js'
 import { renderSecret } from './parts/secret.js'
 import { findSecrets, suggestName, validName, withSecretsSaved } from './secrets.js'
-import { renderModelPicker, orderedModels, providerLabel, withoutPayPerUse } from './parts/models.js'
+import { renderModelPicker, orderedModels, providerLabel, connectedModels, withoutPayPerUse } from './parts/models.js'
 import { questionAnswers, questionInit, questionReduce, normalizeQuestions, renderQuestion } from './parts/question.js'
 import { renderQuotaBars } from './parts/quotabars.js'
 import { jobAgent, parallelAgents, renderSubagents } from './parts/subagents.js'
@@ -1295,9 +1295,12 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
     picker = { kind: 'model', items: [], query, active: 0, start: 0 }
     drawOverlay()
     $('chat-overlay').querySelector('[data-chat-field="model-search"]')?.focus()
-    const reply = await ask({ type: 'listModels' }, session)
+    // What is connected is read fresh: a provider connected or removed since the page loaded counts.
+    const [reply, disk] = await Promise.all([ask({ type: 'listModels' }, session), request({ type: 'loadSettings' }).catch(() => null)])
     if (picker?.kind !== 'model' || session !== tabs.active) return // closed or moved on meanwhile
-    picker = { ...picker, items: withoutPayPerUse(reply.models ?? [], settings?.models?.allowPayPerUse === true, current().model ?? '') }
+    const inUse = current().model ?? ''
+    const models = connectedModels(reply.models ?? [], Array.isArray(disk?.connected) ? disk.connected : null, inUse)
+    picker = { ...picker, items: withoutPayPerUse(models, settings?.models?.allowPayPerUse === true, inUse) }
     drawOverlay()
   }
 

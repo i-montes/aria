@@ -8,8 +8,8 @@
 //   active   index in the ORDERED list (`orderedModels`: grouped by provider) of the highlighted row (clamped)
 //   open     false keeps the element but hides it, so it can animate out
 // ui: unused. t: translate(key, vars).
-// Pure helpers exported for the controller: filterModels, orderedModels, providerLabel (clampActive, stepActive and keepVisible live
-// in ./commands.js and work for every picker).
+// Pure helpers exported for the controller: filterModels, orderedModels, providerLabel, connectedModels, withoutPayPerUse
+// (clampActive, stepActive and keepVisible live in ./commands.js and work for every picker).
 //
 // Emits (on the row's button / its list item):
 //   data-chat="pick"          data-index  the index in the ordered list (Enter, Tab and click use it)
@@ -55,6 +55,20 @@ const refOf = (m) => (m.provider ? `${m.provider}/${m.id}` : String(m.id ?? ''))
 export const withoutPayPerUse = (models, allowed, current) =>
   allowed ? models : models.filter((m) => m.provider !== 'opencode' || refOf(m) === current)
 
+/** The credential (`provider:type`, as the dock reports it in `connected`) each of Pi's providers is used with. The
+ * Claude sign-in is used through `claude-bridge`, so Pi's own `anthropic` provider counts only with an API key. */
+const CREDENTIAL = { 'opencode-go': 'opencode-go:api_key', anthropic: 'anthropic:api_key', 'claude-bridge': 'anthropic:oauth' }
+
+/** Only the providers connected in Aria (`connected`: the dock's credential names; null when unknown keeps everything).
+ * A provider Aria does not connect itself (Zen, a custom one) stays as Pi lists it; the model in use always stays. */
+export const connectedModels = (models, connected, current) =>
+  connected
+    ? models.filter((m) => !CREDENTIAL[m.provider] || connected.includes(CREDENTIAL[m.provider]) || refOf(m) === current)
+    : models
+
+/** Names compared as people read versions: `Opus 5.5` after `Opus 4.5`, `GLM 5.10` after `GLM 5.9`. */
+const byName = new Intl.Collator('en', { numeric: true, sensitivity: 'base' })
+
 /**
  * Ranks the models for `query`: the name starts with it (0), it is inside the name (1 + position),
  * it is in the id, provider, description, tag or tier (50). Ties keep the original order.
@@ -83,7 +97,8 @@ export function filterModels(models, query) {
 
 /**
  * The models for `query`, grouped by provider: providers in the order of their best match (without a query,
- * of first appearance), each provider's models in ranked order. Returns the flat list the picker draws and
+ * of first appearance), each provider's models in ranked order and, among equals (every model without a query), by
+ * name descending, so the newest version comes first. Returns the flat list the picker draws and
  * the controller picks from: [{ model, ranges, index, provider, firstOfProvider }].
  */
 export function orderedModels(models, query) {
@@ -96,6 +111,7 @@ export function orderedModels(models, query) {
   }
   const flat = []
   for (const [provider, hits] of groups) {
+    hits.sort((a, b) => a.score - b.score || byName.compare(nameOf(b.model), nameOf(a.model)) || a.order - b.order)
     hits.forEach((hit, i) => flat.push({ model: hit.model, ranges: hit.ranges, provider, firstOfProvider: i === 0 }))
   }
   return flat.map((entry, index) => ({ ...entry, index }))

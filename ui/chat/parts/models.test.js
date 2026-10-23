@@ -1,7 +1,7 @@
 // Run: bun test ui/chat/parts/models.test.js
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { TEXTS, filterModels, orderedModels, providerLabel, renderModelPicker, withoutPayPerUse } from './models.js'
+import { TEXTS, connectedModels, filterModels, orderedModels, providerLabel, renderModelPicker, withoutPayPerUse } from './models.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const hostile = '<script>alert("x")</script> & \'q\''
@@ -44,8 +44,21 @@ describe('grouping by provider', () => {
     { provider: 'weird<provider>', id: 'x', name: 'X' },
   ]
 
-  test('models of one provider sit together, providers in order of first appearance, models in their own order', () => {
-    expect(orderedModels(mixed, '').map((x) => x.model.id)).toEqual(['glm-5', 'kimi-k2', 'claude-sonnet-5-5', 'claude-opus-5-5', 'x'])
+  test('models of one provider sit together, providers in order of first appearance, models by name descending', () => {
+    expect(orderedModels(mixed, '').map((x) => x.model.id)).toEqual(['kimi-k2', 'glm-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'x'])
+  })
+
+  test('versions descend as numbers: the newest first', () => {
+    const versions = ['Claude Opus 4.5', 'Claude Opus 5.5', 'GLM 5.9', 'GLM 5.10', 'Claude Opus 5'].map((name, i) => ({ provider: 'p', id: `m${i}`, name }))
+    expect(orderedModels(versions, '').map((x) => x.model.name)).toEqual(['GLM 5.10', 'GLM 5.9', 'Claude Opus 5.5', 'Claude Opus 5', 'Claude Opus 4.5'])
+  })
+
+  test('with a query the best match still comes first within its provider', () => {
+    const two = [
+      { provider: 'p', id: 'a', name: 'Zeta Kimi' },
+      { provider: 'p', id: 'b', name: 'Kimi K2' },
+    ]
+    expect(orderedModels(two, 'kimi').map((x) => x.model.id)).toEqual(['b', 'a'])
   })
 
   test('with a query the provider whose best match ranks first comes first', () => {
@@ -79,7 +92,7 @@ describe('grouping by provider', () => {
     expect(html).not.toContain('weird<provider>')
     expect(html.match(/data-chat="pick" data-index="4"/g)).toHaveLength(1)
     expect(html.indexOf('OpenCode Go')).toBeLessThan(html.indexOf('GLM 5'))
-    expect(html.indexOf('GLM 5')).toBeLessThan(html.indexOf('Kimi K2'))
+    expect(html.indexOf('Kimi K2')).toBeLessThan(html.indexOf('GLM 5'))
     expect(html.indexOf('Kimi K2')).toBeLessThan(html.indexOf('Anthropic'))
   })
 
@@ -189,5 +202,34 @@ describe('pay-per-use models (ARIA-SETUP item 7)', () => {
   })
   test('the model in use always stays listed', () => {
     expect(withoutPayPerUse(models, false, 'opencode/gpt-y').map((m) => m.id)).toContain('gpt-y')
+  })
+})
+
+describe('only connected providers', () => {
+  const models = [
+    { provider: 'opencode-go', id: 'glm-5.3' },
+    { provider: 'anthropic', id: 'claude-opus-5-5' },
+    { provider: 'claude-bridge', id: 'claude-opus-5-5' },
+    { provider: 'opencode', id: 'gpt-6-sol' },
+    { provider: 'ollama', id: 'local' },
+  ]
+  const ids = (list) => list.map((m) => `${m.provider}/${m.id}`)
+
+  test('the Claude sign-in lists claude-bridge, not Pi\'s own anthropic provider', () => {
+    expect(ids(connectedModels(models, ['anthropic:oauth', 'opencode-go:api_key'], ''))).toEqual([
+      'opencode-go/glm-5.3',
+      'claude-bridge/claude-opus-5-5',
+      'opencode/gpt-6-sol',
+      'ollama/local',
+    ])
+  })
+
+  test('an Anthropic key lists anthropic, not claude-bridge; a provider without its credential is gone', () => {
+    expect(ids(connectedModels(models, ['anthropic:api_key'], ''))).toEqual(['anthropic/claude-opus-5-5', 'opencode/gpt-6-sol', 'ollama/local'])
+  })
+
+  test('the model in use always stays; not knowing what is connected keeps everything', () => {
+    expect(ids(connectedModels(models, [], 'anthropic/claude-opus-5-5'))).toContain('anthropic/claude-opus-5-5')
+    expect(connectedModels(models, null, '')).toEqual(models)
   })
 })
