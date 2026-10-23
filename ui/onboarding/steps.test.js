@@ -58,7 +58,7 @@ describe('what gets saved', () => {
     expect(s.subagents.turnLimit).toBeNull()
     expect(s.subagents.saveSessions).toBe(false)
     expect(s.git.commitWithoutAsking).toBe(false)
-    expect(s.subagents.autoSkills).toEqual(['systematic-debugging', 'verification-before-completion'])
+    expect(s.subagents.autoSkills).toEqual(['systematic-debugging'])
     expect(s.compaction.percent).toBe(40)
     expect(s.provider.quota.switchAt).toBe(98)
     expect(s.router).toEqual({ enabled: true, backend: 'opencode' })

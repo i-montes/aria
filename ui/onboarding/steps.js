@@ -99,7 +99,7 @@ export function defaultSettings(language = 'en') {
       saveSessions: false,
       turnLimit: null,
       planExecute: true,
-      autoSkills: ['systematic-debugging', 'verification-before-completion'],
+      autoSkills: ['systematic-debugging'],
     },
     shortcut: '',
     credentials: { keyring: true },
