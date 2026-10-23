@@ -8,6 +8,7 @@
 
 mod attachments;
 mod chat;
+mod checkpoints;
 mod clients;
 mod control;
 mod dictation;
