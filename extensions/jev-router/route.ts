@@ -119,6 +119,13 @@ export function hintLine(h: Hints): string {
   ].join(' · ')
 }
 
+/** For focused work that changes things (and is not sizable, which gets the plan offer): start from the outcome and
+ * the check that proves it. Never names a method: that is the router's business, not the person's. */
+export function methodNote(h: Hints): string {
+  if (h.route !== 'focused' || h.readOnly || h.planWorth) return ''
+  return 'Before changing anything, state in one line the outcome and the check that will prove it (a test when there is one), then make the check fail, then pass.'
+}
+
 // The text of the last assistant message on the branch (Pi session entries), or ''.
 export function lastAssistantText(entries: readonly any[]): string {
   for (let i = entries.length - 1; i >= 0; i--) {

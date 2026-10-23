@@ -35,6 +35,7 @@ import {
   expertsLine,
   type Hints,
   hintLine,
+  methodNote,
   isScratchPath,
   lastAssistantText,
   mayWrite,
@@ -241,7 +242,7 @@ export default function (pi: ExtensionAPI) {
         hints.route === 'parallel' ? expertsLine(loadExperts().filter((e) => !hints.readOnly || e.readOnly)) : ''
       // Aria's dock shows the route as a line before the answer.
       if (ctx.mode === 'rpc') ctx.ui?.setStatus?.('aria-jev', JSON.stringify(jevStatus(hints)))
-      const content = [hintLine(hints), experts, styleNote(ariaConfig().style)].filter(Boolean).join('\n')
+      const content = [hintLine(hints), methodNote(hints), experts, styleNote(ariaConfig().style)].filter(Boolean).join('\n')
       return { message: { customType: 'jev-router', content, display: false, details: hints } }
     } catch {
       return

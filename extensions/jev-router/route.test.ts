@@ -1,6 +1,6 @@
 // Run: bun test extensions
 import { describe, expect, test } from 'bun:test'
-import { CLASSIFIER, hintLine, jevStatus, parseHints } from './route.ts'
+import { CLASSIFIER, hintLine, jevStatus, methodNote, parseHints } from './route.ts'
 
 const hints = (over: Record<string, unknown> = {}) => ({ route: 'focused', routeP: 0.9, memory: false, web: false, notion: false, readOnly: false, ...over }) as any
 
@@ -45,5 +45,24 @@ describe('offering a plan for sizable work', () => {
     expect(parseHints(result('quick', 0.9))!.planWorth).toBe(false)
     expect(parseHints(result('parallel', 0.9, 0.1))!.planWorth).toBe(false)
     expect(hintLine(parseHints(result('focused', 0.2))!)).not.toContain('plan=')
+  })
+
+  test('a focused task is asked for its outcome first', () => {
+    const note = methodNote(parseHints(result('focused', 0.2))!)
+    expect(note).toContain('the outcome and the check that will prove it')
+    expect(methodNote(parseHints(result('focused', 0.2, 0.1))!)).toBe('', 'read-only: nothing to prove')
+    expect(methodNote(parseHints(result('focused', 0.9))!)).toBe('', 'sizable work is offered a plan instead')
+    expect(methodNote(parseHints(result('quick', 0.1))!)).toBe('')
+  })
+
+  test('no method names in hints', () => {
+    for (const route of ['quick', 'focused', 'parallel', 'think']) {
+      for (const sizable of [0.1, 0.9]) {
+        const h = parseHints(result(route, sizable))
+        if (!h) continue
+        const said = hintLine(h) + methodNote(h)
+        expect(said).not.toMatch(/\b(ODD|SDD|TDD)\b/)
+      }
+    }
   })
 })

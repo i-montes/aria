@@ -52,6 +52,7 @@ Tests: `bun test extensions`.
   - `jev-router/modes.ts`: `/plan` asks the brainstorming questions in batches of up to 4 independent ones, not one
     per call (the owner asked for it), and then goes straight to writing-plans: no spec to write or review (the owner
     asked for it, 2026-10-22).
+  - `jev-router/route.ts`, `index.ts`: focused work that changes things gets `methodNote`: state the outcome and the check that proves it, make the check fail, then pass (never naming a method).
   - `jev-router/route.ts`, `index.ts`: Jev also asks whether the work is sizable; sizable work that changes things gets
     `plan=offer`, the assistant offers once to plan it first and, accepted, starts plan mode with `start_plan`.
   - `ask-user/index.ts`: the tool's description asks for one batch of up to 4 independent questions per call, even when
