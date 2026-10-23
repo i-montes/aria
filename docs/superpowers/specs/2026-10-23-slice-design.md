@@ -87,9 +87,13 @@ repo's `.gitignore` and the plan is not committed.
 
 ### Phase B: build (a background subagent per phase)
 
-- Approval launches `background_agent` with the phase as the brief (`writes: true`, `isolation: auto`): the brief
-  is the plan path, the phase, the rules below and Ponytail's. The main agent ends its turn at once: the owner can
-  talk to it, ask, or correct.
+- Approval launches `background_agent` with the phase as the brief and a new flag, `commits: true`: the brief is the
+  plan path, the phase, the rules below and Ponytail's. The main agent ends its turn at once: the owner can talk to
+  it, ask, or correct.
+- A committing subagent runs **in the folder**, never in a worktree: a worktree's work comes back as one uncommitted
+  `git apply` (`crates/aria/src/worktree.rs`), which would flatten the commits. The dock's brief today says "Do not
+  commit." to every writer (`crates/aria/src/jobs/agent.rs`); with `commits` it says "Commit locally as the task says;
+  never push, merge or rebase." It queues while another writer holds the folder.
 - The subagent works the phase's tasks, each one a cycle: write the test → run it, red → **commit the test** → the
   minimum code (Ponytail's ladder) → run the tests, green → **commit**. A refactor only with everything green, never
   mixed with new behaviour, in its own commit, and only when the code calls for it (a handler that grows, tests in
