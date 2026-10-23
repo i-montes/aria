@@ -69,8 +69,8 @@ Decided with the owner (2026-10-23):
   - **The editor**: multi-line, history (↑ on an empty editor), `@` opens a fuzzy file list (`listFiles`), `!command`
     runs in the session (Pi's `bash`) and its output joins the context, `/` lists commands (`listCommands`).
   - **Keys**: Enter sends (queued while a turn runs, as in the dock), Esc stops the turn, Esc Esc (idle) opens the undo
-    list, Ctrl+C / Ctrl+D leave, Ctrl+L redraws. The verbose key is picked in the plan against Pi's and the terminal's
-    own keys.
+    list, Ctrl+C / Ctrl+D leave, Ctrl+L redraws, Ctrl+O switches verbose (Pi's own key for
+    expanding tools).
 - **Dialogs** in place of the editor: `ask_user` questions (options by number 1–9 or click, a free answer, several
   questions one after the other), the sandbox's permissions (`y` once, `a` always in this repo, `n`, or a click),
   `request_secret` (masked input; the value goes to the dock as the page sends it, never to the model), the quota card.
