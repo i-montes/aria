@@ -289,7 +289,7 @@ impl Default for Subagents {
             save_sessions: false,
             turn_limit: None,
             plan_execute: true,
-            auto_skills: vec!["systematic-debugging".into(), "verification-before-completion".into()],
+            auto_skills: vec!["systematic-debugging".into()],
         }
     }
 }
@@ -379,7 +379,7 @@ mod tests {
                     { "name": "researcher", "enabled": true, "readOnly": true }
                 ],
                 "saveSessions": false, "turnLimit": null, "planExecute": true,
-                "autoSkills": ["systematic-debugging", "verification-before-completion"]
+                "autoSkills": ["systematic-debugging"]
             },
             "shortcut": "",
             "credentials": { "keyring": true },

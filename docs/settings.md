@@ -35,7 +35,7 @@ The model lives in `crates/aria-core/src/settings.rs`; the defaults are the owne
     "saveSessions": false,
     "turnLimit": null,
     "planExecute": true,
-    "autoSkills": ["systematic-debugging", "verification-before-completion"]
+    "autoSkills": ["systematic-debugging"]
   },
   "shortcut": "",
   "credentials": { "keyring": true },

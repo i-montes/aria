@@ -115,6 +115,9 @@ pub fn session_env(paths: &AriaPaths, path_var: &str, workdir: &Path) -> Vec<(St
         ("PI_SKIP_VERSION_CHECK".into(), "1".into()),
         ("ARIA_PROJECTS_DIR".into(), workdir.display().to_string()),
         ("ARIA_SETTINGS".into(), paths.settings().display().to_string()),
+        // Ponytail's own switches: no "loaded" notice on every session and no status line (the dock has its own).
+        ("PONYTAIL_QUIET_STARTUP".into(), "1".into()),
+        ("PONYTAIL_HIDE_STATUS".into(), "1".into()),
     ]
 }
 
@@ -157,10 +160,19 @@ mod tests {
         let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(
             keys,
-            ["PI_CODING_AGENT_DIR", "PATH", "PI_SKIP_VERSION_CHECK", "ARIA_PROJECTS_DIR", "ARIA_SETTINGS"]
+            [
+                "PI_CODING_AGENT_DIR",
+                "PATH",
+                "PI_SKIP_VERSION_CHECK",
+                "ARIA_PROJECTS_DIR",
+                "ARIA_SETTINGS",
+                "PONYTAIL_QUIET_STARTUP",
+                "PONYTAIL_HIDE_STATUS"
+            ]
         );
         assert_eq!(env[3].1, "/work");
         assert_eq!(env[4].1, paths.settings().display().to_string());
+        assert_eq!((env[5].1.as_str(), env[6].1.as_str()), ("1", "1"));
     }
 
     fn fake_install(paths: &AriaPaths, version: &str, mode: u32) -> PathBuf {

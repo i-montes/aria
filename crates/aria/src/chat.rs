@@ -5758,6 +5758,7 @@ mod tests {
         assert_eq!(args, ["--model", "opencode-go/x", "--thinking", "high"]);
         assert!(env.iter().any(|(k, v)| k == "PI_WATCH_SOCK" && v.ends_with("watch-s1.sock")), "{env:?}");
         assert!(env.iter().any(|(k, _)| k == "PI_CODING_AGENT_DIR"), "{env:?}");
+        assert!(env.iter().any(|(k, v)| k == "PONYTAIL_QUIET_STARTUP" && v == "1"), "subagents stay quiet too: {env:?}");
         assert!(unset.iter().any(|name| name == "ARIA_JOBS_SOCK"), "{unset:?}");
 
         let mut settings = settings::load(&h.paths).unwrap().unwrap();

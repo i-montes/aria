@@ -98,7 +98,7 @@ The user's passwords, API keys and tokens live in the system keyring; you only e
 
 # Superpowers
 
-The user activates Superpowers with `/plan <idea>` (or by accepting your offer to plan, `start_plan`: `brainstorming`'s questions, then straight to `writing-plans`, with no spec to write or review) and `/execute <plan>` (`subagent-driven-development`). Skills are read with `read` from the path the command gives you; there is no `Skill` tool. Outside those modes don't use these skills, except `systematic-debugging` and `verification-before-completion`, which do apply whenever relevant.
+The user activates Superpowers with `/plan <idea>` (or by accepting your offer to plan, `start_plan`: `brainstorming`'s questions, then straight to `writing-plans`, with no spec to write or review) and `/execute <plan>` (`subagent-driven-development`). Skills are read with `read` from the path the command gives you; there is no `Skill` tool. Outside those modes don't use these skills, except `systematic-debugging`, which does apply whenever relevant.
 
 Equivalences when a Superpowers skill asks you to:
 

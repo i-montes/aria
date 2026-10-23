@@ -17,12 +17,13 @@ pub fn required_packages() -> Vec<&'static str> {
     include_str!("../../../pi-packages").lines().map(str::trim).filter(|line| !line.is_empty()).collect()
 }
 
-/// From superpowers the owner loads two skills and no extensions (as in his own Pi's settings); the settings'
-/// `subagents.autoSkills` replace them.
-const SUPERPOWERS_SKILLS: [&str; 2] = ["systematic-debugging", "verification-before-completion"];
+/// From superpowers the owner loads one skill and no extensions (as in his own Pi's settings); the settings'
+/// `subagents.autoSkills` replace it.
+const SUPERPOWERS_SKILLS: [&str; 1] = ["systematic-debugging"];
 
 /// `pi install` lists a package as a plain string; the superpowers one becomes a filtered entry with no extensions
-/// and only `skills` (names under the package's `skills/`). An entry filtered earlier gets the current skills.
+/// and only `skills` (names under the package's `skills/`), the ponytail one keeps its extension and gets two skills.
+/// An entry filtered earlier gets the current skills.
 fn with_package_filters(packages: Value, skills: &[String]) -> Value {
     let Value::Array(list) = packages else { return packages };
     let skills: Vec<String> = skills.iter().map(|name| format!("skills/{name}")).collect();
@@ -33,6 +34,10 @@ fn with_package_filters(packages: Value, skills: &[String]) -> Value {
                 match source {
                     Some(source) if source.starts_with("git:github.com/obra/superpowers") => {
                         json!({"source": source, "extensions": [], "skills": skills})
+                    }
+                    // Ponytail: its Pi extension and two of its skills (the audit, debt, gain and help ones are not Aria's).
+                    Some(source) if source.starts_with("git:github.com/DietrichGebert/ponytail") => {
+                        json!({"source": source, "skills": ["skills/ponytail", "skills/ponytail-review"]})
                     }
                     _ => entry,
                 }
@@ -680,7 +685,8 @@ mod tests {
             required_packages(),
             vec![
                 "npm:pi-parallel-agents@0.2.0",
-                "git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3"
+                "git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3",
+                "git:github.com/DietrichGebert/ponytail@09c434ab73ca43761c5d8b0c5d341926c2fba710"
             ]
         );
         assert!(required_packages().iter().all(|p| p.contains('@')));
@@ -705,10 +711,27 @@ mod tests {
         assert_eq!(packages[0], json!("npm:pi-parallel-agents@0.2.0"));
         assert_eq!(
             packages[1],
-            json!({"source": "git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3", "extensions": [], "skills": ["skills/systematic-debugging", "skills/verification-before-completion"]})
+            json!({"source": "git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3", "extensions": [], "skills": ["skills/systematic-debugging"]})
         );
         assert_eq!(packages[2], json!("npm:pi-claude-agent-sdk@0.9.2"));
         // and again: the object stays as it is
+        prepare(&paths, None).unwrap();
+        assert_eq!(read_json(&paths.agent().join("settings.json")).unwrap().unwrap()["packages"], packages);
+    }
+
+    #[test]
+    fn prepare_gives_the_ponytail_package_its_two_skills() {
+        let (_dir, paths) = paths();
+        std::fs::create_dir_all(paths.agent()).unwrap();
+        std::fs::write(paths.agent().join("settings.json"), r#"{"packages":["npm:pi-parallel-agents@0.2.0","git:github.com/DietrichGebert/ponytail@09c434ab73ca43761c5d8b0c5d341926c2fba710"]}"#).unwrap();
+        prepare(&paths, None).unwrap();
+        let packages = read_json(&paths.agent().join("settings.json")).unwrap().unwrap()["packages"].clone();
+        assert_eq!(packages[0], json!("npm:pi-parallel-agents@0.2.0"));
+        // no `extensions` key: Pi loads the package's extension when it is absent
+        assert_eq!(
+            packages[1],
+            json!({"source": "git:github.com/DietrichGebert/ponytail@09c434ab73ca43761c5d8b0c5d341926c2fba710", "skills": ["skills/ponytail", "skills/ponytail-review"]})
+        );
         prepare(&paths, None).unwrap();
         assert_eq!(read_json(&paths.agent().join("settings.json")).unwrap().unwrap()["packages"], packages);
     }
@@ -718,10 +741,12 @@ mod tests {
         let (_dir, paths) = paths();
         prepare(&paths, None).unwrap();
         assert!(!packages_installed(&paths));
-        std::fs::write(paths.agent().join("settings.json"), r#"{"packages":["npm:pi-parallel-agents@0.2.0","git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3"]}"#).unwrap();
+        std::fs::write(paths.agent().join("settings.json"), r#"{"packages":["npm:pi-parallel-agents@0.2.0","git:github.com/obra/superpowers@bb92a77741419a4ab5f06e711a283343f1ada0c3","git:github.com/DietrichGebert/ponytail@09c434ab73ca43761c5d8b0c5d341926c2fba710"]}"#).unwrap();
         std::fs::create_dir_all(paths.agent().join("npm/node_modules/pi-parallel-agents")).unwrap();
         assert!(!packages_installed(&paths), "superpowers is not cloned yet");
         std::fs::create_dir_all(paths.agent().join("git/github.com/obra/superpowers/skills")).unwrap();
+        assert!(!packages_installed(&paths), "ponytail is not cloned yet");
+        std::fs::create_dir_all(paths.agent().join("git/github.com/DietrichGebert/ponytail/skills")).unwrap();
         assert!(packages_installed(&paths));
     }
 

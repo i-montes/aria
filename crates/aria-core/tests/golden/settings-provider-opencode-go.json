@@ -73,8 +73,7 @@
   "shortcut": "",
   "subagents": {
     "autoSkills": [
-      "systematic-debugging",
-      "verification-before-completion"
+      "systematic-debugging"
     ],
     "experts": [
       {
