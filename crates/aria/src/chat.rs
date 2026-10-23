@@ -16,9 +16,7 @@ use aria_engine::engine::{Engine, EngineEvent, SpawnSpec};
 use aria_engine::protocol::UiAnswer;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-#[cfg(target_os = "linux")]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -700,9 +698,9 @@ impl Chat {
 
     /// A warning in the chat the page says in its own language: a translation key and its values.
     fn notice_key(&self, key: &str, vars: Value) {
-        self.emit(DockMessage::ChatEvent {
-            event: json!({"type": "ui_notice", "request": {"method": "notify", "key": key, "vars": vars, "notifyType": "warning"}}),
-        });
+        self.shown(
+            json!({"type": "ui_notice", "request": {"method": "notify", "key": key, "vars": vars, "notifyType": "warning"}}),
+        );
     }
 
     /// The turn watchdog: it covers the model being silent. A run that got nothing from Pi (no event, reply or UI
@@ -735,9 +733,49 @@ impl Chat {
 
     /// A warning in the chat, as an extension's `notify` shows.
     fn notice(&self, message: String) {
-        self.emit(DockMessage::ChatEvent {
-            event: json!({"type": "ui_notice", "request": {"method": "notify", "message": message, "notifyType": "warning"}}),
-        });
+        self.shown(
+            json!({"type": "ui_notice", "request": {"method": "notify", "message": message, "notifyType": "warning"}}),
+        );
+    }
+
+    /// An event the chat shows that Pi does not keep (a notice, an instruction's changes): kept with its time, so the
+    /// history brings it back in place, then sent.
+    fn shown(&self, event: Value) {
+        if let Some(file) = notices_file(&self.ctx.paths.root, &self.session) {
+            let line = json!({"at": now_ms(), "event": event}).to_string();
+            let mut lines: Vec<String> =
+                std::fs::read_to_string(&file).unwrap_or_default().lines().map(str::to_string).collect();
+            lines.push(line);
+            let start = lines.len().saturating_sub(NOTICES_KEPT);
+            if let Some(dir) = file.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(&file, lines[start..].join("\n") + "\n");
+        }
+        self.emit(DockMessage::ChatEvent { event });
+    }
+
+    /// The notices this tab kept, oldest first.
+    fn kept_notices(&self) -> Vec<(i64, Value)> {
+        let Some(file) = notices_file(&self.ctx.paths.root, &self.session) else { return Vec::new() };
+        std::fs::read_to_string(file)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter_map(|kept| Some((kept["at"].as_i64()?, kept["event"].clone())))
+            .collect()
+    }
+
+    /// After the conversation went back: the notices newer than its last message go with what was undone.
+    fn forget_notices_after(&self, at: i64) {
+        let Some(file) = notices_file(&self.ctx.paths.root, &self.session) else { return };
+        let kept: Vec<String> = self
+            .kept_notices()
+            .into_iter()
+            .filter(|(when, _)| *when <= at)
+            .map(|(when, event)| json!({"at": when, "event": event}).to_string() + "\n")
+            .collect();
+        let _ = std::fs::write(file, kept.concat());
     }
 
     /// The tab closed: its subagent socket goes away.
@@ -954,9 +992,9 @@ impl Chat {
             if let Ok(changes) = checkpoints.changes_since(&checkpoint) {
                 if changes.files > 0 {
                     let _ = checkpoints.set_changes(&checkpoint, changes);
-                    chat.emit(DockMessage::ChatEvent {
-                        event: json!({"type": "changes", "files": changes.files, "added": changes.added, "removed": changes.removed}),
-                    });
+                    chat.shown(
+                        json!({"type": "changes", "files": changes.files, "added": changes.added, "removed": changes.removed}),
+                    );
                 }
             }
         });
@@ -1041,6 +1079,12 @@ impl Chat {
                 if let (Some(c), Some(target)) = (&checkpoints, &target) {
                     let _ = c.forget_from(target);
                 }
+                // What the notices said after the last message left goes with it.
+                let last =
+                    engine.request("get_messages", json!({}), REQUEST_TIMEOUT).ok().filter(|r| r.success).and_then(
+                        |r| r.data["messages"].as_array()?.iter().rev().find_map(|m| m["timestamp"].as_i64()),
+                    );
+                chat.forget_notices_after(last.unwrap_or(0));
                 chat.emit(DockMessage::ChatEvent { event: json!({"type": "session_reset"}) });
                 chat.announce(&engine);
             }
@@ -1230,9 +1274,8 @@ impl Chat {
             if !self.is_current(engine) {
                 return;
             }
-            self.emit(DockMessage::ChatEvent {
-                event: for_page(json!({"type": "history", "messages": response.data["messages"]})),
-            });
+            let messages = with_notices(&response.data["messages"], &self.kept_notices());
+            self.emit(DockMessage::ChatEvent { event: for_page(json!({"type": "history", "messages": messages})) });
         }
         self.refresh_context(engine);
         // Not forced: a run that already settled may have asked a moment ago.
@@ -1767,7 +1810,12 @@ impl Chat {
                 }
                 EngineEvent::UiRequest { id, method, raw } if is_dialog(&method) => self.open_dialog(id, method, raw),
                 EngineEvent::UiRequest { raw, .. } => {
-                    self.emit(DockMessage::ChatEvent { event: json!({"type": "ui_notice", "request": raw}) });
+                    let event = json!({"type": "ui_notice", "request": raw});
+                    if event["request"]["method"] == "notify" {
+                        self.shown(event);
+                    } else {
+                        self.emit(DockMessage::ChatEvent { event });
+                    }
                 }
                 EngineEvent::Response { id, success, command, error } => {
                     // A refused prompt names its text, so the page can take it back out of the thread or the queue.
@@ -2720,6 +2768,7 @@ impl Sessions {
                 }
                 self.close_jobs(session.clone());
                 crate::checkpoints::remove(&self.ctx.paths.root.join("checkpoints"), &session);
+                remove_notices(&self.ctx.paths.root, &session);
                 self.drop_tab(&session);
             }
             PageMessage::JobStop { job } => {
@@ -2785,6 +2834,15 @@ impl Sessions {
                 let name = dir.file_name().to_string_lossy().to_string();
                 if !open.contains(&name) {
                     crate::checkpoints::remove(&root, &name);
+                }
+            }
+        }
+        // And their notices.
+        if let Ok(files) = std::fs::read_dir(self.ctx.paths.root.join("notices")) {
+            for file in files.flatten() {
+                let name = file.file_name().to_string_lossy().trim_end_matches(".jsonl").to_string();
+                if !open.contains(&name) {
+                    remove_notices(&self.ctx.paths.root, &name);
                 }
             }
         }
@@ -2855,6 +2913,40 @@ impl Sessions {
             chat.test_send_raw(kind);
         }
     }
+}
+
+/// The most notices a tab keeps (the oldest go first).
+const NOTICES_KEPT: usize = 500;
+
+/// Where a tab keeps the notices it was shown: `notices/<session>.jsonl`, one `{ at, event }` per line.
+fn notices_file(root: &Path, session: &str) -> Option<PathBuf> {
+    let plain = !session.is_empty() && !session.contains(['/', '\\']) && !session.starts_with('.');
+    plain.then(|| root.join("notices").join(format!("{session}.jsonl")))
+}
+
+/// Removes a closed tab's notices.
+pub fn remove_notices(root: &Path, session: &str) {
+    if let Some(file) = notices_file(root, session) {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
+/// The history with the kept notices in place: each before the first message newer than it (messages without a time
+/// keep theirs), the rest at the end, as `{ role: "ariaNotice", event, timestamp }`.
+fn with_notices(messages: &Value, notices: &[(i64, Value)]) -> Value {
+    let notice = |(at, event): &(i64, Value)| json!({"role": "ariaNotice", "event": event, "timestamp": at});
+    let mut rest = notices.iter().peekable();
+    let mut out = Vec::new();
+    for message in messages.as_array().into_iter().flatten() {
+        if let Some(time) = message["timestamp"].as_i64() {
+            while let Some(kept) = rest.next_if(|(at, _)| *at < time) {
+                out.push(notice(kept));
+            }
+        }
+        out.push(message.clone());
+    }
+    out.extend(rest.map(notice));
+    Value::Array(out)
 }
 
 /// Pi's folder: the configured one, created when missing. `None` when it cannot be made: never another folder in its
@@ -3717,6 +3809,52 @@ mod tests {
         wait_for(&h, "ready again", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         std::thread::sleep(Duration::from_millis(200));
         assert!(drain(&h).iter().all(|m| !matches!(m, DockMessage::ChatEvent { event } if event["request"]["message"].as_str().is_some_and(|t| t.contains("packages")))));
+    }
+
+    #[test]
+    fn kept_notices_go_back_in_place_by_their_time() {
+        let messages = json!([
+            {"role": "user", "content": "a", "timestamp": 100},
+            {"role": "assistant", "content": [], "timestamp": 200},
+            {"role": "user", "content": "b", "timestamp": 300},
+        ]);
+        let notice = |text: &str| json!({"type": "ui_notice", "request": {"method": "notify", "message": text}});
+        let merged = with_notices(&messages, &[(250, notice("between")), (900, notice("last"))]);
+        let roles: Vec<&str> = merged.as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, ["user", "assistant", "ariaNotice", "user", "ariaNotice"]);
+        assert_eq!(merged[2]["event"]["request"]["message"], json!("between"));
+        assert_eq!(merged[2]["timestamp"], json!(250));
+    }
+
+    #[test]
+    fn a_notice_comes_back_with_the_history() {
+        let h = harness();
+        send(&h, "x");
+        wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        h.chat.test_send_raw("notify");
+        wait_for(&h, "the notice", |m| event_of(m, "ui_notice"));
+        h.chat.handle(PageMessage::ChatLoad { fresh: true });
+        match wait_for(&h, "the history", |m| event_of(m, "history")) {
+            DockMessage::ChatEvent { event } => {
+                let last = event["messages"].as_array().unwrap().last().cloned().unwrap();
+                assert_eq!(last["role"], json!("ariaNotice"), "{event}");
+                assert_eq!(last["event"]["request"]["message"], json!("careful"));
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn closing_a_session_removes_its_notices() {
+        let h = harness();
+        send(&h, "x");
+        wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        h.chat.test_send_raw("notify");
+        wait_for(&h, "the notice", |m| event_of(m, "ui_notice"));
+        let file = h.paths.root.join("notices").join("s1.jsonl");
+        assert!(file.exists());
+        remove_notices(&h.paths.root, "s1");
+        assert!(!file.exists());
     }
 
     #[test]

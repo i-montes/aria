@@ -30,7 +30,6 @@ import { isAbsolute, join, resolve } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
   bashWriteRequest,
-  classifierFor,
   classifierRequest,
   type Expert,
   expertRequest,
@@ -76,6 +75,7 @@ import { ariaConfig, hasAriaConfig } from '../lib/config.ts'
 import { styleNote } from './style.ts'
 import { EFFORT_FILE, effortFor, RANK, saveEffort } from './effort.ts'
 import { agentDir } from '../lib/agent-dir.ts'
+import { classifyWithJev, offUntil } from '../lib/jev.ts'
 
 const CLASSIFY_TIMEOUT_MS = 3000
 
@@ -233,10 +233,11 @@ export default function (pi: ExtensionAPI) {
     },
   })
 
-  const classifier = (ctx: any) => {
-    const c = classifierFor(ariaConfig().router.backend)
-    return ctx.modelRegistry.findOfType('classifier', c.provider, c.id)
-  }
+  // Jev for `request`: the first classifier with quota and funds (lib/jev.ts); a step aside is said once.
+  const ask = (ctx: any, request: any) =>
+    classifyWithJev(ctx.modelRegistry, request, { signal: AbortSignal.timeout(CLASSIFY_TIMEOUT_MS) }, {
+      onNote: (note) => ctx?.ui?.notify?.(note, 'info'),
+    })
 
   // Classify when a run starts from a user prompt and add the hints as a hidden message: it is
   // stored in the session and sent to the model after the prompt, but not shown in the TUI, and the
@@ -272,17 +273,16 @@ export default function (pi: ExtensionAPI) {
     if (!text.trim() || text.startsWith('/')) return
     if (!shouldClassify(ctx?.mode, ariaConfig())) return // the router is off in Aria's settings
     try {
-      const jev = classifier(ctx)
-      if (!jev) return
       let previous = ''
       try {
         previous = lastAssistantText(ctx.sessionManager.getBranch())
       } catch {
         // no session yet
       }
-      const result = await ctx.modelRegistry.classify(jev, classifierRequest(text, previous), {
-        signal: AbortSignal.timeout(CLASSIFY_TIMEOUT_MS),
-      })
+      const result = await ask(ctx, classifierRequest(text, previous))
+      // No classifier answered and some are set aside: the footer says routing is off, and until when.
+      const off = result === null ? offUntil() : null
+      if (ctx.mode === 'rpc') ctx.ui?.setStatus?.('aria-jev-off', off ? JSON.stringify({ until: off }) : undefined)
       const hints = parseHints(result)
       if (!hints) return
       current = hints
@@ -317,13 +317,10 @@ export default function (pi: ExtensionAPI) {
       if (item.agent && all.some((e) => e.name === item.agent) && !allowed.has(item.agent)) delete item.agent
     }
     const pending = items.filter((item) => !item.agent)
-    const jev = experts.length && pending.length ? classifier(ctx) : null
-    if (!jev) return
+    if (!experts.length || !pending.length) return
     await Promise.allSettled(
       pending.map(async (item) => {
-        const result = await ctx.modelRegistry.classify(jev, expertRequest(item.task, experts), {
-          signal: AbortSignal.timeout(CLASSIFY_TIMEOUT_MS),
-        })
+        const result = await ask(ctx, expertRequest(item.task, experts))
         const name = parseExpertChoice(result)
         if (name) item.agent = name
       }),
@@ -367,11 +364,7 @@ export default function (pi: ExtensionAPI) {
       const command = String(event.input?.command ?? '')
       if (!mayWrite(command)) return
       try {
-        const jev = classifier(ctx)
-        if (!jev) return BLOCK
-        const result = await ctx.modelRegistry.classify(jev, bashWriteRequest(command, ctx.cwd, guard.dirsText), {
-          signal: AbortSignal.timeout(CLASSIFY_TIMEOUT_MS),
-        })
+        const result = await ask(ctx, bashWriteRequest(command, ctx.cwd, guard.dirsText))
         const p = result?.stopReason === 'stop' ? result.answers?.writes?.probability : undefined
         if (typeof p !== 'number' || p >= 0.5) return BLOCK
       } catch {
@@ -451,17 +444,13 @@ export default function (pi: ExtensionAPI) {
     const text = String(event.text ?? '')
     if (!text.trim() || text.startsWith('/')) return { action: 'continue' }
     try {
-      const jev = classifier(ctx)
-      if (!jev) return { action: 'continue' }
       let previous = ''
       try {
         previous = lastAssistantText(ctx.sessionManager.getBranch())
       } catch {
         // no session yet
       }
-      const result = await ctx.modelRegistry.classify(jev, planContinuationRequest(text, previous), {
-        signal: AbortSignal.timeout(CLASSIFY_TIMEOUT_MS),
-      })
+      const result = await ask(ctx, planContinuationRequest(text, previous))
       const p = parsePlanning(result)
       if (p !== null && p < 0.3) await endPlan(ctx, 'That message is not about planning: plan mode off.')
     } catch {

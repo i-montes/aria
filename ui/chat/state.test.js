@@ -139,6 +139,19 @@ describe('the engine and notices', () => {
     expect(state.messages).toHaveLength(1)
   })
 
+  test('notices the dock kept come back with the history, in place and once', () => {
+    const jev = { type: 'ui_notice', request: { method: 'notify', message: 'Jev: off', notifyType: 'info' } }
+    let state = run(createChat(), ev(jev))
+    state = reduce(state, ev({ type: 'history', messages: [
+      { role: 'user', content: 'fix it', timestamp: 1 },
+      { role: 'ariaNotice', event: { type: 'changes', files: 2, added: 5, removed: 1 }, timestamp: 2 },
+      { role: 'ariaNotice', event: jev, timestamp: 3 },
+      { role: 'user', content: 'next', timestamp: 4 },
+    ] }))
+    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'notice', 'user'])
+    expect(state.messages[1]).toMatchObject({ kind: 'notice', tone: 'info', text: 'Jev: off' })
+  })
+
   test('a notice of the dock carries a translation key and its values, not English text', () => {
     const request = { method: 'notify', key: 'chat.watchdog.stopped', vars: { minutes: 10 }, notifyType: 'warning' }
     const state = run(createChat(), ev({ type: 'ui_notice', request }))

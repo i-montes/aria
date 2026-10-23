@@ -34,7 +34,7 @@ const CASES: [string, Expect, string?][] = [
   ['Crea un archivo en downloads con un resumen de esa transcripcion', { route: ['quick', 'focused'], readOnly: false, planWorth: false }],
   ['arregla el test que falla en src/lib/money.test.ts', { route: 'focused', readOnly: false, planWorth: false }],
   ['Me mentiste, si hiciste cambios en el proyecto, quiero que dejes el repositorio como estaba', { route: 'focused', readOnly: false }],
-  ['Si, agrega el analisis a los logs y di que no es posible hacer una solucion a la medida', { route: 'focused', notion: true, readOnly: false }, 'Puedo agregar este análisis a los logs de la tarea Rifatón en Notion. ¿Lo agrego?'],
+  ['Si, agrega el analisis a los logs y di que no es posible hacer una solucion a la medida', { route: 'focused', notion: true, readOnly: false }, 'Puedo agregar este análisis a los logs de la tarea del widget de pagos en Notion. ¿Lo agrego?'],
   ['sí, hazlo', { route: 'focused', readOnly: false, planWorth: false }, 'Puedo cambiar el tema de tu terminal a verde menta editando ~/.config/alacritty/alacritty.toml. ¿Lo hago?'],
 ]
 

@@ -499,31 +499,17 @@ impl Session {
                 if request["method"] != "notify" {
                     return;
                 }
-                let tone = match request["notifyType"].as_str() {
-                    Some("warning") => Tone::Warn,
-                    Some("error") => Tone::Error,
-                    _ => Tone::Info,
-                };
-                let text = match request["key"].as_str() {
-                    Some(key) => {
-                        if key == "chat.watchdog.stopped" {
-                            self.stopped_by_watchdog = true;
-                        }
-                        let many = key == "chat.watchdog.stopped" && request["vars"]["minutes"] != json!(1);
-                        let key = if key == "chat.watchdog.stopped" {
-                            format!("{key}.{}", if many { "many" } else { "one" })
-                        } else {
-                            key.to_string()
-                        };
-                        Text::Key { key, vars: request["vars"].clone() }
-                    }
-                    None => Text::Raw(request["message"].as_str().unwrap_or_default().to_string()),
-                };
-                self.push(Entry::Notice { tone, text });
+                if request["key"] == "chat.watchdog.stopped" {
+                    self.stopped_by_watchdog = true;
+                }
+                self.push(notice_entry(request));
             }
             "history" => {
                 self.loaded = true;
                 let past = self.read_history(&event["messages"]);
+                // A notice shown live before the history came is in it too: once.
+                self.entries
+                    .retain(|e| !matches!(e, Entry::Notice { .. } | Entry::Changes { .. }) || !past.contains(e));
                 if self.entries.is_empty() {
                     self.entries = past;
                 } else if let Some(first) = self.entries.iter().find_map(|e| match e {
@@ -541,10 +527,7 @@ impl Session {
                 }
                 self.turn_from = self.entries.len();
             }
-            "changes" => {
-                let n = |key: &str| event[key].as_u64().unwrap_or(0) as u32;
-                self.push(Entry::Changes { files: n("files"), added: n("added"), removed: n("removed") });
-            }
+            "changes" => self.push(changes_entry(event)),
             "session_reset" => {
                 self.entries.clear();
                 self.queue.clear();
@@ -625,6 +608,12 @@ impl Session {
                         .collect();
                     add_steps(&mut entries, calls, 0);
                 }
+                // What the chat showed that Pi does not keep (a notice, an instruction's changes), kept by the dock.
+                Some("ariaNotice") => match message["event"]["type"].as_str() {
+                    Some("ui_notice") => entries.push(notice_entry(&message["event"]["request"])),
+                    Some("changes") => entries.push(changes_entry(&message["event"])),
+                    _ => {}
+                },
                 // A command the person ran (`!pwd`, Pi's `bash`).
                 Some("bashExecution") => entries.push(bang_entry(
                     message["command"].as_str().unwrap_or_default(),
@@ -658,6 +647,34 @@ impl Session {
         }
         entries
     }
+}
+
+/// A `notify` request as the chat shows it (the dock's own name a key, in the person's language).
+fn notice_entry(request: &Value) -> Entry {
+    let tone = match request["notifyType"].as_str() {
+        Some("warning") => Tone::Warn,
+        Some("error") => Tone::Error,
+        _ => Tone::Info,
+    };
+    let text = match request["key"].as_str() {
+        Some(key) => {
+            let key = if key == "chat.watchdog.stopped" {
+                let many = request["vars"]["minutes"] != json!(1);
+                format!("{key}.{}", if many { "many" } else { "one" })
+            } else {
+                key.to_string()
+            };
+            Text::Key { key, vars: request["vars"].clone() }
+        }
+        None => Text::Raw(request["message"].as_str().unwrap_or_default().to_string()),
+    };
+    Entry::Notice { tone, text }
+}
+
+/// An instruction's `changes` event as the chat shows it.
+fn changes_entry(event: &Value) -> Entry {
+    let n = |key: &str| event[key].as_u64().unwrap_or(0) as u32;
+    Entry::Changes { files: n("files"), added: n("added"), removed: n("removed") }
 }
 
 #[cfg(test)]
@@ -793,6 +810,43 @@ mod tests {
         assert!(matches!(&s.entries[0], Entry::User { text } if text == "fix it"));
         assert!(matches!(&s.entries[2], Entry::Tools { calls } if calls[0].output == "body"));
         assert!(matches!(&s.entries[3], Entry::Assistant { text, .. } if text == "Fixed."));
+    }
+
+    #[test]
+    fn notices_and_changes_come_back_in_place() {
+        let mut s = Session::default();
+        feed(
+            &mut s,
+            &[event(json!({"type": "history", "messages": [
+                {"role": "user", "content": "fix it", "timestamp": 1},
+                {"role": "ariaNotice", "event": {"type": "changes", "files": 2, "added": 5, "removed": 1}, "timestamp": 2},
+                {"role": "ariaNotice", "event": {"type": "ui_notice", "request": {"method": "notify", "message": "Jev: off", "notifyType": "info"}}, "timestamp": 3},
+                {"role": "user", "content": "next", "timestamp": 4},
+            ]}))],
+        );
+        assert!(matches!(&s.entries[1], Entry::Changes { files: 2, added: 5, removed: 1 }), "{:?}", s.entries);
+        assert!(
+            matches!(&s.entries[2], Entry::Notice { tone: Tone::Info, text: Text::Raw(t) } if t == "Jev: off"),
+            "{:?}",
+            s.entries
+        );
+        assert!(matches!(&s.entries[3], Entry::User { text } if text == "next"));
+    }
+
+    #[test]
+    fn a_notice_shown_before_the_history_is_not_shown_twice() {
+        let mut s = Session::default();
+        let notice = json!({"type": "ui_notice", "request": {"method": "notify", "message": "folder gone", "notifyType": "warning"}});
+        feed(&mut s, &[event(notice.clone())]);
+        feed(
+            &mut s,
+            &[event(json!({"type": "history", "messages": [
+                {"role": "user", "content": "fix it", "timestamp": 1},
+                {"role": "ariaNotice", "event": notice, "timestamp": 2},
+            ]}))],
+        );
+        let notices = s.entries.iter().filter(|e| matches!(e, Entry::Notice { .. })).count();
+        assert_eq!(notices, 1, "{:?}", s.entries);
     }
 
     #[test]

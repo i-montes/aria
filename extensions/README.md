@@ -57,8 +57,10 @@ Tests: `bun test extensions`.
     background job and the chat stays routed (only the build-start message itself is not classified). Leaving plan mode (`/plan off`) cancels an approved build that has not
     started. The skill is hidden from the model's own choice (`disable-model-invocation`): only `/plan` and the router's
     offer reach it.
-  - `jev-router/route.ts`, `sandbox/review.ts`: the classifier is `opencode/jev-1.13-free` or, with `router.backend`
-    `typesafe`, TypeSafe's `typesafe/jev-latest` (`classifierFor`); without Aria's config it stays OpenCode's.
+  - `lib/jev.ts`: every question to Jev (the router's, the sandbox review's) goes down a chain of the classifiers Pi
+    can reach: free Jev, paid Jev, Jev elsewhere, other free classifiers, the rest. Only the spent one steps aside (a
+    429 until the hour its retry delay names, no funds for an hour; `jev-paused.json` in the agent folder, shared by
+    every session) and comes back at its own hour; the person is told once per step aside. Chat models are not touched.
   - `jev-router/route.ts`, `index.ts`: focused work that changes things gets `methodNote`: for code in a project with tests, the outcome and its test first, seen failing, then passing; anything else is done and checked once (never naming a method).
   - `jev-router/route.ts`, `index.ts`: Jev also asks whether the work is sizable; sizable work that changes things gets
     `plan=offer`, the assistant offers once to plan it first and, accepted, starts plan mode with `start_plan`.

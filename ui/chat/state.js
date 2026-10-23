@@ -230,6 +230,13 @@ function backgroundNote(message) {
 
 const TONES = { warning: 'warn', error: 'error' }
 
+/** A `notify` request as a notice; the dock's own name a translation key, so the page says them in its language. */
+function noticeOf(request) {
+  const tone = TONES[request.notifyType] ?? 'info'
+  if (typeof request.key === 'string') return notice(tone, request.vars ? { key: request.key, vars: request.vars } : { key: request.key })
+  return notice(tone, { text: request.message })
+}
+
 /** The summary of what came before, or null: a compaction's (not rotated yet) or a rotation's seed message, whose
  * `details.summary` is the raw summary (its `content` is Pi's framing of it, which the page never shows). */
 function earlierSummary(message) {
@@ -264,6 +271,9 @@ function fromHistory(messages) {
     } else if (earlierSummary(message) !== null) {
       // A stable id (the old session it summarises, or its place), so a history sent again keeps it open.
       entries.push({ kind: 'earlier', id: `earlier-${message.details?.from ?? at}`, summary: earlierSummary(message) })
+    } else if (message.role === 'ariaNotice') {
+      // A notice the dock kept (Pi does not), back in its place. An instruction's changes are the terminal's only.
+      if (message.event?.type === 'ui_notice' && message.event.request?.method === 'notify') entries.push(noticeOf(message.event.request))
     } else if (message.role === 'custom') {
       const note = backgroundNote(message)
       if (note) entries.push(note)
@@ -372,13 +382,8 @@ function reduceEvent(state, event) {
     case 'ui_notice': {
       const request = event.request ?? {}
       if (request.method === 'notify') {
-        const tone = TONES[request.notifyType] ?? 'info'
-        // The dock's own notices (the turn watchdog) name a key, so the page says them in its language.
-        if (typeof request.key === 'string') {
-          const next = request.key === 'chat.watchdog.stopped' ? { ...state, stoppedByWatchdog: true } : state
-          return push(next, notice(tone, request.vars ? { key: request.key, vars: request.vars } : { key: request.key }))
-        }
-        return push(state, notice(tone, { text: request.message }))
+        const next = request.key === 'chat.watchdog.stopped' ? { ...state, stoppedByWatchdog: true } : state
+        return push(next, noticeOf(request))
       }
       // The router's route line (jev-router sends it as the status `aria-jev`).
       if (request.method === 'setStatus' && request.statusKey === 'aria-jev') {
@@ -407,6 +412,9 @@ function reduceEvent(state, event) {
       // goes in front, and so do notices that came first. While only a reply streams (no message of the owner on the
       // page), it is left alone.
       const past = fromHistory(event.messages)
+      // A notice shown before the history came is in it too: once.
+      const kept = new Set(past.filter((m) => m.kind === 'notice').map((m) => JSON.stringify(m)))
+      state = withMessages(state, state.messages.filter((m) => m.kind !== 'notice' || !kept.has(JSON.stringify(m))))
       // Pages shown before it are dropped: the paging starts again from this history, whose summary replaces any shown.
       const shown = state.messages.slice(state.earlier.count).filter((m) => m.kind !== 'earlier' || !past.some((p) => p.kind === 'earlier'))
       state = { ...withMessages(state, shown), loaded: true, turnFrom: Math.max(0, (state.turnFrom ?? 0) - state.earlier.count), earlier: { ...NO_EARLIER, more: past[0]?.kind === 'earlier', loading: state.earlier.loading, stale: state.earlier.loading } }

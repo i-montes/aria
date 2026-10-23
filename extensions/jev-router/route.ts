@@ -1,12 +1,10 @@
 // What the router asks Jev about each new user message, and how the answers become a hint line the
 // conversation model follows. The conversation stays on one model; only the hint changes.
+import { FREE_JEV } from '../lib/jev.ts'
 
-// Only the free Jev: the same OpenCode key also reaches the paid one.
-export const CLASSIFIER = { provider: 'opencode', id: 'jev-1.13-free' } as const
-
-// TypeSafe's own Jev, Pi's built-in classifier model: used when the setup has a TypeSafe key and no OpenCode Go.
-export const TYPESAFE_CLASSIFIER = { provider: 'typesafe', id: 'jev-latest' } as const
-export const classifierFor = (backend: string | undefined) => (backend === 'typesafe' ? TYPESAFE_CLASSIFIER : CLASSIFIER)
+// The free Jev, as the evals ask it; the extensions go through lib/jev.ts, which moves on, model by model, to the next
+// classifier with quota and funds.
+export const CLASSIFIER = FREE_JEV
 
 export type Route = 'quick' | 'focused' | 'parallel' | 'think'
 
