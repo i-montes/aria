@@ -6,7 +6,9 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { bwrapArgs, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, shellQuote, subagentProblem, wrapCommand, writableRoots, isAgentCode, isAriaOwn } from './policy.ts'
 
-const home = '/home/u'
+// On macOS /home is the automounter's (auto_home): every lookup under it waits for it, seconds each. The policy only
+// reads these paths, so any home that is not there does; a Mac one keeps the tests fast there.
+const home = process.platform === 'darwin' ? '/Users/u' : '/home/u'
 const all = () => true
 const none = () => false
 
@@ -180,16 +182,16 @@ describe('review fixes', () => {
 
 describe("Aria's own files", () => {
   test("the extensions, persona, experts and settings of Aria's Pi can never be written by the model", () => {
-    const agent = '/home/u/.aria/agent'
+    const agent = `${home}/.aria/agent`
     for (const p of [`${agent}/extensions/sandbox/policy.ts`, `${agent}/agents/security.md`, `${agent}/SYSTEM.md`, `${agent}/settings.json`, `${agent}/.aria-files`]) {
       expect(isAgentCode(p, agent)).toBe(true)
     }
     expect(isAgentCode(`${agent}/sessions/aria/x.jsonl`, agent)).toBe(false)
-    expect(isAgentCode('/home/u/Projects/app/SYSTEM.md', agent)).toBe(false)
+    expect(isAgentCode(`${home}/Projects/app/SYSTEM.md`, agent)).toBe(false)
   })
 
   test("in the owner's own Pi (no Aria) nothing is locked this way", () => {
-    expect(isAgentCode('/home/u/.pi/agent/extensions/x.ts', null)).toBe(false)
+    expect(isAgentCode(`${home}/.pi/agent/extensions/x.ts`, null)).toBe(false)
   })
 })
 
@@ -205,11 +207,11 @@ describe('extra writable folders (settings)', () => {
   }
   const all = () => true
   test('an extra folder is writable', () =>
-    withExtra(['/srv/shared'], () => expect(isWritable('/srv/shared/notes.md', '/home/u/Projects/app', '/home/u', all)).toBe(true)))
+    withExtra(['/srv/shared'], () => expect(isWritable('/srv/shared/notes.md', `${home}/Projects/app`, home, all)).toBe(true)))
   test('an extra folder inside a secret dir is not', () =>
-    withExtra(['/home/u/.ssh'], () => expect(isWritable('/home/u/.ssh/config', '/home/u/Projects/app', '/home/u', all)).toBe(false)))
+    withExtra([`${home}/.ssh`], () => expect(isWritable(`${home}/.ssh/config`, `${home}/Projects/app`, home, all)).toBe(false)))
   test('an extra folder that does not exist is left out (bwrap cannot bind it)', () =>
-    withExtra(['/srv/missing'], () => expect(writableRoots('/home/u/Projects/app', '/home/u', (p) => p !== '/srv/missing')).not.toContain('/srv/missing')))
+    withExtra(['/srv/missing'], () => expect(writableRoots(`${home}/Projects/app`, home, (p) => p !== '/srv/missing')).not.toContain('/srv/missing')))
   test("an extra folder that holds Aria's own files is refused", () => {
     const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wr } = require('node:fs')
     const home = join(mk(join(require('node:os').tmpdir(), 'aria-home-')), '.aria')
@@ -220,7 +222,7 @@ describe('extra writable folders (settings)', () => {
     process.env.PI_CODING_AGENT_DIR = agent
     process.env.ARIA_SETTINGS = join(home, 'settings.json')
     try {
-      const roots = writableRoots('/home/u/Projects/app', '/home/u', all)
+      const roots = writableRoots(`${home}/Projects/app`, home, all)
       expect(roots).not.toContain(home)
       expect(roots).not.toContain(join(home, 'bin'))
     } finally {
@@ -229,7 +231,7 @@ describe('extra writable folders (settings)', () => {
     }
   })
   test('without it nothing changes', () =>
-    withExtra([], () => expect(isWritable('/srv/shared/notes.md', '/home/u/Projects/app', '/home/u', all)).toBe(false)))
+    withExtra([], () => expect(isWritable('/srv/shared/notes.md', `${home}/Projects/app`, home, all)).toBe(false)))
 })
 
 // Aria links its agent dir's credentials to the files in ~/.aria; bwrap cannot mount over a symlink, so the link's
