@@ -144,6 +144,11 @@ every session, and leaving the terminal stops nothing.
   for the projects folder itself, the home folder, a system folder (`/`, one holding the home folder, a mount point,
   anything under `/etc`, `/usr`, `/var`…) or a folder with more than 20,000 files; `checkpoints` then carries `off`
   (`projects`, `folder`, `system`, `big`) and the terminal says why.
+- **Kept notices** — what a tab shows that Pi does not keep (an extension's `notify`, the dock's own notices, an
+  instruction's changes) is kept with its time in `notices/<session>.jsonl` (the last 500); the history puts each back
+  before the first message newer than it, as `{ role: "ariaNotice", event, timestamp }`, so a terminal or page that
+  opens the session again sees the chat as it was. Going back in the conversation drops those after its last message;
+  closing the tab removes the file.
 - **Notifications** — a run that settles where nobody looks raises one notification titled with the session's name;
   the session's next one replaces it (`Notifier::dismiss_titled`), looking at it takes it away.
 - **Extensions** — `tasks` (`tasks_update`, drawn above the terminal's editor), `context` (the status `aria-context`,
