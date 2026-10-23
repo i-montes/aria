@@ -1,21 +1,20 @@
-// Superpowers modes the user turns on with a command. While one is on, the router stops routing
-// (no Jev labels, no thinking changes) and sends a fixed hint instead.
+// The plan mode the user turns on with a command. While it is on, the router stops routing (no Jev
+// labels, no thinking changes) and sends a fixed hint instead.
 //
-// - plan: the questions of Superpowers' brainstorming skill, then straight to its writing-plans skill
-//   (no spec to write or review), on a stronger model. Only `docs/superpowers/` and `.git` of a git
-//   repo under ~/Projects (the plan lives in the repo that receives the change) and /tmp may be
-//   written. It ends by itself once the plan is written, or when the user sends something that is
-//   not part of planning. The user starts it with /plan, or accepts the assistant's offer (the
-//   router's `plan=offer`, the `start_plan` tool).
-// - execute: carry out an approved plan with subagent-driven-development, back on the default
-//   model, with normal writes. It only accepts a plan, never a spec.
-import { existsSync, readFileSync } from 'node:fs'
+// - plan: phase A of the slice skill, on a stronger model: one round of questions, then the plan in
+//   `docs/plans/` of the repo that receives the change, approved with `plan_ready`. Only `docs/plans/`,
+//   the repo root's `.gitignore`, `.git` of a git repo under ~/Projects and /tmp may be written. The
+//   user starts it with /plan, or accepts the assistant's offer (the router's `plan=offer`, the
+//   `start_plan` tool).
+// There is no execute mode any more: approving the plan, or /execute, launches phase B in the
+// background and the chat stays routed.
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { agentDir, projectsDir } from '../lib/agent-dir.ts'
 import { type AriaConfig, ariaConfig, DEFAULTS, type Model } from '../lib/config.ts'
 
-export type Mode = 'normal' | 'plan' | 'execute'
+export type Mode = 'normal' | 'plan'
 
 // The user picked this model for planning (2026-10-21, mimo-v2.6-pro after glm-5.3 and deepseek-v4-pro);
 // it stays inside the OpenCode Go plan.
@@ -41,8 +40,8 @@ export const planQuotaThreshold = (): number => ariaConfig().quota.planSwitchAt
 // /plan warns before starting in a session that already carries this much context.
 export const LARGE_CONTEXT_TOKENS = 100_000
 
-export const SKILLS_DIR = join(agentDir(), 'git', 'github.com', 'obra', 'superpowers', 'skills')
-const skill = (name: string) => join(SKILLS_DIR, name, 'SKILL.md')
+export const SLICE_SKILL = join(agentDir(), 'skills', 'slice', 'SKILL.md')
+export const REVIEW_SKILL = join(agentDir(), 'git', 'github.com', 'DietrichGebert', 'ponytail', 'skills', 'ponytail-review', 'SKILL.md')
 
 const PROJECTS = projectsDir()
 const TMP_DIRS = [...new Set(['/tmp', tmpdir()])]
@@ -62,9 +61,9 @@ export function gitRoot(path: string): string | null {
 const within = (dir: string, p: string) => p === dir || p.startsWith(`${dir}/`)
 
 /**
- * May plan mode write `rawPath`? Yes inside /tmp, and inside `docs/superpowers/` or `.git/` of
- * a git repo under ~/Projects — the repo that receives the change, which need not be the one
- * Pi was opened in.
+ * May plan mode write `rawPath`? Yes inside /tmp, and inside `docs/plans/`, `.git/` or the root's
+ * `.gitignore` of a git repo under ~/Projects — the repo that receives the change, which need not
+ * be the one Pi was opened in.
  */
 export function planMayWrite(rawPath: string, cwd: string): boolean {
   const path = isAbsolute(rawPath) ? rawPath : resolve(cwd, rawPath)
@@ -72,14 +71,11 @@ export function planMayWrite(rawPath: string, cwd: string): boolean {
   if (!within(PROJECTS, path)) return false
   const root = gitRoot(path)
   if (!root || !within(PROJECTS, root)) return false
-  return within(join(root, 'docs', 'superpowers'), path) || within(join(root, '.git'), path)
+  return within(join(root, 'docs', 'plans'), path) || within(join(root, '.git'), path) || path === join(root, '.gitignore')
 }
 
 /** The directories plan mode may write, as text for the bash classifier. */
-export const PLAN_DIRS_TEXT = [...TMP_DIRS, `${PROJECTS}/<any git repo>/docs/superpowers`, `${PROJECTS}/<any git repo>/.git`]
-
-/** A plan file written in plan mode ends planning. */
-export const isPlanPath = (path: string) => /\/docs\/superpowers\/plans\/[^/]+\.md$/.test(path)
+export const PLAN_DIRS_TEXT = [...TMP_DIRS, `${PROJECTS}/<any git repo>/docs/plans`, `${PROJECTS}/<any git repo>/.git`, `${PROJECTS}/<any git repo>/.gitignore`]
 
 const RISK_QUESTION =
   'When reviewing the plan, for each risk first ask yourself: what happens to an ordinary user who repeats this in real life (for example, does it again without changing anything)? Tell me starting with the most frequent case, with a concrete example, and only then the rare or abuse cases.'
@@ -88,50 +84,25 @@ export function planPrompt(idea: string): string {
   return [
     `I want to plan this: ${idea}`,
     '',
-    `Read with \`read\` the \`brainstorming\` skill (${skill('brainstorming')}) and follow it only up to its questions: explore the context, ask what you need and propose the approaches. Don't offer the visual companion. Skip the rest of it: don't present the design for approval, don't write a spec or design document and don't ask me to review one.`,
-    'Ask the questions (and the choice between approaches) with the `ask_user` tool, in batches: put in one call up to 4 questions that do not depend on each other\'s answers, each with 2-4 options and your recommended one first; a question that depends on an earlier answer goes in the next call. This replaces the skill\'s "one question at a time".',
-    `As soon as my answers settle what to build, read and follow \`writing-plans\` (${skill('writing-plans')}) without asking me anything more: what we decided goes in the plan's header (goal, architecture, the choices made).`,
-    'Save the plan in `docs/superpowers/plans/` of the repo that receives the change (if it touches several repos, the one that receives most of it; the plan says which tasks go in each repo). Tell me at the start which repo and path you will save it in.',
+    `Read with \`read\` the slice skill (${SLICE_SKILL}) and follow its section "Phase A: frame".`,
+    'Save the plan in `docs/plans/<YYYY-MM-DD>-<slug>.md` of the repo that receives the change and tell me at the start which repo and path. Commit it there (only that file, and `.gitignore` if you changed it), then call `plan_ready` with its path: it shows me the plan and asks me to approve it.',
     RISK_QUESTION,
-    'When the plan is done, don\'t offer me a choice of how to execute it: tell me to review it and run it with `/execute <plan path>`.',
   ].join('\n')
 }
 
-export function executePrompt(plan: string): string {
+export function executePrompt(brief: string, name: string): string {
   return [
-    `Execute the plan \`${plan}\`.`,
+    `Build the plan's next phase ("${name}") in the background: call \`background_agent\` with commits true, isolation "folder", title "${name}" (in my language, at most 6 words) and this task, word for word:`,
     '',
-    `Read with \`read\` and follow the \`subagent-driven-development\` skill (${skill('subagent-driven-development')}); its templates and scripts are in that same folder. Apply the equivalences in the system prompt's "Superpowers" section.`,
-    `In the final branch review, add this question to the reviewer's brief: ${RISK_QUESTION}`,
+    brief,
+    '',
+    'Then end your answer with one short line: the phase is being built and I can keep talking to you.',
   ].join('\n')
 }
 
-/**
- * Is `path` an implementation plan (as opposed to a spec, or nothing)? Returns the reason it is
- * not, or null when it is.
- */
-export function notAPlan(path: string, cwd: string): string | null {
-  const full = isAbsolute(path) ? path : resolve(cwd, path)
-  if (!existsSync(full)) return `Can't find \`${path}\`.`
-  if (/\/specs\//.test(full)) return `\`${path}\` is a spec (design), not a plan.`
-  let text = ''
-  try {
-    text = readFileSync(full, 'utf8')
-  } catch {
-    return `Can't read \`${path}\`.`
-  }
-  if (!/^#{2,3} Task \d+/m.test(text) && !/Implementation Plan/i.test(text)) {
-    return `\`${path}\` doesn't look like an implementation plan: it has no tasks ("### Task 1…").`
-  }
-  return null
-}
-
-export function modeHint(mode: Mode): string {
-  if (mode === 'plan') {
-    return `[router] plan mode (Superpowers) on: brainstorming's questions, then the plan with writing-plans (no spec); implement nothing. You may only write to docs/superpowers/ (the plan) and .git of a git repo under ${PROJECTS} (the one receiving the change), and to /tmp. Plan mode turns itself off once the plan is written.`
-  }
-  return '[router] execute mode (Superpowers) on: follow subagent-driven-development with the equivalences in the "Superpowers" section. The user leaves it with /execute off.'
+export function modeHint(_mode: Mode): string {
+  return `[router] plan mode (slice) on: phase A of the slice skill: one round of questions, then the plan; implement nothing. You may only write to docs/plans/ and .gitignore of a git repo under ${PROJECTS} (the one receiving the change), its .git (the commit), and /tmp. Plan mode ends when I approve the plan.`
 }
 
 export const PLAN_BLOCK_REASON =
-  'Blocked by the router: plan mode only writes the plan (docs/superpowers/ of a repo under ~/Projects), its commit and /tmp. Implementation comes with /execute.'
+  'Blocked by the router: plan mode only writes the plan (docs/plans/ of a repo under ~/Projects), .gitignore, the commit and /tmp. The build comes after approval.'

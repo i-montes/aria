@@ -48,11 +48,9 @@ import {
 import {
   executePrompt,
   gitRoot,
-  isPlanPath,
   LARGE_CONTEXT_TOKENS,
   type Mode,
   modeHint,
-  notAPlan,
   PLAN_BLOCK_REASON,
   PLAN_DIRS_TEXT,
   planModel,
@@ -63,6 +61,7 @@ import {
   routedMode,
   shouldClassify,
 } from './modes.ts'
+import { isPlanPath, planProblem } from './slice.ts'
 import { checkKill } from './process-guard.ts'
 import { exhausted, fetchGoUsage } from './usage.ts'
 import { confirmFreeSwitch } from '../quota-fallback/ask.ts'
@@ -350,7 +349,7 @@ export default function (pi: ExtensionAPI) {
   const setMode = (next: Mode, ctx: any) => {
     mode = next
     if (next !== 'plan') planWritten = false
-    const status = next === 'plan' ? `◆ plan mode · ${planModelId}` : next === 'execute' ? '▶ execute mode · /execute off' : undefined
+    const status = next === 'plan' ? `◆ plan mode · ${planModelId}` : undefined
     try {
       ctx.ui?.setStatus?.('jev-router-mode', status)
     } catch {
@@ -538,14 +537,14 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify('No plan found in docs/superpowers/plans/. Give me the path: /execute <plan path>.', 'error')
         return
       }
-      const problem = notAPlan(plan, ctx.cwd)
+      const problem = planProblem(plan, ctx.cwd)
       if (problem) {
         ctx.ui.notify(`${problem} /execute needs the implementation plan: write it first (writing-plans) and review it.`, 'error')
         return
       }
       await leavePlan()
-      setMode('execute', ctx)
-      pi.sendUserMessage(executePrompt(plan))
+      setMode('normal', ctx)
+      pi.sendUserMessage(executePrompt(`Execute the plan \`${plan}\`.`, 'Plan'))
     },
   })
 }

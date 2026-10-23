@@ -1,6 +1,6 @@
 // Run: bun test extensions/jev-router/modes.test.ts
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { exhausted, parseGoUsage } from './usage.ts'
@@ -15,35 +15,20 @@ const gateway = join(projects, 'acme', 'checkout-api')
 for (const repo of [widget, gateway]) mkdirSync(join(repo, '.git'), { recursive: true })
 const savedProjects = process.env.ARIA_PROJECTS_DIR
 process.env.ARIA_PROJECTS_DIR = projects
-const { isPlanPath, notAPlan, planMayWrite, routedMode, planPrompt, PLAN_MODEL, planModel, planQuotaThreshold, planThinking, shouldClassify } = await import('./modes.ts')
+const { executePrompt, modeHint, planMayWrite, routedMode, planPrompt, PLAN_MODEL, SLICE_SKILL, planModel, planQuotaThreshold, planThinking, shouldClassify } = await import('./modes.ts')
 if (savedProjects === undefined) delete process.env.ARIA_PROJECTS_DIR
 else process.env.ARIA_PROJECTS_DIR = savedProjects
 
 describe('planMayWrite', () => {
-  test('spec in the repo Pi runs in', () => expect(planMayWrite('docs/superpowers/specs/x.md', widget)).toBe(true))
-  test('plan in another repo under the projects folder', () => expect(planMayWrite(`${gateway}/docs/superpowers/plans/x.md`, widget)).toBe(true))
+  test('a plan in the repo Pi runs in', () => expect(planMayWrite('docs/plans/x.md', widget)).toBe(true))
+  test('a plan in another repo under the projects folder', () => expect(planMayWrite(`${gateway}/docs/plans/x.md`, widget)).toBe(true))
   test('.git of the repo (commit)', () => expect(planMayWrite(`${widget}/.git/index`, widget)).toBe(true))
+  test("the repo root's .gitignore", () => expect(planMayWrite(`${widget}/.gitignore`, widget)).toBe(true))
+  test('a nested .gitignore is refused', () => expect(planMayWrite(`${widget}/src/.gitignore`, widget)).toBe(false))
+  test('the old Superpowers folder is refused', () => expect(planMayWrite('docs/superpowers/specs/x.md', widget)).toBe(false))
   test('/tmp', () => expect(planMayWrite('/tmp/notes.md', widget)).toBe(true))
   test('source code is refused', () => expect(planMayWrite('src/main.ts', widget)).toBe(false))
   test('outside the projects folder is refused', () => expect(planMayWrite(join(homedir(), '.bashrc'), widget)).toBe(false))
-})
-
-test('isPlanPath', () => {
-  expect(isPlanPath(`${widget}/docs/superpowers/plans/2026-10-14-x.md`)).toBe(true)
-  expect(isPlanPath(`${widget}/docs/superpowers/specs/2026-10-14-x.md`)).toBe(false)
-})
-
-describe('notAPlan', () => {
-  const dir = mkdtempSync('/tmp/notaplan-')
-  mkdirSync(join(dir, 'specs'))
-  mkdirSync(join(dir, 'plans'))
-  writeFileSync(join(dir, 'specs', 'a.md'), '# Design\n### Task 1: x\n')
-  writeFileSync(join(dir, 'plans', 'a.md'), '# X Implementation Plan\n\n### Task 1: x\n')
-  writeFileSync(join(dir, 'plans', 'b.md'), '# Notes\nsome text\n')
-  test('a spec is refused', () => expect(notAPlan(join(dir, 'specs', 'a.md'), dir)).toContain('spec'))
-  test('a plan passes', () => expect(notAPlan('plans/a.md', dir)).toBeNull())
-  test('a file without tasks is refused', () => expect(notAPlan('plans/b.md', dir)).toContain('Task 1'))
-  test('a missing file is refused', () => expect(notAPlan('plans/zzz.md', dir)).toContain("Can't find"))
 })
 
 describe('Go usage', () => {
@@ -66,22 +51,33 @@ describe('which modes the router works in', () => {
   })
 })
 
-describe('the /plan flow skips the spec', () => {
-  test('questions, then straight to writing-plans: no spec to write or review', () => {
+describe("the /plan flow is slice's phase A", () => {
+  test('points at the slice skill and ends with plan_ready', () => {
     const prompt = planPrompt('a recipes app')
-    expect(prompt).toContain("don't write a spec")
-    expect(prompt).toContain('writing-plans')
-    expect(prompt).toContain('without asking me anything more')
-    expect(prompt).not.toContain('approve the design')
-    expect(prompt).toContain('docs/superpowers/plans/')
+    expect(prompt).toContain('Phase A: frame')
+    expect(prompt).toContain(SLICE_SKILL)
+    expect(prompt).toContain('plan_ready')
+    expect(prompt).toContain('docs/plans/')
+    expect(prompt).not.toContain('brainstorming')
+    expect(prompt).not.toContain('writing-plans')
   })
 })
 
-describe('the /plan questions', () => {
-  test('come in batches of independent questions, not one per call', () => {
-    const prompt = planPrompt('a recipes app')
-    expect(prompt).not.toContain('one question per call')
-    expect(prompt).toContain('up to 4')
+describe('the plan phase prompt', () => {
+  test('launches the phase in a folder with commits, word for word', () => {
+    const prompt = executePrompt('BRIEF TEXT', 'Sign up')
+    expect(prompt).toContain('background_agent')
+    expect(prompt).toContain('commits true')
+    expect(prompt).toContain('isolation "folder"')
+    expect(prompt).toContain('BRIEF TEXT')
+  })
+})
+
+describe('the plan mode hint', () => {
+  test('mentions slice and docs/plans/', () => {
+    const hint = modeHint('plan')
+    expect(hint).toContain('slice')
+    expect(hint).toContain('docs/plans/')
   })
 })
 
