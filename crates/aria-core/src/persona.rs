@@ -231,14 +231,15 @@ mod tests {
     }
 
     #[test]
-    fn plan_and_execute_off_drop_the_superpowers_commands_and_the_skills_come_from_the_settings() {
+    fn plan_off_drops_slice_and_the_skills_come_from_the_settings() {
         let mut settings = owners();
+        assert!(render_system(TEMPLATE, &settings).contains("# Slice"));
         settings.subagents.auto_skills = vec!["brainstorming".into()];
         let text = render_system(TEMPLATE, &settings);
         assert!(text.contains("except `brainstorming`, which does apply whenever relevant"));
         settings.subagents.plan_execute = false;
         let text = render_system(TEMPLATE, &settings);
-        assert!(!text.contains("/plan <idea>"));
+        assert!(!text.contains("# Slice") && !text.contains("/plan <idea>") && !text.contains("`plan=offer`"));
     }
 
     #[test]
