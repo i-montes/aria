@@ -21,6 +21,8 @@ pub struct Config {
     pub connected: Vec<String>,
     pub allow_pay_per_use: bool,
     pub compact_at: u8,
+    /// The host `aria connect` is on: sessions there have no folder of this terminal's.
+    pub remote: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -315,12 +317,11 @@ impl App {
                 (title, folder, state, ago)
             })
             .collect();
-        rows.push((
-            t(lang, "term.new", &json!({"folder": self.config.cwd})),
-            String::new(),
-            String::new(),
-            String::new(),
-        ));
+        let new = match &self.config.remote {
+            Some(host) => t(lang, "term.newRemote", &json!({"host": host})),
+            None => t(lang, "term.new", &json!({"folder": self.config.cwd})),
+        };
+        rows.push((new, String::new(), String::new(), String::new()));
         rows
     }
 
@@ -332,7 +333,7 @@ impl App {
         match self.ordered().get(self.selected).map(|s| s.id.clone()) {
             Some(id) => self.attach(id),
             None => {
-                let workdir = Some(self.config.cwd.clone());
+                let workdir = if self.config.remote.is_some() { None } else { Some(self.config.cwd.clone()) };
                 vec![self.request(Pending::SessionNew, |id| PageMessage::SessionNew { id, workdir })]
             }
         }
@@ -989,6 +990,7 @@ mod tests {
             connected: vec![],
             allow_pay_per_use: false,
             compact_at: 40,
+            remote: None,
         }
     }
 
@@ -1483,5 +1485,30 @@ mod tests {
         );
         let effects = app.update(Input::Dock(DockMessage::Error { id: 0, code: "gone".into() }));
         assert_eq!(effects, vec![Effect::Reconnect], "every loss tries once more");
+    }
+
+    #[test]
+    fn over_connect_a_new_session_has_no_folder() {
+        let (mut app, effects) = App::new(Config { remote: Some("hub.example".into()), ..config() });
+        let Some(Effect::Send(PageMessage::SessionsLoad { id })) = effects.first().cloned() else {
+            panic!("{effects:?}")
+        };
+        app.update(Input::Dock(DockMessage::Sessions { id, sessions: vec![], active: None }));
+        let rows = app.list_rows();
+        assert_eq!(rows.last().unwrap().0, "+ new on hub.example");
+        let effects = key(&mut app, Key::Enter);
+        assert!(
+            effects.iter().any(|e| matches!(e, Effect::Send(PageMessage::SessionNew { workdir: None, .. }))),
+            "{effects:?}"
+        );
+    }
+
+    #[test]
+    fn a_dropped_ssh_reconnects_and_attaches_again() {
+        let mut app = attached();
+        let effects = app.update(Input::Dock(DockMessage::Error { id: 0, code: "gone".into() }));
+        assert_eq!(effects, vec![Effect::Reconnect]);
+        let effects = app.update(Input::Reconnected);
+        assert_eq!(effects[0], Effect::Attach("aa".into()));
     }
 }

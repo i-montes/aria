@@ -105,6 +105,27 @@ const OWN: &[(&str, &str, &str)] = &[
         "El dock de Aria es más viejo que este aria: reinícialo con `aria quit` y `aria`.",
     ),
     ("term.new", "+ new in {folder}", "+ nueva en {folder}"),
+    ("term.newRemote", "+ new on {host}", "+ nueva en {host}"),
+    (
+        "term.noSsh",
+        "ssh is not installed here (or ARIA_SSH names a program that is not there).",
+        "ssh no está instalado aquí (o ARIA_SSH nombra un programa que no existe).",
+    ),
+    (
+        "term.hubDown",
+        "Aria is not running on that computer: start it there with `aria start`.",
+        "Aria no está corriendo en ese computador: inícialo allá con `aria start`.",
+    ),
+    (
+        "term.hubTooOld",
+        "Aria on that computer is older than this aria: update it there.",
+        "Aria en ese computador es más viejo que este aria: actualízalo allá.",
+    ),
+    (
+        "term.protocolMismatch",
+        "This aria speaks protocol {ours} and Aria on that computer speaks {theirs}: update the older one.",
+        "Este aria habla el protocolo {ours} y Aria en ese computador habla el {theirs}: actualiza el más viejo.",
+    ),
     ("term.working", "working", "trabajando"),
     ("term.waiting", "waiting for you", "esperando tu respuesta"),
     ("term.done", "done", "listo"),

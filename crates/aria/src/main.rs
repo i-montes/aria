@@ -12,6 +12,7 @@ mod attachments;
 mod chat;
 mod checkpoints;
 mod clients;
+mod connect;
 mod control;
 mod dictation;
 mod dock;
@@ -100,6 +101,13 @@ fn main() {
                 std::process::exit(1);
             }
         },
+        Some("connect") => match std::env::args().nth(2) {
+            Some(host) => std::process::exit(term::run_remote(&host)),
+            None => {
+                eprintln!("usage: aria connect [user@]host");
+                std::process::exit(2);
+            }
+        },
         Some("client-stdio") => std::process::exit(stdio_bridge::command()),
         Some("start") => start_service(),
         Some("secret") => {
@@ -110,7 +118,7 @@ fn main() {
         Some("bar") => std::process::exit(omarchy_bar::bar_command(std::env::args().nth(2).as_deref())),
         Some("--version" | "-V" | "version") => println!("aria {}", env!("CARGO_PKG_VERSION")),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [dock|toggle|show|start|quit|keyring|secret|bar|update-ready|client-stdio|--version]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [dock|toggle|show|start|quit|keyring|secret|bar|update-ready|connect|client-stdio|--version]");
             std::process::exit(2);
         }
         None => unreachable!("plain aria is the client or the dock"),

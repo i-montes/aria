@@ -124,7 +124,7 @@ pub fn run(
     link: Link,
     config: Config,
     paths: &aria_core::paths::AriaPaths,
-    clients: &Path,
+    reconnect: &dyn Fn() -> std::io::Result<Link>,
 ) -> std::io::Result<Option<String>> {
     let mut link = link;
     let palette = Palette::detect();
@@ -292,7 +292,7 @@ pub fn run(
                 Effect::Focus(focused) => link.focus(focused),
                 Effect::SaveVerbose(on) => save_verbose(paths, on),
                 Effect::Reconnect => {
-                    let back = match Link::connect(clients) {
+                    let back = match reconnect() {
                         Ok(new) => {
                             events = new.events();
                             link = new;
