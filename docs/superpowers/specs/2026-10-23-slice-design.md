@@ -138,7 +138,7 @@ Every piece exists; this feeds them. One source: the plan file's checkboxes.
 |---|---|---|
 | The plan and its state | document card (`ui/chat/parts/document.js`) | phase A, at approval: `doc: 'plan'`, `draft` → `approved` |
 | Phases → tasks | phases card (`ui/chat/parts/phases.js`) | phase A, from the plan |
-| Progress: todo / active / done | the dock's task dock (`chat.setTasks`) and the terminal's tasks strip | the plan's marks while its phase runs |
+| Progress: todo / active / done | the dock's task dock (fed by the `aria-tasks` status; `chat.setTasks` stays for the sandbox) and the terminal's tasks strip | the plan's marks while its phase runs |
 | What the subagent does, step by step | the background pill, Alt+A | already |
 | Every real change | the commits | already |
 
@@ -146,8 +146,9 @@ The task list reuses `tasks_update`'s shape (`{ id, title, status, agent }`, `ex
 0.17.0). While a slice phase runs in the background, the parent Pi watches the plan file and, on each change,
 publishes the phase's tasks as the extension status `aria-tasks` (JSON), the channel the dock (`ui/chat/state.js`,
 `ui_notice` → `setStatus`, as `aria-jev`) and the terminal (`crates/aria/src/term/state.rs`, as `aria-verify`)
-already read; cleared when the job ends. The terminal shows it in its tasks strip; the dock feeds its task dock
-(`chat.setTasks`), which nothing fed before.
+already read. The list stays after the job ends, until the next phase's job replaces it or the plan is done. The
+terminal shows it in its tasks strip; the dock feeds its task dock from the status (`chat.setTasks` is kept for the
+sandbox), which nothing fed before.
 
 ## 5. Jev whatever the model, through Go or TypeSafe
 

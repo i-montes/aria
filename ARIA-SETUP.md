@@ -43,7 +43,7 @@ Snapshot of the Pi setup behind Aria, as of 2026-10-18. Everything lives in `~/.
 19. **Effort:** in auto the route decides, and free models run at their top level. A level picked by hand (`/thinking`, `shift+tab` or `/effort <level>`) stays until `/effort auto`.
 20. **Slice modes:**
     - `/plan` (or accepting the router's offer for sizable work) is phase A of the `slice` skill: one round of questions, then a plan in `docs/plans/` that you approve (`plan_ready`); it only writes to `docs/plans/`, `.gitignore`, `.git` and `/tmp` of repos under `~/Projects`, and turns itself off when the plan is approved;
-    - approving the plan builds its first phase in a background subagent that commits in the folder, test first, and never pushes; `/execute` builds the next open phase of an approved plan;
+    - approving the plan builds its first open phase in a background subagent that commits in the folder, test first, and never pushes; `/execute` builds the next open phase of a plan with phases;
     - the model never picks `slice` on its own: it is reached only through `/plan` or the offer.
 21. **Generic experts:** `frontend` and `backend` write; `security`, `reviewer` and `researcher` are read-only.
 22. **Subagents:**

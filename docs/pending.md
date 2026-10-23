@@ -152,6 +152,9 @@ extension, the strip and the Alt+A list; see the [architecture](architecture.md#
   protect `commondir` and `gitdir` (or the whole git dir but what git must write) in `extensions/sandbox/policy.ts`, and
   give the dock's git an empty attributes source.
 - If the projects folder is itself inside a git repository, `.aria-worktrees/` lands inside that repository.
+- A slice job that ends while the main agent is in the middle of a turn gets no `[slice]` hint and no tasks-feed finish:
+  Pi queues the `aria-background` message as a follow-up (agent-session `followUp`) and `before_agent_start` does not
+  fire for it. The design accepts it; the later fix is to emit the hint from a `message_end` hook for `aria-background`.
 
 ## Connectors and attachments
 

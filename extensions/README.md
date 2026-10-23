@@ -6,7 +6,7 @@ every time a session starts; an extension the owner edited there is kept (see `c
 
 | Extension | What it does |
 |---|---|
-| `jev-router` | Jev classifies each message (route, memory, web, Notion, read-only, sizable) and adds a hidden hint and the answer-style rule; reasoning effort follows the route (`/effort`); `/plan` starts slice's phase A (one round of questions, then the plan in `docs/plans/`) and, for sizable work, the offer to plan it first (`plan=offer`, the `start_plan` tool) does the same; `plan_ready` shows the plan and asks for approval, and approving it launches phase B, a committing background subagent; `/execute` builds the next open phase of an approved plan (it resumes one); after each slice job the router adds a `[slice]` hint with the next step (review, a question to ask, the manual checks); while a phase builds, the plan's marks are published as the status `aria-tasks` (the dock's task dock and the terminal's tasks strip) |
+| `jev-router` | Jev classifies each message (route, memory, web, Notion, read-only, sizable) and adds a hidden hint and the answer-style rule; reasoning effort follows the route (`/effort`); `/plan` starts slice's phase A (one round of questions, then the plan in `docs/plans/`) and, for sizable work, the offer to plan it first (`plan=offer`, the `start_plan` tool) does the same; `plan_ready` shows the plan and asks for approval, and approving it launches phase B, a committing background subagent; `/execute` builds the next open phase of a plan with phases (it resumes one); after each slice job the router adds a `[slice]` hint with the next step (review, a question to ask, the manual checks); while a phase builds, the plan's marks are published as the status `aria-tasks` (the dock's task dock and the terminal's tasks strip) |
 | `sandbox` | every bash command runs in bwrap: writes only in the project, `/tmp` and caches; asks before leaving it, with Jev's review; also `background_run` (a never-ending command for Aria's dock), on the same route as bash |
 | `quota-fallback` | when the OpenCode Go quota is almost spent, asks to switch to the free model (countdown) |
 | `autocompact` | compacts the context at a set percent (`/autocompact`) |
@@ -51,10 +51,10 @@ Tests: `bun test extensions`.
   - `quota-fallback/ask.ts` (new): `quotaQuestion` builds the quota card in RPC, the old text in the terminal.
   - `jev-router/modes.ts`, `slice.ts`, `approve.ts`: `/plan` is phase A of the `slice` skill (`agent-files/skills/slice/`),
     not Superpowers' brainstorming and writing-plans: one round of up to 4 questions, then a plan of phases and tasks in
-    `docs/plans/<date>-<slug>.md`, committed. Plan mode writes only `docs/plans/`, the repo root's `.gitignore`, `.git`
+    `docs/plans/<date>-<slug>.md`, committed (unless the owner keeps `docs/` out of the repository). Plan mode writes only `docs/plans/`, the repo root's `.gitignore`, `.git`
     and `/tmp`. `plan_ready` shows the plan (the chat draws it as a card) and asks to approve or change it; approved, plan
-    mode ends and the build starts when the model's answer does. There is no execute mode any more: the build is a
-    background job and the chat stays routed. Leaving plan mode (`/plan off`) cancels an approved build that has not
+    mode ends and the build starts when the model's answer ends. There is no execute mode any more: the build is a
+    background job and the chat stays routed (only the build-start message itself is not classified). Leaving plan mode (`/plan off`) cancels an approved build that has not
     started. The skill is hidden from the model's own choice (`disable-model-invocation`): only `/plan` and the router's
     offer reach it.
   - `jev-router/route.ts`, `sandbox/review.ts`: the classifier is `opencode/jev-1.13-free` or, with `router.backend`

@@ -53,7 +53,7 @@ json.dump(mcp, open(sys.argv[2], "w"), indent=2)
 PY
 fi
 for file in auth.json mcp.json mcp-auth.json; do [ -f "$home/$file" ] && chmod 600 "$home/$file"; done
-# Pi's packages (pi-parallel-agents, superpowers, the Claude provider), copied so nothing writes into the real ones.
+# Pi's packages (pi-parallel-agents, superpowers, Ponytail, the Claude provider), copied so nothing writes into the real ones.
 for dir in npm git; do
   [ -d "$real/agent/$dir" ] && { cp -R --reflink=auto "$real/agent/$dir" "$home/agent/$dir" 2>/dev/null || cp -R "$real/agent/$dir" "$home/agent/$dir"; }
 done
