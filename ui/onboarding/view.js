@@ -69,6 +69,7 @@ export function createOnboarding(env) {
     svc: freshServices(), // Notion and Tavily do not depend on the provider, so they live apart from `ui`
     ui: freshUi(),
     found: freshFound(), // the MCP servers other apps have (the dock's `mcpFound`), and what is picked to import
+    secrets: { status: 'idle', list: [], confirm: null }, // the person's saved secrets (names only; the dock's `secrets`)
   }
 
   /** `status`: idle | scanning | ready | error. Replaced on every scan, so a reply to an older one is ignored. */
@@ -637,6 +638,7 @@ export function createOnboarding(env) {
     }
     if (s.integrations.services.some((service) => !isConnected(service.id))) html += c.info('amber', '', t('ob.integrations.needConnect'))
     html += accessRows()
+    html += secretsBlock()
     html += foundBlock()
     const p = s.integrations.packages
     html += c.section(t('ob.integrations.section.packages'))
@@ -658,6 +660,41 @@ export function createOnboarding(env) {
       c.info('neutral', '', t('ob.integrations.access.desc')) +
       servers.map((server) => c.segments(`access:${server}`, displayName(server), options, ACCESS_LEVELS.includes(access[server]) ? access[server] : 'ask')).join('')
     )
+  }
+
+  /** The passwords, keys and tokens the person keeps in the keyring (names only), each with Delete (asked twice). */
+  function secretsBlock() {
+    const s = state.secrets
+    let html = c.section(t('ob.secrets.section'))
+    if (s.status === 'error') return html + c.info('amber', '', t('ob.secrets.error'))
+    if (s.status !== 'ready') return html + c.info('neutral', '', t('ob.secrets.loading'))
+    html += c.info('neutral', '', t('ob.secrets.desc'))
+    if (!s.list.length) return html + c.info('neutral', '', t('ob.secrets.none'))
+    for (const entry of s.list) {
+      const confirming = s.confirm === entry.name
+      html +=
+        c.info('neutral', entry.name, [entry.purpose, `$${entry.env}`].filter(Boolean).join(' · ')) +
+        `<div class="action-row"><button class="link" data-nav data-action="secret-delete" data-value="${c.esc(entry.name)}" data-key="secret-delete:${c.esc(entry.name)}">${c.esc(t(confirming ? 'ob.secrets.confirm' : 'ob.secrets.delete'))}</button></div>`
+    }
+    return html
+  }
+
+  /** Asks the dock for the saved secrets (`reply` when an answer is already here: a delete answers with the list). */
+  async function loadSecrets(reply = null) {
+    const answer = reply ?? (await request({ type: 'secretsList' }))
+    state.secrets = answer?.type === 'secrets' && Array.isArray(answer.secrets)
+      ? { status: 'ready', list: answer.secrets.filter((e) => e && typeof e.name === 'string'), confirm: null }
+      : { status: 'error', list: [], confirm: null }
+    render()
+  }
+
+  /** Delete asks once more on the same button; the second click forgets it (keyring and list). */
+  async function deleteSecret(name) {
+    if (state.secrets.confirm !== name) {
+      state.secrets = { ...state.secrets, confirm: name }
+      return render()
+    }
+    await loadSecrets(await request({ type: 'secretDelete', name }))
   }
 
   /** "Your other MCP servers": what Claude Code, Claude Desktop, Cursor and VS Code have, to copy into Aria's mcp.json.
@@ -889,7 +926,10 @@ export function createOnboarding(env) {
     render()
     // Opening the sign-in's section is what checks a credential already on disk.
     maybeCheckStoredCredential()
-    if (id === 'integrations') void scanFound()
+    if (id === 'integrations') {
+      void scanFound()
+      void loadSecrets()
+    }
   }
 
   function exitSettings() {
@@ -965,7 +1005,10 @@ export function createOnboarding(env) {
     render()
     // Drawing has no side effects; entering the sign-in step is what checks a credential already on disk.
     maybeCheckStoredCredential()
-    if (step === 'integrations') void scanFound()
+    if (step === 'integrations') {
+      void scanFound()
+      void loadSecrets()
+    }
   }
 
   function startFlow(mode) {
@@ -1454,6 +1497,7 @@ export function createOnboarding(env) {
       return render()
     }
     if (action === 'mcp-import') return importFound()
+    if (action === 'secret-delete') return deleteSecret(value)
     if (action === 'check' && field === 'mcpImport') return pickFound(value)
     if (action === 'check') {
       update((s) => {

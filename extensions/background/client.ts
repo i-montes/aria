@@ -216,11 +216,12 @@ const SHOWN_LINES = 30
  * command itself without the sandbox). Waits up to 3 s for its first output (less once a URL shows) and says what
  * started.
  */
-export async function startProcess(o: { command: string; line: string; title: string; folder: string }): Promise<{ content: any[]; isError?: boolean; details?: any }> {
+export async function startProcess(o: { command: string; line: string; title: string; folder: string; env?: Record<string, string> }): Promise<{ content: any[]; isError?: boolean; details?: any }> {
   const client = jobsClient()
   if (!client) return refusal(DOCK_REFUSAL)
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) if (typeof v === 'string') env[k] = v
+  Object.assign(env, o.env)
   let answer: any
   try {
     answer = await client.request('start', { kind: 'process', command: o.command, line: o.line, title: o.title, folder: o.folder, env })

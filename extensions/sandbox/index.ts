@@ -24,6 +24,7 @@ import { startProcess } from '../background/client.ts'
 import { object, prepareRun, RUN_DESCRIPTION, RUN_PROPERTIES } from '../background/run.ts'
 import { ariaConfig } from '../lib/config.ts'
 import { handOver, takeOver } from '../lib/rotation.ts'
+import { secretEnv } from '../lib/secrets.ts'
 import { BLOCK_NOTE, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, resolvePath, secretDirs, secretFiles, subagentProblem, wrapCommand, writableRoots, isAriaOwn } from './policy.ts'
 
 const hasBwrap = (() => {
@@ -55,9 +56,12 @@ const OUTSIDE = 'Only after a command failed because of the sandbox: run it outs
 export default function sandbox(pi: ExtensionAPI) {
   if (process.env.PI_SANDBOX === '0') return
   const cwd = process.cwd()
-  const plain = createBashToolDefinition(cwd)
+  // Each command gets the person's secrets it names ($ARIA_SECRET_X), read from the keyring as it starts.
+  const plain = createBashToolDefinition(cwd, {
+    spawnHook: ({ command, cwd, env }) => ({ command, cwd, env: { ...env, ...secretEnv(command) } }),
+  })
   const boxed = createBashToolDefinition(cwd, {
-    spawnHook: ({ command, cwd, env }) => ({ command: wrapCommand(command, cwd), cwd, env }),
+    spawnHook: ({ command, cwd, env }) => ({ command: wrapCommand(command, cwd), cwd, env: { ...env, ...secretEnv(command) } }),
   })
   let grants = emptyGrants()
 
@@ -164,7 +168,7 @@ export default function sandbox(pi: ExtensionAPI) {
       if (route === 'ask' && !allowed) return refuse(SAID_NO)
       const line = backgroundLine(route, command, ready.folder, allowed)
       if (line === null) return refuse(refusalText(route, hasBwrap) ?? SAID_NO)
-      return startProcess({ command, line, title, folder: ready.folder })
+      return startProcess({ command, line, title, folder: ready.folder, env: secretEnv(command) })
     },
   } as any)
 

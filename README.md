@@ -26,6 +26,10 @@ A personal assistant that lives on your desktop. Press **Super + A** (**Option +
 - **Connectors** (Notion, Tavily, and the MCP servers your other apps already have), each read-only, ask-first or
   allowed; **attachments** by the paperclip, drop or paste; **memory** with its own Engram.
 - **Keys in the system keyring** (Keychain, Secret Service), never in plain files under `~/.aria`.
+- **Your secrets, never seen by the model**: when a task needs a password, API key or token, Aria asks with a secret
+  card; a key pasted in the chat is caught before it goes out; one lying in a file is masked in what the agent reads,
+  and Aria offers to keep it (or keeps the one in a file you name). Each goes to the keyring, and a command uses it as
+  `$ARIA_SECRET_<NAME>`; outputs that print one are masked. Settings → Integrations lists them and deletes one.
 - **Scheduled tasks**: ask "every day at 7:30 give me my Notion tasks" and Aria does it by itself, in the task's own tab
   with a desktop notification, with the permissions you gave it (anything else is refused, never asked); a time missed
   while the computer slept or Aria was off runs once when it is back. `/schedules` lists, pauses and deletes them.
@@ -81,6 +85,7 @@ sh install/install.sh --local target/release/aria
 | the system keyring | Every key (Keychain on macOS, the Secret Service on Omarchy), under the service `aria`; `aria keyring status` lists them by name |
 | `~/.aria/mcp.json` | The MCP servers (Notion, Tavily, the ones you import), in Pi's format; their keys are `!aria secret …` commands that read the keyring |
 | `auth.json`, `mcp-auth.json` | Provider and MCP credentials, in Pi's formats: sealed in the keyring, with a live copy in a private temporary folder (`$XDG_RUNTIME_DIR` on Omarchy) while the dock runs. With `credentials.keyring` off (`aria keyring off`) they are plain files in `~/.aria`, mode `600` |
+| `~/.aria/secrets.json` | The names of your secrets, what each is for and when it was saved (mode `600`), never a value; the values are keyring accounts `user:<name>` |
 | `~/.aria/schedules.json` | The scheduled tasks: prompt, time, days or date, permissions, last run and result ([design](docs/superpowers/specs/2026-10-21-schedules-design.md)) |
 | `~/.aria/sessions.json` | The open session tabs (ids, titles, the active one); the conversations are Pi's session files in `~/.aria/agent/sessions` |
 | `~/.aria/pi/<version>/` | The pinned Pi engine (the version is in the repo's `pi-version` file) |

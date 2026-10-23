@@ -495,7 +495,7 @@ export function answersForCard(questions, answers) {
   })
 }
 
-const CARD_LABEL = { sandbox: 'sandbox', write: 'sandbox', connector: 'connector', quota: 'model', question: 'ask' }
+const CARD_LABEL = { sandbox: 'sandbox', write: 'sandbox', connector: 'connector', quota: 'model', question: 'ask', secret: 'secret' }
 
 /** The dialog is answered: it goes away, and a card leaves what was chosen in the thread. `choice` is the
  * option's text (or the answers array of a question card; nothing for a skipped one). */
@@ -508,6 +508,8 @@ export function answerDialog(state, id, choice) {
     return Array.isArray(choice) ? push(next, { kind: 'answers', answers: choice }) : push(next, { kind: 'note', label: 'ask', key: 'chat.askSkipped' })
   }
   if (!choice) return next
+  // A secret card's choice is the name it was saved under (never its value).
+  if (kind === 'secret') return push(next, { kind: 'note', label: 'secret', key: 'chat.secret.saved', vars: { name: String(choice) } })
   // The known codes have a sentence ("allowed once"); an extension's own option is shown as it was written.
   const known = ['allow', 'always', 'deny', 'free', 'keep'].includes(choice)
   return push(next, known ? { kind: 'note', label: CARD_LABEL[kind] ?? kind, key: `chat.result.${choice}`, text: String(choice) } : { kind: 'note', label: CARD_LABEL[kind] ?? kind, text: String(choice) })

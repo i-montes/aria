@@ -429,5 +429,12 @@
   "ob.integrations.found.warn.envFile": "its env file is not imported: add those variables after importing",
   "ob.error.mcp-write-failed": "Aria could not write ~/.aria/mcp.json.",
   "ob.error.nothing-to-import": "None of the checked servers can be imported any more.",
-  "quit.confirm": "Press ⌘Q again to quit Aria"
+  "quit.confirm": "Press ⌘Q again to quit Aria",
+  "ob.secrets.section": "YOUR SECRETS",
+  "ob.secrets.desc": "Passwords, keys and tokens Aria keeps in the system keyring. The model only knows their names; a command reads one as its variable.",
+  "ob.secrets.none": "None yet. When a task needs one, Aria asks with a card, or keeps one you paste in the chat.",
+  "ob.secrets.loading": "Reading your secrets…",
+  "ob.secrets.error": "Your secrets could not be read.",
+  "ob.secrets.delete": "Delete",
+  "ob.secrets.confirm": "Delete it for good?"
 }

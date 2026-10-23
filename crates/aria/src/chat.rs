@@ -666,6 +666,7 @@ impl Chat {
             self.ctx.jobs.clone(),
             launcher,
             self.ctx.schedules.clone(),
+            self.ctx.paths.clone(),
         ) {
             Ok(socket) => socket,
             Err(error) => {
@@ -881,6 +882,10 @@ impl Chat {
         }
         if let Some(path) = self.jobs_socket() {
             spec.env.push(("ARIA_JOBS_SOCK".into(), path.display().to_string()));
+        }
+        // The `aria` the secrets extension reads a stored secret with (`aria secret`), for a command that names it.
+        if let Some(vault) = self.ctx.paths.vault.as_ref() {
+            spec.env.push(("ARIA_EXE".into(), vault.exe.display().to_string()));
         }
         let grants = self.inner.lock().unwrap().scheduled.as_ref().map(|s| s.grants.clone());
         if let Some(grants) = grants {

@@ -208,7 +208,7 @@ pub fn resolve(vault: Option<&Vault>, value: &str) -> Option<String> {
 }
 
 /// Writes `bytes` to `path` with mode 0600 through a temporary file in the same folder, so a reader never sees half.
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_file_name(format!(
         ".{}.{}.tmp",
         path.file_name().unwrap_or_default().to_string_lossy(),

@@ -429,5 +429,12 @@
   "ob.integrations.found.warn.envFile": "su archivo de entorno no se importa: añade esas variables después de importar",
   "ob.error.mcp-write-failed": "Aria no pudo escribir ~/.aria/mcp.json.",
   "ob.error.nothing-to-import": "Ninguno de los servidores marcados se puede importar ya.",
-  "quit.confirm": "Pulsa ⌘Q otra vez para cerrar Aria"
+  "quit.confirm": "Pulsa ⌘Q otra vez para cerrar Aria",
+  "ob.secrets.section": "TUS SECRETOS",
+  "ob.secrets.desc": "Contraseñas, claves y tokens que Aria guarda en el llavero del sistema. El modelo solo conoce sus nombres; un comando lee cada uno como su variable.",
+  "ob.secrets.none": "Ninguno todavía. Cuando una tarea necesite uno, Aria lo pide con una tarjeta, o guarda el que pegues en el chat.",
+  "ob.secrets.loading": "Leyendo tus secretos…",
+  "ob.secrets.error": "No se pudieron leer tus secretos.",
+  "ob.secrets.delete": "Borrar",
+  "ob.secrets.confirm": "¿Borrarlo definitivamente?"
 }

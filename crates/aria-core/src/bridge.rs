@@ -31,6 +31,22 @@ pub enum PageMessage {
     /// `provider` is `opencode-go`, `anthropic-api`, `typesafe` or `tavily`.
     #[serde(rename = "saveKey")]
     SaveKey { id: u64, provider: String, key: String },
+    /// Keep one of the person's secrets in the keyring under `name` (`aria_core::secrets`): from a secret card, or a
+    /// key the composer caught. The value goes page → dock → keyring, never through Pi.
+    #[serde(rename = "secretSave")]
+    SecretSave {
+        id: u64,
+        name: String,
+        value: String,
+        #[serde(default)]
+        purpose: String,
+    },
+    /// The saved secrets' names (`DockMessage::Secrets`).
+    #[serde(rename = "secretsList")]
+    SecretsList { id: u64 },
+    /// Forget one (`DockMessage::Secrets`, the list after it).
+    #[serde(rename = "secretDelete")]
+    SecretDelete { id: u64, name: String },
     /// Validate the key already stored for a provider (`auth.json`), without the page ever seeing it.
     #[serde(rename = "checkKey")]
     CheckKey { id: u64, provider: String },
@@ -213,6 +229,13 @@ pub enum DockMessage {
     /// `error` is a UI string key: `key-rejected`, `network-unavailable`, `auth-file-broken`.
     #[serde(rename = "keyResult")]
     KeyResult { id: u64, ok: bool, error: Option<String> },
+    /// A secret saved (`name` as stored, `env` the variable a command reads it from), or why not: `keyring-off`,
+    /// `keyring-failed`, or a text about the name or the value.
+    #[serde(rename = "secretResult")]
+    SecretResult { id: u64, ok: bool, name: Option<String>, env: Option<String>, error: Option<String> },
+    /// The saved secrets: `[{name, purpose, saved, env}]`, never a value.
+    #[serde(rename = "secrets")]
+    Secrets { id: u64, secrets: Value },
     #[serde(rename = "oauthUrl")]
     OAuthUrl { id: u64, url: String },
     /// `error` is a UI string key: `oauth-denied`, `oauth-timeout`, `oauth-state`, `network-unavailable`.

@@ -137,6 +137,13 @@ First put in by hand as a test, then taken out with `aria bar remove` and put ba
 | `~/.config/omarchy/shell.json` | `{ "id": "aria.face" }` in `bar.layout.center`, right after `omarchy.weather`, put there by `omarchy plugin enable` after `omarchy-shell shell rescanPlugins` (the right section was tried first, but the bar always pins the tray before every other widget there) | `~/.config/omarchy/shell.json.bak.<epoch>`, one each time it is placed | `aria bar remove` (runs `omarchy plugin disable aria.face`), or copy a backup back (the shell reloads it on save) |
 | `$XDG_RUNTIME_DIR/aria/face` (`~/.aria/run/face` on macOS, where nothing reads it yet) | the face's state, one word, written by the dock whenever what its tabs do changes it (runtime only; gone at logout) | not applicable | stop the dock; `rm` it and the face stays idle |
 
+## 2026-10-22 — secrets (the dock and its extensions, installed with `sh install/install.sh --local target/release/aria`)
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| the system keyring (service `aria`) | one account `user:<name>` per secret the person saves (a card, a key pasted in the chat, a file); nothing until one is saved | not applicable | Settings → Integrations → Your secrets → Delete, or `secret-tool clear service aria account user:<name>` (Omarchy) / `security delete-generic-password -s aria -a user:<name>` (macOS) |
+| `~/.aria/secrets.json` | the secrets' names, purposes and dates, mode `600`, no values (new, written at the first save) | none, new | delete each secret in Settings, then `rm` it |
+
 ## 2026-10-22 — dictation on Omarchy (the Mac's dictation, checked on Linux; installed with `sh install/install.sh --local target/release/aria`)
 
 | File | What | Backup | Revert |

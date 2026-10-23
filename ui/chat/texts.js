@@ -14,6 +14,7 @@ import * as index from './parts/index.js'
 import * as jev from './parts/jev.js'
 import * as memory from './parts/memory.js'
 import * as schedules from './parts/schedules.js'
+import * as secret from './parts/secret.js'
 import * as models from './parts/models.js'
 import * as note from './parts/note.js'
 import * as permission from './parts/permission.js'
@@ -31,7 +32,7 @@ import * as trace from './parts/trace.js'
 import * as user from './parts/user.js'
 import * as working from './parts/working.js'
 
-export const PARTS = [answers, assistant, attachments, background, commands, composer, connect, divider, doc, files, index, jev, memory, models, note, permission, phases, pill, question, quota, quotabars, schedules, session, subagents, tabs, tasks, tools, trace, user, working]
+export const PARTS = [answers, assistant, attachments, background, commands, composer, connect, divider, doc, files, index, jev, memory, models, note, permission, phases, pill, question, quota, quotabars, schedules, secret, session, subagents, tabs, tasks, tools, trace, user, working]
 
 const OWN = {
   en: {

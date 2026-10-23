@@ -11,8 +11,10 @@ use aria_core::mcp_import::{self, ImportError};
 use aria_core::oauth::{self, OAuthError};
 use aria_core::paths::AriaPaths;
 use aria_core::providers;
+use aria_core::secrets;
 use aria_core::settings::{self, Settings, SettingsError};
 use aria_core::validate::{check_key, KeyCheck, KeyKind, ProbeRequest};
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -97,6 +99,9 @@ pub fn is_blocking(message: &PageMessage) -> bool {
     matches!(
         message,
         PageMessage::SaveKey { .. }
+            | PageMessage::SecretSave { .. }
+            | PageMessage::SecretsList { .. }
+            | PageMessage::SecretDelete { .. }
             | PageMessage::CheckKey { .. }
             | PageMessage::StartOAuth { .. }
             | PageMessage::StartMcpOAuth { .. }
@@ -141,6 +146,26 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         PageMessage::CheckKey { id, provider } => {
             let _ = ctx.paths.ensure_root();
             emit(check_stored_key(id, &provider, ctx));
+        }
+        PageMessage::SecretSave { id, name, value, purpose } => {
+            let _ = ctx.paths.ensure_root();
+            emit(match secrets::store(&ctx.paths, &name, &value, &purpose, now_ms()) {
+                Ok(entry) => DockMessage::SecretResult {
+                    id,
+                    ok: true,
+                    env: Some(secrets::env_name(&entry.name)),
+                    name: Some(entry.name),
+                    error: None,
+                },
+                Err(error) => DockMessage::SecretResult { id, ok: false, name: None, env: None, error: Some(error) },
+            });
+        }
+        PageMessage::SecretsList { id } => emit(DockMessage::Secrets { id, secrets: secrets_json(ctx) }),
+        PageMessage::SecretDelete { id, name } => {
+            if let Err(error) = secrets::delete(&ctx.paths, &name) {
+                crate::note(&format!("the secret {name} could not be deleted: {error}"));
+            }
+            emit(DockMessage::Secrets { id, secrets: secrets_json(ctx) });
         }
         PageMessage::StartOAuth { id } => {
             let _ = ctx.paths.ensure_root();
@@ -297,6 +322,20 @@ fn key_result(id: u64, error: Option<&str>) -> DockMessage {
 
 /// Checks the key against its provider and only then stores it; a key that is rejected or cannot be
 /// checked is never written.
+/// The saved secrets for the page: names, purposes, when, and the variable each one is read from; never a value.
+fn secrets_json(ctx: &Ctx) -> Value {
+    Value::Array(
+        secrets::list(&ctx.paths)
+            .into_iter()
+            .map(|e| json!({"name": e.name, "purpose": e.purpose, "saved": e.saved, "env": secrets::env_name(&e.name)}))
+            .collect(),
+    )
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+}
+
 fn save_key(id: u64, provider: &str, key: &str, ctx: &Ctx) -> DockMessage {
     let Some((kind, entries)) = key_target(provider) else {
         return DockMessage::Error { id, code: "unknown-provider".into() };

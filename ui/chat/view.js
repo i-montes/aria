@@ -14,6 +14,8 @@ import { renderFilePicker, filterFiles } from './parts/files.js'
 import { indexItems, indexLayout, renderIndex } from './parts/index.js'
 import { renderMemory, initialMemoryUi, reduceMemoryUi } from './parts/memory.js'
 import { renderSchedules } from './parts/schedules.js'
+import { renderSecret } from './parts/secret.js'
+import { findSecrets, suggestName, validName, withSecretsSaved } from './secrets.js'
 import { renderModelPicker, orderedModels, providerLabel, withoutPayPerUse } from './parts/models.js'
 import { questionAnswers, questionInit, questionReduce, normalizeQuestions, renderQuestion } from './parts/question.js'
 import { renderQuotaBars } from './parts/quotabars.js'
@@ -246,6 +248,9 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
   let headerKey = ''
   let indexKey = ''
   let questionKey = ''
+  // A message the composer held back because it carries secrets (secrets.js): { session, atEnd, found, busy?, error? }.
+  let pasteOffer = null
+  const secretCards = new Map() // secret dialog id -> { busy?, error? }
   let input = null
   // The thread follows what Aria writes while the reader is at its end. Only the reader changes that, by scrolling: a
   // redraw cannot, or a stream of tokens (one redraw a frame) pulls back the first pixels of every scroll up.
@@ -389,31 +394,117 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
     el.innerHTML = items.length > 1 ? renderIndex({ items, activeId: ui.activeId }, ui.index, t) : ''
   }
 
-  /** `force`: the wizard changed. Otherwise the card is only drawn when another one shows up. */
+  /** What takes the composer's place: a message held back for its secrets, then a secret card, then a question card. */
+  function swapCard() {
+    if (pasteOffer?.session === tabs.active) return { kind: 'pasted', id: 'pasted' }
+    const dialogs = current().dialogs
+    const dialog = dialogs.find((d) => d.card?.kind === 'secret') ?? dialogs.find((d) => d.card?.kind === 'question')
+    return dialog ? { kind: dialog.card.kind, id: dialog.id, dialog } : null
+  }
+
+  /** `force`: the wizard (or a secret card's state) changed. Otherwise the card is only drawn when another one shows up. */
   function drawQuestion(force = false) {
-    const state = current()
-    const dialog = state.dialogs.find((d) => d.card?.kind === 'question')
+    const card = swapCard()
     const el = $('chat-question')
-    const key = `${tabs.active}:${dialog?.id ?? ''}`
+    const key = `${tabs.active}:${card ? `${card.kind}:${card.id}` : ''}`
     if (!force && key === questionKey) return
     const wasAsking = !!questionKey && !questionKey.endsWith(':')
+    const appeared = key !== questionKey
     questionKey = key
     // The card takes the composer's place (chat.css, `.is-asking`).
-    $('view-chat').classList.toggle('is-asking', !!dialog)
-    if (!dialog) {
+    $('view-chat').classList.toggle('is-asking', !!card)
+    if (!card) {
       // Emptied once its row has folded, so the card does not vanish mid-animation; the composer takes the keyboard.
       if (wasAsking) {
         setTimeout(() => {
-          if (!current().dialogs.some((d) => d.card?.kind === 'question')) el.innerHTML = ''
+          if (!swapCard()) el.innerHTML = ''
         }, SWAP_MS)
         setTimeout(() => input?.focus(), SWAP_MS - 60)
       } else el.innerHTML = ''
       return
     }
-    if (!wizards.has(dialog.id)) wizards.set(dialog.id, questionInit(dialog.card.questions))
+    if (card.kind === 'question') {
+      const dialog = card.dialog
+      if (!wizards.has(dialog.id)) wizards.set(dialog.id, questionInit(dialog.card.questions))
+      return keepingFocus(el, () => {
+        el.innerHTML = `<div class="question-fill">${renderQuestion({ id: dialog.id, questions: dialog.card.questions }, wizards.get(dialog.id), t)}</div>`
+      })
+    }
+    // A secret card: what was typed survives a redraw (busy, an error), and never leaves the page except to the dock.
+    const typed = [...el.querySelectorAll('input[data-secret-value], input[data-secret-name]')].map((f) => f.value)
+    const props =
+      card.kind === 'pasted'
+        ? { mode: 'pasted', found: pasteOffer.found, busy: pasteOffer.busy, error: pasteOffer.error }
+        : { mode: 'asked', id: card.id, ...card.dialog.card, ...(secretCards.get(card.id) ?? {}) }
     keepingFocus(el, () => {
-      el.innerHTML = `<div class="question-fill">${renderQuestion({ id: dialog.id, questions: dialog.card.questions }, wizards.get(dialog.id), t)}</div>`
+      el.innerHTML = `<div class="question-fill">${renderSecret(props, {}, t)}</div>`
     })
+    if (!appeared) el.querySelectorAll('input[data-secret-value], input[data-secret-name]').forEach((f, i) => (f.value = typed[i] ?? f.value))
+    else setTimeout(() => el.querySelector('input[data-secret-value], input[data-secret-name]')?.focus(), SWAP_MS - 60)
+  }
+
+  /** The dock's refusal as the card's error key. */
+  const secretError = (error) =>
+    error === 'keyring-off' ? 'keyring-off' : /name/.test(String(error ?? '')) ? 'invalid-name' : 'failed'
+
+  /** The secret card's Save: the value goes to the dock (the keyring), and only its name back to Pi. */
+  async function saveAskedSecret(id) {
+    const session = tabs.active
+    const dialog = current().dialogs.find((d) => d.id === id)
+    const value = $('chat-question').querySelector('input[data-secret-value]')?.value ?? ''
+    if (!dialog) return
+    if (!value.trim()) {
+      secretCards.set(id, { error: 'empty' })
+      return drawQuestion(true)
+    }
+    secretCards.set(id, { busy: true })
+    drawQuestion(true)
+    const reply = await request({ type: 'secretSave', name: dialog.card.name, value, purpose: dialog.card.purpose })
+    if (!reply?.ok) {
+      secretCards.set(id, { error: secretError(reply?.error) })
+      return drawQuestion(true)
+    }
+    secretCards.delete(id)
+    if (session !== tabs.active) {
+      // The person moved to another tab while it was saved: that session's dialog is answered all the same.
+      post({ type: 'uiAnswer', id, value: `saved:${reply.name}` }, session)
+      chats.set(session, answerDialog(chatOf(session), id, reply.name))
+      return render()
+    }
+    answer(id, { value: `saved:${reply.name}` }, reply.name)
+  }
+
+  /** The held-back message: keep its secrets (then send it with their names), send it as it is, or go back to it. */
+  async function onPasteOffer(op) {
+    const offer = pasteOffer
+    if (!offer) return
+    if (op === 'edit') {
+      pasteOffer = null
+      drawQuestion(true)
+      return input?.focus()
+    }
+    if (op === 'send') {
+      pasteOffer = null
+      return submit(offer.atEnd, true)
+    }
+    const names = [...$('chat-question').querySelectorAll('input[data-secret-name]')].map((f) => suggestName(f.value))
+    if (names.length !== offer.found.length || !names.every(validName)) {
+      pasteOffer = { ...offer, error: 'invalid-name' }
+      return drawQuestion(true)
+    }
+    pasteOffer = { ...offer, busy: true, error: null }
+    drawQuestion(true)
+    for (const [i, f] of offer.found.entries()) {
+      const reply = await request({ type: 'secretSave', name: names[i], value: f.value, purpose: '' })
+      if (!reply?.ok) {
+        pasteOffer = { ...offer, busy: false, error: secretError(reply?.error) }
+        return drawQuestion(true)
+      }
+      names[i] = reply.name
+    }
+    pasteOffer = null
+    input.value = withSecretsSaved(input.value, offer.found, names)
+    submit(offer.atEnd, true)
   }
 
   function drawDialogs() {
@@ -990,7 +1081,7 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
 
   /** While Aria works a message goes in at the run's next step (after the tool calls going on); `atEnd` keeps it for when
    * the run is over. */
-  function submit(atEnd = false) {
+  function submit(atEnd = false, secretsChecked = false) {
     const steer = !atEnd
     const text = input.value.trim()
     const files = filesOf()
@@ -1021,6 +1112,12 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
       clearDraft()
       drawComposer()
       return runOwnCommand(own[1], (own[2] ?? '').trim())
+    }
+    // A pasted password or key is held back: the person keeps it in the keyring, or sends it on purpose.
+    const secrets = secretsChecked ? [] : findSecrets(text)
+    if (secrets.length) {
+      pasteOffer = { session: tabs.active, atEnd, found: secrets.map(({ kind, value, name }) => ({ kind, value, name })) }
+      return drawQuestion(true)
     }
     const session = tabs.active
     const chat = chatOf(session)
@@ -1716,6 +1813,14 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
       }
       return // Escape is not handled here: the page calls escape(), which closes just this picker
     }
+    if (event.key === 'Enter' && !event.isComposing && event.target?.dataset?.secretValue !== undefined) {
+      event.preventDefault()
+      return saveAskedSecret(event.target.dataset.id)
+    }
+    if (event.key === 'Enter' && !event.isComposing && event.target?.dataset?.secretName !== undefined) {
+      event.preventDefault()
+      return onPasteOffer('keep')
+    }
     if (event.target?.dataset?.chatField === 'connect-key' && event.key === 'Enter' && !event.isComposing) {
       event.preventDefault()
       return saveConnectKey()
@@ -1832,6 +1937,8 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
       }
       case 'index-jump': return jumpTo(id)
       case 'permission': return answer(id, { value: choice }, choice)
+      case 'secret': return el.dataset.op === 'save' ? saveAskedSecret(id) : answer(id, { cancelled: true }, undefined)
+      case 'secret-paste': return onPasteOffer(el.dataset.op)
       // The note says what was decided in the chat's words (free / keep), whatever string the extension used.
       case 'quota': return answer(id, { value: choice }, el.dataset.role || choice)
       case 'question': return onQuestion(el)

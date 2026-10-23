@@ -14,3 +14,12 @@
 .p-perm-secondary { border: 1px solid rgba(255, 255, 255, 0.14); background: #1A1409; color: #EDEDEF; }
 .p-perm-btn:hover, .p-perm-btn:focus-visible { border-color: #B9A8FF; }
 .p-perm-btn:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 2px; }
+/* The secret card (secret.js): the same shell, with its fields. */
+.p-secret-field { box-sizing: border-box; width: 100%; min-height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.14); background: #0A0A0C; color: #FFFFFF; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; }
+.p-secret-field:focus-visible { outline: 2px solid #B9A8FF; outline-offset: 1px; border-color: #B9A8FF; }
+.p-secret-row { display: grid; grid-template-columns: minmax(0, 9em) minmax(0, 1fr); align-items: center; gap: 10px; }
+.p-secret-kind { font-size: 13px; color: #D6D6DC; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-secret-note { margin: 0; font-size: 12.5px; line-height: 1.5; color: #8A8A94; }
+.p-secret-note code { font-family: 'Geist Mono', ui-monospace, monospace; color: #D6D6DC; }
+.p-secret-error { color: #FF8A80; }
+.p-perm-btn:disabled { opacity: 0.6; cursor: default; }

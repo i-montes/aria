@@ -11,6 +11,8 @@
 use crate::jobs::{AgentStart, Job, JobEvent, Jobs, ProcessStart};
 use crate::lines::read_bounded_line;
 use crate::schedule_store::ScheduleStore;
+use aria_core::paths::AriaPaths;
+use aria_core::secrets;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufReader, Write};
@@ -70,6 +72,8 @@ struct Session {
     jobs: Jobs,
     launcher: Arc<dyn Launcher>,
     schedules: ScheduleStore,
+    /// Aria's home and keyring, for the person's secrets (`secret_import`, `secrets_list`).
+    paths: AriaPaths,
 }
 
 /// A connection's writing half, shared by answers and pushed events. `written` is the highest event `seq` this
@@ -95,6 +99,7 @@ impl JobsSocket {
         jobs: Jobs,
         launcher: Arc<dyn Launcher>,
         schedules: ScheduleStore,
+        paths: AriaPaths,
     ) -> std::io::Result<JobsSocket> {
         if let Some(dir) = path.parent().filter(|dir| !dir.exists()) {
             use std::os::unix::fs::DirBuilderExt;
@@ -106,7 +111,7 @@ impl JobsSocket {
         listener.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
         let clients: Arc<Mutex<HashMap<u64, UnixStream>>> = Arc::default();
-        let session = Arc::new(Session { name: session, jobs, launcher, schedules });
+        let session = Arc::new(Session { name: session, jobs, launcher, schedules, paths });
         {
             let (stop, clients) = (stop.clone(), clients.clone());
             let next = AtomicU64::new(0);
@@ -297,7 +302,42 @@ fn answer(session: &Session, op: Option<&str>, request: &Value) -> Result<Fields
             session.schedules.delete(request["task"].as_str().ok_or("task is missing")?)?;
             Ok(Fields::new())
         }
+        // The value never comes back: only the name it was kept under and the variable a command reads it from.
+        Some("secret_import") => {
+            let path = resolve_path(request["path"].as_str().ok_or("path is missing")?, request["cwd"].as_str());
+            let text = std::fs::read_to_string(&path).map_err(|e| format!("could not read {}: {e}", path.display()))?;
+            let value = secrets::extract(&text, request["key"].as_str())?;
+            let purpose = request["purpose"].as_str().unwrap_or_default();
+            let entry = secrets::store(
+                &session.paths,
+                request["name"].as_str().ok_or("name is missing")?,
+                &value,
+                purpose,
+                now_ms(),
+            )?;
+            Ok(fields(json!({"name": entry.name, "env": secrets::env_name(&entry.name)})))
+        }
+        Some("secrets_list") => {
+            let list: Vec<Value> = secrets::list(&session.paths)
+                .into_iter()
+                .map(|e| json!({"name": e.name, "purpose": e.purpose, "env": secrets::env_name(&e.name)}))
+                .collect();
+            Ok(fields(json!({"secrets": list})))
+        }
         _ => Err("unknown op".into()),
+    }
+}
+
+/// A path the model or the person named: `~` is the home, a relative one is from Pi's working folder.
+fn resolve_path(raw: &str, cwd: Option<&str>) -> PathBuf {
+    let raw = raw.trim();
+    if let Some(rest) = raw.strip_prefix("~/") {
+        return PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(rest);
+    }
+    let path = PathBuf::from(raw);
+    match cwd {
+        Some(cwd) if path.is_relative() => Path::new(cwd).join(path),
+        _ => path,
     }
 }
 
@@ -448,6 +488,8 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
         jobs: Jobs,
         launcher: Arc<FakeLauncher>,
         schedules: ScheduleStore,
+        paths: AriaPaths,
+        keyring: Arc<aria_core::keyring::MemoryBackend>,
     }
 
     fn setup(with_pi: bool) -> Setup {
@@ -462,7 +504,15 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
         let paths = aria_core::paths::AriaPaths::new(dir.path().to_path_buf());
         std::fs::write(paths.mcp(), r#"{"mcpServers":{"notion":{"url":"https://n"}}}"#).unwrap();
         let schedules = ScheduleStore::open(paths);
-        Setup { dir, jobs, launcher: Arc::new(FakeLauncher { pi, spawned: AtomicUsize::new(0) }), schedules }
+        let (secret_paths, keyring) = aria_core::testing::vault_paths(&dir.path().join("home"));
+        Setup {
+            dir,
+            jobs,
+            launcher: Arc::new(FakeLauncher { pi, spawned: AtomicUsize::new(0) }),
+            schedules,
+            paths: secret_paths,
+            keyring,
+        }
     }
 
     fn bind(setup: &Setup, session: &str) -> JobsSocket {
@@ -473,6 +523,7 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
             setup.jobs.clone(),
             setup.launcher.clone(),
             setup.schedules.clone(),
+            setup.paths.clone(),
         )
         .unwrap()
     }
@@ -510,6 +561,32 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_secret_from_a_file_goes_to_the_keyring_and_its_value_never_comes_back() {
+        use aria_core::keyring::Backend;
+        let s = setup(false);
+        let work = s.dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join(".env"), "PORT=3000\nOPENAI_API_KEY=sk-proj-0123456789abcdef\n").unwrap();
+        let socket = bind(&s, "s1");
+        let mut c = Client::connect(&socket);
+        let saved = c.ask(json!({"id": 1, "op": "secret_import", "path": ".env", "cwd": work.display().to_string(),
+            "key": "OPENAI_API_KEY", "name": "OpenAI key", "purpose": "the widget's chat"}));
+        assert_eq!(saved["ok"], true, "{saved}");
+        assert_eq!(saved["name"], "openai-key");
+        assert_eq!(saved["env"], "ARIA_SECRET_OPENAI_KEY");
+        assert!(!saved.to_string().contains("sk-proj"), "the value never comes back: {saved}");
+        assert_eq!(s.keyring.get("user:openai-key").unwrap().as_deref(), Some("sk-proj-0123456789abcdef"));
+        let list = c.ask(json!({"id": 2, "op": "secrets_list"}));
+        assert_eq!(
+            list["secrets"],
+            json!([{"name": "openai-key", "purpose": "the widget's chat", "env": "ARIA_SECRET_OPENAI_KEY"}])
+        );
+        let missing = c.ask(json!({"id": 3, "op": "secret_import", "path": ".env", "cwd": work.display().to_string(), "key": "NOPE", "name": "x"}));
+        assert_eq!(missing["ok"], false);
+        assert!(!missing.to_string().contains("sk-proj"), "nor in an error: {missing}");
     }
 
     #[test]
@@ -751,8 +828,15 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
     fn a_folder_it_makes_for_the_socket_is_private_too() {
         let s = setup(false);
         let path = s.dir.path().join("run").join("aria").join("j.sock");
-        let socket =
-            JobsSocket::bind(&path, "s1".into(), s.jobs.clone(), s.launcher.clone(), s.schedules.clone()).unwrap();
+        let socket = JobsSocket::bind(
+            &path,
+            "s1".into(),
+            s.jobs.clone(),
+            s.launcher.clone(),
+            s.schedules.clone(),
+            s.paths.clone(),
+        )
+        .unwrap();
         for dir in [s.dir.path().join("run"), s.dir.path().join("run").join("aria")] {
             let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o700, "{}", dir.display());
@@ -873,6 +957,7 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
             jobs: s.jobs.clone(),
             launcher: s.launcher.clone(),
             schedules: s.schedules.clone(),
+            paths: s.paths.clone(),
         };
         let (dock, _peer) = UnixStream::pair().unwrap();
         let writer = Arc::new(Mutex::new(Writer { stream: dock, written: 9 }));
