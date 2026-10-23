@@ -216,6 +216,7 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         | PageMessage::SessionsSave { .. }
         | PageMessage::SessionClose { .. }
         | PageMessage::SessionNew { .. }
+        | PageMessage::ChatBash { .. }
         | PageMessage::SchedulesList { .. }
         | PageMessage::ScheduleUpdate { .. }
         | PageMessage::ScheduleDelete { .. }

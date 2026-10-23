@@ -116,6 +116,11 @@ pub enum PageMessage {
         #[serde(default)]
         args: Value,
     },
+    /// A terminal's `!command`, run by Pi as its `bash` (outside the sandbox: the person's own command); replies `piReply`.
+    /// Never read from JSON: only the clients hub makes it, from a client's `piCommand` `bash`, so the dock's page (a
+    /// WebView that shows the model's output) can never run a command.
+    #[serde(skip)]
+    ChatBash { id: u64, command: String },
     /// Download and list the Claude provider (`claude-bridge`) in Aria's Pi; replies `saved`, or an `error` whose `code` is
     /// `pi-missing`, `claude-code-missing` or `claude-bridge-install-failed`.
     #[serde(rename = "installClaudeBridge")]

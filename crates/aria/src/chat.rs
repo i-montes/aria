@@ -39,13 +39,10 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a compaction may take: a model call over the whole context.
 const COMPACT_TIMEOUT: Duration = Duration::from_secs(600);
 /// Pi's own commands the `/` menu offers, and how long each may take: a compaction is a model call over the whole context.
-/// `bash` is a terminal's `!command`: the person's own command, run by Pi, its output joining the context.
-const PI_COMMANDS: [(&str, Duration); 4] = [
-    ("compact", COMPACT_TIMEOUT),
-    ("get_session_stats", REQUEST_TIMEOUT),
-    ("export_html", Duration::from_secs(60)),
-    ("bash", Duration::from_secs(600)),
-];
+const PI_COMMANDS: [(&str, Duration); 3] =
+    [("compact", COMPACT_TIMEOUT), ("get_session_stats", REQUEST_TIMEOUT), ("export_html", Duration::from_secs(60))];
+/// A terminal's `!command` (`ChatBash`) may run this long.
+const BASH_TIMEOUT: Duration = Duration::from_secs(600);
 const FILE_LIMIT: usize = 50;
 const QUOTA_MAX_AGE: Duration = Duration::from_secs(20);
 /// What a session with background work is told when an update has waited `UPDATE_NOTICE_AFTER` for that work alone.
@@ -311,6 +308,7 @@ fn waits_for_rotation(message: &PageMessage) -> bool {
         message,
         PageMessage::ChatSend { .. }
             | PageMessage::PiCommand { .. }
+            | PageMessage::ChatBash { .. }
             | PageMessage::SetModel { .. }
             | PageMessage::ChatClearQueue { .. }
             | PageMessage::EnginesRestart
@@ -532,6 +530,9 @@ impl Chat {
             PageMessage::ListCommands { id } => self.list(id, "get_commands", "commands"),
             PageMessage::ListModels { id } => self.list(id, "get_available_models", "models"),
             PageMessage::PiCommand { id, command, args } => self.pi_command(id, command, args),
+            PageMessage::ChatBash { id, command } => {
+                self.pi_request(id, "bash", json!({ "command": command }), BASH_TIMEOUT)
+            }
             // `/reload`: this tab's Pi starts again (reading its extensions, skills and templates), after its run.
             PageMessage::EnginesRestart => self.restart_after_run(),
             PageMessage::SetModel { id, model } => self.set_model(id, model),
@@ -1282,6 +1283,11 @@ impl Chat {
             return self.emit(DockMessage::PiReply { id, ok: false, data: Value::Null, error });
         };
         let args = if args.is_object() { args } else { json!({}) };
+        self.pi_request(id, command, args, timeout);
+    }
+
+    /// Sends Pi one of its commands and answers the page (or client) with `piReply`.
+    fn pi_request(&self, id: u64, command: &'static str, args: Value, timeout: Duration) {
         let chat = self.clone();
         std::thread::spawn(move || {
             let reply = chat
@@ -3862,10 +3868,17 @@ mod tests {
     #[test]
     fn a_bang_command_runs_in_pi_as_its_bash() {
         let h = harness();
-        h.chat.handle(PageMessage::PiCommand { id: 5, command: "bash".into(), args: json!({"command": "pwd"}) });
+        h.chat.handle(PageMessage::ChatBash { id: 5, command: "pwd".into() });
         let (ok, data, _) = pi_reply(&h, 5);
         assert!(ok);
         assert_eq!(data["output"], json!("ran pwd"));
+    }
+
+    #[test]
+    fn the_page_cannot_run_a_command() {
+        let h = harness();
+        h.chat.handle(PageMessage::PiCommand { id: 6, command: "bash".into(), args: json!({"command": "id"}) });
+        assert_eq!(pi_reply(&h, 6), (false, Value::Null, Some("command-unknown".into())));
     }
 
     #[test]

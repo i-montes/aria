@@ -167,7 +167,20 @@ impl Hub {
             *slot = json!(CLIENT_BASE + number * CLIENT_SPAN + id);
             Some(id)
         });
-        let message = serde_json::from_value::<PageMessage>(value).ok();
+        // A client's `!command`: its own message, which the page can never send.
+        let message = serde_json::from_value::<PageMessage>(value).ok().map(|message| match message {
+            PageMessage::Session { session, message } => match *message {
+                PageMessage::PiCommand { id, command, args } if command == "bash" => PageMessage::Session {
+                    session,
+                    message: Box::new(PageMessage::ChatBash {
+                        id,
+                        command: args["command"].as_str().unwrap_or_default().to_string(),
+                    }),
+                },
+                other => PageMessage::Session { session, message: Box::new(other) },
+            },
+            other => other,
+        });
         match message {
             Some(message) if handlers::is_chat(&message) => {
                 let _ = self.chat.lock().unwrap().send(message);
@@ -362,6 +375,23 @@ mod tests {
         let seen = other.next();
         assert_eq!(seen["type"], "sessionAdded");
         assert!(seen.get("id").is_none(), "another client's id is never shown to the rest");
+    }
+
+    #[test]
+    fn a_clients_command_reaches_the_chat_as_its_own_message() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(json!({"type": "session", "session": "aa", "message": {"type": "piCommand", "id": 4, "command": "bash", "args": {"command": "pwd"}}}));
+        match f.chat.recv_timeout(Duration::from_secs(5)).unwrap() {
+            PageMessage::Session { message, .. } => {
+                assert!(matches!(*message, PageMessage::ChatBash { ref command, .. } if command == "pwd"))
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            serde_json::from_str::<PageMessage>(r#"{"type":"chatBash","id":1,"command":"id"}"#).is_err(),
+            "never from JSON"
+        );
     }
 
     #[test]
