@@ -112,6 +112,11 @@ const OWN: &[(&str, &str, &str)] = &[
         "ssh no está instalado aquí (o ARIA_SSH nombra un programa que no existe).",
     ),
     (
+        "term.sshTimeout",
+        "ssh did not finish connecting to {host} in 60 seconds. The first time you connect to a host, run `ssh {host}` once by hand to accept its key.",
+        "ssh no terminó de conectarse a {host} en 60 segundos. La primera vez que te conectas a un host, ejecuta `ssh {host}` una vez a mano para aceptar su llave.",
+    ),
+    (
         "term.hubDown",
         "Aria is not running on that computer: start it there with `aria start`.",
         "Aria no está corriendo en ese computador: inícialo allá con `aria start`.",
@@ -199,4 +204,25 @@ pub fn t(lang: &str, key: &str, vars: &Value) -> String {
         }
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_ssh_timeout_is_said_in_both_languages_with_the_host() {
+        let vars = json!({"host": "ana@hub.example"});
+        let en = t("en", "term.sshTimeout", &vars);
+        let es = t("es", "term.sshTimeout", &vars);
+        assert_ne!(en, "term.sshTimeout");
+        assert_ne!(es, "term.sshTimeout");
+        assert_ne!(en, es);
+        for text in [&en, &es] {
+            assert!(text.contains("60"), "{text}");
+            assert!(text.contains("`ssh ana@hub.example`"), "{text}");
+            assert!(!text.contains("{host}"), "{text}");
+        }
+    }
 }

@@ -14,8 +14,12 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// How long a hub has to answer the `hello` before the client gives up.
-const HELLO_WITHIN: Duration = Duration::from_secs(10);
+/// How long the hub on the local socket has to answer the `hello` before the client gives up.
+const SOCKET_HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The same over ssh: its clock starts before ssh has logged in, so a first-contact host-key prompt, a passphrase or a
+/// slow login profile has to fit in it.
+pub const SSH_HELLO_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Why a hub did not open the link (the `io::Error` of `Link::over` carries one of these, as `InvalidData`; its text is
 /// the code).
@@ -74,13 +78,17 @@ impl Link {
     /// The hub behind `command`'s stdin and stdout (`ssh host aria client-stdio`); the child is killed and waited on
     /// when the link is dropped, or when it does not open.
     pub fn spawn(command: &mut Command) -> io::Result<Link> {
+        Link::spawn_within(command, SSH_HELLO_TIMEOUT)
+    }
+
+    fn spawn_within(command: &mut Command, within: Duration) -> io::Result<Link> {
         let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
         let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
             let _ = child.kill();
             let _ = child.wait();
             return Err(io::Error::other("the child has no pipes"));
         };
-        match Link::over(stdout, stdin, true) {
+        match Link::over_within(stdout, stdin, true, within) {
             Ok(mut link) => {
                 link.child = Some(child);
                 Ok(link)
@@ -93,13 +101,13 @@ impl Link {
         }
     }
 
-    /// A link on any pair of streams: sends the `hello`, and waits up to 10 s for the hub's.
+    /// A link on any pair of streams: sends the `hello`, and waits up to 10 s (`SOCKET_HELLO_TIMEOUT`) for the hub's.
     pub fn over(
         reader: impl Read + Send + 'static,
         writer: impl Write + Send + 'static,
         remote: bool,
     ) -> io::Result<Link> {
-        Link::over_within(reader, writer, remote, HELLO_WITHIN)
+        Link::over_within(reader, writer, remote, SOCKET_HELLO_TIMEOUT)
     }
 
     fn over_within(
@@ -400,6 +408,28 @@ mod tests {
         assert!(alive(&pid));
         drop(link);
         assert!(!alive(&pid), "the child is gone once the link is");
+    }
+
+    #[test]
+    fn a_spawned_child_that_never_answers_times_out_and_is_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let script = format!("echo $$ > {}; exec sleep 60", pid_file.display());
+        let started = std::time::Instant::now();
+        let error =
+            Link::spawn_within(std::process::Command::new("sh").args(["-c", &script]), Duration::from_millis(500))
+                .err()
+                .expect("no link");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(10));
+        let pid = std::fs::read_to_string(&pid_file).unwrap().trim().to_string();
+        assert!(!alive(&pid), "the child is not left running");
+    }
+
+    #[test]
+    fn spawn_waits_for_ssh_longer_than_the_socket() {
+        assert_eq!(SSH_HELLO_TIMEOUT, Duration::from_secs(60));
+        assert!(SSH_HELLO_TIMEOUT > SOCKET_HELLO_TIMEOUT);
     }
 
     #[test]

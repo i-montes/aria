@@ -88,6 +88,9 @@ pub fn run_remote(host: &str) -> i32 {
             let (text, code) = match error {
                 ConnectError::OptionLikeHost => (format!("{host}: not a host"), 2),
                 ConnectError::NoSsh => (texts::t(&lang, "term.noSsh", &none), 1),
+                ConnectError::Failed(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                    (texts::t(&lang, "term.sshTimeout", &serde_json::json!({ "host": host })), 1)
+                }
                 ConnectError::Failed(error) => match link::LinkError::of(&error) {
                     Some(link::LinkError::HubDown) => (texts::t(&lang, "term.hubDown", &none), 1),
                     Some(link::LinkError::HubTooOld) => (texts::t(&lang, "term.hubTooOld", &none), 1),

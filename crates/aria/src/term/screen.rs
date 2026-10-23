@@ -106,6 +106,16 @@ fn save_verbose(paths: &aria_core::paths::AriaPaths, on: bool) {
     }
 }
 
+/// The folder whose git status the footer shows: none over ssh, where the session's folder is on the other computer
+/// and the same path here (if there is one) is another repository.
+fn git_folder(remote: bool, workdir: &str) -> String {
+    if remote {
+        String::new()
+    } else {
+        workdir.to_string()
+    }
+}
+
 /// The git status of the attached session's folder, read every 2 s on its own thread.
 fn watch_git(folder: Arc<Mutex<String>>) -> Arc<Mutex<Option<GitStatus>>> {
     let status = Arc::new(Mutex::new(None));
@@ -129,6 +139,7 @@ pub fn run(
     let mut link = link;
     let palette = Palette::detect();
     let mut events = link.events();
+    let remote = config.remote.is_some();
     let (mut app, first) = App::new(config);
     for effect in first {
         if let Effect::Send(message) = effect {
@@ -177,7 +188,7 @@ pub fn run(
         let now_ms =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
         app.clock(now_ms);
-        *folder.lock().unwrap() = app.session().workdir.clone();
+        *folder.lock().unwrap() = git_folder(remote, &app.session().workdir);
         let git = git_status.lock().unwrap().clone();
         if git != last_git {
             last_git = git.clone();
@@ -324,6 +335,12 @@ pub fn run(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn a_remote_session_has_no_local_git_to_watch() {
+        assert_eq!(git_folder(true, "/home/ana/Projects/checkout-widget"), "");
+        assert_eq!(git_folder(false, "/home/ana/Projects/checkout-widget"), "/home/ana/Projects/checkout-widget");
+    }
 
     #[test]
     fn a_panicked_thread_ends_the_loop() {
