@@ -147,6 +147,9 @@ pub fn run(
     let mut max_scroll = 0;
     while !quit {
         app.clamp_scroll(max_scroll);
+        let now_ms =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        app.clock(now_ms);
         *folder.lock().unwrap() = app.session().workdir.clone();
         terminal.draw(|frame| match app.screen() {
             Screen::List => draw_list(frame, &app.list_rows(), app.selected(), app.note().as_deref(), &palette),
@@ -170,6 +173,8 @@ pub fn run(
                         .duration_since(std::time::UNIX_EPOCH)
                         .map_or(0, |d| d.as_secs() as i64),
                     scroll: app.scroll(),
+                    working_ms: app.working_ms(now_ms),
+                    tick: now_ms,
                 };
                 max_scroll = max_scroll_of(&view, area.width, area.height);
                 draw_session(frame, &view);

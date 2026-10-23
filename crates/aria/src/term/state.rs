@@ -92,6 +92,8 @@ pub struct Session {
     pub dialogs: Vec<Dialog>,
     pub queue: Vec<String>,
     pub agents: Value,
+    /// What the run is doing (`ui/chat/parts/working.js`'s phases): `working`, `thinking`, `reading files`…
+    pub phase: String,
     pub loaded: bool,
     /// A refused message's text, back to the editor.
     pub give_back: Option<String>,
@@ -123,6 +125,26 @@ fn thinking_of(content: &Value) -> String {
 /// The person's text without the dock's attachment lines (`[attached: …]`).
 fn without_attached(text: &str) -> String {
     text.lines().filter(|line| !line.starts_with("[attached")).collect::<Vec<_>>().join("\n").trim_end().to_string()
+}
+
+/// What the run is doing while this tool runs (as `phaseFor` in `ui/chat/state.js`).
+pub fn phase_for(name: &str) -> &'static str {
+    if name.contains("engram") || name.contains("mem_") {
+        "searching memory"
+    } else if name.contains("tavily") {
+        "searching the web"
+    } else if name.contains("notion") {
+        "checking Notion"
+    } else if name.starts_with("parallel") || name.starts_with("subagent") {
+        "delegating"
+    } else {
+        match name {
+            "bash" => "running command",
+            "read" | "grep" | "find" | "ls" => "reading files",
+            "write" | "edit" => "writing files",
+            _ => "working",
+        }
+    }
 }
 
 /// A short label for a call: the command's first line, the path, or the tool's name.
@@ -303,6 +325,7 @@ impl Session {
         match event["type"].as_str().unwrap_or_default() {
             "agent_start" => {
                 self.running = true;
+                self.phase = "working".into();
                 self.turn_from = self.entries.len();
                 self.stopped_by_watchdog = false;
             }
@@ -341,9 +364,18 @@ impl Session {
                 };
                 self.queue = [texts("steering"), texts("followUp")].concat();
             }
-            "message_update" => self.stream(&event["assistantMessageEvent"]),
+            "message_update" => {
+                let kind = event["assistantMessageEvent"]["type"].as_str().unwrap_or_default();
+                if kind.starts_with("thinking") {
+                    self.phase = "thinking".into();
+                } else if kind == "text_delta" && self.phase == "thinking" {
+                    self.phase = "working".into();
+                }
+                self.stream(&event["assistantMessageEvent"]);
+            }
             "message_end" if event["message"]["role"] == "assistant" => self.end_assistant(&event["message"]),
             "tool_execution_start" => {
+                self.phase = phase_for(event["toolName"].as_str().unwrap_or_default()).into();
                 let call = new_call(
                     event["toolCallId"].as_str().unwrap_or_default(),
                     event["toolName"].as_str().unwrap_or_default(),
@@ -371,6 +403,7 @@ impl Session {
                 text: Text::key("chat.retry", json!({"attempt": event["attempt"], "max": event["maxAttempts"]})),
             }),
             "compaction_start" => {
+                self.phase = "compacting context".into();
                 if !self.running {
                     self.running = true;
                     self.compacting = true;
@@ -737,6 +770,35 @@ mod tests {
         assert!(
             matches!(&s.entries[0], Entry::Tools { calls } if calls[0].summary == "!pwd" && calls[0].output == "/home/ana\n")
         );
+    }
+
+    #[test]
+    fn the_phase_follows_what_the_run_does() {
+        let mut s = Session::default();
+        feed(&mut s, &[event(json!({"type": "agent_start"}))]);
+        assert_eq!(s.phase, "working");
+        feed(&mut s, &turn_with_tools()[2..5]);
+        assert_eq!(s.phase, "reading files");
+        feed(
+            &mut s,
+            &[
+                event(json!({"type": "message_start", "message": {"role": "assistant", "content": []}})),
+                event(
+                    json!({"type": "message_update", "assistantMessageEvent": {"type": "thinking_delta", "contentIndex": 0, "delta": "hm"}}),
+                ),
+            ],
+        );
+        assert_eq!(s.phase, "thinking");
+        feed(
+            &mut s,
+            &[event(
+                json!({"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 1, "delta": "ok"}}),
+            )],
+        );
+        assert_eq!(s.phase, "working");
+        assert_eq!(phase_for("tavily_search"), "searching the web");
+        assert_eq!(phase_for("bash"), "running command");
+        assert_eq!(phase_for("edit"), "writing files");
     }
 
     #[test]

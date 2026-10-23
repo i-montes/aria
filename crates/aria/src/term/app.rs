@@ -109,6 +109,8 @@ pub struct App {
     height: u16,
     /// Lines scrolled up from the bottom of the conversation.
     scroll: usize,
+    /// When the running turn started (ms), for the working line's timer.
+    started: Option<u64>,
 }
 
 fn folder_name(path: &str) -> String {
@@ -133,6 +135,7 @@ impl App {
             note: None,
             height: 24,
             scroll: 0,
+            started: None,
         };
         let load = app.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
         (app, vec![load])
@@ -148,6 +151,20 @@ impl App {
 
     pub fn note(&self) -> Option<String> {
         self.note.clone()
+    }
+
+    /// The time now (ms since the epoch): a run that just started is timed from it, one that ended stops being timed.
+    pub fn clock(&mut self, now_ms: u64) {
+        if self.session.running {
+            self.started.get_or_insert(now_ms);
+        } else {
+            self.started = None;
+        }
+    }
+
+    /// How long the running turn has run, at `now_ms`; none while nothing runs.
+    pub fn working_ms(&self, now_ms: u64) -> Option<u64> {
+        self.started.filter(|_| self.session.running).map(|start| now_ms.saturating_sub(start))
     }
 
     pub fn scroll(&self) -> usize {
@@ -235,6 +252,7 @@ impl App {
     fn attach(&mut self, id: String) -> Vec<Effect> {
         self.attached = Some(id.clone());
         self.session = Session::default();
+        self.started = None;
         self.dialog = None;
         self.picker = None;
         self.commands = None;
@@ -897,6 +915,19 @@ mod tests {
         typed(&mut app, "hi");
         key(&mut app, Key::Enter);
         assert_eq!(app.scroll(), 0);
+    }
+
+    #[test]
+    fn a_run_is_timed_from_when_it_starts() {
+        let mut app = attached();
+        app.clock(1_000);
+        assert_eq!(app.working_ms(5_000), None);
+        app.update(in_session(DockMessage::ChatEvent { event: json!({"type": "agent_start"}) }));
+        app.clock(2_000);
+        assert_eq!(app.working_ms(5_400), Some(3_400));
+        app.update(in_session(DockMessage::ChatEvent { event: json!({"type": "agent_settled"}) }));
+        app.clock(6_000);
+        assert_eq!(app.working_ms(6_000), None);
     }
 
     #[test]

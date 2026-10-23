@@ -37,6 +37,37 @@ pub struct SessionView<'a> {
     pub now: i64,
     /// Lines scrolled up from the bottom of the conversation.
     pub scroll: usize,
+    /// How long the running turn has run (ms); none while nothing runs.
+    pub working_ms: Option<u64>,
+    /// A clock in ms that turns the spinner.
+    pub tick: u64,
+}
+
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// `3.4s`, or `2m 5.0s` from a minute on (as the dock's working line).
+fn elapsed(ms: u64) -> String {
+    let tenths = ms / 100;
+    let seconds = tenths as f64 / 10.0;
+    if seconds < 60.0 {
+        format!("{seconds:.1}s")
+    } else {
+        format!("{}m {:.1}s", tenths / 600, (tenths % 600) as f64 / 10.0)
+    }
+}
+
+/// The working line: the spinner, what the run is doing and for how long.
+fn working_line(v: &SessionView, ms: u64) -> Line<'static> {
+    let p = &v.palette;
+    let phase = if v.session.phase.is_empty() { "working" } else { v.session.phase.as_str() };
+    let key = format!("chat.working.phase.{}", phase.replace(' ', "_"));
+    let label = t(&v.lang, &key, &json!({}));
+    let label = if label == key { phase.to_string() } else { label };
+    Line::from(vec![
+        Span::styled(format!("{} ", SPINNER[(v.tick / 80) as usize % SPINNER.len()]), Style::default().fg(p.accent)),
+        Span::styled(label, Style::default().fg(p.text)),
+        Span::styled(format!(" · {}", elapsed(ms)), Style::default().fg(p.faint)),
+    ])
 }
 
 /// `claude-bridge/claude-opus-5-5` → `opus 5.5`, `opencode-go/mimo-v2.6-pro` → `mimo v2.6 pro`.
@@ -389,7 +420,11 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) {
         Some(panel) => panel.clone(),
         None => editor_lines(v, width),
     };
-    let mut bottom: Vec<Line<'static>> = vec![rule.clone()];
+    let mut bottom: Vec<Line<'static>> = Vec::new();
+    if let Some(ms) = v.working_ms {
+        bottom.push(working_line(v, ms));
+    }
+    bottom.push(rule.clone());
     let room = usize::from(area.height).saturating_sub(4).max(1);
     bottom.extend(middle.into_iter().take(room));
     bottom.push(rule);
@@ -484,6 +519,8 @@ mod tests {
             // 2026-10-23T13:00:00Z: the 5-hour window resets in 1h12.
             now: 1_792_760_400,
             scroll: 0,
+            working_ms: None,
+            tick: 0,
         }
     }
 
@@ -604,6 +641,22 @@ mod tests {
         assert_eq!(cursor_position("ab\ncd", 1, 80, 20), (5, 16), "after a, on the first of two lines");
         assert_eq!(cursor_position("ab\ncd", 6, 80, 20), (6, 17), "the end of the last line");
         assert_eq!(cursor_position("", 0, 10, 5), (2, 2), "no margin below 21 columns");
+    }
+
+    #[test]
+    fn a_running_turn_shows_what_it_does_and_for_how_long() {
+        let mut s = worked();
+        s.running = true;
+        s.phase = "reading files".into();
+        let mut v = view(&s, true);
+        v.working_ms = Some(3_400);
+        let screen = text(&render(&v, 100, 30));
+        assert!(screen.contains("Leyendo archivos · 3.4s"), "{screen}");
+        v.working_ms = Some(125_000);
+        assert!(text(&render(&v, 100, 30)).contains("2m 5.0s"));
+        let mut idle = view(&s, true);
+        idle.working_ms = None;
+        assert!(!text(&render(&idle, 100, 30)).contains("Leyendo archivos"));
     }
 
     #[test]
