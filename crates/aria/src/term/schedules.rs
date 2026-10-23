@@ -30,10 +30,15 @@ struct Row {
 pub enum Outcome {
     None,
     Close,
-    /// Pause (`enabled` false) or resume (true) the task.
+    /// Pause the task (`enabled` false). A resume is never asked for directly: see `Check`.
     Update {
         schedule: String,
         enabled: bool,
+    },
+    /// The person wants a paused task running again: ask the dock for a fresh list first, because the one on screen may
+    /// be old and the dock approves a task that waits for approval when it is resumed.
+    Check {
+        schedule: String,
     },
     Delete {
         schedule: String,
@@ -65,6 +70,18 @@ impl Schedules {
         self.confirming = None;
     }
 
+    /// The dock says the task now waits for approval (`scheduleAwaiting`): it can no longer be resumed from here.
+    pub fn mark_awaiting(&mut self, schedule: &str) {
+        for row in self.rows.iter_mut().filter(|row| row.id == schedule) {
+            row.awaiting = true;
+        }
+    }
+
+    /// Whether the task is on the list, paused and not waiting for approval: the only state a resume may be sent for.
+    pub fn can_resume(&self, schedule: &str) -> bool {
+        self.rows.iter().any(|row| row.id == schedule && !row.enabled && !row.awaiting)
+    }
+
     pub fn key(&mut self, key: Key) -> Outcome {
         if let Some(id) = self.confirming.take() {
             // Only `y` deletes; Esc and every other key take the question back.
@@ -76,7 +93,11 @@ impl Schedules {
             Key::Esc => return Outcome::Close,
             Key::Enter => {
                 if let Some(row) = self.rows.get(self.selected).filter(|row| !row.awaiting) {
-                    return Outcome::Update { schedule: row.id.clone(), enabled: !row.enabled };
+                    return if row.enabled {
+                        Outcome::Update { schedule: row.id.clone(), enabled: false }
+                    } else {
+                        Outcome::Check { schedule: row.id.clone() }
+                    };
                 }
             }
             Key::Char('d') => self.confirming = self.rows.get(self.selected).map(|row| row.id.clone()),
@@ -159,7 +180,7 @@ impl Schedules {
 }
 
 /// The tasks a dock `schedules` reply carries; what is not an object with an `id` is left out, a missing field takes a
-/// quiet default.
+/// quiet default (`awaiting` the cautious one: it counts as waiting).
 fn parse(tasks: &Value) -> Vec<Row> {
     tasks
         .as_array()
@@ -172,7 +193,8 @@ fn parse(tasks: &Value) -> Vec<Row> {
                 id: id.to_string(),
                 title: task["title"].as_str().unwrap_or_default().to_string(),
                 enabled: task["enabled"].as_bool().unwrap_or(true),
-                awaiting: task["awaiting"].as_bool().unwrap_or(false),
+                // Fails closed: only an explicit `false` lets a task be resumed.
+                awaiting: task["awaiting"].as_bool().unwrap_or(true),
                 at: when["at"].as_str().unwrap_or_default().to_string(),
                 days: when["days"]
                     .as_array()
@@ -299,7 +321,7 @@ mod tests {
         let mut panel = Schedules::new(&json!([task("s-1", "A", true), task("s-2", "B", false), waiting]));
         assert_eq!(panel.key(Key::Enter), Outcome::Update { schedule: "s-1".into(), enabled: false });
         panel.key(Key::Down);
-        assert_eq!(panel.key(Key::Enter), Outcome::Update { schedule: "s-2".into(), enabled: true });
+        assert_eq!(panel.key(Key::Enter), Outcome::Check { schedule: "s-2".into() }, "a resume is checked first");
         panel.key(Key::Down);
         assert_eq!(panel.key(Key::Enter), Outcome::None, "never approved from here");
         let shown = render(&panel, "en");
@@ -331,7 +353,7 @@ mod tests {
         panel.key(Key::Down);
         panel.key(Key::Char('d'));
         panel.replace(&json!([task("s-2", "B", false), task("s-1", "A", true)]));
-        assert_eq!(panel.key(Key::Enter), Outcome::Update { schedule: "s-2".into(), enabled: true });
+        assert_eq!(panel.key(Key::Enter), Outcome::Check { schedule: "s-2".into() });
         panel.replace(&json!([task("s-1", "A", true)]));
         assert_eq!(panel.key(Key::Enter), Outcome::Update { schedule: "s-1".into(), enabled: false });
     }
@@ -360,7 +382,7 @@ mod tests {
             Schedules::new(&json!([{"id": "s-1"}, {"id": "s-2", "when": 5, "next": "soon", "enabled": "yes"}]));
         assert_eq!(panel.rows.len(), 2);
         render(&panel, "en");
-        assert_eq!(panel.key(Key::Enter), Outcome::Update { schedule: "s-1".into(), enabled: false });
+        assert_eq!(panel.key(Key::Enter), Outcome::None, "no awaiting field: counted as waiting");
     }
 
     #[test]
@@ -376,5 +398,34 @@ mod tests {
         assert!(shown.contains("❯ Task 7"), "{shown}");
         assert!(!shown.contains("Task 0"), "{shown}");
         assert!(shown.contains("more"), "{shown}");
+    }
+
+    #[test]
+    fn a_missing_or_odd_awaiting_is_not_resumable_and_only_false_is() {
+        let paused = |awaiting: Option<Value>| {
+            let mut task = task("s-1", "A", false);
+            match awaiting {
+                None => task.as_object_mut().unwrap().remove("awaiting"),
+                Some(other) => task.as_object_mut().unwrap().insert("awaiting".into(), other),
+            };
+            Schedules::new(&json!([task]))
+        };
+        for odd in [None, Some(json!("false")), Some(json!(0)), Some(json!(null)), Some(json!([])), Some(json!(true))] {
+            let mut panel = paused(odd.clone());
+            assert!(!panel.can_resume("s-1"), "{odd:?}");
+            assert_eq!(panel.key(Key::Enter), Outcome::None, "{odd:?}");
+        }
+        let mut panel = paused(Some(json!(false)));
+        assert!(panel.can_resume("s-1"));
+        assert_eq!(panel.key(Key::Enter), Outcome::Check { schedule: "s-1".into() });
+    }
+
+    #[test]
+    fn a_live_awaiting_message_makes_the_row_unresumable() {
+        let mut panel = Schedules::new(&json!([task("s-1", "A", false)]));
+        panel.mark_awaiting("s-1");
+        assert!(!panel.can_resume("s-1"));
+        assert_eq!(panel.key(Key::Enter), Outcome::None);
+        panel.mark_awaiting("s-unknown");
     }
 }

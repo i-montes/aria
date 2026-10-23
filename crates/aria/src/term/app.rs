@@ -98,8 +98,10 @@ enum Pending {
     Undo(String),
     /// `/schedules`'s `schedulesList`: its reply opens the panel.
     SchedulesOpen,
-    /// A pause, a resume or a delete from the panel: its reply is the new list.
+    /// A pause or a delete from the panel, or a resume once it was checked: its reply is the new list.
     SchedulesChange,
+    /// Enter on a paused task: the fresh list that says whether it may be resumed (it is not waiting for approval).
+    SchedulesResume(String),
 }
 
 /// The client's own commands, before the session's.
@@ -355,7 +357,7 @@ impl App {
         self.dialog = None;
         self.picker = None;
         self.commands = None;
-        self.schedules = None;
+        self.drop_schedules();
         self.scroll = 0;
         self.screen = Screen::Session;
         self.note = None;
@@ -368,7 +370,7 @@ impl App {
         self.screen = Screen::List;
         self.dialog = None;
         self.picker = None;
-        self.schedules = None;
+        self.drop_schedules();
         let load = self.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
         vec![Effect::Detach, load]
     }
@@ -609,6 +611,14 @@ impl App {
         }
     }
 
+    /// The panel goes, and so do the requests it waits on: a late reply must not open it in another session.
+    fn drop_schedules(&mut self) {
+        self.schedules = None;
+        self.pending.retain(|_, p| {
+            !matches!(p, Pending::SchedulesOpen | Pending::SchedulesChange | Pending::SchedulesResume(_))
+        });
+    }
+
     fn scheduled_outcome(&mut self, outcome: schedules::Outcome) -> Vec<Effect> {
         match outcome {
             schedules::Outcome::None => Vec::new(),
@@ -618,6 +628,9 @@ impl App {
             }
             schedules::Outcome::Update { schedule, enabled } => {
                 vec![self.request(Pending::SchedulesChange, |id| PageMessage::ScheduleUpdate { id, schedule, enabled })]
+            }
+            schedules::Outcome::Check { schedule } => {
+                vec![self.request(Pending::SchedulesResume(schedule), |id| PageMessage::SchedulesList { id })]
             }
             schedules::Outcome::Delete { schedule } => {
                 vec![self.request(Pending::SchedulesChange, |id| PageMessage::ScheduleDelete { id, schedule })]
@@ -860,7 +873,27 @@ impl App {
                             open.replace(&tasks);
                         }
                     }
+                    // The resume goes only if the fresh list still shows the task paused and not waiting for approval
+                    // (the dock approves a waiting task when it is resumed). What can still happen between this reply
+                    // and the dock reading the update is accepted: it is a few milliseconds, not a stale screen.
+                    Some(Pending::SchedulesResume(task)) => {
+                        let Some(open) = self.schedules.as_mut() else { return Vec::new() };
+                        open.replace(&tasks);
+                        if open.can_resume(&task) {
+                            return vec![self.request(Pending::SchedulesChange, |id| PageMessage::ScheduleUpdate {
+                                id,
+                                schedule: task,
+                                enabled: true,
+                            })];
+                        }
+                    }
                     _ => {}
+                }
+                Vec::new()
+            }
+            DockMessage::ScheduleAwaiting { schedule } => {
+                if let Some(open) = self.schedules.as_mut() {
+                    open.mark_awaiting(&schedule);
                 }
                 Vec::new()
             }
@@ -1620,7 +1653,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_pauses_a_running_task_and_resumes_a_paused_one() {
+    fn enter_pauses_a_running_task_without_asking_the_dock_again() {
         let mut app =
             with_schedules(json!([scheduled("s-1", "Notion tasks", true), scheduled("s-2", "Backup notes", false)]));
         let effects = key(&mut app, Key::Enter);
@@ -1631,12 +1664,124 @@ mod tests {
         let reply = json!([scheduled("s-1", "Notion tasks", false), scheduled("s-2", "Backup notes", false)]);
         app.update(Input::Dock(DockMessage::Schedules { id: *id, tasks: reply }));
         assert_eq!(panel_text(&app).matches("paused").count(), 2, "the panel redraws from the reply");
+    }
+
+    /// A panel open on a running task `s-1` and a paused one `s-2`, with the highlight on `s-2`.
+    fn on_a_paused_task() -> App {
+        let mut app =
+            with_schedules(json!([scheduled("s-1", "Notion tasks", true), scheduled("s-2", "Backup notes", false)]));
         key(&mut app, Key::Down);
+        app
+    }
+
+    fn the_fresh_list_id(effects: &[Effect]) -> u64 {
+        let [Effect::Send(PageMessage::SchedulesList { id })] = effects else { panic!("{effects:?}") };
+        *id
+    }
+
+    #[test]
+    fn enter_on_a_paused_task_asks_for_a_fresh_list_and_resumes_only_if_it_is_still_paused() {
+        let mut app = on_a_paused_task();
         let effects = key(&mut app, Key::Enter);
-        let [Effect::Send(PageMessage::ScheduleUpdate { schedule, enabled, .. })] = &effects[..] else {
+        let id = the_fresh_list_id(&effects);
+        let effects = app.update(Input::Dock(DockMessage::Schedules {
+            id,
+            tasks: json!([scheduled("s-1", "Notion tasks", true), scheduled("s-2", "Backup notes", false)]),
+        }));
+        let [Effect::Send(PageMessage::ScheduleUpdate { id, schedule, enabled })] = &effects[..] else {
             panic!("{effects:?}")
         };
         assert_eq!((schedule.as_str(), *enabled), ("s-2", true));
+        app.update(Input::Dock(DockMessage::Schedules {
+            id: *id,
+            tasks: json!([scheduled("s-1", "Notion tasks", true), scheduled("s-2", "Backup notes", true)]),
+        }));
+        assert_eq!(panel_text(&app).matches("paused").count(), 0, "the panel redraws from the reply");
+    }
+
+    #[test]
+    fn a_fresh_list_that_shows_the_task_awaiting_or_gone_sends_nothing() {
+        let mut waiting = scheduled("s-2", "Backup notes", false);
+        waiting["awaiting"] = json!(true);
+        for tasks in [
+            json!([scheduled("s-1", "Notion tasks", true), waiting]),
+            json!([scheduled("s-1", "Notion tasks", true)]),
+            json!([scheduled("s-1", "Notion tasks", true), scheduled("s-2", "Backup notes", true)]),
+            json!("nope"),
+        ] {
+            let mut app = on_a_paused_task();
+            let id = the_fresh_list_id(&key(&mut app, Key::Enter));
+            let effects = app.update(Input::Dock(DockMessage::Schedules { id, tasks }));
+            assert!(effects.is_empty(), "{effects:?}");
+            assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_some(), "the panel stays");
+        }
+        let mut app = on_a_paused_task();
+        let id = the_fresh_list_id(&key(&mut app, Key::Enter));
+        let mut waiting = scheduled("s-2", "Backup notes", false);
+        waiting["awaiting"] = json!(true);
+        app.update(Input::Dock(DockMessage::Schedules { id, tasks: json!([waiting]) }));
+        assert!(panel_text(&app).contains("waiting for approval in the dock"), "it redraws from the fresh list");
+        assert!(key(&mut app, Key::Enter).is_empty());
+    }
+
+    #[test]
+    fn a_resume_check_whose_panel_was_closed_sends_nothing() {
+        let mut app = on_a_paused_task();
+        let id = the_fresh_list_id(&key(&mut app, Key::Enter));
+        key(&mut app, Key::Esc);
+        let effects = app.update(Input::Dock(DockMessage::Schedules {
+            id,
+            tasks: json!([scheduled("s-2", "Backup notes", false)]),
+        }));
+        assert!(effects.is_empty(), "{effects:?}");
+    }
+
+    #[test]
+    fn a_live_awaiting_message_stops_the_row_before_any_request() {
+        let mut app = on_a_paused_task();
+        let effects = app.update(Input::Dock(DockMessage::ScheduleAwaiting { schedule: "s-2".into() }));
+        assert!(effects.is_empty());
+        assert!(panel_text(&app).contains("waiting for approval in the dock"));
+        assert!(key(&mut app, Key::Enter).is_empty(), "not even the refetch");
+        // With no panel open the message is ignored.
+        let mut closed = attached();
+        assert!(closed.update(Input::Dock(DockMessage::ScheduleAwaiting { schedule: "s-2".into() })).is_empty());
+        assert!(closed.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_none());
+    }
+
+    #[test]
+    fn a_row_without_a_boolean_awaiting_cannot_be_resumed() {
+        for awaiting in [None, Some(json!("false")), Some(json!(1)), Some(json!(null))] {
+            let mut task = scheduled("s-2", "Backup notes", false);
+            match awaiting {
+                None => task.as_object_mut().unwrap().remove("awaiting"),
+                Some(value) => task.as_object_mut().unwrap().insert("awaiting".into(), value),
+            };
+            let mut app = with_schedules(json!([task]));
+            assert!(key(&mut app, Key::Enter).is_empty());
+        }
+    }
+
+    #[test]
+    fn a_late_reply_after_switching_session_opens_no_panel() {
+        let mut app = attached();
+        typed(&mut app, "/schedules");
+        let id = the_fresh_list_id(&key(&mut app, Key::Enter));
+        key(&mut app, Key::Esc);
+        typed(&mut app, "/sessions");
+        key(&mut app, Key::Enter);
+        key(&mut app, Key::Down);
+        key(&mut app, Key::Enter);
+        assert_eq!(app.attached_session(), Some("bb"));
+        app.update(Input::Dock(DockMessage::Schedules { id, tasks: json!([scheduled("s-1", "Notion tasks", true)]) }));
+        assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_none());
+        // The same through the list: the reply of a resume check does not reach a panel opened later.
+        let mut app = on_a_paused_task();
+        let check = the_fresh_list_id(&key(&mut app, Key::Enter));
+        app.update(Input::Dock(DockMessage::SessionRemoved { session: "aa".into() }));
+        let effects = app.update(Input::Dock(DockMessage::Schedules { id: check, tasks: json!([]) }));
+        assert!(effects.is_empty());
+        assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_none());
     }
 
     #[test]
