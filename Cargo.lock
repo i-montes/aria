@@ -29,7 +29,9 @@ dependencies = [
  "objc2-web-kit",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
+ "ureq",
  "url",
  "webkit2gtk",
 ]

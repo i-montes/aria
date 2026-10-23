@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+sha2 = "0.10"
+ureq = { version = "2", default-features = false, features = ["tls"] }
 aria-core = { path = "../aria-core" }
 aria-engine = { path = "../aria-engine" }
 include_dir = "0.7"

@@ -9,6 +9,7 @@
 mod attachments;
 mod chat;
 mod control;
+mod dictation;
 mod dock;
 mod face;
 mod face_motion;
