@@ -4,15 +4,42 @@
 //   bun tools/ui-sandbox/serve.ts 8770 &      then      bun tools/ui-sandbox/check.ts
 //
 // Exit code 1 when any check fails.
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
 const url = process.env.URL ?? 'http://127.0.0.1:8770/'
-const port = 9338
-const browser = process.env.CHROME ?? (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'google-chrome-stable')
-const chrome = Bun.spawn([browser, '--headless=new', '--disable-gpu', '--no-sandbox', `--user-data-dir=/tmp/aria-check-${process.pid}`, `--remote-debugging-port=${port}`, '--window-size=940,940', 'about:blank'], { stderr: 'ignore', stdout: 'ignore' })
+// On a Mac, the owner's own Chrome run headless shares its bundle id: it shows in the Dock as another Chrome and
+// Launch Services may hand it the links the owner clicks, which then open in a tab nobody sees. Chrome for Testing
+// (the one agent-browser installs) has its own bundle id, so it is preferred.
+const forTesting = () => {
+  const dir = join(homedir(), '.agent-browser/browsers')
+  const chrome = existsSync(dir) ? readdirSync(dir).filter((d) => d.startsWith('chrome-')).sort().at(-1) : undefined
+  const bin = chrome && join(dir, chrome, 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing')
+  return bin && existsSync(bin) ? bin : undefined
+}
+const browser = process.env.CHROME ?? (process.platform === 'darwin' ? forTesting() ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'google-chrome-stable')
+// A run killed before its end (a timeout, Ctrl+C) left its Chrome running with no parent; those go first.
+const stale = Bun.spawnSync(['ps', '-axo', 'pid=,ppid=,command=']).stdout.toString().split('\n')
+  .map((l) => l.trim().split(/\s+/)).filter(([, ppid, ...cmd]) => ppid === '1' && cmd.join(' ').includes('--user-data-dir=/tmp/aria-check-'))
+for (const [pid] of stale) try { process.kill(Number(pid)) } catch {}
+const profile = `/tmp/aria-check-${process.pid}`
+// Port 0: Chrome picks a free one and writes it to DevToolsActivePort, so two runs never talk to each other's page.
+const chrome = Bun.spawn([browser, '--headless=new', '--disable-gpu', '--no-sandbox', `--user-data-dir=${profile}`, '--remote-debugging-port=0', '--window-size=940,940', 'about:blank'], { stderr: 'ignore', stdout: 'ignore' })
+const quit = () => { chrome.kill(); try { rmSync(profile, { recursive: true, force: true }) } catch {} }
+process.on('exit', quit)
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => process.exit(130))
+process.on('uncaughtException', (e) => { console.error(e); process.exit(1) })
+process.on('unhandledRejection', (e) => { console.error(e); process.exit(1) })
 let target: any
 for (let i = 0; i < 50 && !target; i++) {
   await Bun.sleep(200)
-  try { target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t: any) => t.type === 'page') } catch {}
+  try {
+    const port = readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]
+    target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t: any) => t.type === 'page')
+  } catch {}
 }
+if (!target) { console.error(`could not reach ${browser}`); process.exit(1) }
 const ws = new WebSocket(target.webSocketDebuggerUrl)
 await new Promise((r) => (ws.onopen = r))
 let id = 0
