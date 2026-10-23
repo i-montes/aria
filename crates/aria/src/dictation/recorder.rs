@@ -65,3 +65,30 @@ impl Recorder for Microphone {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The real microphone for a few seconds: `cargo test -p aria records_the_microphone -- --ignored --nocapture`
+    /// (with `ARIA_DICTATION_MODEL` set, what was said is transcribed too).
+    #[test]
+    #[ignore]
+    fn records_the_microphone() {
+        let mut mic = Microphone::default();
+        mic.start().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let seconds = mic.seconds();
+        let audio = mic.finish();
+        let loudest = audio.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        eprintln!("{seconds:.2} s, {} samples, loudest {loudest:.4}", audio.len());
+        assert!((4.5..5.6).contains(&seconds), "{seconds}");
+        assert!(loudest > 0.0, "exact silence: the microphone is not allowed");
+        if let Ok(model) = std::env::var("ARIA_DICTATION_MODEL") {
+            use super::super::worker::Transcriber;
+            let mut whisper = super::super::whisper::Whisper::new(model.into());
+            whisper.load().unwrap();
+            eprintln!("heard: {:?}", whisper.transcribe(&audio, "es").unwrap());
+        }
+    }
+}

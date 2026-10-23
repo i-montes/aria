@@ -25,6 +25,10 @@ impl Transcriber for Whisper {
     }
 
     fn load(&mut self) -> Result<(), DictationError> {
+        // whisper.cpp and ggml print every step of a load to stderr (the dock's log): their hooks go to `log`, which
+        // Aria does not use, so the lines are dropped.
+        static QUIET: std::sync::Once = std::sync::Once::new();
+        QUIET.call_once(whisper_rs::install_logging_hooks);
         let mut params = WhisperContextParameters::default();
         params.flash_attn(true);
         let path = self.model.to_str().ok_or_else(|| failed("the model's path is not UTF-8"))?;
