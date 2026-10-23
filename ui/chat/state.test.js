@@ -427,6 +427,48 @@ describe('a card sent by an extension (a dialog whose title is JSON)', () => {
   })
 })
 
+describe('the plan card', () => {
+  const plan = { title: 'Sign-up', path: 'docs/plans/x.md', summary: 'Sign-up · 1 phase · 1 task', detail: 'docs/plans/x.md', sections: [{ heading: 'Goal', text: 'Let people sign up.' }], phases: [{ name: 'Sign up', tasks: ['a'] }] }
+  const planEnd = (id, details) =>
+    ev({ type: 'tool_execution_end', toolCallId: id, toolName: 'plan_ready', isError: false, result: { content: [{ type: 'text', text: 'ok' }], details } })
+
+  test('answering it pushes no entry: the record comes with the tool result', () => {
+    const title = JSON.stringify({ aria: 1, kind: 'plan', ...plan, options: [{ value: 'approve', label: 'Approve and build' }] })
+    const state = reduce(createChat(), { type: 'chatDialog', id: 'p1', method: 'select', request: { title, options: ['approve', 'change'] }, hidden: false })
+    expect(state.dialogs[0].card.kind).toBe('plan')
+    const answered = answerDialog(state, 'p1', 'approve')
+    expect(answered.dialogs).toEqual([])
+    expect(answered.messages).toEqual(state.messages)
+  })
+
+  test('an approved plan_ready leaves the plan after the tools group; a draft leaves nothing', () => {
+    let state = run(createChat(), ev({ type: 'agent_start' }), toolStart('c1', 'plan_ready'), planEnd('c1', { status: 'approved', plan }))
+    expect(state.messages.map((m) => m.kind)).toEqual(['tools', 'plan'])
+    expect(state.messages[0].calls[0]).toMatchObject({ id: 'c1', status: 'done' })
+    expect(state.messages[1]).toEqual({ kind: 'plan', status: 'approved', ...plan })
+    state = run(createChat(), ev({ type: 'agent_start' }), toolStart('c2', 'plan_ready'), planEnd('c2', { status: 'draft', plan }))
+    expect(state.messages.map((m) => m.kind)).toEqual(['tools'])
+  })
+
+  test('another tool with such details leaves nothing', () => {
+    const state = run(createChat(), ev({ type: 'agent_start' }), toolStart('c1', 'bash'), ev({ type: 'tool_execution_end', toolCallId: 'c1', toolName: 'bash', isError: false, result: { content: [], details: { status: 'approved', plan } } }))
+    expect(state.messages.map((m) => m.kind)).toEqual(['tools'])
+  })
+
+  test('history gives the same entry from the tool result', () => {
+    const messages = [
+      { role: 'user', content: 'plan it' },
+      { role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'plan_ready', arguments: { path: plan.path } }] },
+      { role: 'toolResult', toolCallId: 'c1', toolName: 'plan_ready', isError: false, content: [{ type: 'text', text: 'Approved' }], details: { status: 'approved', plan } },
+      { role: 'assistant', content: [{ type: 'toolCall', id: 'c2', name: 'plan_ready', arguments: {} }] },
+      { role: 'toolResult', toolCallId: 'c2', toolName: 'plan_ready', isError: false, content: [{ type: 'text', text: 'Not yet' }], details: { status: 'draft', plan } },
+    ]
+    const state = reduce(createChat(), ev({ type: 'history', messages }))
+    expect(state.messages.map((m) => m.kind)).toEqual(['user', 'tools', 'plan', 'tools'])
+    expect(state.messages[2]).toEqual({ kind: 'plan', status: 'approved', ...plan })
+  })
+})
+
 describe('what the question card leaves in the thread', () => {
   const questions = [
     { question: 'Which fallback?', header: 'Fallback', options: [{ label: 'Git hash' }, { label: 'Version' }] },

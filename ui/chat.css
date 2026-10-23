@@ -26,6 +26,7 @@ body.open.mode-chat .chat { animation: enter 300ms var(--content) both; }
 .chat-list::-webkit-scrollbar { width: 6px; }
 .chat-list::-webkit-scrollbar-thumb { background: #34343B; border-radius: 3px; }
 .thread-item { flex: none; min-width: 0; }
+.thread-plan { display: flex; flex-direction: column; gap: 10px; }
 .thread-empty { margin: auto 0; display: flex; flex-direction: column; gap: 8px; align-items: center; text-align: center; padding: 0 12px; }
 .thread-empty-title { font: 11px ui-monospace, "Geist Mono", monospace; letter-spacing: 0.08em; color: var(--muted); }
 .thread-empty-text { font-size: 13.5px; line-height: 1.6; color: #B4B4BC; }

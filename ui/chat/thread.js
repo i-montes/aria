@@ -5,11 +5,13 @@ import { esc } from '../onboarding/components.js'
 import { renderAnswers } from './parts/answers.js'
 import { renderAssistant } from './parts/assistant.js'
 import { renderDivider } from './parts/divider.js'
+import { renderDocument } from './parts/document.js'
 import { messageDomId } from './parts/index.js'
 import { renderJev } from './parts/jev.js'
 import { renderNote } from './parts/note.js'
 import { renderMarkdown } from './parts/markdown.js'
-import { renderPermission } from './parts/permission.js'
+import { renderOptions, renderPermission } from './parts/permission.js'
+import { renderPhases } from './parts/phases.js'
 import { renderPill } from './parts/pill.js'
 import { renderQuota } from './parts/quota.js'
 import { renderToolStep, renderTools } from './parts/tools.js'
@@ -21,13 +23,18 @@ const noticeKey = (key, vars) =>
   key === 'chat.watchdog.stopped' ? `${key}.${Number(vars?.minutes) === 1 ? 'one' : 'many'}` : key
 
 /** Dialogs whose card sits in the thread (the question card is an overlay; the rest are plain dialogs). */
-export const INLINE_CARDS = ['sandbox', 'write', 'connector', 'quota']
+export const INLINE_CARDS = ['sandbox', 'write', 'connector', 'quota', 'plan']
 
 export const renderEmptyThread = (t) =>
   `<div class="thread-empty"><span class="thread-empty-title">${esc(t('chat.empty.title'))}</span><span class="thread-empty-text">${esc(t('chat.empty.text'))}</span></div>`
 
+/** A plan as the thread draws it: the document card, the phases card and, while it waits for an answer, the buttons. */
+const renderPlan = ({ status, title, path, sections, phases }, ui, t, actions = '') =>
+  `<div class="thread-plan">${renderDocument({ doc: 'plan', status, title, path, sections }, ui, t)}${renderPhases({ phases }, ui, t)}${actions}</div>`
+
 function renderCard(dialog, t) {
   const card = dialog.card
+  if (card.kind === 'plan') return renderPlan({ ...card, status: 'draft' }, {}, t, renderOptions(dialog.id, card.options, t))
   if (card.kind === 'quota') {
     return renderQuota({ id: dialog.id, percent: card.percent, freeModel: card.freeModel, secondsLeft: card.countdown, options: card.options }, {}, t)
   }
@@ -84,6 +91,8 @@ function renderEntry(state, entry, index, ui, t) {
       const key = JSON.stringify([index, live, toolUi.open, [...toolUi.openRows], [...toolUi.moreOpen]])
       return cached(entry, key, t, () => `<div class="thread-item">${renderTools({ index, calls: entry.calls, live }, toolUi, t)}</div>`)
     }
+    case 'plan':
+      return cached(entry, entry.status, t, () => `<div class="thread-item">${renderPlan(entry, { animate: false }, t)}</div>`)
     case 'jev':
       return `<div class="thread-item">${renderJev({ mode: entry.mode, action: entry.action }, {}, t)}</div>`
     case 'note':

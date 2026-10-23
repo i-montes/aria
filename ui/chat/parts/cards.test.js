@@ -93,3 +93,23 @@ describe('options carried by a card', () => {
     expect(html).toContain('data-choice="Yes, just this once"')
   })
 })
+
+describe('the plan card', () => {
+  const options = [{ value: 'approve', label: 'Approve and build', primary: true }, { value: 'change', label: 'Change something' }]
+  const sections = [{ heading: 'Goal', text: 'Let people sign up.' }]
+  const phases = [{ name: 'Sign up', tasks: ['a'] }]
+
+  test('keeps the title, the path, the sections, the phases and the options', () => {
+    const raw = { kind: 'plan', title: 'Sign-up', path: 'docs/plans/x.md', summary: 'Sign-up · 1 phase · 1 task', detail: 'docs/plans/x.md', sections, phases, options }
+    expect(parseCardTitle(title(raw))).toEqual(raw)
+    expect(INLINE_CARDS).toContain('plan')
+  })
+
+  test('missing or mistyped fields get the defaults', () => {
+    expect(parseCardTitle(title({ kind: 'plan' }))).toEqual({ kind: 'plan', title: '', path: '', summary: '', detail: '', sections: [], phases: [], options: [] })
+    const bad = parseCardTitle(title({ kind: 'plan', sections: ['x', null, { heading: 'H' }], phases: 'nope' }))
+    expect(bad.sections).toEqual([{ heading: 'H' }])
+    expect(bad.phases).toEqual([])
+  })
+})
+

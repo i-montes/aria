@@ -15,6 +15,7 @@ import { parseCardTitle } from './parts/cards.js'
 //                                                   compaction's, or the `aria-earlier` message a rotation starts with)
 //   { kind: 'jev', mode, action }                   the router's route line before an answer
 //   { kind: 'answers', answers: [{ header, selected, talk }] }   what you answered to a question card
+//   { kind: 'plan', status: 'approved', title, path, sections, phases }   a slice plan the owner approved (plan_ready's result)
 // `earlier` pages back through older history: { more, cursor, loading, count, stale } (count: the entries prepended so
 // far; stale: a history came while a page was on its way, so that page belongs to the paging before it and is dropped).
 // `queue` holds messages waiting behind the run ({ text, steer?, files?, raw? }); `phase` names what the run is doing now.
@@ -127,11 +128,11 @@ function streamUpdate(state, update) {
 
 let stepSeq = 0
 
-/** The group steps go into: the last `tools` entry after the last user message and the last thing Aria said (and after
- * `from`, where the run started), or -1. */
+/** The group steps go into: the last `tools` entry after the last user message and the last thing Aria said or showed (a plan),
+ * and after `from` (where the run started), or -1. */
 function turnGroup(messages, from = 0) {
   for (let i = messages.length - 1; i >= from; i--) {
-    if (messages[i].kind === 'user' || (messages[i].kind === 'assistant' && messages[i].text)) return -1
+    if (messages[i].kind === 'user' || messages[i].kind === 'plan' || (messages[i].kind === 'assistant' && messages[i].text)) return -1
     if (messages[i].kind === 'tools') return i
   }
   return -1
@@ -178,6 +179,10 @@ function startTool(state, event) {
   return withMessages(state, addSteps(state.messages, [call], state.turnFrom))
 }
 
+/** The record a `plan_ready` result leaves: the plan that was approved (a draft leaves nothing), or null. */
+const approvedPlan = (name, details) =>
+  name === 'plan_ready' && details?.status === 'approved' && details.plan && typeof details.plan === 'object' ? { kind: 'plan', status: 'approved', ...details.plan } : null
+
 function finishTool(state, event) {
   const resultText = textOf(event.result?.content).slice(0, RESULT_LIMIT)
   const messages = state.messages.map((entry) =>
@@ -190,7 +195,9 @@ function finishTool(state, event) {
           ),
         },
   )
-  return withMessages(state, messages)
+  const name = state.messages.flatMap((entry) => (entry.kind === 'tools' ? entry.calls : [])).find((call) => call.id === event.toolCallId)?.name ?? event.toolName
+  const plan = approvedPlan(name, event.result?.details)
+  return withMessages(state, plan ? [...messages, plan] : messages)
 }
 
 // ---- background work: the background extension's `aria-background` custom message, a note in the thread ---------
@@ -264,6 +271,8 @@ function fromHistory(messages) {
         call.status = message.isError ? 'error' : 'done'
         call.result = textOf(message.content).slice(0, RESULT_LIMIT)
       }
+      const plan = approvedPlan(message.toolName, message.details)
+      if (plan) entries.push(plan)
     }
   }
   return entries
@@ -508,6 +517,8 @@ export function answerDialog(state, id, choice) {
   const next = { ...state, dialogs: state.dialogs.filter((d) => d.id !== id) }
   const kind = dialog?.card?.kind
   if (!kind) return next
+  // The plan card's answer leaves no note: an approved plan is recorded by `plan_ready`'s result (finishTool).
+  if (kind === 'plan') return next
   if (kind === 'question') {
     return Array.isArray(choice) ? push(next, { kind: 'answers', answers: choice }) : push(next, { kind: 'note', label: 'ask', key: 'chat.askSkipped' })
   }

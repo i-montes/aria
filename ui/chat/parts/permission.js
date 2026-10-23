@@ -24,6 +24,18 @@ const ICONS = { sandbox: lock, write: file, connector: plug }
 const text = (value) => (typeof value === 'string' ? value : '')
 const review = (jev) => (typeof jev === 'string' ? jev : text(jev?.review) || text(jev?.text))
 
+/** The buttons of a card that asks for a decision: one per option (answering with its `value`), or allow / always / deny
+ * without options. The plan card draws its own choices with it. */
+export function renderOptions(id, options, t) {
+  const choice = (name, label, cls) =>
+    `<button type="button" class="p-perm-btn ${cls}" data-chat="permission" data-id="${esc(id)}" data-choice="${esc(name)}">${esc(label)}</button>`
+  return `<div class="p-perm-actions">
+    ${Array.isArray(options) && options.length
+      ? options.map((o, i) => choice(o.value, o.label, o.primary || (i === 0 && !options.some((x) => x.primary)) ? 'p-perm-primary' : 'p-perm-secondary')).join('\n    ')
+      : [choice('allow', t('chat.perm.allow'), 'p-perm-primary'), choice('always', t('chat.perm.always'), 'p-perm-secondary'), choice('deny', t('chat.perm.deny'), 'p-perm-secondary')].join('\n    ')}
+  </div>`
+}
+
 export function renderPermission({ id, kind, summary, detail, jev, options } = {}, ui, t) {
   const shown = kind === 'write' || kind === 'connector' ? kind : 'sandbox'
   // Only a sandbox card holds a shell command (with its "$"); a path or a call's arguments go in plain.
@@ -31,17 +43,11 @@ export function renderPermission({ id, kind, summary, detail, jev, options } = {
   const title = text(summary) || t(`chat.perm.${shown}`)
   const command = text(detail)
   const note = review(jev)
-  const choice = (name, label, cls) =>
-    `<button type="button" class="p-perm-btn ${cls}" data-chat="permission" data-id="${esc(id)}" data-choice="${esc(name)}">${esc(label)}</button>`
   return `<div class="p-perm" role="group" aria-label="${esc(title)}">
   <div class="p-perm-head">${ICONS[shown]}<span>${esc(title)}</span></div>
   ${command ? `<div class="p-perm-cmd${plain ? ' p-perm-path' : ''}">${plain ? '' : '<span class="p-perm-prompt" aria-hidden="true">$</span>'}<code class="p-perm-code">${esc(command)}</code></div>` : ''}
   ${note ? `<p class="p-perm-review"><span class="p-perm-jev">jev</span> ${esc(note)}</p>` : ''}
-  <div class="p-perm-actions">
-    ${Array.isArray(options) && options.length
-      ? options.map((o, i) => choice(o.value, o.label, o.primary || (i === 0 && !options.some((x) => x.primary)) ? 'p-perm-primary' : 'p-perm-secondary')).join('\n    ')
-      : [choice('allow', t('chat.perm.allow'), 'p-perm-primary'), choice('always', t('chat.perm.always'), 'p-perm-secondary'), choice('deny', t('chat.perm.deny'), 'p-perm-secondary')].join('\n    ')}
-  </div>
+  ${renderOptions(id, options, t)}
 </div>`
 }
 

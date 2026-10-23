@@ -112,6 +112,36 @@ describe('the thread', () => {
     expect(html).toContain('data-choice="always"')
   })
 
+  test('a plan card waits in the thread as the document and the phases, with one button per option', () => {
+    const options = [{ value: 'approve', label: 'Approve and build', primary: true }, { value: 'change', label: 'Change something' }]
+    const card = { kind: 'plan', title: 'Sign-up <flow>', path: 'docs/plans/x.md', sections: [{ heading: 'Goal', text: 'Let people sign up.' }], phases: [{ name: 'Sign up', tasks: ['Form', 'Mail'] }], options }
+    const state = run(createChat(), dialog('p1', card, { options: ['approve', 'change'] }))
+    const html = renderThread(state, {}, t)
+    expect(html).toContain('p-doc-card')
+    expect(html).toContain('Sign-up &lt;flow&gt;')
+    expect(html).toContain('docs/plans/x.md')
+    expect(html).toContain('Draft')
+    expect(html).toContain('Let people sign up.')
+    expect(html).toContain('Sign up')
+    expect(html).toContain('Form')
+    expect(html).toContain('class="p-phases')
+    expect(html.match(/<button/g)).toHaveLength(2)
+    expect(html).toContain('data-chat="permission" data-id="p1" data-choice="approve"')
+    expect(html).toContain('data-chat="permission" data-id="p1" data-choice="change"')
+    expect(html).toContain('Approve and build')
+    expect(html.indexOf('p-doc-card')).toBeLessThan(html.indexOf('class="p-phases'))
+    expect(html.indexOf('class="p-phases')).toBeLessThan(html.indexOf('data-choice="approve"'))
+  })
+
+  test('an approved plan stays in the thread as a record: Approved, no buttons', () => {
+    const plan = { kind: 'plan', status: 'approved', title: 'Sign-up', path: 'docs/plans/x.md', sections: [], phases: [{ name: 'Sign up', tasks: ['a'] }] }
+    const html = renderThread({ ...createChat(), messages: [plan] }, {}, t)
+    expect(html).toContain('Approved')
+    expect(html).toContain('is-static')
+    expect(html).toContain('class="p-phases')
+    expect(html).not.toContain('<button')
+  })
+
   test('an answered card leaves a note and no card', () => {
     let state = run(createChat(), dialog('u1', { kind: 'sandbox', summary: 'rm -rf build' }))
     state = answerDialog(state, 'u1', 'allow')

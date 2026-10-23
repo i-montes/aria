@@ -382,6 +382,25 @@ const script = `(async () => {
   check('after answering the composer comes back and takes the keyboard', wrapStyle() === 'visible' && document.activeElement === $('#chat-input'), wrapStyle() + ' ' + document.activeElement?.id)
   await reset()
 
+  // 4a. the plan card: the document, the phases and two buttons wait in the thread; approving answers with the option's
+  // value and leaves the thread as it was, and the approved plan comes back as the plan_ready result
+  const planCard = { sections: [{ heading: 'GOAL', text: 'Let people sign up.' }], phases: [{ name: 'Sign up', tasks: ['Form', 'Mail'] }] }
+  const planOptions = [{ value: 'approve', label: 'Approve and build', primary: true }, { value: 'change', label: 'Change something' }]
+  window.__sent.length = 0
+  sess({ type: 'chatDialog', id: 'plan1', method: 'select', request: { title: JSON.stringify({ aria: 1, kind: 'plan', title: 'Sign-up', path: 'docs/plans/2026-10-23-sign-up.md', summary: 'Sign-up', detail: 'docs/plans/2026-10-23-sign-up.md', ...planCard, options: planOptions }), options: ['approve', 'change'] }, hidden: false }); await wait(120)
+  check('a plan card draws the document and the phases in the thread', $('#chat-list .p-doc .p-doc-title')?.textContent === 'Sign-up' && $('#chat-list .p-doc-chip.is-draft') && $('#chat-list .p-phases')?.textContent.includes('Form'), $('#chat-list').textContent.slice(0, 160))
+  const planButtons = [...document.querySelectorAll('#chat-list [data-chat="permission"][data-id="plan1"]')]
+  check('and one button per option', planButtons.map((b) => b.dataset.choice).join() === 'approve,change' && planButtons[0].textContent === 'Approve and build', planButtons.map((b) => b.outerHTML).join(' ').slice(0, 200))
+  const notesBefore = document.querySelectorAll('#chat-list .p-note').length
+  planButtons[0].click(); await wait(80)
+  const approvedAnswer = sent().find((m) => m.type === 'uiAnswer')
+  check('approving answers the dialog with its value and the card goes', approvedAnswer?.id === 'plan1' && approvedAnswer.value === 'approve' && !$('#chat-list [data-chat="permission"]') && !$('#chat-list .p-doc'), JSON.stringify(approvedAnswer))
+  check('and leaves no note of its own', document.querySelectorAll('#chat-list .p-note').length === notesBefore)
+  ev({ type: 'tool_execution_start', toolCallId: 'pr1', toolName: 'plan_ready', args: {} })
+  ev({ type: 'tool_execution_end', toolCallId: 'pr1', toolName: 'plan_ready', isError: false, result: { content: [{ type: 'text', text: 'Approved' }], details: { status: 'approved', plan: { title: 'Sign-up', path: 'docs/plans/2026-10-23-sign-up.md', ...planCard } } } }); await wait(80)
+  check('the approved plan stays as a record, Approved and without buttons', $('#chat-list .p-doc-chip.is-approved') && $('#chat-list .p-phases') && !$('#chat-list [data-chat="permission"]'), $('#chat-list').textContent.slice(0, 160))
+  await reset()
+
   // 4b. Scrolling a picker: the row under the moving pointer is marked, and the list stays where it was scrolled
   typeIn('/'); await wait(120)
   const cmdList = $('.p-cmd-list')
