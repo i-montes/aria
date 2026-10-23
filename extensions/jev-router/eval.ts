@@ -28,12 +28,12 @@ const CASES: [string, Expect, string?][] = [
   ['quiero que analices este proyecto ~/Projects/acme/checkout-widget - quiero que detectes vulnerabilidades - que revises la estructura del proyecto - quiero ver oportunidades de rendimiento', { route: 'parallel', readOnly: true }],
   ['revisa los repos de ~/Projects/acme y dime cuáles tienen dependencias desactualizadas y cuáles no tienen tests', { route: 'parallel', readOnly: true }],
   ['compara Wompi, ePayco y Mercado Pago para donaciones recurrentes en Colombia: comisiones, API y soporte de Bre-B', { route: 'parallel', web: true, readOnly: true }],
-  ['Quiero que crees un nuevo proyecto, es una pagina web llamada openmovie en la que se podran ver peliculas, el tema por defecto quiero que sea dark', { route: 'focused', readOnly: false }],
-  ['ejecuta el dev server para poder verlo', { route: 'quick', readOnly: false }],
-  ['arregla el test que falla en src/lib/money.test.ts', { route: 'focused', readOnly: false }],
+  ['Quiero que crees un nuevo proyecto, es una pagina web llamada openmovie en la que se podran ver peliculas, el tema por defecto quiero que sea dark', { route: 'focused', readOnly: false, planWorth: true }],
+  ['ejecuta el dev server para poder verlo', { route: 'quick', readOnly: false, planWorth: false }],
+  ['arregla el test que falla en src/lib/money.test.ts', { route: 'focused', readOnly: false, planWorth: false }],
   ['Me mentiste, si hiciste cambios en el proyecto, quiero que dejes el repositorio como estaba', { route: 'focused', readOnly: false }],
   ['Si, agrega el analisis a los logs y di que no es posible hacer una solucion a la medida', { route: 'focused', notion: true, readOnly: false }, 'Puedo agregar este análisis a los logs de la tarea Rifatón en Notion. ¿Lo agrego?'],
-  ['sí, hazlo', { route: 'focused', readOnly: false }, 'Puedo cambiar el tema de tu terminal a verde menta editando ~/.config/alacritty/alacritty.toml. ¿Lo hago?'],
+  ['sí, hazlo', { route: 'focused', readOnly: false, planWorth: false }, 'Puedo cambiar el tema de tu terminal a verde menta editando ~/.config/alacritty/alacritty.toml. ¿Lo hago?'],
 ]
 
 const BASH: [string, boolean][] = [
@@ -87,14 +87,14 @@ await Promise.all(
     else {
       const routes = Array.isArray(expect.route) ? expect.route : [expect.route]
       if (!routes.includes(h.route)) bad.push(`route=${h.route}(${h.routeP.toFixed(2)}) want ${routes.join('|')} ${JSON.stringify(result.answers.route.probabilities)}`)
-      for (const key of ['memory', 'web', 'notion', 'readOnly'] as const) {
+      for (const key of ['memory', 'web', 'notion', 'readOnly', 'planWorth'] as const) {
         if (expect[key] !== undefined && expect[key] !== h[key]) {
-          const q = key === 'readOnly' ? 'changes' : key
+          const q = key === 'readOnly' ? 'changes' : key === 'planWorth' ? 'sizable' : key
           bad.push(`${key}=${h[key]} (p=${result.answers[q]?.probability?.toFixed(2)})`)
         }
       }
     }
-    const checks = 1 + (['memory', 'web', 'notion', 'readOnly'] as const).filter((k) => expect[k] !== undefined).length
+    const checks = 1 + (['memory', 'web', 'notion', 'readOnly', 'planWorth'] as const).filter((k) => expect[k] !== undefined).length
     total += checks
     ok += checks - bad.length
     if (bad.length) fails.push(`✗ [${ms}ms] ${message.slice(0, 70)}\n    ${bad.join('\n    ')}`)

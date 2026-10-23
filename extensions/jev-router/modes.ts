@@ -1,10 +1,12 @@
 // Superpowers modes the user turns on with a command. While one is on, the router stops routing
 // (no Jev labels, no thinking changes) and sends a fixed hint instead.
 //
-// - plan: design and plan with Superpowers' brainstorming and writing-plans skills, on a stronger
-//   model. Only `docs/superpowers/` and `.git` of a git repo under ~/Projects (the spec and plan
-//   live in the repo that receives the change) and /tmp may be written. It ends by itself once the
-//   plan is written, or when the user sends something that is not part of planning.
+// - plan: the questions of Superpowers' brainstorming skill, then straight to its writing-plans skill
+//   (no spec to write or review), on a stronger model. Only `docs/superpowers/` and `.git` of a git
+//   repo under ~/Projects (the plan lives in the repo that receives the change) and /tmp may be
+//   written. It ends by itself once the plan is written, or when the user sends something that is
+//   not part of planning. The user starts it with /plan, or accepts the assistant's offer (the
+//   router's `plan=offer`, the `start_plan` tool).
 // - execute: carry out an approved plan with subagent-driven-development, back on the default
 //   model, with normal writes. It only accepts a plan, never a spec.
 import { existsSync, readFileSync } from 'node:fs'
@@ -80,15 +82,16 @@ export const PLAN_DIRS_TEXT = [...TMP_DIRS, `${PROJECTS}/<any git repo>/docs/sup
 export const isPlanPath = (path: string) => /\/docs\/superpowers\/plans\/[^/]+\.md$/.test(path)
 
 const RISK_QUESTION =
-  'When reviewing the spec and the plan, for each risk first ask yourself: what happens to an ordinary user who repeats this in real life (for example, does it again without changing anything)? Tell me starting with the most frequent case, with a concrete example, and only then the rare or abuse cases.'
+  'When reviewing the plan, for each risk first ask yourself: what happens to an ordinary user who repeats this in real life (for example, does it again without changing anything)? Tell me starting with the most frequent case, with a concrete example, and only then the rare or abuse cases.'
 
 export function planPrompt(idea: string): string {
   return [
     `I want to plan this: ${idea}`,
     '',
-    `Follow the Superpowers flow. Read with \`read\` and follow the whole \`brainstorming\` skill (${skill('brainstorming')}). Don't offer the visual companion. Once I approve the design and the written spec, read and follow \`writing-plans\` (${skill('writing-plans')}).`,
-    'Ask the brainstorming questions (and the choice between approaches) with the `ask_user` tool, in batches: put in one call up to 4 questions that do not depend on each other\'s answers, each with 2-4 options and your recommended one first; a question that depends on an earlier answer goes in the next call. This replaces the skill\'s "one question at a time". To approve the design or the written spec, ask with `ask_user` too.',
-    'Save the spec and the plan in `docs/superpowers/` of the repo that receives the change (if it touches several repos, the one that receives most of it; the plan says which tasks go in each repo). Tell me at the start which repo and path you will save them in.',
+    `Read with \`read\` the \`brainstorming\` skill (${skill('brainstorming')}) and follow it only up to its questions: explore the context, ask what you need and propose the approaches. Don't offer the visual companion. Skip the rest of it: don't present the design for approval, don't write a spec or design document and don't ask me to review one.`,
+    'Ask the questions (and the choice between approaches) with the `ask_user` tool, in batches: put in one call up to 4 questions that do not depend on each other\'s answers, each with 2-4 options and your recommended one first; a question that depends on an earlier answer goes in the next call. This replaces the skill\'s "one question at a time".',
+    `As soon as my answers settle what to build, read and follow \`writing-plans\` (${skill('writing-plans')}) without asking me anything more: what we decided goes in the plan's header (goal, architecture, the choices made).`,
+    'Save the plan in `docs/superpowers/plans/` of the repo that receives the change (if it touches several repos, the one that receives most of it; the plan says which tasks go in each repo). Tell me at the start which repo and path you will save it in.',
     RISK_QUESTION,
     'When the plan is done, don\'t offer me a choice of how to execute it: tell me to review it and run it with `/execute <plan path>`.',
   ].join('\n')
@@ -125,10 +128,10 @@ export function notAPlan(path: string, cwd: string): string | null {
 
 export function modeHint(mode: Mode): string {
   if (mode === 'plan') {
-    return `[router] plan mode (Superpowers) on: design and plan following brainstorming and writing-plans; implement nothing. You may only write to docs/superpowers/ (spec and plan) and .git of a git repo under ${PROJECTS} (the one receiving the change), and to /tmp. Plan mode turns itself off once the plan is written.`
+    return `[router] plan mode (Superpowers) on: brainstorming's questions, then the plan with writing-plans (no spec); implement nothing. You may only write to docs/superpowers/ (the plan) and .git of a git repo under ${PROJECTS} (the one receiving the change), and to /tmp. Plan mode turns itself off once the plan is written.`
   }
   return '[router] execute mode (Superpowers) on: follow subagent-driven-development with the equivalences in the "Superpowers" section. The user leaves it with /execute off.'
 }
 
 export const PLAN_BLOCK_REASON =
-  'Blocked by the router: plan mode only writes the spec and the plan (docs/superpowers/ of a repo under ~/Projects), their commit and /tmp. Implementation comes with /execute.'
+  'Blocked by the router: plan mode only writes the plan (docs/superpowers/ of a repo under ~/Projects), its commit and /tmp. Implementation comes with /execute.'

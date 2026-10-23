@@ -27,9 +27,12 @@ work="$tmp/work"
 mkdir -p "$home/bin" "$home/agent" "$work"
 chmod 700 "$tmp"
 [ -f "$real/settings.json" ] && cp "$real/settings.json" "$home/settings.json"
-# The API keys only, unless sign-ins are asked for.
-if [ -f "$real/auth.json" ]; then
-  python3 - "$real/auth.json" "$home/auth.json" "${ARIA_PARITY_OAUTH:-0}" <<'PY'
+# The API keys only, unless sign-ins are asked for. With the keyring on, auth.json is not in the home: the dock keeps
+# a live copy for Pi, which the agent folder links to.
+auth_src="$real/auth.json"
+[ -f "$auth_src" ] || auth_src="$real/agent/auth.json"
+if [ -f "$auth_src" ]; then
+  python3 - "$auth_src" "$home/auth.json" "${ARIA_PARITY_OAUTH:-0}" <<'PY'
 import json, sys
 auth = json.load(open(sys.argv[1]))
 if sys.argv[3] != "1":
@@ -64,7 +67,7 @@ git -C "$work" init -q
 env=$(cd "$repo" && ARIA_HOME="$home" ARIA_PARITY_WORKDIR="$work" cargo run -q -p aria-core --example parity_env)
 eval "$env"
 export ARIA_HOME="$home"
-export ARIA_REAL_AUTH="$real/auth.json"
+export ARIA_REAL_AUTH="$auth_src"
 cd "$work"
 set +e
 "$@"

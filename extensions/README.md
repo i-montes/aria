@@ -6,7 +6,7 @@ every time a session starts; an extension the owner edited there is kept (see `c
 
 | Extension | What it does |
 |---|---|
-| `jev-router` | Jev classifies each message (route, memory, web, Notion, read-only) and adds a hidden hint and the answer-style rule; reasoning effort follows the route (`/effort`); `/plan` and `/execute` |
+| `jev-router` | Jev classifies each message (route, memory, web, Notion, read-only, sizable) and adds a hidden hint and the answer-style rule; reasoning effort follows the route (`/effort`); `/plan` and `/execute`, and for sizable work the offer to plan it first (`plan=offer`, the `start_plan` tool) |
 | `sandbox` | every bash command runs in bwrap: writes only in the project, `/tmp` and caches; asks before leaving it, with Jev's review; also `background_run` (a never-ending command for Aria's dock), on the same route as bash |
 | `quota-fallback` | when the OpenCode Go quota is almost spent, asks to switch to the free model (countdown) |
 | `autocompact` | compacts the context at a set percent (`/autocompact`) |
@@ -45,7 +45,10 @@ Tests: `bun test extensions`.
     (both `PI_CODING_AGENT_DIR` and `ARIA_PROJECTS_DIR` set).
   - `quota-fallback/ask.ts` (new): `quotaQuestion` builds the quota card in RPC, the old text in the terminal.
   - `jev-router/modes.ts`: `/plan` asks the brainstorming questions in batches of up to 4 independent ones, not one
-    per call (the owner asked for it).
+    per call (the owner asked for it), and then goes straight to writing-plans: no spec to write or review (the owner
+    asked for it, 2026-10-22).
+  - `jev-router/route.ts`, `index.ts`: Jev also asks whether the work is sizable; sizable work that changes things gets
+    `plan=offer`, the assistant offers once to plan it first and, accepted, starts plan mode with `start_plan`.
   - `ask-user/index.ts`: the tool's description asks for one batch of up to 4 independent questions per call, even when
     a skill asks one at a time (the dock shows them as one card; the owner asked for it).
   - `ask-user/questions.ts`: `questionCard`, `parseCardAnswers` and `TALK_LABEL`. `ask-user/dock.ts` (new) asks with

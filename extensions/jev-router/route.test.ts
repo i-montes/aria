@@ -1,6 +1,6 @@
 // Run: bun test extensions
 import { describe, expect, test } from 'bun:test'
-import { CLASSIFIER, jevStatus } from './route.ts'
+import { CLASSIFIER, hintLine, jevStatus, parseHints } from './route.ts'
 
 const hints = (over: Record<string, unknown> = {}) => ({ route: 'focused', routeP: 0.9, memory: false, web: false, notion: false, readOnly: false, ...over }) as any
 
@@ -20,4 +20,30 @@ describe("the route line the dock shows", () => {
 
 test('the classifier is the free Jev, by its exact id (jev-1.13 is paid)', () => {
   expect(CLASSIFIER).toEqual({ provider: 'opencode', id: 'jev-1.13-free' })
+})
+
+describe('offering a plan for sizable work', () => {
+  const result = (route: string, sizable: number, changes = 0.9) => ({
+    stopReason: 'stop',
+    answers: {
+      route: { type: 'choice', choice: route, probabilities: { [route]: 0.9 } },
+      sizable: { type: 'bool', probability: sizable },
+      changes: { type: 'bool', probability: changes },
+    },
+  })
+
+  test('sizable work that changes things gets plan=offer', () => {
+    const h = parseHints(result('focused', 0.85))!
+    expect(h.planWorth).toBe(true)
+    expect(hintLine(h)).toEndWith('plan=offer')
+  })
+
+  test('small work, a doubt, a question or a read-only analysis does not', () => {
+    expect(parseHints(result('focused', 0.2))!.planWorth).toBe(false)
+    expect(parseHints(result('focused', 0.55))!.planWorth).toBe(false)
+    expect(parseHints(result('think', 0.9))!.planWorth).toBe(false)
+    expect(parseHints(result('quick', 0.9))!.planWorth).toBe(false)
+    expect(parseHints(result('parallel', 0.9, 0.1))!.planWorth).toBe(false)
+    expect(hintLine(parseHints(result('focused', 0.2))!)).not.toContain('plan=')
+  })
 })

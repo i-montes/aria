@@ -451,30 +451,60 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify('Usage: /plan <idea>  ·  /plan off', 'info')
         return
       }
-      // Planning re-reads the whole session on a pricier model: in a long session that is costly.
-      const used = ctx.getContextUsage?.()?.tokens
-      if (mode !== 'plan' && typeof used === 'number' && used > LARGE_CONTEXT_TOKENS && ctx.hasUI && !ariaConfig().noAsk) {
-        const k = Math.round(used / 1000)
-        const go = await ctx.ui.confirm(
-          `This session is already at ~${k}k tokens`,
-          'The planning model re-reads them on every call and spends quota. Better to open a new session (/new) or compact (/compact) first. Plan here anyway?',
-        )
-        if (!go) return
-      }
-      const { model, note } = await choosePlanModel(ctx)
-      if (mode !== 'plan') restore = { model: ctx.model, thinking: pi.getThinkingLevel() }
-      if (!model || !(await pi.setModel(model))) {
-        restore = null
-        ctx.ui.notify('Could not switch to the planning model.', 'error')
-        return
-      }
-      planModelId = model.id
-      setLevel(isFree(model) ? 'max' : planThinking())
-      setMode('plan', ctx)
-      if (note) ctx.ui.notify(note, 'warning')
-      pi.sendUserMessage(planPrompt(idea))
+      await startPlan(idea, ctx)
     },
   })
+
+  // The assistant offered to plan the work first (the router's `plan=offer`) and the user accepted: plan mode starts
+  // the way /plan does, once this answer has ended.
+  let pendingPlan: string | null = null
+  if (planExecute) pi.registerTool({
+    name: 'start_plan',
+    label: 'Plan first',
+    description:
+      'Start plan mode for `idea` once your answer ends, as the /plan command does: questions, then an implementation plan. Only after the user accepted your offer to plan the work first.',
+    parameters: { type: 'object', properties: { idea: { type: 'string', description: 'What to plan, in one or two sentences, in the user\'s words.' } }, required: ['idea'] },
+    async execute(_id: string, params: any) {
+      const idea = String(params?.idea ?? '').trim()
+      if (!idea) return { content: [{ type: 'text', text: 'start_plan needs the idea to plan.' }], isError: true }
+      if (mode !== 'normal') return { content: [{ type: 'text', text: `Already in ${mode} mode.` }], isError: true }
+      pendingPlan = idea
+      return { content: [{ type: 'text', text: 'Plan mode starts as soon as this answer ends: end it now with one short line saying so.' }] }
+    },
+  } as any)
+
+  pi.on('agent_settled', async (_event: any, ctx: any) => {
+    if (!routed(ctx) || !pendingPlan) return
+    const idea = pendingPlan
+    pendingPlan = null
+    if (mode === 'normal') await startPlan(idea, ctx)
+  })
+
+  /** Plan mode for `idea`: the planning model, then the plan prompt (from /plan, or the accepted offer). */
+  async function startPlan(idea: string, ctx: any) {
+    // Planning re-reads the whole session on a pricier model: in a long session that is costly.
+    const used = ctx.getContextUsage?.()?.tokens
+    if (mode !== 'plan' && typeof used === 'number' && used > LARGE_CONTEXT_TOKENS && ctx.hasUI && !ariaConfig().noAsk) {
+      const k = Math.round(used / 1000)
+      const go = await ctx.ui.confirm(
+        `This session is already at ~${k}k tokens`,
+        'The planning model re-reads them on every call and spends quota. Better to open a new session (/new) or compact (/compact) first. Plan here anyway?',
+      )
+      if (!go) return
+    }
+    const { model, note } = await choosePlanModel(ctx)
+    if (mode !== 'plan') restore = { model: ctx.model, thinking: pi.getThinkingLevel() }
+    if (!model || !(await pi.setModel(model))) {
+      restore = null
+      ctx.ui.notify('Could not switch to the planning model.', 'error')
+      return
+    }
+    planModelId = model.id
+    setLevel(isFree(model) ? 'max' : planThinking())
+    setMode('plan', ctx)
+    if (note) ctx.ui.notify(note, 'warning')
+    pi.sendUserMessage(planPrompt(idea))
+  }
 
   /** The newest plan under docs/superpowers/plans of the repo Pi runs in, or null. */
   function latestPlan(cwd: string): string | null {

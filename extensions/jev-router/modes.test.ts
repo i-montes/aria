@@ -66,6 +66,17 @@ describe('which modes the router works in', () => {
   })
 })
 
+describe('the /plan flow skips the spec', () => {
+  test('questions, then straight to writing-plans: no spec to write or review', () => {
+    const prompt = planPrompt('a recipes app')
+    expect(prompt).toContain("don't write a spec")
+    expect(prompt).toContain('writing-plans')
+    expect(prompt).toContain('without asking me anything more')
+    expect(prompt).not.toContain('approve the design')
+    expect(prompt).toContain('docs/superpowers/plans/')
+  })
+})
+
 describe('the /plan questions', () => {
   test('come in batches of independent questions, not one per call', () => {
     const prompt = planPrompt('a recipes app')

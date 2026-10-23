@@ -38,6 +38,11 @@ const BOOL_QUESTIONS = {
     instructions: "Does `message` concern the user's Notion workspace? The user keeps their tasks, to-dos, deadlines and work logs in Notion, so questions about their tasks count even without the word Notion.",
     criteria: { true: 'Involves Notion', false: 'Does not involve Notion' },
   },
+  sizable: {
+    instructions:
+      'Does `message` ask to build or change something sizable in a project: a new feature, a redesign, a migration, a change across several parts of a system, where agreeing on a plan before writing code pays off? A single fix, a small edit, a config change, a question, an explanation or an analysis is NOT sizable.',
+    criteria: { true: 'Sizable work worth planning first', false: 'Small or not a build' },
+  },
   changes: {
     instructions:
       'Does `message` ask the assistant to create, modify, delete, install or run something that changes files or the system? Analysing, reviewing, auditing, explaining, reading, searching or researching how something could be done is NOT a change. Use `previous_reply` for short follow-ups such as "yes, do it".',
@@ -54,6 +59,8 @@ export interface Hints {
   web: boolean
   notion: boolean
   readOnly: boolean
+  /** Sizable work that changes things: the assistant offers to plan it first (`plan=offer`). */
+  planWorth: boolean
 }
 
 export function classifierRequest(message: string, previousReply: string) {
@@ -75,6 +82,8 @@ export function classifierRequest(message: string, previousReply: string) {
 // A bool is "yes" above this probability. Read-only needs `changes` to be clearly unlikely.
 const YES = 0.5
 const READ_ONLY_BELOW = 0.3
+// Offering a plan interrupts: only when Jev is fairly sure the work is sizable.
+const PLAN_WORTH = 0.6
 
 // A Jev result -> hints, or null when it failed or answered something unexpected.
 export function parseHints(result: any): Hints | null {
@@ -84,13 +93,15 @@ export function parseHints(result: any): Hints | null {
   if (a.route?.type !== 'choice' || !(route in ROUTE_CRITERIA)) return null
   const p = (key: BoolKey) => (a[key]?.type === 'bool' ? Number(a[key].probability) : NaN)
   const changes = p('changes')
+  const readOnly = Number.isFinite(changes) && changes < READ_ONLY_BELOW
   return {
     route,
     routeP: Number(a.route.probabilities?.[route] ?? 0),
     memory: p('memory') >= YES,
     web: p('web') >= YES,
     notion: p('notion') >= YES,
-    readOnly: Number.isFinite(changes) && changes < READ_ONLY_BELOW,
+    readOnly,
+    planWorth: !readOnly && (route === 'focused' || route === 'parallel') && p('sizable') >= PLAN_WORTH,
   }
 }
 
@@ -104,6 +115,7 @@ export function hintLine(h: Hints): string {
     `web=${yn(h.web)}`,
     `notion=${yn(h.notion)}`,
     `changes=${h.readOnly ? 'no (read-only)' : 'yes'}`,
+    ...(h.planWorth ? ['plan=offer'] : []),
   ].join(' · ')
 }
 
