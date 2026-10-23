@@ -33,6 +33,14 @@ pub struct Changes {
     pub removed: u32,
 }
 
+/// Removes a closed session's checkpoints (`root/<session>`); a name that is not a plain folder name is ignored.
+pub fn remove(root: &Path, session: &str) {
+    if session.is_empty() || session.contains(['/', '\\']) || session.starts_with('.') {
+        return;
+    }
+    let _ = std::fs::remove_dir_all(root.join(session));
+}
+
 /// A path as a literal gitignore pattern.
 fn escape_pattern(path: &str) -> String {
     path.replace('\\', "\\\\").replace('*', "\\*").replace('?', "\\?").replace('[', "\\[").replace('!', "\\!")
@@ -244,6 +252,13 @@ impl Checkpoints {
         Ok(())
     }
 
+    /// After undoing to `checkpoint`, it and the ones after it are gone from the list.
+    pub fn forget_from(&self, checkpoint: &Checkpoint) -> io::Result<()> {
+        let list = self.read_index();
+        let keep: Vec<Checkpoint> = list.iter().take_while(|c| c.id != checkpoint.id).cloned().collect();
+        self.write_index(&keep)
+    }
+
     /// The checkpoints undo can go back to, newest first.
     pub fn list(&self) -> Vec<Checkpoint> {
         let mut list = self.read_index();
@@ -362,6 +377,29 @@ mod tests {
         let cp = c.take("x").unwrap();
         fs::write(folder.join("node_modules").join("lib").join("x.js"), "changed dep").unwrap();
         assert_eq!(c.changes_since(&cp).unwrap(), Changes::default(), "node_modules is not the session's to keep");
+    }
+
+    #[test]
+    fn after_an_undo_the_checkpoints_from_there_on_go() {
+        let p = place();
+        let c = open(&p);
+        let first = c.take("one").unwrap();
+        c.take("two").unwrap();
+        c.take("three").unwrap();
+        c.forget_from(&c.list()[1]).unwrap();
+        assert_eq!(c.list().iter().map(|x| x.text.as_str()).collect::<Vec<_>>(), ["one"]);
+        assert_eq!(c.list()[0].id, first.id);
+    }
+
+    #[test]
+    fn a_closed_sessions_checkpoints_are_removed() {
+        let p = place();
+        open(&p).take("x").unwrap();
+        assert!(p.root.join("s1").exists());
+        remove(&p.root, "s1");
+        assert!(!p.root.join("s1").exists());
+        remove(&p.root, "../escape");
+        assert!(p.root.parent().unwrap().exists(), "never outside the checkpoints folder");
     }
 
     #[test]

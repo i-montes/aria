@@ -320,6 +320,21 @@ impl Drop for RotationEnd {
     }
 }
 
+/// The entry to fork from for a message the person wrote: Pi's text of it may carry the dock's attachment lines; with
+/// the same text more than once, `newer_same` later checkpoints share it, so it is that many before the latest.
+fn fork_entry(messages: &Value, text: &str, newer_same: usize) -> Option<String> {
+    let mine = |pi_text: &str| -> String {
+        pi_text.lines().filter(|l| !l.starts_with("[attached")).collect::<Vec<_>>().join("\n").trim().to_string()
+    };
+    messages
+        .as_array()?
+        .iter()
+        .rev()
+        .filter(|m| m["text"].as_str().is_some_and(|t| mine(t) == text.trim()))
+        .nth(newer_same)
+        .and_then(|m| m["entryId"].as_str().map(str::to_string))
+}
+
 /// What must wait for a rotation to end: everything that reaches Pi's session or restarts it.
 fn waits_for_rotation(message: &PageMessage) -> bool {
     matches!(
@@ -405,6 +420,8 @@ pub struct Chat {
     inner: Arc<Mutex<Inner>>,
     /// Starting Pi is check-then-act across threads (a send and a `/` picker can race); one at a time.
     spawn_lock: Arc<Mutex<()>>,
+    /// One operation at a time on this session's checkpoints (a snapshot, its changes, an undo, the list).
+    checkpoint_lock: Arc<Mutex<()>>,
 }
 
 /// The notification's text: a card's summary (its path, its quota, its first question), or the dialog's own title.
@@ -432,7 +449,14 @@ fn is_dialog(method: &str) -> bool {
 
 impl Chat {
     pub fn new(ctx: Arc<ChatCtx>, emit: Emit, session: String) -> Chat {
-        Chat { session, ctx, emit, inner: Arc::new(Mutex::new(Inner::default())), spawn_lock: Arc::new(Mutex::new(())) }
+        Chat {
+            session,
+            ctx,
+            emit,
+            inner: Arc::new(Mutex::new(Inner::default())),
+            spawn_lock: Arc::new(Mutex::new(())),
+            checkpoint_lock: Arc::new(Mutex::new(())),
+        }
     }
 
     fn emit(&self, message: DockMessage) {
@@ -552,6 +576,7 @@ impl Chat {
             PageMessage::ListModels { id } => self.list(id, "get_available_models", "models"),
             PageMessage::PiCommand { id, command, args } => self.pi_command(id, command, args),
             PageMessage::ChatCheckpoints { id } => {
+                let _one = self.checkpoint_lock.lock().unwrap_or_else(|e| e.into_inner());
                 let list = self.checkpoints().map(|c| c.list()).unwrap_or_default();
                 self.emit(DockMessage::Checkpoints { id, list: json!(list) });
             }
@@ -825,7 +850,8 @@ impl Chat {
             Err(error) => return refuse(&error),
         };
         // The folder as it is before this message, so its changes can be told and undone.
-        if behavior.is_none() {
+        // A `/command` (an extension's or Pi's) changes no files of its own: it gets no checkpoint.
+        if behavior.is_none() && !text.trim_start().starts_with('/') {
             self.take_checkpoint(text);
         }
         let (message, images) = crate::attachments::message(text, &saved);
@@ -869,6 +895,7 @@ impl Chat {
         if self.inner.lock().unwrap().run_checkpoint.is_some() {
             return;
         }
+        let _one = self.checkpoint_lock.lock().unwrap_or_else(|e| e.into_inner());
         let Some(checkpoints) = self.checkpoints() else { return };
         match checkpoints.take(text) {
             Ok(checkpoint) => self.inner.lock().unwrap().run_checkpoint = Some(checkpoint),
@@ -881,6 +908,7 @@ impl Chat {
         let Some(checkpoint) = self.inner.lock().unwrap().run_checkpoint.take() else { return };
         let chat = self.clone();
         std::thread::spawn(move || {
+            let _one = chat.checkpoint_lock.lock().unwrap_or_else(|e| e.into_inner());
             let Some(checkpoints) = chat.checkpoints() else { return };
             if let Ok(changes) = checkpoints.changes_since(&checkpoint) {
                 if changes.files > 0 {
@@ -893,45 +921,52 @@ impl Chat {
         });
     }
 
-    /// Back to before `checkpoint`'s message: the folder, then the conversation (Pi forks before that message, the tab
-    /// records the new session and the conversation is told again).
+    /// Back to before `checkpoint`'s message: the conversation's place is found first, then the folder is put back and
+    /// Pi forks there (the tab records the new session and the conversation is told again). Only on a quiet tab; what
+    /// arrives meanwhile waits, as during a rotation.
     fn undo(&self, id: u64, checkpoint: String) {
-        if self.inner.lock().unwrap().running {
-            return self.emit(DockMessage::Error { id, code: "busy".into() });
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if !quiet(&inner) {
+                drop(inner);
+                return self.emit(DockMessage::Error { id, code: "busy".into() });
+            }
+            inner.rotating = true;
         }
         let chat = self.clone();
         std::thread::spawn(move || {
+            let _end = RotationEnd { chat: chat.clone() };
+            let _one = chat.checkpoint_lock.lock().unwrap_or_else(|e| e.into_inner());
             let failed = |chat: &Chat, why: &str| {
                 crate::note(&format!("tab {}: undo failed: {why}", chat.session));
                 chat.emit(DockMessage::Error { id, code: "failed".into() });
             };
             let Some(checkpoints) = chat.checkpoints() else { return failed(&chat, "no checkpoints") };
-            let Some(target) = checkpoints.list().into_iter().find(|c| c.id == checkpoint) else {
+            let list = checkpoints.list();
+            let Some(at) = list.iter().position(|c| c.id == checkpoint) else {
                 return failed(&chat, "unknown checkpoint");
             };
-            if let Err(error) = checkpoints.restore(&target) {
-                return failed(&chat, &error.to_string());
-            }
+            let target = list[at].clone();
+            let newer_same = list[..at].iter().filter(|c| c.text.trim() == target.text.trim()).count();
             let engine = match chat.ensure_engine() {
                 Ok(engine) => engine,
                 Err(code) => return failed(&chat, code),
             };
-            let entry =
-                engine.request("get_fork_messages", json!({}), REQUEST_TIMEOUT).ok().filter(|r| r.success).and_then(
-                    |r| {
-                        r.data["messages"]
-                            .as_array()?
-                            .iter()
-                            .rev()
-                            .find(|m| m["text"].as_str().is_some_and(|t| t.trim() == target.text.trim()))
-                            .and_then(|m| m["entryId"].as_str().map(str::to_string))
-                    },
-                );
+            let entry = engine
+                .request("get_fork_messages", json!({}), REQUEST_TIMEOUT)
+                .ok()
+                .filter(|r| r.success)
+                .and_then(|r| fork_entry(&r.data["messages"], &target.text, newer_same));
+            // Nothing moves unless the conversation can go back too.
             let Some(entry) = entry else { return failed(&chat, "the message is not in the conversation") };
+            if let Err(error) = checkpoints.restore(&target) {
+                return failed(&chat, &error.to_string());
+            }
             match engine.request("fork", json!({ "entryId": entry }), REQUEST_TIMEOUT) {
                 Ok(response) if response.success => {}
                 _ => return failed(&chat, "Pi did not fork"),
             }
+            let _ = checkpoints.forget_from(&target);
             chat.emit(DockMessage::ChatEvent { event: json!({"type": "session_reset"}) });
             chat.announce(&engine);
             chat.emit(DockMessage::Saved { id });
@@ -1489,6 +1524,7 @@ impl Chat {
         }
         self.emit(DockMessage::ChatDialogClosed { id: id.to_string() });
         self.report_face();
+        self.update_status();
     }
 
     /// What this session is doing, for Aria's face in the bar.
@@ -1949,6 +1985,7 @@ impl Chat {
         };
         // A scheduled run Pi died in ends as failed, so the person's next turn there is never taken for it.
         self.prompt_failed("Pi stopped before the run finished");
+        self.update_status();
         if dismiss {
             self.ctx.notifier.dismiss(&self.session);
         }
@@ -2039,6 +2076,8 @@ impl Chat {
 
     /// A prompt that never became a run (Pi refused it, or could not start): a scheduled run it was ends as failed.
     fn prompt_failed(&self, why: &str) {
+        // The message never ran: its checkpoint is not a turn's, and the next message takes its own.
+        self.inner.lock().unwrap().run_checkpoint = None;
         if std::mem::take(&mut self.inner.lock().unwrap().scheduled_run) {
             self.finish_scheduled(Some(why), false);
         }
@@ -2602,6 +2641,7 @@ impl Sessions {
                     chat.forget_jobs();
                 }
                 self.close_jobs(session.clone());
+                crate::checkpoints::remove(&self.ctx.paths.root.join("checkpoints"), &session);
                 self.drop_tab(&session);
             }
             PageMessage::JobStop { job } => {
@@ -2659,6 +2699,16 @@ impl Sessions {
         let stored: HashSet<String> = self.ctx.jobs.list(None).into_iter().map(|job| job.session).collect();
         for gone in stored.difference(&open) {
             self.ctx.jobs.forget_session(gone);
+        }
+        // Checkpoints of sessions that are not open any more.
+        let root = self.ctx.paths.root.join("checkpoints");
+        if let Ok(dirs) = std::fs::read_dir(&root) {
+            for dir in dirs.flatten() {
+                let name = dir.file_name().to_string_lossy().to_string();
+                if !open.contains(&name) {
+                    crate::checkpoints::remove(&root, &name);
+                }
+            }
         }
     }
 
@@ -3229,6 +3279,44 @@ mod tests {
         wait_for(&h, "idle once looked at", |m| status_of(m).as_deref() == Some("idle"));
         h.chat.test_send_raw("ask");
         wait_for(&h, "waiting for an answer", |m| status_of(m).as_deref() == Some("waiting"));
+        h.chat.handle(PageMessage::UiAnswer {
+            id: "u1".into(),
+            value: Some("Allow".into()),
+            confirmed: None,
+            cancelled: None,
+        });
+        wait_for(&h, "idle once answered", |m| status_of(m).as_deref() == Some("idle"));
+    }
+
+    #[test]
+    fn a_pi_that_dies_mid_run_is_not_working() {
+        let h = harness();
+        send(&h, "CRASH");
+        wait_for(&h, "working", |m| status_of(m).as_deref() == Some("working"));
+        wait_for(&h, "not working once Pi is gone", |m| status_of(m).as_deref() == Some("idle"));
+    }
+
+    #[test]
+    fn a_refused_message_leaves_no_checkpoint_behind() {
+        let h = harness();
+        let own = h._dir.path().join("checkout-widget");
+        std::fs::create_dir_all(&own).unwrap();
+        with_own_folder(&h, &own);
+        send(&h, "FAIL");
+        wait_for(&h, "refused", |m| event_of(m, "command_failed"));
+        assert!(h.chat.inner.lock().unwrap().run_checkpoint.is_none(), "the next message gets its own");
+        send(&h, "/verify off");
+        std::thread::sleep(Duration::from_millis(200));
+        h.chat.handle(PageMessage::ChatCheckpoints { id: 9 });
+        match wait_for(&h, "the list", |m| matches!(m, DockMessage::Checkpoints { id: 9, .. })) {
+            DockMessage::Checkpoints { list, .. } => {
+                assert!(
+                    list.as_array().unwrap().iter().all(|c| !c["text"].as_str().unwrap_or("").starts_with('/')),
+                    "{list}"
+                )
+            }
+            _ => unreachable!(),
+        }
     }
 
     #[test]
@@ -3293,6 +3381,56 @@ mod tests {
             _ => unreachable!(),
         }
         assert!(!h.paths.root.join("checkpoints").join("s1").exists());
+    }
+
+    #[test]
+    fn the_message_to_fork_from_is_found_whatever_pi_added_to_it() {
+        let messages = json!([
+            {"entryId": "e1", "text": "yes"},
+            {"entryId": "e2", "text": "look at this\n[attached image: a.png at /home/ana/.aria/attachments/a.png]"},
+            {"entryId": "e3", "text": "yes"},
+        ]);
+        assert_eq!(
+            fork_entry(&messages, "look at this", 0).as_deref(),
+            Some("e2"),
+            "attachment lines are Pi's, not the person's"
+        );
+        assert_eq!(fork_entry(&messages, "yes", 0).as_deref(), Some("e3"), "the latest of the same text");
+        assert_eq!(
+            fork_entry(&messages, "yes", 1).as_deref(),
+            Some("e1"),
+            "one newer checkpoint with the same text: the one before"
+        );
+        assert_eq!(fork_entry(&messages, "never said", 0), None);
+    }
+
+    #[test]
+    fn undo_leaves_files_alone_when_the_conversation_cannot_go_back() {
+        let h = harness();
+        let own = h._dir.path().join("checkout-widget");
+        std::fs::create_dir_all(&own).unwrap();
+        with_own_folder(&h, &own);
+        send(&h, "OTHER");
+        wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
+        std::fs::write(own.join("mine.txt"), "made by the person").unwrap();
+        h.chat.handle(PageMessage::ChatCheckpoints { id: 3 });
+        let list = match wait_for(&h, "the list", |m| matches!(m, DockMessage::Checkpoints { id: 3, .. })) {
+            DockMessage::Checkpoints { list, .. } => list,
+            _ => unreachable!(),
+        };
+        let checkpoint = list[0]["id"].as_str().unwrap().to_string();
+        h.chat.handle(PageMessage::ChatUndo { id: 4, checkpoint });
+        wait_for(&h, "failed", |m| matches!(m, DockMessage::Error { id: 4, code } if code == "failed"));
+        assert!(own.join("mine.txt").exists(), "files are only restored once the conversation can go back too");
+    }
+
+    #[test]
+    fn undo_is_refused_while_a_message_is_on_its_way() {
+        let h = harness();
+        ready(&h);
+        h.chat.inner.lock().unwrap().pending_prompts.insert("p1".into(), "x".into());
+        h.chat.handle(PageMessage::ChatUndo { id: 7, checkpoint: "x".into() });
+        wait_for(&h, "busy", |m| matches!(m, DockMessage::Error { id: 7, code } if code == "busy"));
     }
 
     #[test]
@@ -4274,6 +4412,19 @@ mod tests {
         let h = harness();
         h.chat.handle(PageMessage::PiCommand { id: 6, command: "bash".into(), args: json!({"command": "id"}) });
         assert_eq!(pi_reply(&h, 6), (false, Value::Null, Some("command-unknown".into())));
+    }
+
+    #[test]
+    fn closing_a_session_removes_its_checkpoints() {
+        let s = sessions_harness();
+        let gone = s.h.paths.root.join("checkpoints").join("aa");
+        std::fs::create_dir_all(&gone).unwrap();
+        s.sessions.handle(PageMessage::SessionClose { session: "aa".into() });
+        assert!(!gone.exists());
+        let stale = s.h.paths.root.join("checkpoints").join("zz");
+        std::fs::create_dir_all(&stale).unwrap();
+        s.sessions.forget_gone_sessions();
+        assert!(!stale.exists(), "a session that is not open any more keeps no checkpoints");
     }
 
     #[test]
