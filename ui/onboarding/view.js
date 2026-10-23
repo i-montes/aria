@@ -7,7 +7,7 @@ import { renderPanelHead } from '../chat/parts/panelhead.js'
 import { orderedModels, renderModelPicker } from '../chat/parts/models.js'
 import {
   applyProvider, canContinue, credentialFor, defaultSettings, finish, isSignedIn, languageChoice, nextStep,
-  previousStep, PROVIDERS, providerModule, setLanguageChoice, setRouter, skip, stepIds,
+  previousStep, PROVIDERS, providerModule, rivals, setLanguageChoice, setRouter, skip, stepIds,
 } from './steps.js'
 
 const SERVICES = ['notion', 'tavily']
@@ -29,7 +29,7 @@ const DEFAULT_TURN_TIMEOUT = 10
  * have (the quota without OpenCode Go) is left out. */
 const SETTINGS_SECTIONS = [
   { id: 'assistant', steps: ['assistant'] },
-  { id: 'provider', steps: ['provider', 'auth', 'quota'] },
+  { id: 'provider', steps: ['provider', 'quota'] },
   { id: 'models', steps: ['models', 'effort'] },
   { id: 'router', steps: ['router'] },
   { id: 'context', steps: ['compaction', 'memory'] },
@@ -89,9 +89,15 @@ export function createOnboarding(env) {
       // The Shortcut row: listening for keys, why the last press (or the typed one) did not count, and the typed text.
       shortcut: { recording: false, note: null, draft: '' },
       drafts: { key: '', typesafeKey: '', extraWritable: '' },
-      key: { status: 'idle', error: null, requested: false },
+      // The provider whose key field or sign-in button is open on the providers step; `key` and `oauth` are its.
+      target: null,
+      key: { status: 'idle', error: null },
       typesafe: { status: 'idle', error: null },
-      oauth: { status: 'idle', error: null, url: null, token: 0, requested: false },
+      oauth: { status: 'idle', error: null, url: null, token: 0 },
+      // The main provider's credential already on disk, checked once when the providers step opens.
+      check: { status: 'idle', error: null, requested: false },
+      // Remove asks twice: the provider waiting for the second click, and why the last removal failed.
+      remove: { confirm: null, busy: null, error: null },
     }
   }
 
@@ -100,7 +106,7 @@ export function createOnboarding(env) {
 
   const uiFlags = () => ({
     signedIn: state.ui.signedIn,
-    keyChecking: state.ui.key.status === 'checking' || state.ui.oauth.status === 'checking',
+    keyChecking: state.ui.check.status === 'checking',
     typesafeSaved: state.ui.typesafeSaved,
     servicesConnected: SERVICES.filter((id) => state.connected.has(`mcp:${id}`)),
   })
@@ -221,7 +227,6 @@ export function createOnboarding(env) {
   const sectionsByStep = {
     provider: () => providerStep(),
     quota: () => quotaStep(),
-    auth: () => authStep(),
     router: () => routerStep(),
     assistant: () => assistantStep(),
     models: () => modelsStep(),
@@ -238,14 +243,70 @@ export function createOnboarding(env) {
 
   // ---- steps ----------------------------------------------------------------------------------
 
+  /** Every provider, each with its state: connected or not, the main one (its models, quota and Jev are the
+   * settings'), and the links to connect it, make it the main one or remove it. Several can be connected at once. */
   function providerStep() {
-    const options = PROVIDERS.map((p) => ({
-      value: p.id,
+    const main = state.settings.provider.id
+    let html = PROVIDERS.map((p) => providerRow(p, main)).join('')
+    if (main && !state.connected.has(credentialFor(main))) html += c.info('amber', '', t('ob.provider.mainMissing', { provider: providerModule(main).label }))
+    return html + c.info('lavender', t('ob.signin.stored.title'), t('ob.signin.stored.desc'))
+  }
+
+  function providerRow(p, main) {
+    const ui = state.ui
+    const connected = state.connected.has(credentialFor(p.id))
+    const isMain = p.id === main
+    const open = ui.target === p.id
+    const checking = isMain && ui.check.status === 'checking'
+    // A stored credential the check rejected is on disk but does not work: it is connected again from here.
+    const rejected = isMain && !!ui.check.error && ui.check.error !== 'network-unavailable'
+    const removeError = ui.remove.error && ui.remove.error.id === p.id ? ui.remove.error.code : null
+    const status = checking
+      ? t('ob.signin.checking')
+      : rejected
+        ? t(`ob.error.${ui.check.error}`)
+        : removeError
+          ? t(`ob.error.${removeError}`)
+          : t(connected ? 'ob.provider.connected' : 'ob.provider.notConnected')
+    const actions = []
+    if (!connected || rejected || open) actions.push({ action: 'provider-connect', text: t(open ? 'ob.provider.close' : connected ? 'ob.provider.replace' : 'ob.provider.connect') })
+    if (connected && !isMain && !open) {
+      actions.push({ action: 'pick', text: t('ob.provider.makeMain') })
+      actions.push({ action: 'provider-remove', text: t(ui.remove.confirm === p.id ? 'ob.provider.removeConfirm' : 'ob.provider.remove') })
+    }
+    return c.providerRow({
+      id: p.id,
       label: p.label,
       description: t(`ob.provider.${p.id}.desc`),
       badges: p.quota ? [t('ob.badge.quota'), t('ob.badge.jev')] : [],
-    }))
-    return c.choice('provider', '', options, state.settings.provider.id) + c.info('lavender', t('ob.provider.modules.title'), t('ob.provider.modules.desc'))
+      main: isMain,
+      mainText: t('ob.provider.main'),
+      state: status,
+      tone: rejected || removeError ? 'error' : connected && !checking ? 'ok' : '',
+      actions,
+      body: open ? connectForm(p) : '',
+    })
+  }
+
+  /** The open provider's key field or sign-in button; a warning first when it replaces another provider's credential. */
+  function connectForm(p) {
+    const replaced = rivals(p.id).filter((id) => state.connected.has(credentialFor(id)))
+    let html = replaced.map((id) => c.info('amber', '', t('ob.provider.replaces', { provider: providerModule(id).label }))).join('')
+    if (p.auth === 'key') return html + keyBlock({ field: 'key', label: t('ob.signin.keyLabel', { provider: p.label }), status: state.ui.key, draft: state.ui.drafts.key })
+    const o = state.ui.oauth
+    const stateText =
+      o.status === 'done' ? t('ob.signin.oauth.done')
+      : o.status === 'waiting' ? t('ob.signin.oauth.waiting')
+      : o.error ? t(`ob.error.${o.error}`)
+      : t('ob.signin.oauth.hint')
+    html += c.actionButton('oauth-start', t('ob.signin.oauth.button'), stateText, {
+      disabled: o.status === 'waiting' || o.status === 'done',
+      tone: o.status === 'done' ? 'ok' : o.error ? 'error' : '',
+    })
+    if (o.status === 'waiting') {
+      html += `<div class="action-row">${o.url ? `<button class="link" data-nav data-action="oauth-reopen" data-key="oauth-reopen">${c.esc(t('ob.signin.oauth.reopen'))}</button>` : ''}<button class="link" data-nav data-action="oauth-cancel" data-key="oauth-cancel">${c.esc(t('ob.signin.oauth.cancel'))}</button></div>`
+    }
+    return html
   }
 
   function quotaStep() {
@@ -291,31 +352,6 @@ export function createOnboarding(env) {
         tone: saved ? 'ok' : status.error ? 'error' : '',
       })
     )
-  }
-
-  function authStep() {
-    const m = module()
-    let html = ''
-    if (m.auth === 'key') {
-      html += keyBlock({ field: 'key', label: t('ob.signin.keyLabel', { provider: m.label }), status: state.ui.key, draft: state.ui.drafts.key })
-      if (state.ui.signedIn && state.ui.key.status === 'saved') html += c.info('green', '', t('ob.signin.existing'))
-    } else {
-      const o = state.ui.oauth
-      const stateText =
-        o.status === 'done' ? t('ob.signin.oauth.done')
-        : o.status === 'checking' ? t('ob.signin.checking')
-        : o.status === 'waiting' ? t('ob.signin.oauth.waiting')
-        : o.error ? t(`ob.error.${o.error}`)
-        : t('ob.signin.oauth.hint')
-      html += c.actionButton('oauth-start', t('ob.signin.oauth.button'), stateText, {
-        disabled: o.status === 'waiting' || o.status === 'done' || o.status === 'checking',
-        tone: o.status === 'done' ? 'ok' : o.error ? 'error' : '',
-      })
-      if (o.status === 'waiting') {
-        html += `<div class="action-row">${o.url ? `<button class="link" data-nav data-action="oauth-reopen" data-key="oauth-reopen">${c.esc(t('ob.signin.oauth.reopen'))}</button>` : ''}<button class="link" data-nav data-action="oauth-cancel" data-key="oauth-cancel">${c.esc(t('ob.signin.oauth.cancel'))}</button></div>`
-      }
-    }
-    return html + c.info('lavender', t('ob.signin.stored.title'), t('ob.signin.stored.desc'))
   }
 
   function routerStep() {
@@ -803,12 +839,12 @@ export function createOnboarding(env) {
     const language = languageChoice(s.assistant.language) === 'other' ? s.assistant.language : t(`ob.assistant.language.${s.assistant.language}`)
     const services = s.integrations.services.map((x) => t(`ob.integrations.${x.id}`))
     const experts = s.subagents.experts.filter((e) => e.enabled).length
+    const others = PROVIDERS.filter((p) => p.id !== s.provider.id && state.connected.has(credentialFor(p.id))).map((p) => p.label)
     return {
-      provider: (m?.label ?? '—') + (m?.quota ? t('ob.val.quotaMeter') : ''),
+      provider: (m?.label ?? '—') + (m?.quota ? t('ob.val.quotaMeter') : '') + (others.length ? t('ob.val.alsoConnected', { providers: others.join(', ') }) : ''),
       quota: q
         ? t('ob.val.quota', { a: q.switchAt, b: q.planSwitchAt, ask: q.askFirst ? t('ob.val.quotaAsk', { n: q.countdownMinutes }) : t('ob.val.quotaNoAsk') })
         : t('ob.val.quotaNone'),
-      auth: t(m?.auth === 'oauth' ? 'ob.val.authOauth' : 'ob.val.authKey'),
       assistant: t('ob.val.assistant', { name: assistantName(), language, style: t(`ob.style.${s.assistant.style}`) }) + (s.assistant.userName.trim() ? t('ob.val.callsYou', { user: s.assistant.userName.trim() }) : ''),
       router: s.router.enabled && m?.jevIncluded ? t('ob.val.routerOn') : t('ob.val.off'),
       models: t('ob.val.models', { daily: modelLabel(s.models.daily), planning: modelLabel(s.models.planning), effort: t(`ob.level.${s.models.planningEffort}`) }),
@@ -826,8 +862,8 @@ export function createOnboarding(env) {
     const quickFlow = state.mode === 'quick'
     const values = summaryValues()
     const order = quickFlow
-      ? ['provider', 'auth', 'assistant']
-      : ['provider', 'quota', 'auth', 'assistant', 'router', 'models', 'effort', 'compaction', 'memory', 'integrations', 'sandbox', 'git', 'agents']
+      ? ['provider', 'assistant']
+      : ['provider', 'quota', 'assistant', 'router', 'models', 'effort', 'compaction', 'memory', 'integrations', 'sandbox', 'git', 'agents']
     const wanted = new Set(ids())
     let html = c.summary(order.map((id) => ({ id, label: t(`ob.row.${id}`), value: values[id], editLabel: wanted.has(id) ? t('ob.edit') : '' })))
     if (quickFlow) html += c.info('lavender', t('ob.review.defaultsNote.title'), t('ob.review.defaultsNote.desc'))
@@ -1057,16 +1093,10 @@ export function createOnboarding(env) {
     const [name] = field.split(':')
     if (name === 'provider') {
       if (value === state.settings.provider.id) return
-      state.settings = applyProvider(state.settings, value)
-      const keep = state.ui.drafts
-      state.ui = {
-        ...freshUi(),
-        drafts: { ...keep, key: '' },
-        // An API key is signed in only after it is checked (checkStoredKey); an OAuth credential cannot
-        // be checked from here, so being on disk is enough.
-        signedIn: providerModule(value)?.auth === 'oauth' ? isSignedIn(state.settings, [...state.connected]) : false,
-        typesafeSaved: state.connected.has('typesafe:api_key'),
-      }
+      makeMain(value)
+      render()
+      // The new main provider's credential is on disk: it is checked as when the step opens.
+      return maybeCheckStoredCredential()
     } else if (name === 'language') {
       state.settings = setLanguageChoice(state.settings, value, languageChoice(state.settings.assistant.language) === 'other' ? state.settings.assistant.language : '')
       if (value !== 'other') env.setLanguage(value)
@@ -1178,6 +1208,62 @@ export function createOnboarding(env) {
 
   // ---- keys and sign-in -----------------------------------------------------------------------
 
+  /** Points the settings at a provider (its models, quota and Jev). What was open or being checked belongs to the old
+   * main provider and is dropped. An API key is signed in only after it is checked (checkKey); an OAuth credential
+   * cannot be checked from here, so being on disk is enough. */
+  function makeMain(id, signedIn) {
+    state.settings = applyProvider(state.settings, id)
+    const keep = state.ui.drafts
+    state.ui = {
+      ...freshUi(),
+      drafts: { ...keep, key: '' },
+      signedIn: signedIn ?? (providerModule(id)?.auth === 'oauth' ? isSignedIn(state.settings, [...state.connected]) : false),
+      typesafeSaved: state.connected.has('typesafe:api_key'),
+    }
+  }
+
+  /** Opens (or closes) a provider's key field or sign-in button. */
+  function toggleConnect(id) {
+    const ui = state.ui
+    if (ui.oauth.status === 'waiting') cancelOauth()
+    ui.target = ui.target === id ? null : id
+    ui.key = { status: 'idle', error: null }
+    ui.oauth = { status: 'idle', error: null, url: null, token: ui.oauth.token + 1 }
+    ui.drafts.key = ''
+    ui.remove = { confirm: null, busy: null, error: null }
+    render()
+  }
+
+  /** A provider just connected: it is on disk, the one whose credential it replaced is not. Without a main provider
+   * that works, it becomes the main one. Returns whether it is the main one now. */
+  function connected(id) {
+    state.connected.add(credentialFor(id))
+    for (const other of rivals(id)) state.connected.delete(credentialFor(other))
+    const main = state.settings.provider.id
+    if (main !== id && main && state.connected.has(credentialFor(main))) return false
+    if (main !== id) makeMain(id, true)
+    state.ui.signedIn = true
+    state.ui.check = { status: 'idle', error: null, requested: true }
+    return true
+  }
+
+  /** Remove asks twice; the second click asks the dock to delete the provider's credential. Never the main one. */
+  async function removeProvider(id) {
+    const ui = state.ui
+    if (id === state.settings.provider.id || ui.remove.busy) return
+    if (ui.remove.confirm !== id) {
+      ui.remove = { confirm: id, busy: null, error: null }
+      return render()
+    }
+    ui.remove = { confirm: null, busy: id, error: null }
+    render()
+    const reply = await request({ type: 'credentialDelete', provider: id })
+    if (reply.type === 'saved') state.connected.delete(credentialFor(id))
+    if (state.ui !== ui) return
+    ui.remove = { confirm: null, busy: null, error: reply.type === 'saved' ? null : { id, code: reply.code ?? 'generic' } }
+    render()
+  }
+
   // A reply can arrive after the user moved on (changed provider, cancelled): `state.ui` is replaced
   // when the provider changes, so a continuation that finds another `ui` has been overtaken and
   // must not touch the state.
@@ -1186,26 +1272,31 @@ export function createOnboarding(env) {
     const status = field === 'key' ? ui.key : ui.typesafe
     const draft = ui.drafts[field]
     if (status.status === 'checking' || !draft.trim()) return
-    // A key the user typed replaces the stored one: the automatic check of an existing key must not
-    // fire after this attempt, whichever way it ends.
-    if (field === 'key') ui.key.requested = true
+    const target = field === 'key' ? ui.target : null
+    if (field === 'key' && !target) return
     status.status = 'checking'
     status.error = null
     render()
-    const provider = field === 'typesafeKey' ? 'typesafe' : module().keyProvider
-    const credential = field === 'typesafeKey' ? 'typesafe:api_key' : credentialFor(state.settings.provider.id)
+    const provider = field === 'typesafeKey' ? 'typesafe' : providerModule(target).keyProvider
     const at = here()
     const reply = await request({ type: 'saveKey', provider, key: draft })
-    if (reply.type === 'keyResult' && reply.ok) state.connected.add(credential) // it IS stored, whatever the page shows now
-    if (state.ui !== ui) return
-    if (reply.type === 'keyResult' && reply.ok) {
+    const ok = reply.type === 'keyResult' && reply.ok
+    // It IS stored, whatever the page shows now.
+    if (ok && field === 'typesafeKey') state.connected.add('typesafe:api_key')
+    if (ok && field === 'key' && (state.ui !== ui || ui.key !== status)) {
+      state.connected.add(credentialFor(target))
+      for (const other of rivals(target)) state.connected.delete(credentialFor(other))
+    }
+    if (state.ui !== ui || (field === 'key' && ui.key !== status)) return
+    if (ok) {
       status.status = 'saved'
       if (field === 'key') {
-        ui.signedIn = true
-        ui.drafts[field] = ''
+        const isMain = connected(target)
+        state.ui.target = null
+        state.ui.drafts.key = ''
         render()
-        // A key that just worked does not need a second confirmation: the flow goes on (quick and full).
-        if (!state.editing && here() === at) next()
+        // A key that just worked for the main provider does not need a second confirmation: the flow goes on.
+        if (isMain && !state.editing && here() === at) next()
         return
       }
       ui.typesafeSaved = true
@@ -1221,21 +1312,18 @@ export function createOnboarding(env) {
   /** A credential that is already on disk is validated once, when the sign-in step opens. If it still
    * works the flow goes on by itself (quick or full) instead of asking for it again. */
   function maybeCheckStoredCredential() {
-    const onSignIn = (state.view === 'step' && state.step === 'auth') || (state.view === 'settings' && state.section === 'provider')
+    const onSignIn = (state.view === 'step' && state.step === 'provider') || (state.view === 'settings' && state.section === 'provider')
     if (!onSignIn) return
     const m = module()
     if (!m || !state.connected.has(credentialFor(state.settings.provider.id))) return
-    const slot = m.auth === 'key' ? state.ui.key : state.ui.oauth
-    if (slot.requested) return
-    if (m.auth === 'key' && slot.status === 'saved') return
-    if (m.auth === 'oauth' && slot.status === 'done') return
-    slot.requested = true
+    if (state.ui.check.requested) return
+    state.ui.check.requested = true
     void checkStoredCredential(m)
   }
 
   async function checkStoredCredential(m) {
     const ui = state.ui
-    const slot = m.auth === 'key' ? ui.key : ui.oauth
+    const slot = ui.check
     slot.status = 'checking'
     slot.error = null
     render()
@@ -1246,12 +1334,12 @@ export function createOnboarding(env) {
     // Pi will say so when it is really used. Only a rejected credential stops the flow.
     const valid = (reply.type === 'keyResult' && reply.ok) || reply.error === 'network-unavailable'
     if (valid) {
-      slot.status = m.auth === 'oauth' ? 'done' : 'saved'
+      slot.status = 'done'
+      slot.error = reply.error === 'network-unavailable' ? reply.error : null
       ui.signedIn = true
-      state.connected.add(credentialFor(state.settings.provider.id))
       render()
       // Only a fresh setup moves on its own; while editing, the user decides (they came here to change it).
-      if (!state.editing && here() === at && (m.auth === 'oauth' || !ui.drafts.key.trim())) next()
+      if (!state.editing && here() === at && !ui.target) next()
       return
     }
     slot.status = 'idle'
@@ -1265,8 +1353,7 @@ export function createOnboarding(env) {
     const o = ui.oauth
     if (o.status === 'waiting') return
     const token = ++o.token
-    const credential = credentialFor(state.settings.provider.id)
-    const current = () => state.ui === ui && o.token === token
+    const current = () => state.ui === ui && ui.oauth === o && o.token === token
     o.status = 'waiting'
     o.error = null
     o.url = null
@@ -1278,14 +1365,19 @@ export function createOnboarding(env) {
       render()
     })
     if (o.token !== token) return // cancelled or replaced by a newer attempt: ignored
-    if (reply.type === 'oauthResult' && reply.ok) state.connected.add(credential)
-    if (state.ui !== ui) return
-    if (reply.type === 'oauthResult' && reply.ok) {
+    const ok = reply.type === 'oauthResult' && reply.ok
+    if (ok && !current()) {
+      state.connected.add(credentialFor('anthropic-oauth'))
+      for (const other of rivals('anthropic-oauth')) state.connected.delete(credentialFor(other))
+    }
+    if (!current()) return
+    if (ok) {
       o.status = 'done'
-      ui.signedIn = true
+      const isMain = connected('anthropic-oauth')
+      state.ui.target = null
       render()
-      // A sign-in that just worked does not need a second confirmation either.
-      if (!state.editing && here() === at) next()
+      // A sign-in that just worked for the main provider does not need a second confirmation either.
+      if (isMain && !state.editing && here() === at) next()
       return
     }
     o.status = 'idle'
@@ -1469,6 +1561,8 @@ export function createOnboarding(env) {
     }
     if (action === 'save-key') return saveKey('key')
     if (action === 'save-typesafeKey') return saveKey('typesafeKey')
+    if (action === 'provider-connect') return toggleConnect(value)
+    if (action === 'provider-remove') return removeProvider(value)
     if (action === 'oauth-start') return startOauth()
     if (action === 'oauth-cancel') return cancelOauth()
     if (action === 'save-tavilyKey') return saveTavily()
@@ -1594,6 +1688,8 @@ export function createOnboarding(env) {
     typesafeSaved: state.ui.typesafeSaved,
     oauth: state.ui.oauth.status,
     key: state.ui.key.status,
+    check: state.ui.check.status,
+    target: state.ui.target,
   })
 
   return { start, render, snapshot, onOpen, refreshSettings, platformChanged }

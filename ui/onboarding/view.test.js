@@ -79,52 +79,48 @@ const oauthOk = { type: 'oauthResult', ok: true, error: null }
 const keyOk = { type: 'keyResult', ok: true, error: null }
 const completed = { ...applyProvider(defaultSettings('en'), 'opencode-go'), setup: { completed: true, mode: 'quick' } }
 
+const connect = (h, provider) => h.click('provider-connect', 'provider', provider)
+
 describe('a sign-in that finishes late', () => {
-  test('a Claude sign-in finishing after the provider changed does not sign the new provider in', async () => {
+  test('a Claude sign-in finishing after another provider was opened does not sign it in', async () => {
     const h = harness()
     h.ob.start(null)
     h.click('choose', undefined, 'full')
-    h.click('pick', 'provider', 'anthropic-oauth')
-    h.click('next')
+    connect(h, 'anthropic-oauth')
     h.click('oauth-start')
     const oauth = h.lastRequest()
     expect(oauth.message.type).toBe('startOauth')
-    h.click('back')
-    h.click('pick', 'provider', 'opencode-go')
+    connect(h, 'opencode-go')
     oauth.resolve(oauthOk)
     await flush()
-    expect(h.ob.snapshot().signedIn).toBe(false)
+    expect(h.ob.snapshot()).toMatchObject({ signedIn: false, target: 'opencode-go', step: 'provider' })
   })
 
-  test('a key check finishing after the provider changed does not sign the new provider in', async () => {
+  test('a key check finishing after another provider was opened does not make it the main one', async () => {
     const h = harness()
     h.ob.start(null)
     h.click('choose', undefined, 'full')
-    h.click('pick', 'provider', 'opencode-go')
-    h.click('next') // quota
-    h.click('next') // sign-in
+    connect(h, 'opencode-go')
     h.type('key', 'slow-key')
     h.click('save-key')
     const check = h.lastRequest()
     expect(check.message).toMatchObject({ type: 'saveKey', provider: 'opencode-go', key: 'slow-key' })
-    h.click('back')
-    h.click('back')
-    h.click('pick', 'provider', 'anthropic-api')
+    connect(h, 'anthropic-api')
     check.resolve(keyOk)
     await flush()
-    expect(h.ob.snapshot().signedIn).toBe(false)
+    // It is stored, so it shows as connected; but nobody chose it while it was being checked.
+    expect(h.ob.snapshot()).toMatchObject({ signedIn: false, step: 'provider', connected: ['opencode-go:api_key'] })
   })
 
-  test('a sign-in that is still current does sign in', async () => {
+  test('a sign-in that is still current signs in and makes it the main provider', async () => {
     const h = harness()
     h.ob.start(null)
     h.click('choose', undefined, 'full')
-    h.click('pick', 'provider', 'anthropic-oauth')
-    h.click('next')
+    connect(h, 'anthropic-oauth')
     h.click('oauth-start')
     h.lastRequest().resolve(oauthOk)
     await flush()
-    expect(h.ob.snapshot()).toMatchObject({ signedIn: true, oauth: 'done' })
+    expect(h.ob.snapshot()).toMatchObject({ signedIn: true, step: 'router' })
   })
 })
 
@@ -133,8 +129,7 @@ describe('abandoning a sign-in', () => {
     const h = harness()
     h.ob.start(null)
     h.click('choose', undefined, 'full')
-    h.click('pick', 'provider', 'anthropic-oauth')
-    h.click('next')
+    connect(h, 'anthropic-oauth')
     h.click('oauth-start')
     const first = h.lastRequest()
     expect(h.ob.snapshot().oauth).toBe('waiting')
@@ -148,7 +143,126 @@ describe('abandoning a sign-in', () => {
     expect(h.ob.snapshot()).toMatchObject({ signedIn: false, oauth: 'waiting' })
     second.resolve(oauthOk)
     await flush()
-    expect(h.ob.snapshot()).toMatchObject({ signedIn: true, oauth: 'done' })
+    expect(h.ob.snapshot()).toMatchObject({ signedIn: true, step: 'router' })
+  })
+})
+
+describe('several providers at once', () => {
+  const editing = (connected) => {
+    const h = harness()
+    h.ob.start(completed, connected)
+    h.click('settings-open', undefined, 'provider')
+    return h
+  }
+  const rowOf = (h, provider) => {
+    const html = h.root.innerHTML
+    const at = html.indexOf(`data-value="${provider}"`)
+    return html.slice(html.lastIndexOf('<div class="provider', at), html.indexOf('</div>', html.indexOf('class="action-row"', at)))
+  }
+
+  test('every provider is listed with its own state, and the main one is marked', () => {
+    const h = editing(['opencode-go:api_key', 'anthropic:api_key'])
+    const html = h.root.innerHTML
+    expect(html.match(/class="provider/g)).toHaveLength(3)
+    expect(html).toContain('<div class="provider main" data-provider="opencode-go">')
+    expect(html).toContain('ob.provider.main')
+    expect(html).toMatch(/data-action="pick" data-field="provider" data-value="anthropic-api"/)
+    expect(html).toMatch(/data-action="provider-remove" data-field="provider" data-value="anthropic-api"/)
+    expect(html).toMatch(/data-action="provider-connect" data-field="provider" data-value="anthropic-oauth"/)
+    // The main provider can be neither removed nor made main again.
+    expect(html).not.toMatch(/data-action="(pick|provider-remove)" data-field="provider" data-value="opencode-go"/)
+  })
+
+  test('connecting a second provider keeps the main one and the setup can still be saved', async () => {
+    const h = editing(['opencode-go:api_key'])
+    h.lastRequest().resolve(keyOk) // the main provider's stored key
+    await flush()
+    connect(h, 'anthropic-api')
+    h.type('key', 'sk-ant-1')
+    h.click('save-key')
+    expect(h.lastRequest().message).toMatchObject({ type: 'saveKey', provider: 'anthropic-api', key: 'sk-ant-1' })
+    h.lastRequest().resolve(keyOk)
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ section: 'provider', signedIn: true, dirty: false, target: null })
+    expect(h.ob.snapshot().connected).toEqual(['anthropic:api_key', 'opencode-go:api_key'])
+  })
+
+  test('making another connected provider the main one points the settings at it', () => {
+    const h = editing(['opencode-go:api_key', 'anthropic:api_key'])
+    h.click('pick', 'provider', 'anthropic-api')
+    expect(h.ob.snapshot()).toMatchObject({ dirty: true })
+    expect(h.lastRequest().message).toMatchObject({ type: 'checkKey', provider: 'anthropic-api' })
+    expect(h.ob.snapshot().connected).toContain('opencode-go:api_key') // nothing is disconnected
+  })
+
+  test('removing asks twice, then deletes that provider\'s credential only', async () => {
+    const h = editing(['opencode-go:api_key', 'anthropic:api_key'])
+    const before = h.pending.length
+    h.click('provider-remove', 'provider', 'anthropic-api')
+    expect(h.pending).toHaveLength(before)
+    expect(h.root.innerHTML).toContain('ob.provider.removeConfirm')
+    h.click('provider-remove', 'provider', 'anthropic-api')
+    expect(h.lastRequest().message).toEqual({ type: 'credentialDelete', provider: 'anthropic-api' })
+    h.lastRequest().resolve({ type: 'saved' })
+    await flush()
+    expect(h.ob.snapshot().connected).toEqual(['opencode-go:api_key'])
+  })
+
+  test('the main provider is never removed from the page', () => {
+    const h = editing(['opencode-go:api_key', 'anthropic:api_key'])
+    const before = h.pending.length
+    h.click('provider-remove', 'provider', 'opencode-go')
+    h.click('provider-remove', 'provider', 'opencode-go')
+    expect(h.pending).toHaveLength(before)
+  })
+
+  test('a removal the dock refuses says why and keeps the provider', async () => {
+    const h = editing(['opencode-go:api_key', 'anthropic:api_key'])
+    h.click('provider-remove', 'provider', 'anthropic-api')
+    h.click('provider-remove', 'provider', 'anthropic-api')
+    h.lastRequest().resolve({ type: 'error', code: 'keyring-failed' })
+    await flush()
+    expect(h.ob.snapshot().connected).toContain('anthropic:api_key')
+    expect(h.root.innerHTML).toContain('ob.error.keyring-failed')
+  })
+
+  test('connecting the Claude sign-in warns that it replaces the Anthropic key, and does', async () => {
+    const h = editing(['opencode-go:api_key', 'anthropic:api_key'])
+    connect(h, 'anthropic-oauth')
+    expect(h.root.innerHTML).toContain('ob.provider.replaces')
+    h.click('oauth-start')
+    h.lastRequest().resolve(oauthOk)
+    await flush()
+    expect(h.ob.snapshot().connected).toEqual(['anthropic:oauth', 'opencode-go:api_key'])
+  })
+
+  test('when the main provider\'s credential is replaced, the new one becomes the main one', async () => {
+    const claude = { ...applyProvider(defaultSettings('en'), 'anthropic-api'), setup: { completed: true, mode: 'full' } }
+    const h = harness()
+    h.ob.start(claude, ['anthropic:api_key'])
+    h.click('settings-open', undefined, 'provider')
+    h.lastRequest().resolve(keyOk)
+    await flush()
+    connect(h, 'anthropic-oauth')
+    h.click('oauth-start')
+    h.lastRequest().resolve(oauthOk)
+    await flush()
+    expect(h.ob.snapshot()).toMatchObject({ signedIn: true, dirty: true })
+    expect(h.root.innerHTML).not.toContain('ob.provider.mainMissing')
+  })
+
+  test('a main provider that is not connected is pointed out and blocks the save', () => {
+    const h = editing([])
+    expect(h.root.innerHTML).toContain('ob.provider.mainMissing')
+    h.click('toggle', 'askFirst') // any change, to bring up the save bar
+    expect(h.root.innerHTML).toContain('settings.blocked')
+    expect(h.root.innerHTML).toMatch(/data-action="settings-save"[^>]*disabled/)
+  })
+
+  test('a provider that is connected shows no key field until asked', () => {
+    const h = editing(['opencode-go:api_key', 'anthropic:api_key'])
+    expect(h.root.innerHTML).not.toContain('data-field="key"')
+    expect(rowOf(h, 'anthropic-api')).toContain('ob.provider.connected')
   })
 })
 
@@ -157,8 +271,7 @@ describe('reopening Aria', () => {
     const h = harness()
     h.ob.start(null, ['opencode-go:api_key'])
     h.click('choose', undefined, 'quick')
-    h.click('pick', 'provider', 'opencode-go')
-    h.click('next') // sign-in: the stored key is checked
+    h.click('pick', 'provider', 'opencode-go') // the stored key is checked, and the flow goes on
     h.lastRequest().resolve(keyOk)
     await flush()
     h.click('next') // assistant -> review
@@ -200,52 +313,50 @@ describe('a key that is already there', () => {
     h.ob.start(null, connected)
     h.click('choose', undefined, mode)
     h.click('pick', 'provider', 'opencode-go')
-    h.click('next')
-    if (mode === 'full') h.click('next') // quota
     return h
   }
 
   test('quick: the stored key is checked and the flow goes on to the assistant', async () => {
     const h = openFlow('quick')
-    expect(h.ob.snapshot()).toMatchObject({ step: 'auth', signedIn: false, canContinue: false })
+    expect(h.ob.snapshot()).toMatchObject({ step: 'provider', signedIn: false, canContinue: false, check: 'checking' })
     expect(h.lastRequest().message).toMatchObject({ type: 'checkKey', provider: 'opencode-go' })
     h.lastRequest().resolve(keyOk)
     await flush()
     expect(h.ob.snapshot()).toMatchObject({ step: 'assistant', signedIn: true, canContinue: true })
   })
 
-  test('full: the stored key is checked and the flow goes on to the router', async () => {
+  test('full: the stored key is checked and the flow goes on to the quota', async () => {
     const h = openFlow('full')
-    expect(h.ob.snapshot().step).toBe('auth')
     expect(h.lastRequest().message).toMatchObject({ type: 'checkKey', provider: 'opencode-go' })
     h.lastRequest().resolve(keyOk)
     await flush()
-    expect(h.ob.snapshot()).toMatchObject({ step: 'router', signedIn: true, canContinue: true })
+    expect(h.ob.snapshot()).toMatchObject({ step: 'quota', signedIn: true, canContinue: true })
   })
 
-  test('a stored key that no longer works keeps the step and asks for a new one', async () => {
+  test('a stored key that no longer works keeps the step and offers to connect it again', async () => {
     const h = openFlow('quick')
     h.lastRequest().resolve({ type: 'keyResult', ok: false, error: 'key-rejected' })
     await flush()
-    expect(h.ob.snapshot()).toMatchObject({ step: 'auth', signedIn: false, canContinue: false })
+    expect(h.ob.snapshot()).toMatchObject({ step: 'provider', signedIn: false, canContinue: false })
+    expect(h.root.innerHTML).toContain('ob.error.key-rejected')
+    expect(h.root.innerHTML).toMatch(/data-action="provider-connect" data-field="provider" data-value="opencode-go"/)
   })
 
   test('editing: the check does not move the flow by itself', async () => {
     const h = harness()
     h.ob.start(completed, connected)
-    h.click('edit', undefined, 'auth')
+    h.click('edit', undefined, 'provider')
     expect(h.lastRequest().message).toMatchObject({ type: 'checkKey', provider: 'opencode-go' })
     h.lastRequest().resolve(keyOk)
     await flush()
-    expect(h.ob.snapshot()).toMatchObject({ step: 'auth', signedIn: true, canContinue: true })
+    expect(h.ob.snapshot()).toMatchObject({ step: 'provider', signedIn: true, canContinue: true })
   })
 
-  test('a key pasted and checked goes on by itself', async () => {
+  test('a key pasted and checked makes it the main provider and goes on by itself', async () => {
     const h = harness()
     h.ob.start(null)
     h.click('choose', undefined, 'quick')
-    h.click('pick', 'provider', 'opencode-go')
-    h.click('next')
+    connect(h, 'opencode-go')
     expect(h.pending).toHaveLength(0) // nothing on disk: no check
     h.type('key', 'fresh-key')
     h.click('save-key')
@@ -261,13 +372,11 @@ describe('the same for Anthropic', () => {
     h.ob.start(null, connected)
     h.click('choose', undefined, 'quick')
     h.click('pick', 'provider', provider)
-    h.click('next')
     return h
   }
 
   test('anthropic-api: a stored key is checked and the flow goes on', async () => {
     const h = openWith('anthropic-api', ['anthropic:api_key'])
-    expect(h.ob.snapshot().step).toBe('auth')
     expect(h.lastRequest().message).toMatchObject({ type: 'checkKey', provider: 'anthropic-api' })
     h.lastRequest().resolve(keyOk)
     await flush()
@@ -279,14 +388,14 @@ describe('the same for Anthropic', () => {
     expect(h.lastRequest().message).toMatchObject({ type: 'checkKey', provider: 'anthropic-oauth' })
     h.lastRequest().resolve(keyOk)
     await flush()
-    expect(h.ob.snapshot()).toMatchObject({ step: 'assistant', signedIn: true, oauth: 'done' })
+    expect(h.ob.snapshot()).toMatchObject({ step: 'assistant', signedIn: true })
   })
 
   test('anthropic-oauth: a sign-in that no longer works asks for it again', async () => {
     const h = openWith('anthropic-oauth', ['anthropic:oauth'])
     h.lastRequest().resolve({ type: 'keyResult', ok: false, error: 'key-rejected' })
     await flush()
-    expect(h.ob.snapshot()).toMatchObject({ step: 'auth', signedIn: false, oauth: 'idle' })
+    expect(h.ob.snapshot()).toMatchObject({ step: 'provider', signedIn: false })
   })
 
   test('a check that cannot reach the provider trusts the stored credential and goes on', async () => {
@@ -300,13 +409,12 @@ describe('the same for Anthropic', () => {
     const h = harness()
     h.ob.start(null)
     h.click('choose', undefined, 'quick')
-    h.click('pick', 'provider', 'anthropic-oauth')
-    h.click('next')
+    connect(h, 'anthropic-oauth')
     expect(h.pending).toHaveLength(0) // nothing on disk: no check
     h.click('oauth-start')
     h.lastRequest().resolve(oauthOk)
     await flush()
-    expect(h.ob.snapshot()).toMatchObject({ step: 'assistant', signedIn: true, oauth: 'done' })
+    expect(h.ob.snapshot()).toMatchObject({ step: 'assistant', signedIn: true })
   })
 })
 
@@ -384,7 +492,7 @@ describe('the integrations step', () => {
     h.click('mcp-oauth-start', undefined, 'notion')
     const signIn = h.lastRequest()
     h.click('edit', undefined, 'provider')
-    h.click('pick', 'provider', 'anthropic-api')
+    connect(h, 'anthropic-api')
     signIn.resolve(oauthOk)
     await flush()
     expect(h.ob.snapshot().connected).toContain('mcp:notion')
@@ -503,27 +611,25 @@ describe('a reply that arrives after the user moved on', () => {
     h.ob.start(null, ['opencode-go:api_key'])
     h.click('choose', undefined, 'quick')
     h.click('pick', 'provider', 'opencode-go')
-    h.click('next')
     const check = h.lastRequest()
     h.click('back')
-    expect(h.ob.snapshot().step).toBe('provider')
+    expect(h.ob.snapshot().view).toBe('welcome')
     check.resolve(keyOk)
     await flush()
-    expect(h.ob.snapshot()).toMatchObject({ view: 'step', step: 'provider' })
+    expect(h.ob.snapshot().view).toBe('welcome')
   })
 
   test('a browser sign-in that finishes after the user went back does not pull them forward', async () => {
     const h = harness()
     h.ob.start(null)
     h.click('choose', undefined, 'quick')
-    h.click('pick', 'provider', 'anthropic-oauth')
-    h.click('next')
+    connect(h, 'anthropic-oauth')
     h.click('oauth-start')
     const signIn = h.lastRequest()
     h.click('back')
     signIn.resolve(oauthOk)
     await flush()
-    expect(h.ob.snapshot().step).toBe('provider')
+    expect(h.ob.snapshot().view).toBe('welcome')
   })
 
   test('while a stored Claude sign-in is being checked, Continue waits', () => {
@@ -531,8 +637,7 @@ describe('a reply that arrives after the user moved on', () => {
     h.ob.start(null, ['anthropic:oauth'])
     h.click('choose', undefined, 'quick')
     h.click('pick', 'provider', 'anthropic-oauth')
-    h.click('next')
-    expect(h.ob.snapshot()).toMatchObject({ step: 'auth', oauth: 'checking', canContinue: false })
+    expect(h.ob.snapshot()).toMatchObject({ step: 'provider', check: 'checking', canContinue: false })
   })
 })
 
@@ -563,7 +668,6 @@ describe('the settings screen', () => {
     const h = settingsHarness()
     h.click('settings-open', undefined, 'provider')
     expect(h.root.innerHTML).toContain('ob.provider.title')
-    expect(h.root.innerHTML).toContain('ob.auth.title')
     expect(h.root.innerHTML).toContain('ob.quota.title')
     const claude = { ...applyProvider(defaultSettings('en'), 'anthropic-api'), setup: { completed: true, mode: 'full' } }
     const other = settingsHarness(['anthropic:api_key'], claude)
@@ -632,7 +736,7 @@ describe('the settings screen', () => {
     expect(h.lastRequest().message).toMatchObject({ type: 'checkKey', provider: 'opencode-go' })
     h.lastRequest().resolve(keyOk)
     await flush()
-    expect(h.ob.snapshot()).toMatchObject({ view: 'settings', section: 'provider', key: 'saved' })
+    expect(h.ob.snapshot()).toMatchObject({ view: 'settings', section: 'provider', check: 'done', signedIn: true })
   })
 
   test('an outside change refreshes the screen, but never over the reader\'s own changes', () => {

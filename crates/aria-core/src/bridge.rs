@@ -50,6 +50,10 @@ pub enum PageMessage {
     /// Validate the key already stored for a provider (`auth.json`), without the page ever seeing it.
     #[serde(rename = "checkKey")]
     CheckKey { id: u64, provider: String },
+    /// Remove a provider's credential from `auth.json` (`provider` is a setup provider: `opencode-go`, `anthropic-api`,
+    /// `anthropic-oauth`). Replies `saved`; never the main provider's (`provider-in-use`).
+    #[serde(rename = "credentialDelete")]
+    CredentialDelete { id: u64, provider: String },
     /// Start the Anthropic OAuth sign-in.
     #[serde(rename = "startOauth")]
     StartOAuth { id: u64 },
@@ -404,6 +408,10 @@ mod tests {
             PageMessage::StartMcpOAuth { id: 5, service: "notion".into() }
         );
         assert_eq!(page(r#"{"type":"openUrl","url":"https://x"}"#), PageMessage::OpenUrl { url: "https://x".into() });
+        assert_eq!(
+            page(r#"{"type":"credentialDelete","id":6,"provider":"anthropic-api"}"#),
+            PageMessage::CredentialDelete { id: 6, provider: "anthropic-api".into() }
+        );
     }
 
     #[test]

@@ -120,6 +120,19 @@ export const actionButton = (action, text, state, o = {}) => `
     <span class="state ${o.tone ?? ''}" role="status">${esc(state)}</span>
   </div>`
 
+/** A provider on the providers step: its card, a line of state, the links that act on it (each carries
+ * `data-field="provider"` and the provider as its value) and, under them, `body` (its key field or sign-in button).
+ * `r`: { id, label, description, badges, main, mainText, state, tone, actions: [{ action, text }], body }. */
+export const providerRow = (r) => `
+  <div class="provider${r.main ? ' main' : ''}" data-provider="${esc(r.id)}">
+    <span class="opt-text"><span class="opt-label">${esc(r.label)}${(r.badges ?? []).map((b) => `<em class="badge">${esc(b)}</em>`).join('')}${r.main ? `<em class="badge main">${esc(r.mainText)}</em>` : ''}</span><span class="opt-desc">${esc(r.description)}</span></span>
+    <div class="action-row">
+      <span class="state ${r.tone ?? ''}" role="status">${esc(r.state)}</span>
+      ${r.actions.map((a) => `<button type="button" class="link" data-nav data-action="${esc(a.action)}" data-field="provider" data-value="${esc(r.id)}" ${key(a.action, 'provider', r.id)}>${esc(a.text)}</button>`).join('')}
+    </div>
+    ${r.body ?? ''}
+  </div>`
+
 /** The review list. `rows`: { id, label, value, editLabel }. */
 export const summary = (rows) => `
   <div class="summary">${rows.map((r) => `

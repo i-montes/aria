@@ -143,12 +143,12 @@ export function setLanguageChoice(settings, choice, otherText = '') {
 
 /** The steps of a flow after the welcome screen. Editing an existing setup uses the full flow. */
 export function stepIds(mode, providerId) {
-  if (mode === 'quick') return ['provider', 'auth', 'assistant', 'review']
+  if (mode === 'quick') return ['provider', 'assistant', 'review']
   const hasQuota = !!providerModule(providerId)?.quota
   return [
     'provider',
     ...(hasQuota ? ['quota'] : []),
-    'auth', 'router', 'assistant', 'models', 'effort', 'compaction', 'memory', 'integrations', 'sandbox', 'git', 'agents', 'review',
+    'router', 'assistant', 'models', 'effort', 'compaction', 'memory', 'integrations', 'sandbox', 'git', 'agents', 'review',
   ]
 }
 
@@ -170,11 +170,17 @@ const CREDENTIAL = { 'opencode-go': 'opencode-go:api_key', 'anthropic-api': 'ant
 export const credentialFor = (providerId) => CREDENTIAL[providerId]
 export const isSignedIn = (settings, connected) => connected.includes(credentialFor(settings.provider.id))
 
+/** The providers whose credential this one's replaces: the Anthropic key and the Claude sign-in share one entry of
+ * `auth.json` (`anthropic`), so connecting one disconnects the other. */
+export const rivals = (providerId) => {
+  const entry = (id) => CREDENTIAL[id]?.split(':')[0]
+  return PROVIDERS.filter((p) => p.id !== providerId && entry(p.id) === entry(providerId)).map((p) => p.id)
+}
+
 /** `ui` is what the page knows beyond the settings: `signedIn`, `keyChecking`, `typesafeSaved`, `servicesConnected`. */
 export function canContinue(step, settings, ui) {
-  if (step === 'provider') return settings.provider.id !== null
-  // A key that is being checked cannot be considered signed in yet.
-  if (step === 'auth') return ui.signedIn === true && ui.keyChecking !== true
+  // The main provider has to be connected; a credential that is being checked does not count yet.
+  if (step === 'provider') return settings.provider.id !== null && ui.signedIn === true && ui.keyChecking !== true
   // A service you turned on has to be connected; to skip one, turn it off.
   if (step === 'integrations') return settings.integrations.services.every((service) => ui.servicesConnected?.includes(service.id))
   return true

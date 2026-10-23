@@ -58,6 +58,7 @@ const sandbox = `<script>
       else if (m.type === 'scheduleDelete') { window.sim.schedules = window.sim.schedules.filter((x) => x.id !== m.schedule); r({ type: 'schedules', tasks: window.sim.schedules }) }
       else if (m.type === 'saveSettings') { settings = m.settings; r({ type: 'saved' }); setTimeout(platform, 30) }
       else if (m.type === 'checkKey') r({ type: 'keyResult', ok: true, error: null })
+      else if (m.type === 'credentialDelete') r({ type: 'saved' })
       else if (m.type === 'saveKey') r({ type: 'keyResult', ok: m.key !== 'bad', error: m.key === 'bad' ? 'key-rejected' : null })
       else if (m.type === 'startOauth') { r({ type: 'oauthUrl', url: 'https://claude.ai/oauth/authorize?x=1' }); setTimeout(() => r({ type: 'oauthResult', ok: true, error: null }), 300) }
       else if (m.type === 'installClaudeBridge') setTimeout(() => (window.sim.installError ? r({ type: 'error', code: window.sim.installError }) : r({ type: 'saved' })), 300)

@@ -102,6 +102,7 @@ pub fn is_blocking(message: &PageMessage) -> bool {
             | PageMessage::SecretSave { .. }
             | PageMessage::SecretsList { .. }
             | PageMessage::SecretDelete { .. }
+            | PageMessage::CredentialDelete { .. }
             | PageMessage::CheckKey { .. }
             | PageMessage::StartOAuth { .. }
             | PageMessage::StartMcpOAuth { .. }
@@ -167,6 +168,7 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
             }
             emit(DockMessage::Secrets { id, secrets: secrets_json(ctx) });
         }
+        PageMessage::CredentialDelete { id, provider } => emit(delete_credential(id, &provider, ctx)),
         PageMessage::StartOAuth { id } => {
             let _ = ctx.paths.ensure_root();
             oauth_flow(id, ctx, emit);
@@ -367,6 +369,38 @@ fn save_key(id: u64, provider: &str, key: &str, ctx: &Ctx) -> DockMessage {
     key_result(id, None)
 }
 
+/// Removes one provider's credential. Two providers can share an entry (the Anthropic key and the Claude sign-in are
+/// both `anthropic`): only a credential of this provider's own kind is removed, so the other one's stays.
+fn delete_credential(id: u64, provider: &str, ctx: &Ctx) -> DockMessage {
+    let Some(module) = providers::provider(provider) else {
+        return DockMessage::Error { id, code: "unknown-provider".into() };
+    };
+    // The settings point at the main provider: without its credential nothing could run.
+    if matches!(settings::load(&ctx.paths), Ok(Some(saved)) if saved.provider.id.as_deref() == Some(provider)) {
+        return DockMessage::Error { id, code: "provider-in-use".into() };
+    }
+    let store = AuthStore::for_paths(&ctx.paths);
+    for entry in module.auth_entries {
+        let ours = match store.get(entry) {
+            Ok(Some(Credential::ApiKey { .. })) => module.auth == providers::AuthKind::ApiKey,
+            Ok(Some(Credential::OAuth { .. })) => module.auth == providers::AuthKind::OAuth,
+            Ok(None) => false,
+            Err(_) => return DockMessage::Error { id, code: "auth-file-broken".into() },
+        };
+        if !ours {
+            continue;
+        }
+        match store.remove(entry) {
+            Ok(()) => {}
+            Err(aria_core::auth::AuthError::Vault(_)) => {
+                return DockMessage::Error { id, code: "keyring-failed".into() }
+            }
+            Err(_) => return DockMessage::Error { id, code: "auth-file-broken".into() },
+        }
+    }
+    DockMessage::Saved { id }
+}
+
 /// Checks the credential already in `auth.json` for a provider. The page never has the key: it asks, and
 /// the dock reads it and validates it. Used by the setup to go on when the credential it finds still works.
 fn check_stored_key(id: u64, provider: &str, ctx: &Ctx) -> DockMessage {
@@ -563,6 +597,68 @@ mod tests {
 
     fn auth(h: &Harness) -> AuthStore {
         AuthStore::for_paths(&h.ctx.paths)
+    }
+
+    // ---- removing a provider's credential --------------------------------------------------------------
+
+    #[test]
+    fn removing_a_provider_drops_every_entry_it_is_stored_under_and_nothing_else() {
+        let h = harness(KeyCheck::Valid);
+        let store = auth(&h);
+        store.set("opencode-go", &Credential::ApiKey { key: "go".into() }).unwrap();
+        store.set("opencode", &Credential::ApiKey { key: "go".into() }).unwrap();
+        store.set("anthropic", &Credential::ApiKey { key: "ant".into() }).unwrap();
+        assert_eq!(
+            run(&h, PageMessage::CredentialDelete { id: 1, provider: "opencode-go".into() }),
+            vec![DockMessage::Saved { id: 1 }]
+        );
+        assert_eq!(store.summary(), vec!["anthropic:api_key".to_string()]);
+    }
+
+    #[test]
+    fn removing_one_anthropic_provider_never_removes_the_other_one_s_credential() {
+        let h = harness(KeyCheck::Valid);
+        let store = auth(&h);
+        store.set("anthropic", &Credential::OAuth { access: "a".into(), refresh: "r".into(), expires: 1 }).unwrap();
+        assert_eq!(
+            run(&h, PageMessage::CredentialDelete { id: 2, provider: "anthropic-api".into() }),
+            vec![DockMessage::Saved { id: 2 }]
+        );
+        assert_eq!(store.summary(), vec!["anthropic:oauth".to_string()], "the sign-in is not the API key");
+        assert_eq!(
+            run(&h, PageMessage::CredentialDelete { id: 3, provider: "anthropic-oauth".into() }),
+            vec![DockMessage::Saved { id: 3 }]
+        );
+        assert!(store.summary().is_empty());
+    }
+
+    #[test]
+    fn the_main_provider_s_credential_is_not_removed() {
+        let h = harness(KeyCheck::Valid);
+        let mut settings = aria_core::settings::Settings::defaults("en");
+        aria_core::providers::apply_provider(&mut settings, "opencode-go");
+        aria_core::settings::save(&h.ctx.paths, &settings).unwrap();
+        auth(&h).set("opencode-go", &Credential::ApiKey { key: "go".into() }).unwrap();
+        assert_eq!(
+            run(&h, PageMessage::CredentialDelete { id: 4, provider: "opencode-go".into() }),
+            vec![DockMessage::Error { id: 4, code: "provider-in-use".into() }]
+        );
+        assert_eq!(auth(&h).summary(), vec!["opencode-go:api_key".to_string()]);
+        assert_eq!(
+            run(&h, PageMessage::CredentialDelete { id: 5, provider: "nope".into() }),
+            vec![DockMessage::Error { id: 5, code: "unknown-provider".into() }]
+        );
+    }
+
+    #[test]
+    fn removing_from_a_broken_auth_file_says_so() {
+        let h = harness(KeyCheck::Valid);
+        std::fs::create_dir_all(h.ctx.paths.auth().parent().unwrap()).unwrap();
+        std::fs::write(h.ctx.paths.auth(), "{ nope").unwrap();
+        assert_eq!(
+            run(&h, PageMessage::CredentialDelete { id: 6, provider: "anthropic-api".into() }),
+            vec![DockMessage::Error { id: 6, code: "auth-file-broken".into() }]
+        );
     }
 
     // ---- importing other apps' MCP servers -------------------------------------------------------------

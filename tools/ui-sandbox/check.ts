@@ -188,6 +188,15 @@ const script = `(async () => {
   check('the change notice that follows the save keeps the section', !!$('#flow [data-action="settings-home"]'), $('#flow').textContent.slice(0, 80))
   // each connected server (not the memory) has its access level: Ask until one is chosen; the choice is saved
   $('#flow [data-action="settings-home"]')?.click(); await wait(80)
+  // The providers: every one listed, the main one marked and kept; another one connects without touching it.
+  $('#flow [data-action="settings-open"][data-value="provider"]')?.click(); await wait(150)
+  const providerRow = (id) => $('#flow .provider[data-provider="' + id + '"]')
+  check('the providers section lists the three providers, OpenCode Go as the main one', document.querySelectorAll('#flow .provider').length === 3 && providerRow('opencode-go') === $('#flow .provider.main') && !providerRow('opencode-go')?.querySelector('[data-action="provider-remove"]'), $('#flow').textContent.slice(0, 200))
+  $('#flow [data-action="provider-connect"][data-value="anthropic-api"]')?.click(); await wait(80)
+  check('Connect opens the key field inside that provider row', !!providerRow('anthropic-api')?.querySelector('input[data-field="key"]'))
+  $('#flow [data-action="provider-connect"][data-value="anthropic-api"]')?.click(); await wait(80)
+  check('Cancel closes it again', !$('#flow input[data-field="key"]'))
+  $('#flow [data-action="settings-home"]')?.click(); await wait(80)
   $('#flow [data-action="settings-open"][data-value="integrations"]')?.click(); await wait(120)
   const accessSeg = (level) => $('#flow [data-action="pick"][data-field="access:notion"][data-value="' + level + '"]')
   check('the integrations list each configured server with Read only / Ask / Allow, Ask by default', accessSeg('read') && accessSeg('ask')?.classList.contains('selected') && accessSeg('allow') && !$('#flow [data-field="access:engram"]'), $('#flow').textContent.slice(0, 200))

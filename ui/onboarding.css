@@ -126,6 +126,11 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .chip-add:hover, .chip-add:focus-visible { border-color: var(--accent-border); outline: none; }
 
 .action-row .primary { white-space: nowrap; }
+.provider { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line-strong); }
+.provider.main { border-color: var(--accent-border); }
+.provider > .action-row { display: flex; flex-wrap: wrap; }
+.provider > .action-row .state { margin-right: auto; }
+.badge.main { background: #2a2440; color: var(--accent); }
 .action-row .state { line-height: 1.4; }
 
 /* The settings screen: an overview of cards (the welcome screen's), one page per section, and a bar to save. */

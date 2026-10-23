@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import {
   applyProvider, canContinue, defaultSettings, finish, isSignedIn, languageChoice, nextStep, previousStep,
-  setLanguageChoice, setRouter, skip, stepIds,
+  rivals, setLanguageChoice, setRouter, skip, stepIds,
 } from './steps.js'
 
 const golden = (name) => JSON.parse(readFileSync(new URL(`../../crates/aria-core/tests/golden/${name}.json`, import.meta.url), 'utf8'))
@@ -29,14 +29,14 @@ describe('the JS defaults follow the Rust ones (golden files written by aria-cor
 })
 
 describe('flows', () => {
-  test('quick steps', () => expect(stepIds('quick', 'opencode-go')).toEqual(['provider', 'auth', 'assistant', 'review']))
+  test('quick steps', () => expect(stepIds('quick', 'opencode-go')).toEqual(['provider', 'assistant', 'review']))
   test('full steps with a quota', () =>
     expect(stepIds('full', 'opencode-go')).toEqual([
-      'provider', 'quota', 'auth', 'router', 'assistant', 'models', 'effort', 'compaction', 'memory', 'integrations', 'sandbox', 'git', 'agents', 'review',
+      'provider', 'quota', 'router', 'assistant', 'models', 'effort', 'compaction', 'memory', 'integrations', 'sandbox', 'git', 'agents', 'review',
     ]))
   test('full steps without a quota', () => {
     expect(stepIds('full', 'anthropic-api')).not.toContain('quota')
-    expect(stepIds('full', 'anthropic-api')).toHaveLength(13)
+    expect(stepIds('full', 'anthropic-api')).toHaveLength(12)
   })
   test('back from the first step is the welcome screen', () => {
     expect(previousStep(stepIds('full', 'opencode-go'), 'provider')).toBe('welcome')
@@ -44,7 +44,7 @@ describe('flows', () => {
   })
   test('next after the last step finishes', () => {
     const ids = stepIds('quick', 'opencode-go')
-    expect(nextStep(ids, 'provider')).toBe('auth')
+    expect(nextStep(ids, 'provider')).toBe('assistant')
     expect(nextStep(ids, 'review')).toBeNull()
   })
 })
@@ -115,14 +115,11 @@ describe('language', () => {
 
 describe('when Continue is allowed', () => {
   const opencode = applyProvider(defaultSettings('en'), 'opencode-go')
-  test('the provider step needs a provider', () => {
-    expect(canContinue('provider', defaultSettings('en'), {})).toBe(false)
-    expect(canContinue('provider', opencode, {})).toBe(true)
-  })
-  test('sign-in needs a saved key or finished OAuth', () => {
-    expect(canContinue('auth', opencode, { signedIn: false })).toBe(false)
-    expect(canContinue('auth', opencode, { signedIn: true })).toBe(true)
-    expect(canContinue('auth', opencode, { signedIn: true, keyChecking: true })).toBe(false)
+  test('the providers step needs a main provider that is connected and not being checked', () => {
+    expect(canContinue('provider', defaultSettings('en'), { signedIn: true })).toBe(false)
+    expect(canContinue('provider', opencode, { signedIn: false })).toBe(false)
+    expect(canContinue('provider', opencode, { signedIn: true })).toBe(true)
+    expect(canContinue('provider', opencode, { signedIn: true, keyChecking: true })).toBe(false)
   })
   test('the router never blocks, and without Jev in the provider it is saved off', () => {
     const api = setRouter(applyProvider(defaultSettings('en'), 'anthropic-api'), true)
@@ -148,6 +145,11 @@ describe('what is already set up on disk', () => {
     expect(isSignedIn(settingsFor('anthropic-api'), ['anthropic:oauth'])).toBe(false)
     expect(isSignedIn(settingsFor('anthropic-oauth'), ['anthropic:oauth'])).toBe(true)
     expect(isSignedIn(settingsFor('anthropic-oauth'), ['anthropic:api_key'])).toBe(false)
+  })
+  test('the Anthropic key and the Claude sign-in replace each other; OpenCode Go replaces nothing', () => {
+    expect(rivals('anthropic-api')).toEqual(['anthropic-oauth'])
+    expect(rivals('anthropic-oauth')).toEqual(['anthropic-api'])
+    expect(rivals('opencode-go')).toEqual([])
   })
   test('no provider chosen is never signed in', () => {
     expect(isSignedIn(defaultSettings('en'), ['opencode-go:api_key'])).toBe(false)

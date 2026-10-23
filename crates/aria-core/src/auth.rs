@@ -115,6 +115,30 @@ impl AuthStore {
         write_json_atomic(&self.path, &Value::Object(providers), 0o600)?;
         Ok(())
     }
+
+    /// Removes one provider's entry, and its key from the keyring when the dock holds one; every other provider stays
+    /// as it was. A provider that is not there is not an error. A file that does not parse is left untouched.
+    pub fn remove(&self, provider: &str) -> Result<(), AuthError> {
+        let mut providers = match read_json(&self.path)? {
+            None => return Ok(()),
+            Some(Value::Object(map)) => map,
+            Some(_) => {
+                return Err(JsonFileError::Invalid {
+                    path: self.path.clone(),
+                    message: "expected a JSON object".into(),
+                }
+                .into());
+            }
+        };
+        if providers.remove(provider).is_none() {
+            return Ok(());
+        }
+        if let Some(vault) = &self.vault {
+            vault.keyring.delete(&format!("key:{provider}")).map_err(crate::vault::VaultError::from)?;
+        }
+        write_json_atomic(&self.path, &Value::Object(providers), 0o600)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -208,6 +232,42 @@ mod tests {
         assert!(summary.iter().all(|s| !s.contains('k') || s.contains("api_key") || s.contains("opencode")));
         std::fs::write(store.path(), "{ nope").unwrap();
         assert!(store.summary().is_empty());
+    }
+
+    #[test]
+    fn remove_drops_one_provider_and_keeps_the_others() {
+        let (_dir, store) = store();
+        std::fs::write(store.path(), r#"{"opencode":{"type":"api_key","key":"z"},"anthropic":{"type":"oauth","access":"a","refresh":"r","expires":1}}"#)
+            .unwrap();
+        store.remove("anthropic").unwrap();
+        let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(store.path()).unwrap()).unwrap();
+        assert_eq!(value, json!({"opencode": {"type": "api_key", "key": "z"}}));
+        assert_eq!(std::fs::metadata(store.path()).unwrap().permissions().mode() & 0o777, 0o600);
+        // Nothing there (no entry, or no file) is not an error.
+        store.remove("anthropic").unwrap();
+        std::fs::remove_file(store.path()).unwrap();
+        store.remove("opencode-go").unwrap();
+        assert!(!store.path().exists());
+    }
+
+    #[test]
+    fn remove_takes_the_key_out_of_the_keyring_too() {
+        use crate::keyring::Backend;
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, keyring) = crate::testing::vault_paths(dir.path());
+        let store = AuthStore::for_paths(&paths);
+        store.set("opencode-go", &Credential::ApiKey { key: "k1".into() }).unwrap();
+        store.remove("opencode-go").unwrap();
+        assert_eq!(keyring.get("key:opencode-go").unwrap(), None);
+        assert!(store.summary().is_empty());
+    }
+
+    #[test]
+    fn remove_leaves_a_broken_file_untouched() {
+        let (_dir, store) = store();
+        std::fs::write(store.path(), "{ nope").unwrap();
+        assert!(store.remove("anthropic").is_err());
+        assert_eq!(std::fs::read_to_string(store.path()).unwrap(), "{ nope");
     }
 
     #[test]
