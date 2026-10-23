@@ -148,7 +148,7 @@ end). This is one design with four milestones; each milestone gets its own plan.
   `aarch64` Ubuntu 24.04 with glibc 2.39, no Rust toolchain, so nothing is compiled there). `aria hub init <user@host>`
   prints its plan and, on a yes, copies that binary, the pinned Pi, Engram and the extensions as `install.sh` installs
   them today, and a Node of the version Pi needs (the system's may be too old: the owner's VPS has Node 18) into
-  `~/.aria/node/`, checked against nodejs.org's `SHASUMS256.txt`, never replacing the system's. When releases exist the
+  `~/.aria/node/`, checked against a SHA-256 pinned in the repo's `node-version`, never replacing the system's. When releases exist the
   same step downloads instead.
 - **The hub's user.** `hub init` installs as the user it logs in as and creates no accounts (a dedicated unprivileged
   user is the recommendation, and it works by passing that user). Installing a system package (`bubblewrap`) needs
