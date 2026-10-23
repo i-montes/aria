@@ -9,7 +9,7 @@ use crate::shortcut::{InUse, Platform, Shortcut};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum PageMessage {
     /// The page has loaded.
@@ -190,7 +190,7 @@ pub enum PageMessage {
 }
 
 /// A file attached to a chat message: its name as the person had it, its media type and its bytes in base64.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Attachment {
     pub name: String,
     #[serde(default)]
@@ -198,7 +198,7 @@ pub struct Attachment {
     pub data: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DockMessage {
     #[serde(rename = "open")]

@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::time::Duration;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct Window {
     /// `5h`, `week`, `month`, or the model's name for a per-model weekly window (`fable`, `opus`).
     pub id: String,
