@@ -185,6 +185,8 @@ pub struct ChatCtx {
     pub jobs: Jobs,
     /// The scheduled tasks every session's jobs socket can change.
     pub schedules: crate::schedule_store::ScheduleStore,
+    /// The terminals attached to each session (crate::clients): a focused one sees it.
+    pub watchers: crate::clients::Watchers,
 }
 
 /// A scheduled task's tab: its task, and the grants its Pi runs with (`ARIA_GRANTS`, docs/superpowers/specs/
@@ -1530,9 +1532,11 @@ impl Chat {
 
     /// The dock's visibility changed: when it is now hidden, every open dialog that has no notification
     /// yet gets one (the owner may have pressed Escape with a question still open).
-    /// Can the owner see this chat? The dock is open and showing the chat, not the settings.
+    /// Can the owner see this chat? The dock is open and showing the chat (not the settings), or a terminal attached to
+    /// this session has the focus.
     fn seen(&self) -> bool {
-        self.ctx.dock_visible.load(Ordering::SeqCst) && self.ctx.chat_shown.load(Ordering::SeqCst)
+        (self.ctx.dock_visible.load(Ordering::SeqCst) && self.ctx.chat_shown.load(Ordering::SeqCst))
+            || self.ctx.watchers.sees(&self.session)
     }
 
     pub fn dock_visibility_changed(&self) {
@@ -2558,6 +2562,10 @@ mod tests {
 
     /// An Aria home with a "pinned Pi" that is the fake script and a Node that says it is new enough.
     fn harness_with(install_pi: bool) -> Harness {
+        harness_seen_by(install_pi, crate::clients::Watchers::default())
+    }
+
+    fn harness_seen_by(install_pi: bool, watchers: crate::clients::Watchers) -> Harness {
         let turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let paths = AriaPaths::new(dir.path().join(".aria"));
@@ -2607,6 +2615,7 @@ mod tests {
             quota_fetcher,
             jobs: Jobs::new(dir.path().join("jobs.json"), Arc::new(|| {})),
             schedules: crate::schedule_store::ScheduleStore::open(paths.clone()),
+            watchers,
         };
         Harness {
             _turn: turn,
@@ -2626,6 +2635,11 @@ mod tests {
 
     fn harness() -> Harness {
         harness_with(true)
+    }
+
+    /// A harness whose session `watched` is shown by a focused terminal.
+    fn harness_watched(watched: &str) -> Harness {
+        harness_seen_by(true, crate::clients::Watchers::watching(watched))
     }
 
     fn wait_for(h: &Harness, what: &str, found: impl Fn(&DockMessage) -> bool) -> DockMessage {
@@ -2923,6 +2937,18 @@ mod tests {
     }
 
     #[test]
+    fn a_terminal_looking_at_the_session_counts_as_seen() {
+        let h = harness_watched("s1");
+        send(&h, "x");
+        wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        h.visible.store(false, Ordering::SeqCst);
+        h.chat.test_send_raw("ask");
+        let dialog = wait_for(&h, "the dialog", |m| matches!(m, DockMessage::ChatDialog { .. }));
+        assert!(matches!(dialog, DockMessage::ChatDialog { hidden: false, .. }), "a terminal shows it");
+        assert!(h.notifier.log().is_empty(), "no notification while a terminal shows the session");
+    }
+
+    #[test]
     fn dialog_while_hidden_notifies_once_and_answer_dismisses() {
         let h = harness();
         send(&h, "x");
@@ -3096,6 +3122,7 @@ mod tests {
             quota_fetcher: Arc::new(|_| None),
             jobs: h.chat.ctx.jobs.clone(),
             schedules: h.chat.ctx.schedules.clone(),
+            watchers: Default::default(),
         };
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);
@@ -3377,6 +3404,7 @@ mod tests {
             quota_fetcher: Arc::new(|_| None),
             jobs: h.chat.ctx.jobs.clone(),
             schedules: h.chat.ctx.schedules.clone(),
+            watchers: Default::default(),
         };
         let sessions = Sessions::new(ctx, emit);
         SessionsHarness { h, sessions, messages }
@@ -4877,6 +4905,7 @@ mod tests {
             quota_fetcher: Arc::new(|_| None),
             jobs: h.chat.ctx.jobs.clone(),
             schedules: h.chat.ctx.schedules.clone(),
+            watchers: Default::default(),
         };
         let (sender, messages) = mpsc::channel();
         let sender = Mutex::new(sender);

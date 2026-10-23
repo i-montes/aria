@@ -8,6 +8,7 @@
 
 mod attachments;
 mod chat;
+mod clients;
 mod control;
 mod dictation;
 mod dock;
@@ -162,6 +163,20 @@ fn run_dock() {
     let hidden_dir = std::env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty()).map(std::path::PathBuf::from);
     #[cfg(target_os = "macos")]
     let hidden_dir = Some(run_dir.clone());
+    // Terminal clients (`aria` in a terminal): they speak the page's messages; what they may send goes to the chat's
+    // worker or, for a secret, to the handlers, and what the dock says reaches them through `hub.route`.
+    let hub = {
+        let (ctx, sender) = (ctx.clone(), reply_sender.clone());
+        let handle: Arc<dyn Fn(PageMessage) + Send + Sync> = Arc::new(move |message| {
+            let (ctx, sender) = (ctx.clone(), sender.clone());
+            std::thread::spawn(move || {
+                handlers::handle(message, &ctx, &move |reply| {
+                    let _ = sender.send(reply);
+                })
+            });
+        });
+        clients::Hub::new(chat_sender.clone(), handle)
+    };
     let chat = {
         let sender = reply_sender.clone();
         Sessions::new(
@@ -176,6 +191,7 @@ fn run_dock() {
                 quota_fetcher: Arc::new(aria_core::quota::real_fetcher),
                 jobs: jobs.clone(),
                 schedules: schedules.clone(),
+                watchers: hub.watchers(),
             },
             Arc::new(move |message| {
                 let _ = sender.send(message);
@@ -183,6 +199,10 @@ fn run_dock() {
         )
     };
     chat.forget_gone_sessions();
+    match clients::bind(&clients::socket_path()) {
+        Ok(listener) => hub.serve(listener),
+        Err(error) => note(&format!("terminals cannot connect: {error}")),
+    }
     let chat_for_visibility = chat.clone();
     let chat_for_settings = chat.clone();
     std::thread::spawn(move || {
@@ -412,7 +432,9 @@ fn run_dock() {
             std::process::exit(75); // not a clean exit: systemd and launchd start the dock again
         }
         while let Ok(reply) = reply_receiver.try_recv() {
-            dock.send(&reply);
+            if hub.route(&reply) {
+                dock.send(&reply);
+            }
         }
         #[cfg(target_os = "linux")]
         while let Ok(state) = registration_receiver.try_recv() {
