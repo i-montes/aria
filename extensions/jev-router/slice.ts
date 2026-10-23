@@ -127,7 +127,8 @@ export function buildBrief(b: BriefBase & { name: string; skill: string; answer?
 export function reviewBrief(b: BriefBase & { skill: string }): string {
   return [
     `<!-- slice:review plan=${b.plan} phase=${b.phase} base=${b.base} -->`,
-    `Review phase ${b.phase} of the plan ${b.plan}: the commits \`${b.base}..HEAD\` of this repository.`,
+    // No base when git could not say HEAD (a repository with no commit yet): a `..HEAD` range would be invalid.
+    `Review phase ${b.phase} of the plan ${b.plan}: ${b.base ? `the commits \`${b.base}..HEAD\`` : 'the commits of this phase'} of this repository.`,
     `Read and follow the review skill (${b.skill}). Change nothing.`,
     'End with your findings, most important first; the first line says how many must be fixed (`MUST FIX: <n>`).',
   ].join('\n')
@@ -137,7 +138,7 @@ export type Marker = BriefBase & { kind: 'build' | 'review' }
 
 /** The marker a brief starts with, so a job that ends can be told apart from plain background work. */
 export function parseMarker(task: string): Marker | null {
-  const m = /^<!-- slice:(build|review) plan=(.+?) phase=(\d+) base=(\S+) -->/.exec(task)
+  const m = /^<!-- slice:(build|review) plan=(.+?) phase=(\d+) base=(\S*) -->/.exec(task)
   return m ? { kind: m[1] as Marker['kind'], plan: m[2], phase: Number(m[3]), base: m[4] } : null
 }
 
@@ -153,7 +154,8 @@ export function outcome(result: string): Outcome {
 
 // The `details.job` the background extension sends when a job ends (extensions/background/text.ts), as far as this needs.
 type EndedJob = { task?: string | null; state?: string; result?: string | null }
-type Paths = { skill: string; review: string; head: () => string }
+// `root` is the repo of a plan (modes.ts planRoot): the folder the jobs work in. Passed in so this file runs no process.
+type Paths = { skill: string; review: string; head: () => string; root: (plan: string) => string }
 
 /** The hidden hint the router gives after a slice job ends, or null when the job is not a slice job. */
 export function nextStepHint(job: EndedJob, planText: string, paths: Paths): string | null {
@@ -164,23 +166,24 @@ export function nextStepHint(job: EndedJob, planText: string, paths: Paths): str
   const label = `Phase ${marker.phase}`
   const state = job.state ?? 'unknown'
   const result = String(job.result ?? '')
+  const folder = `folder "${paths.root(marker.plan)}"`
   const brief = (number: number, name: string, base: string, answer?: string) =>
     buildBrief({ plan: marker.plan, phase: number, name, base, skill: paths.skill, answer })
 
   if (marker.kind === 'review') {
     if (state !== 'done') return `[slice] The review of phase ${marker.phase} did not finish (${state}). Tell the owner and go on to the manual checks.`
-    const review = `[slice] The review of phase ${marker.phase} is in the job's result. Tell the owner the must-fix findings in a few lines; if there are any, ask with ask_user: fix them now (a build job with commits true and a brief listing them) or move on. Go through the phase's manual checks with the owner. If a decision applies to the whole project, propose one line for CLAUDE.md or AGENTS.md.`
+    const review = `[slice] The review of phase ${marker.phase} is in the job's result. Tell the owner the must-fix findings in a few lines; if there are any, ask with ask_user: fix them now (a build job with commits true, ${folder} and a brief listing them) or move on. Go through the phase's manual checks with the owner. If a decision applies to the whole project, propose one line for CLAUDE.md or AGENTS.md.`
     const next = nextOpenPhase(plan, marker.phase)
     if (!next) return `${review} The plan is done. Offer the next story of the backlog (the owner can plan it with /plan).`
-    return `${review} Then launch phase ${next.number}: background_agent with commits true, isolation "folder", title "${next.name}", and this task word for word:\n\n${brief(next.number, next.name, paths.head())}`
+    return `${review} Then launch phase ${next.number}: background_agent with commits true, isolation "folder", ${folder}, title "${next.name}", and this task word for word:\n\n${brief(next.number, next.name, paths.head())}`
   }
 
   const said = state === 'done' ? outcome(result) : null
   if (said?.kind === 'question') {
-    return `[slice] ${label} stopped with a question for the owner: ask it with ask_user (its options, your recommended one first). Then launch the phase again: background_agent with commits true, isolation "folder", and this task word for word, putting the owner's answer after "The owner answered your question:":\n\n${brief(marker.phase, phase?.name ?? '', marker.base, '<answer>')}`
+    return `[slice] ${label} stopped with a question for the owner: ask it with ask_user (its options, your recommended one first). Then launch the phase again: background_agent with commits true, isolation "folder", ${folder}, and this task word for word, putting the owner's answer after "The owner answered your question:":\n\n${brief(marker.phase, phase?.name ?? '', marker.base, '<answer>')}`
   }
   if (said?.kind === 'done' && phase && !isOpen(phase)) {
-    return `[slice] ${label} ("${phase.name}") is built. Launch its review now: background_agent with writes false, title "Review ${marker.phase}" in the owner's language, and this task, word for word:\n\n${reviewBrief({ plan: marker.plan, phase: marker.phase, base: marker.base, skill: paths.review })}`
+    return `[slice] ${label} ("${phase.name}") is built. Launch its review now: background_agent with writes false, ${folder}, title "Review ${marker.phase}" in the owner's language, and this task, word for word:\n\n${reviewBrief({ plan: marker.plan, phase: marker.phase, base: marker.base, skill: paths.review })}`
   }
   const why =
     said?.kind === 'blocked' ? said.text

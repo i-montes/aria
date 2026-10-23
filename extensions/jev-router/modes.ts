@@ -58,6 +58,9 @@ export function gitRoot(path: string): string | null {
   return null
 }
 
+/** The repo a plan belongs to (the build and its review work there, whatever folder Pi runs in), or the plan's folder. */
+export const planRoot = (plan: string): string => gitRoot(dirname(plan)) ?? dirname(plan)
+
 const within = (dir: string, p: string) => p === dir || p.startsWith(`${dir}/`)
 
 /**
@@ -90,9 +93,9 @@ export function planPrompt(idea: string): string {
   ].join('\n')
 }
 
-export function executePrompt(brief: string, name: string): string {
+export function executePrompt(brief: string, name: string, root: string): string {
   return [
-    `Build the plan's next phase ("${name}") in the background: call \`background_agent\` with commits true, isolation "folder", title "${name}" (in my language, at most 6 words) and this task, word for word:`,
+    `Build the plan's next phase ("${name}") in the background: call \`background_agent\` with commits true, isolation "folder", folder "${root}", title "${name}" (in my language, at most 6 words) and this task, word for word:`,
     '',
     brief,
     '',

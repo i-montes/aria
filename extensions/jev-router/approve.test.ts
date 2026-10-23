@@ -3,7 +3,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { askApproval, pendingBuild } from './approve.ts'
+import { askApproval, ownPrompt, pendingBuild } from './approve.ts'
 import { parsePlan, planCard } from './slice.ts'
 
 const PLAN = `# Checkout widget
@@ -112,4 +112,14 @@ describe('pendingBuild', () => {
     const builds = [plan, build.take()].filter(Boolean) // /execute's own startBuild, then agent_settled
     expect(builds).toEqual([plan])
   })
+})
+
+describe('ownPrompt', () => {
+  test("the router's own build message is skipped once, and only once", () => {
+    const own = ownPrompt()
+    own.mark()
+    expect(own.consume()).toBe(true)
+    expect(own.consume()).toBe(false)
+  })
+  test('a message typed by the owner is never skipped', () => expect(ownPrompt().consume()).toBe(false))
 })

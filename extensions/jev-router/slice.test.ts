@@ -215,6 +215,17 @@ describe('briefs and markers', () => {
     const review = reviewBrief({ plan: widgetPlan, phase: 2, base: 'def456', skill: '/p/SKILL.md' })
     expect(parseMarker(review)).toEqual({ kind: 'review', plan: widgetPlan, phase: 2, base: 'def456' })
   })
+  test('a repository with no commit yet leaves the base empty: the marker still reads', () => {
+    const fresh = buildBrief({ plan: widgetPlan, phase: 1, name: 'Sign up', base: '', skill: '/s/SKILL.md' })
+    expect(parseMarker(fresh)).toEqual({ kind: 'build', plan: widgetPlan, phase: 1, base: '' })
+    const review = reviewBrief({ plan: widgetPlan, phase: 1, base: '', skill: '/p/SKILL.md' })
+    expect(parseMarker(review)).toEqual({ kind: 'review', plan: widgetPlan, phase: 1, base: '' })
+  })
+  test('the review brief with no base names no range', () => {
+    const review = reviewBrief({ plan: widgetPlan, phase: 1, base: '', skill: '/p/SKILL.md' })
+    expect(review).not.toContain('..HEAD')
+    expect(review).toContain('the commits of this phase')
+  })
   test('no marker, or not on the first line: null', () => {
     expect(parseMarker('fix the tests')).toBeNull()
     expect(parseMarker(`Please do this:\n${build}`)).toBeNull()
@@ -234,7 +245,8 @@ describe('outcome', () => {
 })
 
 describe('nextStepHint', () => {
-  const paths = { skill: '/s/SKILL.md', review: '/p/ponytail-review/SKILL.md', head: () => 'fff999' }
+  const root = '/home/ana/Projects/acme/checkout-widget'
+  const paths = { skill: '/s/SKILL.md', review: '/p/ponytail-review/SKILL.md', head: () => 'fff999', root: () => root }
   const buildTask = buildBrief({ plan: widgetPlan, phase: 1, name: 'Sign up', base: 'abc123', skill: '/s/SKILL.md' })
   const reviewTask = reviewBrief({ plan: widgetPlan, phase: 1, base: 'abc123', skill: paths.review })
   const phase1Done = PLAN.replace('- [~]', '- [x]').replace('- [ ] the form', '- [x] the form')
@@ -244,6 +256,7 @@ describe('nextStepHint', () => {
     const hint = nextStepHint(job(buildTask, 'done', 'All green.\nSLICE DONE'), phase1Done, paths)!
     expect(hint.startsWith('[slice] Phase 1 ("Sign up") is built.')).toBe(true)
     expect(hint).toContain('writes false')
+    expect(hint).toContain(`folder "${root}"`)
     expect(hint).toContain(reviewBrief({ plan: widgetPlan, phase: 1, base: 'abc123', skill: paths.review }))
   })
   test('a question goes to the owner, then the phase launches again from the same base', () => {
@@ -251,6 +264,7 @@ describe('nextStepHint', () => {
     expect(hint.startsWith('[slice] Phase 1 stopped with a question')).toBe(true)
     expect(hint).toContain('ask_user')
     expect(hint).toContain('commits true')
+    expect(hint).toContain(`folder "${root}"`)
     expect(hint).toContain(buildBrief({ plan: widgetPlan, phase: 1, name: 'Sign up', base: 'abc123', skill: '/s/SKILL.md', answer: '<answer>' }))
   })
   test('a failed build did not finish', () => {
@@ -270,7 +284,9 @@ describe('nextStepHint', () => {
   test('a review with a next phase launches it from the current head', () => {
     const hint = nextStepHint(job(reviewTask, 'done', 'MUST FIX: 0'), phase1Done, paths)!
     expect(hint.startsWith('[slice] The review of phase 1 is in the job\'s result.')).toBe(true)
+    expect(hint).toContain('commits true, folder "' + root + '" and a brief listing them')
     expect(hint).toContain('title "Create a task"')
+    expect(hint).toContain(`folder "${root}"`)
     expect(hint).toContain(buildBrief({ plan: widgetPlan, phase: 2, name: 'Create a task', base: 'fff999', skill: '/s/SKILL.md' }))
   })
   test('a review on the last phase offers the next story', () => {

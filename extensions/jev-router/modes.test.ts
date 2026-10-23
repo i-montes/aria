@@ -15,7 +15,7 @@ const gateway = join(projects, 'acme', 'checkout-api')
 for (const repo of [widget, gateway]) mkdirSync(join(repo, '.git'), { recursive: true })
 const savedProjects = process.env.ARIA_PROJECTS_DIR
 process.env.ARIA_PROJECTS_DIR = projects
-const { executePrompt, modeHint, planMayWrite, routedMode, planPrompt, PLAN_MODEL, SLICE_SKILL, planModel, planQuotaThreshold, planThinking, shouldClassify } = await import('./modes.ts')
+const { executePrompt, planRoot, modeHint, planMayWrite, routedMode, planPrompt, PLAN_MODEL, SLICE_SKILL, planModel, planQuotaThreshold, planThinking, shouldClassify } = await import('./modes.ts')
 if (savedProjects === undefined) delete process.env.ARIA_PROJECTS_DIR
 else process.env.ARIA_PROJECTS_DIR = savedProjects
 
@@ -65,12 +65,18 @@ describe("the /plan flow is slice's phase A", () => {
 
 describe('the plan phase prompt', () => {
   test('launches the phase in a folder with commits, word for word', () => {
-    const prompt = executePrompt('BRIEF TEXT', 'Sign up')
+    const prompt = executePrompt('BRIEF TEXT', 'Sign up', '/home/ana/Projects/acme/checkout-widget')
     expect(prompt).toContain('background_agent')
     expect(prompt).toContain('commits true')
     expect(prompt).toContain('isolation "folder"')
+    expect(prompt).toContain('folder "/home/ana/Projects/acme/checkout-widget"')
     expect(prompt).toContain('BRIEF TEXT')
   })
+})
+
+describe('planRoot', () => {
+  test('the repo of a plan, which need not be the one Pi runs in', () => expect(planRoot(`${gateway}/docs/plans/x.md`)).toBe(gateway))
+  test('a plan outside any repo: its own folder', () => expect(planRoot('/tmp/aria-no-repo/x.md')).toBe('/tmp/aria-no-repo'))
 })
 
 describe('the plan mode hint', () => {

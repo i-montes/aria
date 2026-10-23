@@ -48,3 +48,17 @@ export function pendingBuild() {
     },
   }
 }
+
+/** The build-start message the router sends itself: the next prompt it sees is not the owner's, so Jev does not classify it. */
+export function ownPrompt() {
+  let own = false
+  return {
+    mark: () => void (own = true),
+    /** True once after `mark`: a second call, or a message nobody marked, is the owner's. */
+    consume: () => {
+      const was = own
+      own = false
+      return was
+    },
+  }
+}

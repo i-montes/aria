@@ -26,7 +26,7 @@
 import { execFileSync } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
   bashWriteRequest,
@@ -47,13 +47,13 @@ import {
   parsePlanning,
   planContinuationRequest,
   READ_ONLY_NOTE, jevStatus } from './route.ts'
-import { askApproval, pendingBuild } from './approve.ts'
+import { askApproval, ownPrompt, pendingBuild } from './approve.ts'
 import {
   executePrompt,
-  gitRoot,
   LARGE_CONTEXT_TOKENS,
   type Mode,
   modeHint,
+  planRoot,
   PLAN_BLOCK_REASON,
   PLAN_DIRS_TEXT,
   planModel,
@@ -108,8 +108,7 @@ function loadExperts(): Expert[] {
 /** The commit the repository of `path` is at now, or '' when git cannot say. */
 function headOf(path: string): string {
   try {
-    const dir = dirname(path)
-    return execFileSync('git', ['-C', gitRoot(dir) ?? dir, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    return execFileSync('git', ['-C', planRoot(path), 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim()
   } catch {
     return ''
   }
@@ -128,6 +127,8 @@ export default function (pi: ExtensionAPI) {
   let planModelId: string = planModel().id
   // The plan the owner approved with `plan_ready`: plan mode ends and its build starts when that run settles.
   const build = pendingBuild()
+  // The build-start message goes to the model as it is: Jev does not classify it (a `plan=offer` hint could make it offer a plan again).
+  const own = ownPrompt()
   // The plan's marks of the phase that builds, published as the status `aria-tasks` (the dock's task dock, the terminal's strip).
   const taskFeed = createTaskFeed()
   const showTasks = (ctx: any, tasks: any[] | null) => {
@@ -258,12 +259,13 @@ export default function (pi: ExtensionAPI) {
         taskFeed.stop()
         showTasks(ctx, null)
       }
-      const hint = nextStepHint(job, plan, { skill: SLICE_SKILL, review: REVIEW_SKILL, head: () => headOf(marker.plan) })
+      const hint = nextStepHint(job, plan, { skill: SLICE_SKILL, review: REVIEW_SKILL, head: () => headOf(marker.plan), root: planRoot })
       return hint ? { message: { customType: 'jev-router', content: hint, display: false, details: { slice: marker } } } : undefined
     }
     if (!routed(ctx) || event.messageType !== 'user') return
     const text = String(event.prompt ?? '')
     current = null
+    if (own.consume()) return
     if (mode !== 'normal') {
       return { message: { customType: 'jev-router', content: modeHint(), display: false, details: { mode } } }
     }
@@ -431,6 +433,7 @@ export default function (pi: ExtensionAPI) {
   })
 
   // A slice phase starts building in the background: its plan file's marks become the task list while the job runs.
+  // The marker is the gate here, not `routed(ctx)`.
   pi.on('tool_result', (event: any, ctx: any) => {
     if (event.toolName !== 'background_agent' || event.isError) return
     const job = event.details?.job
@@ -587,7 +590,8 @@ export default function (pi: ExtensionAPI) {
       return
     }
     const brief = buildBrief({ plan, phase: phase.number, name: phase.name, base: headOf(plan), skill: SLICE_SKILL })
-    pi.sendUserMessage(executePrompt(brief, phase.name))
+    own.mark()
+    pi.sendUserMessage(executePrompt(brief, phase.name, planRoot(plan)))
   }
 
   if (planExecute) pi.registerCommand('execute', {
