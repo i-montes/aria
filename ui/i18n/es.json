@@ -337,6 +337,7 @@
   "chat.ok": "Aceptar",
   "chat.tools": "Usó {n} herramientas",
   "chat.retry": "El proveedor falló, reintentando ({attempt}/{max})…",
+  "chat.folderMissing": "La carpeta en la que se abrió esta sesión ya no está ({path}): por ahora trabaja en la carpeta de proyectos.",
   "chat.watchdog.stopped.one": "Aria detuvo este turno: no llegó nada en 1 minuto.",
   "chat.watchdog.stopped.many": "Aria detuvo este turno: no llegó nada en {minutes} minutos.",
   "chat.compacting": "Compactando la conversación…",

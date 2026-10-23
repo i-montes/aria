@@ -20,6 +20,10 @@ pub struct SessionEntry {
     /// The scheduled task this tab runs (`crate::schedules`); such tabs do not count against `MAX_SESSIONS`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
+    /// The folder the tab's Pi works in (absolute): a session opened from a terminal works where it was opened. None is
+    /// the settings' projects folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workdir: Option<String>,
 }
 
 /// The tab's segments, oldest first: `segments`, or the tab's own id when it has none.
@@ -143,9 +147,48 @@ pub fn add_scheduled(paths: &AriaPaths, id: &str, title: &str, schedule: &str) -
         title: title.to_string(),
         segments: Vec::new(),
         schedule: Some(schedule.to_string()),
+        workdir: None,
     });
     save(paths, &list)?;
     Ok(true)
+}
+
+#[derive(Debug)]
+pub enum AddError {
+    /// Already `MAX_SESSIONS` regular tabs.
+    TooMany,
+    Io(String),
+}
+
+/// A new tab's id, like the page's: 16 lowercase hex characters.
+pub fn new_id() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..16).map(|_| char::from_digit(rng.gen_range(0..16), 16).unwrap_or('0')).collect()
+}
+
+/// Adds a regular tab at the end (never the active one), working in `workdir` when given.
+pub fn add(paths: &AriaPaths, id: &str, title: &str, workdir: Option<&str>) -> Result<SessionEntry, AddError> {
+    if !valid_id(id) {
+        return Err(AddError::Io(format!("{id:?} is not a valid session id")));
+    }
+    let mut list = load(paths);
+    if list.sessions.iter().any(|entry| entry.id == id) {
+        return Err(AddError::Io(format!("the tab {id} is already there")));
+    }
+    if list.sessions.iter().filter(|entry| entry.schedule.is_none()).count() >= MAX_SESSIONS {
+        return Err(AddError::TooMany);
+    }
+    let entry = SessionEntry {
+        id: id.to_string(),
+        title: title.to_string(),
+        segments: Vec::new(),
+        schedule: None,
+        workdir: workdir.map(str::to_string),
+    };
+    list.sessions.push(entry.clone());
+    save(paths, &list).map_err(|e| AddError::Io(e.to_string()))?;
+    Ok(entry)
 }
 
 /// Record `segment` as the tab's new current segment and save. `false` when the tab is not in the list or `segment` is
@@ -223,7 +266,38 @@ mod tests {
     }
 
     fn entry(id: &str, title: &str) -> SessionEntry {
-        SessionEntry { id: id.into(), title: title.into(), segments: vec![], schedule: None }
+        SessionEntry { id: id.into(), title: title.into(), segments: vec![], schedule: None, workdir: None }
+    }
+
+    #[test]
+    fn an_entry_keeps_its_folder() {
+        let (_dir, paths) = paths();
+        std::fs::write(paths.sessions(), r#"{"sessions":[{"id":"a1","title":"Old"}],"active":"a1"}"#).unwrap();
+        assert_eq!(load(&paths).sessions[0].workdir, None);
+        let mut list = load(&paths);
+        list.sessions.push(SessionEntry { workdir: Some("/home/ana/Projects/checkout-widget".into()), ..entry("b2", "Coupons") });
+        save(&paths, &list).unwrap();
+        let written = std::fs::read_to_string(paths.sessions()).unwrap();
+        assert_eq!(written.matches("workdir").count(), 1, "an entry without a folder is written without the field");
+        assert_eq!(load(&paths).sessions[1].workdir.as_deref(), Some("/home/ana/Projects/checkout-widget"));
+    }
+
+    #[test]
+    fn add_appends_with_a_folder_and_refuses_a_ninth() {
+        let (_dir, paths) = paths();
+        save(&paths, &SessionList { sessions: vec![entry("a1", "First")], active: Some("a1".into()) }).unwrap();
+        let added = add(&paths, "b2", "", Some("/home/ana/Projects/checkout-widget")).unwrap();
+        assert_eq!(added.workdir.as_deref(), Some("/home/ana/Projects/checkout-widget"));
+        let list = load(&paths);
+        assert_eq!(list.sessions.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["a1", "b2"]);
+        assert_eq!(list.active.as_deref(), Some("a1"), "adding never changes the active tab");
+        for n in 3..=8 {
+            add(&paths, &format!("t{n}"), "", None).unwrap();
+        }
+        assert!(matches!(add(&paths, "t9", "", None), Err(AddError::TooMany)));
+        assert!(matches!(add(&paths, "a1", "", None), Err(AddError::Io(_))), "an id already there is refused");
+        let id = new_id();
+        assert!(valid_id(&id) && id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 
     #[test]

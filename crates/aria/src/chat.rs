@@ -857,7 +857,15 @@ impl Chat {
             })?;
         let save_sessions = settings.as_ref().is_some_and(|s| s.subagents.save_sessions);
         pi::write_shim(&self.ctx.paths, &install, save_sessions).map_err(|_| "agent-dir-unwritable")?;
-        let workdir = working_folder(settings.as_ref()).ok_or("workdir-unavailable")?;
+        // A tab opened from a terminal works where it was opened; a folder gone since then is never made again.
+        let workdir = match self.own_folder() {
+            Some(own) if own.is_dir() => own,
+            Some(own) => {
+                self.notice_key("chat.folderMissing", json!({"path": own.display().to_string()}));
+                working_folder(settings.as_ref()).ok_or("workdir-unavailable")?
+            }
+            None => working_folder(settings.as_ref()).ok_or("workdir-unavailable")?,
+        };
         self.tell_once(&kept);
 
         self.emit(DockMessage::ChatEngine { state: "starting".into() });
@@ -1705,6 +1713,12 @@ impl Chat {
     }
 
     /// The folder this chat's running Pi works in (None when no Pi runs).
+    /// The folder this tab was opened in (`sessions.json`), when it has one of its own.
+    fn own_folder(&self) -> Option<PathBuf> {
+        let list = sessions::load(&self.ctx.paths);
+        list.sessions.into_iter().find(|entry| entry.id == self.session)?.workdir.map(PathBuf::from)
+    }
+
     fn workdir(&self) -> Option<PathBuf> {
         let inner = self.inner.lock().unwrap();
         inner.engine.as_ref().and(inner.workdir.clone())
@@ -2031,7 +2045,11 @@ impl Sessions {
         // The folder a Pi works in is fixed when it starts: one working in another folder than the settings' starts again.
         let wanted = agent::workdir(settings.as_ref());
         let chats: Vec<Chat> = self.chats.lock().unwrap().values().cloned().collect();
-        for chat in chats.into_iter().filter(|chat| chat.workdir().is_some_and(|dir| dir != wanted)) {
+        // A tab with its own folder stays where it was opened.
+        for chat in chats
+            .into_iter()
+            .filter(|chat| chat.own_folder().is_none() && chat.workdir().is_some_and(|dir| dir != wanted))
+        {
             chat.restart_when_idle();
         }
     }
@@ -2244,6 +2262,8 @@ impl Sessions {
                     .map(|mut entry| {
                         let kept = stored.sessions.iter().find(|kept| kept.id == entry.id);
                         entry.segments = kept.map(|kept| kept.segments.clone()).unwrap_or_default();
+                        // Nor its folder: the page does not know it.
+                        entry.workdir = entry.workdir.or_else(|| kept.and_then(|kept| kept.workdir.clone()));
                         // Nor which tabs are a scheduled task's: the dock made them.
                         entry.schedule = entry.schedule.or_else(|| kept.and_then(|kept| kept.schedule.clone()));
                         entry
@@ -3221,6 +3241,56 @@ mod tests {
         }
     }
 
+    /// The tab `s1` of the harness, saved with its own folder.
+    fn with_own_folder(h: &Harness, folder: &std::path::Path) {
+        let entry = aria_core::sessions::SessionEntry {
+            id: "s1".into(),
+            title: "".into(),
+            segments: vec![],
+            schedule: None,
+            workdir: Some(folder.display().to_string()),
+        };
+        aria_core::sessions::save(&h.paths, &SessionList { sessions: vec![entry], active: Some("s1".into()) }).unwrap();
+    }
+
+    #[test]
+    fn a_session_with_its_own_folder_starts_pi_there() {
+        let h = harness();
+        let own = h._dir.path().join("checkout-widget");
+        std::fs::create_dir_all(&own).unwrap();
+        with_own_folder(&h, &own);
+        send(&h, "x");
+        wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
+        match wait_for(&h, "chatState", |m| matches!(m, DockMessage::ChatState { .. })) {
+            DockMessage::ChatState { workdir, .. } => assert_eq!(workdir, own.display().to_string()),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn a_missing_session_folder_falls_back_with_a_notice() {
+        let h = harness();
+        let gone = h._dir.path().join("unmounted");
+        with_own_folder(&h, &gone);
+        send(&h, "x");
+        let notice = wait_for(&h, "the notice", |m| event_of(m, "ui_notice"));
+        match notice {
+            DockMessage::ChatEvent { event } => {
+                assert_eq!(event["request"]["key"], json!("chat.folderMissing"));
+                assert_eq!(event["request"]["vars"]["path"], json!(gone.display().to_string()));
+            }
+            _ => unreachable!(),
+        }
+        wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        assert!(!gone.exists(), "a missing folder is never made");
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
+        match wait_for(&h, "chatState", |m| matches!(m, DockMessage::ChatState { .. })) {
+            DockMessage::ChatState { workdir, .. } => assert_eq!(workdir, h.workdir.display().to_string()),
+            _ => unreachable!(),
+        }
+    }
+
     // ---- sessions: one Pi per tab -------------------------------------------------------------
 
     struct SessionsHarness {
@@ -3569,6 +3639,53 @@ mod tests {
     }
 
     #[test]
+    fn settings_changes_do_not_restart_a_session_with_its_own_folder() {
+        let s = sessions_harness();
+        let own = s.h._dir.path().join("checkout-widget");
+        std::fs::create_dir_all(&own).unwrap();
+        let entry = aria_core::sessions::SessionEntry {
+            id: "aa".into(),
+            title: "".into(),
+            segments: vec![],
+            schedule: None,
+            workdir: Some(own.display().to_string()),
+        };
+        aria_core::sessions::save(&s.h.paths, &SessionList { sessions: vec![entry], active: Some("aa".into()) })
+            .unwrap();
+        s.sessions
+            .handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] }));
+        wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        let mut settings = settings::load(&s.h.paths).unwrap().unwrap();
+        let elsewhere = s.h._dir.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        settings.sandbox.projects_dir = elsewhere.display().to_string();
+        settings::save(&s.h.paths, &settings).unwrap();
+        s.sessions.settings_changed();
+        std::thread::sleep(Duration::from_millis(300));
+        let stopped = s
+            .messages
+            .try_iter()
+            .any(|m| matches!(&m, DockMessage::Session { message, .. } if matches!(**message, DockMessage::ChatEngine { ref state } if state == "stopped")));
+        assert!(!stopped, "a session with its own folder keeps working where it was opened");
+    }
+
+    #[test]
+    fn a_page_save_keeps_a_session_folder() {
+        let s = sessions_harness();
+        let entry = |workdir: Option<&str>| aria_core::sessions::SessionEntry {
+            id: "aa".into(),
+            title: "Coupons".into(),
+            segments: vec![],
+            schedule: None,
+            workdir: workdir.map(str::to_string),
+        };
+        let folder = "/home/ana/Projects/checkout-widget";
+        aria_core::sessions::save(&s.h.paths, &SessionList { sessions: vec![entry(Some(folder))], active: None }).unwrap();
+        s.sessions.handle(PageMessage::SessionsSave { sessions: vec![entry(None)], active: Some("aa".into()) });
+        assert_eq!(aria_core::sessions::load(&s.h.paths).sessions[0].workdir.as_deref(), Some(folder));
+    }
+
+    #[test]
     fn a_change_to_the_settings_file_is_seen_once() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("settings.json");
@@ -3591,6 +3708,7 @@ mod tests {
             title: "Fix the build".into(),
             segments: vec![],
             schedule: None,
+            workdir: None,
         }];
         s.sessions.handle(PageMessage::SessionsSave { sessions: entries.clone(), active: Some("aa".into()) });
         s.sessions.handle(PageMessage::SessionsLoad { id: 9 });
@@ -3867,6 +3985,7 @@ mod tests {
             title: "Fix".into(),
             segments: vec![],
             schedule: None,
+            workdir: None,
         };
         s.sessions.handle(PageMessage::SessionsSave { sessions: vec![regular], active: Some("aa".into()) });
         let ids: Vec<String> = aria_core::sessions::load(&s.h.paths).sessions.into_iter().map(|e| e.id).collect();
@@ -4816,6 +4935,7 @@ mod tests {
             title: "Kept".into(),
             segments: vec![],
             schedule: None,
+            workdir: None,
         }];
         aria_core::sessions::save(&s.h.paths, &SessionList { sessions: entries, active: None }).unwrap();
         s.sessions.forget_gone_sessions();
@@ -4865,6 +4985,7 @@ mod tests {
             title: "Tab".into(),
             segments: segments.iter().map(|s| s.to_string()).collect(),
             schedule: None,
+            workdir: None,
         };
         sessions::save(&h.paths, &SessionList { sessions: vec![entry], active: Some("s1".into()) }).unwrap();
     }
@@ -5247,6 +5368,7 @@ mod tests {
             title: title.into(),
             segments: segments.iter().map(|s| s.to_string()).collect(),
             schedule: None,
+            workdir: None,
         };
         sessions::save(&s.h.paths, &SessionList { sessions: vec![entry("aa", "Old", &["aa", "x-2"])], active: None })
             .unwrap();

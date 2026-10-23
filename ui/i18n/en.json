@@ -337,6 +337,7 @@
   "chat.ok": "OK",
   "chat.tools": "Used {n} tools",
   "chat.retry": "The provider failed, trying again ({attempt}/{max})…",
+  "chat.folderMissing": "The folder this session was opened in is gone ({path}): it works in the projects folder for now.",
   "chat.watchdog.stopped.one": "Aria stopped this turn: nothing came back for 1 minute.",
   "chat.watchdog.stopped.many": "Aria stopped this turn: nothing came back for {minutes} minutes.",
   "chat.compacting": "Compacting the conversation…",
