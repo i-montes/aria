@@ -90,17 +90,20 @@ enum Pending {
     Bang(String),
     Secret(String),
     Checkpoints,
+    /// `/context`'s `get_session_stats`.
+    Context,
     /// An undo, with the text that goes back to the editor once it is done.
     Undo(String),
 }
 
 /// The client's own commands, before the session's.
-const OWN: [(&str, &str); 5] = [
+const OWN: [(&str, &str); 6] = [
     ("exit", "term.cmd.exit"),
     ("verbose", "term.cmd.verbose"),
     ("model", "term.cmd.model"),
     ("sessions", "term.cmd.sessions"),
     ("undo", "term.cmd.undo"),
+    ("context", "term.cmd.context"),
 ];
 
 pub struct App {
@@ -129,6 +132,8 @@ pub struct App {
     after_abort: Option<String>,
     /// Calls whose whole output is shown.
     expanded: std::collections::HashSet<String>,
+    /// `/context`'s panel: (tokens used, window), while it is open.
+    context: Option<(u64, u64)>,
     /// The task strip shows only its first row (Ctrl+T, a click on it).
     tasks_folded: bool,
     /// The task strip's rows on screen.
@@ -175,6 +180,7 @@ impl App {
             statuses: HashMap::new(),
             last_esc: None,
             tasks_folded: false,
+            context: None,
             strip_rows: None,
             undo_texts: HashMap::new(),
             now_ms: 0,
@@ -428,6 +434,12 @@ impl App {
                 _ => Vec::new(),
             };
         }
+        if self.context.is_some() {
+            if press.key == Key::Esc {
+                self.context = None;
+            }
+            return Vec::new();
+        }
         if let Some(dialog) = self.dialog.as_mut() {
             let answer = dialog.key(press.key);
             return self.answered(answer);
@@ -595,6 +607,13 @@ impl App {
                 "undo" => {
                     return vec![self.session_request(Pending::Checkpoints, |id| PageMessage::ChatCheckpoints { id })]
                 }
+                "context" => {
+                    return vec![self.session_request(Pending::Context, |id| PageMessage::PiCommand {
+                        id,
+                        command: "get_session_stats".into(),
+                        args: json!({}),
+                    })]
+                }
                 _ => {}
             }
         }
@@ -641,6 +660,22 @@ impl App {
         palette: &crate::term::theme::Palette,
         width: u16,
     ) -> Option<Vec<ratatui::text::Line<'static>>> {
+        if let Some((used, window)) = self.context {
+            let parts = self
+                .session
+                .statuses
+                .get("aria-context")
+                .and_then(|text| serde_json::from_str(text).ok())
+                .unwrap_or_else(|| json!({}));
+            return Some(crate::term::view::context_lines(
+                &parts,
+                used,
+                window,
+                self.config.compact_at,
+                palette,
+                &self.config.lang,
+            ));
+        }
         self.dialog.as_ref().map(|dialog| dialog.lines(&self.config.lang, palette, width))
     }
 
@@ -816,6 +851,14 @@ impl App {
                 let current = self.session.model.clone().unwrap_or_default();
                 let items = models_for_picker(&models, &self.config.connected, &current, self.config.allow_pay_per_use);
                 self.picker = Some((PickerKind::Models, Picker::new(items)));
+            }
+            DockMessage::PiReply { id, ok, data, .. } if self.pending.get(&id) == Some(&Pending::Context) => {
+                self.pending.remove(&id);
+                if ok {
+                    let usage = &data["contextUsage"];
+                    self.context =
+                        Some((usage["tokens"].as_u64().unwrap_or(0), usage["contextWindow"].as_u64().unwrap_or(0)));
+                }
             }
             DockMessage::PiReply { id, ok, data, error } => {
                 if let Some(Pending::Bang(command)) = self.pending.remove(&id) {
@@ -1326,6 +1369,26 @@ mod tests {
         assert!(app.tasks_folded());
         ctrl(&mut app, 't');
         assert!(!app.tasks_folded());
+    }
+
+    #[test]
+    fn slash_context_asks_pi_and_opens_the_panel() {
+        let mut app = attached();
+        typed(&mut app, "/context");
+        let effects = key(&mut app, Key::Enter);
+        let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
+        let PageMessage::PiCommand { id, ref command, .. } = **message else { panic!("{message:?}") };
+        assert_eq!(command, "get_session_stats");
+        app.update(in_session(DockMessage::PiReply {
+            id,
+            ok: true,
+            data: json!({"contextUsage": {"tokens": 20000, "contextWindow": 200000, "percent": 10}}),
+            error: None,
+        }));
+        let palette = crate::term::theme::Palette::truecolor();
+        assert!(app.panel_lines(&palette, 80).is_some());
+        key(&mut app, Key::Esc);
+        assert!(app.panel_lines(&palette, 80).is_none(), "Esc closes it");
     }
 
     #[test]

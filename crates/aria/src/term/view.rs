@@ -49,6 +49,83 @@ pub struct SessionView<'a> {
     pub tasks_folded: bool,
 }
 
+/// `9.0k` from 9000; under a thousand as it is.
+fn kilo(n: u64) -> String {
+    if n >= 1000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+/// `/context`: a grid of 100 cells (one per 1 % of the window) coloured by what fills them, then one row per part with
+/// its tokens and share, the free space and the compaction reserve. `parts` is the context extension's measure.
+pub fn context_lines(
+    parts: &serde_json::Value,
+    used: u64,
+    window: u64,
+    compact_at: u8,
+    p: &Palette,
+    lang: &str,
+) -> Vec<Line<'static>> {
+    let window = window.max(1);
+    let names: [(&str, ratatui::style::Color); 5] =
+        [("system", p.grey), ("tools", p.accent), ("skills", p.green), ("memory", p.amber), ("messages", p.text)];
+    let mut cells: Vec<(&str, ratatui::style::Color)> = Vec::new();
+    let mut rows = Vec::new();
+    for (name, colour) in names {
+        let tokens = parts[name].as_u64().unwrap_or(0);
+        let share = tokens as f64 * 100.0 / window as f64;
+        let n = if tokens > 0 { share.round().max(1.0) as usize } else { 0 };
+        cells.extend(std::iter::repeat_n(("■", colour), n));
+        rows.push(Line::from(vec![
+            Span::styled("  ■ ", Style::default().fg(colour)),
+            Span::styled(
+                format!("{:<20}", t(lang, &format!("term.ctx.{name}"), &json!({}))),
+                Style::default().fg(p.text),
+            ),
+            Span::styled(format!("{:>8}  {:>5.1}%", kilo(tokens), share), Style::default().fg(p.grey)),
+        ]));
+    }
+    let taken = cells.len().min(100);
+    cells.truncate(100);
+    let reserve = (100 - usize::from(compact_at.min(100))).min(100 - taken);
+    let free = 100 - taken - reserve;
+    cells.extend(std::iter::repeat_n(("□", p.faint), free));
+    cells.extend(std::iter::repeat_n(("▨", p.rule), reserve));
+    let mut out: Vec<Line<'static>> = cells
+        .chunks(20)
+        .map(|row| {
+            let mut spans = vec![Span::raw("  ")];
+            spans.extend(
+                row.iter().map(|(symbol, colour)| Span::styled(format!("{symbol} "), Style::default().fg(*colour))),
+            );
+            Line::from(spans)
+        })
+        .collect();
+    out.push(Line::default());
+    let percent = used * 100 / window;
+    out.push(Line::styled(
+        format!(
+            "  {}",
+            t(lang, "term.ctx.title", &json!({"used": kilo(used), "window": kilo(window), "percent": percent}))
+        ),
+        Style::default().fg(p.text),
+    ));
+    out.extend(rows);
+    out.push(Line::from(vec![
+        Span::styled("  □ ", Style::default().fg(p.faint)),
+        Span::styled(format!("{:<20}", t(lang, "term.ctx.free", &json!({}))), Style::default().fg(p.text)),
+        Span::styled(format!("{:>8}  {:>5}%", kilo(window.saturating_sub(used)), free), Style::default().fg(p.grey)),
+    ]));
+    out.push(Line::from(vec![
+        Span::styled("  ▨ ", Style::default().fg(p.rule)),
+        Span::styled(format!("{:<20}", t(lang, "term.ctx.reserve", &json!({}))), Style::default().fg(p.text)),
+        Span::styled(format!("{:>8}  {:>5}%", "", 100 - usize::from(compact_at.min(100))), Style::default().fg(p.grey)),
+    ]));
+    out
+}
+
 /// Rows the task strip shows at most below its first one.
 const TASK_ROWS: usize = 6;
 
@@ -452,6 +529,16 @@ fn footer(v: &SessionView, width: u16) -> Line<'static> {
         }
     }
     let mut right_side: Vec<Span<'static>> = Vec::new();
+    // The project's checks after the last edits (the verify extension).
+    if let Some(verify) = s.statuses.get("aria-verify").and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
+    {
+        if verify["ok"] == json!(true) {
+            let passed = verify["passed"].as_u64().map(|n| format!(" {n}")).unwrap_or_default();
+            right_side.push(Span::styled(format!("tests ✓{passed}    "), Style::default().fg(p.green)));
+        } else {
+            right_side.push(Span::styled("tests ✗    ".to_string(), Style::default().fg(p.coral)));
+        }
+    }
     if let Some(git) = &v.git {
         let changed = if git.changed > 0 { format!(" ~{}", git.changed) } else { String::new() };
         right_side.push(Span::styled(format!("{}{changed}    ", git.branch), grey));
@@ -1008,6 +1095,29 @@ mod tests {
         folded.tasks_folded = true;
         let screen = text(&render(&folded, 100, 30));
         assert!(screen.contains("1/3") && !screen.contains("● Endpoint"), "{screen}");
+    }
+
+    #[test]
+    fn the_footer_says_how_the_checks_went() {
+        let mut s = worked();
+        s.statuses.insert("aria-verify".into(), r#"{"ok":true,"passed":43}"#.into());
+        let screen = text(&render(&view(&s, true), 140, 30));
+        assert!(screen.lines().last().unwrap().contains("tests ✓ 43"), "{screen}");
+        s.statuses.insert("aria-verify".into(), r#"{"ok":false}"#.into());
+        let b = render(&view(&s, true), 140, 30);
+        assert_eq!(colour_of(&b, "tests ✗"), Palette::truecolor().coral);
+    }
+
+    #[test]
+    fn the_context_panel_draws_the_grid_and_rows() {
+        let parts = json!({"system": 9_000, "tools": 4_000, "skills": 1_000, "memory": 0, "messages": 6_000});
+        let lines = context_lines(&parts, 20_000, 200_000, 40, &Palette::truecolor(), "en");
+        let plain: Vec<String> = lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect();
+        let cells: usize = plain.iter().take(5).map(|l| l.chars().filter(|c| "■□▨".contains(*c)).count()).sum();
+        assert_eq!(cells, 100, "one cell per 1 % of the window: {plain:?}");
+        assert!(plain.iter().any(|l| l.contains("System") && l.contains("9.0k") && l.contains("4.5%")), "{plain:?}");
+        assert!(plain.iter().any(|l| l.contains("Free")), "{plain:?}");
+        assert!(plain.iter().any(|l| l.contains("Compaction reserve") && l.contains("60%")), "{plain:?}");
     }
 
     #[test]

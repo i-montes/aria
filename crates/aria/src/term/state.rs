@@ -135,6 +135,8 @@ pub struct Session {
     pub phase: String,
     /// The model's task list, from its last `tasks_update`.
     pub tasks: Vec<Task>,
+    /// What the extensions publish (`aria-context`, `aria-verify`…), by key.
+    pub statuses: std::collections::HashMap<String, String>,
     pub loaded: bool,
     /// A refused message's text, back to the editor.
     pub give_back: Option<String>,
@@ -475,6 +477,14 @@ impl Session {
             }
             "ui_notice" => {
                 let request = &event["request"];
+                if request["method"] == "setStatus" {
+                    let key = request["statusKey"].as_str().unwrap_or_default().to_string();
+                    match request["statusText"].as_str() {
+                        Some(text) => self.statuses.insert(key, text.to_string()),
+                        None => self.statuses.remove(&key),
+                    };
+                    return;
+                }
                 if request["method"] != "notify" {
                     return;
                 }
@@ -865,6 +875,23 @@ mod tests {
             ]}))],
         );
         assert_eq!(back.tasks[1].status, "done", "they come back with the history");
+    }
+
+    #[test]
+    fn the_extensions_statuses_are_kept() {
+        let mut s = Session::default();
+        feed(
+            &mut s,
+            &[event(
+                json!({"type": "ui_notice", "request": {"method": "setStatus", "statusKey": "aria-verify", "statusText": "{\"ok\":true}"}}),
+            )],
+        );
+        assert_eq!(s.statuses.get("aria-verify").map(String::as_str), Some("{\"ok\":true}"));
+        feed(
+            &mut s,
+            &[event(json!({"type": "ui_notice", "request": {"method": "setStatus", "statusKey": "aria-verify"}}))],
+        );
+        assert!(s.statuses.get("aria-verify").is_none(), "cleared");
     }
 
     #[test]

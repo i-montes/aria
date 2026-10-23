@@ -22,6 +22,8 @@ every time a session starts; an extension the owner edited there is kept (see `c
 | `secrets` | Aria's own: the person's passwords, keys and tokens, never seen by the model: `request_secret` (a secret card; the page sends the value straight to the dock, which keeps it in the keyring), `secret_import` (the dock reads a file and keeps one value), `secrets_list` (names only); every tool output is masked (stored values by name, key shapes, secret-named assignments) with a note offering `secret_import`; the sandbox gives a command the `$ARIA_SECRET_<NAME>` it names |
 | `loadout` | Aria's own: a resumed session restores the tools recorded in its transcript, so a tool a newer Aria added would never be declared; at every session start the tools of Aria's extensions that are not active become active (not in subagents) |
 | `tasks` | Aria's own: the `tasks_update` tool, the task list of multi-step work (the whole list each time, at most 20); Aria's terminal draws it above the editor from the tool's result, live and from the history; not in subagents |
+| `context` | Aria's own: before every run, what fills the context (system prompt, tools, skills, conversation) in tokens estimated at 4 characters each, published as the status `aria-context`; the terminal's `/context` draws it |
+| `verify` | Aria's own: after a run that edited files, the project's checks (`.aria/verify.json`, else on Linux what package.json, Cargo.toml or pyproject.toml show), boxed by bwrap on Linux, 5 minutes each; the result is the status `aria-verify` (the terminal's footer) and a failure is told to the model once; `/verify off\|on` |
 
 Tests: `bun test extensions`.
 
