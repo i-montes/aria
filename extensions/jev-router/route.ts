@@ -2,8 +2,8 @@
 // conversation model follows. The conversation stays on one model; only the hint changes.
 import { FREE_JEV } from '../lib/jev.ts'
 
-// The free Jev, as the evals ask it; the extensions go through lib/jev.ts, which falls back to the paid one while the
-// free one's quota is spent.
+// The free Jev, as the evals ask it; the extensions go through lib/jev.ts, which moves on, model by model, to the next
+// classifier with quota and funds.
 export const CLASSIFIER = FREE_JEV
 
 export type Route = 'quick' | 'focused' | 'parallel' | 'think'

@@ -70,7 +70,7 @@ import { ariaConfig, hasAriaConfig } from '../lib/config.ts'
 import { styleNote } from './style.ts'
 import { EFFORT_FILE, effortFor, RANK, saveEffort } from './effort.ts'
 import { agentDir } from '../lib/agent-dir.ts'
-import { classifyWithJev, pauseNote } from '../lib/jev.ts'
+import { classifyWithJev } from '../lib/jev.ts'
 
 const CLASSIFY_TIMEOUT_MS = 3000
 
@@ -208,10 +208,10 @@ export default function (pi: ExtensionAPI) {
     },
   })
 
-  // Jev for `request`: the free one, or the paid one while the free one's quota is spent (said once, when it runs out).
+  // Jev for `request`: the first classifier with quota and funds (lib/jev.ts); a step aside is said once.
   const ask = (ctx: any, request: any) =>
     classifyWithJev(ctx.modelRegistry, request, { signal: AbortSignal.timeout(CLASSIFY_TIMEOUT_MS) }, {
-      onPause: (until, paid) => ctx?.ui?.notify?.(pauseNote(until, paid), 'info'),
+      onNote: (note) => ctx?.ui?.notify?.(note, 'info'),
     })
 
   // Classify when a run starts from a user prompt and add the hints as a hidden message: it is

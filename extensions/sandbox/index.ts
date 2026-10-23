@@ -18,7 +18,7 @@ import { createBashToolDefinition } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import { commandPreview, covers, coversPath, emptyGrants, grantDir, grantUnits } from './grants.ts'
 import { parseReview, REVIEW_TIMEOUT_MS, reviewLine, reviewRequest } from './review.ts'
-import { classifyWithJev, pauseNote } from '../lib/jev.ts'
+import { classifyWithJev } from '../lib/jev.ts'
 import { canAsk, sandboxCard } from './card.ts'
 import { backgroundLine, bashRoute, refusalText, SAID_NO } from './route.ts'
 import { startProcess } from '../background/client.ts'
@@ -88,7 +88,7 @@ export default function sandbox(pi: ExtensionAPI) {
         ctx.modelRegistry,
         reviewRequest(command, description),
         { signal: AbortSignal.timeout(REVIEW_TIMEOUT_MS) },
-        { onPause: (until, paid) => ctx?.ui?.notify?.(pauseNote(until, paid), 'info') },
+        { onNote: (note) => ctx?.ui?.notify?.(note, 'info') },
       )
       return parseReview(result)
     } catch {
