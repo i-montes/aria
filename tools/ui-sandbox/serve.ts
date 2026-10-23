@@ -73,7 +73,7 @@ const sandbox = `<script>
         if (inner.type === 'dictationStart') { if (!sim.voiceModel) ds({ state: 'needsModel', size: 574041195 }); else record() }
         else if (inner.type === 'dictationDownload') { ds({ state: 'downloading', progress: 0.5 }); setTimeout(() => { sim.voiceModel = true; record() }, 150) }
         else if (inner.type === 'dictationCancel') { clearInterval(sim.dictTimer); ds({ state: 'idle' }) }
-        else if (inner.type === 'dictationStop') { clearInterval(sim.dictTimer); ds({ state: 'transcribing' }); setTimeout(() => { sim.sess(m.session, { type: 'dictationText', text: sim.dictText ?? 'hola desde el sandbox' }); ds({ state: 'idle' }) }, 120) }
+        else if (inner.type === 'dictationStop') { clearInterval(sim.dictTimer); ds({ state: 'transcribing' }); setTimeout(() => { sim.sess(m.session, { type: 'dictationText', text: sim.dictText ?? 'hola desde el sandbox' }); ds({ state: 'idle' }) }, sim.dictDelay ?? 120) }
         if (inner.type === 'listCommands') w({ type: 'commands', commands: COMMANDS })
         else if (inner.type === 'listFiles') w({ type: 'files', files: FILES.filter((f) => f.includes(inner.query)) })
         else if (inner.type === 'listModels') w({ type: 'models', models: MODELS })

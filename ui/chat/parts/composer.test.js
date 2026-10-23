@@ -173,10 +173,13 @@ describe('dictation', () => {
     expect(html).toContain('0:07')
     expect(html).toContain('chat.composer.dictate.stop')
   })
-  test('transcribing: busy, not pressable', () => {
+  test('transcribing: busy, not pressable, and says so with a spinner', () => {
     const html = renderComposer({ dictation: { state: 'transcribing' } }, {}, tt)
     expect(html).toContain('is-transcribing')
     expect(html).toMatch(/data-chat="dictate"[^>]*disabled/)
+    expect(html).toContain('p-composer-spin')
+    expect(html).toContain('chat.composer.dictate.writing')
+    expect(html).toContain('role="status"')
   })
   test('the model to download: a strip with its size, Download and Not now', () => {
     const html = renderComposer({ dictation: { state: 'needsModel', size: 574041195 } }, {}, tt)

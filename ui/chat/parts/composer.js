@@ -45,6 +45,7 @@ export const TEXTS = {
     'chat.composer.dictate.start': 'Dictate (Alt+D)',
     'chat.composer.dictate.stop': 'Stop and write it (Alt+D) · Esc cancels',
     'chat.composer.dictate.transcribing': 'Writing what you said…',
+    'chat.composer.dictate.writing': 'Writing…',
     'chat.composer.dictate.download': 'Download the voice model ({size})? It stays on this computer, and so does your voice.',
     'chat.composer.dictate.downloadButton': 'Download',
     'chat.composer.dictate.later': 'Not now',
@@ -67,6 +68,7 @@ export const TEXTS = {
     'chat.composer.dictate.start': 'Dictar (Alt+D)',
     'chat.composer.dictate.stop': 'Detener y escribirlo (Alt+D) · Esc cancela',
     'chat.composer.dictate.transcribing': 'Escribiendo lo que dijiste…',
+    'chat.composer.dictate.writing': 'Escribiendo…',
     'chat.composer.dictate.download': '¿Descargar el modelo de voz ({size})? Se queda en este computador, y tu voz también.',
     'chat.composer.dictate.downloadButton': 'Descargar',
     'chat.composer.dictate.later': 'Ahora no',
@@ -95,8 +97,14 @@ function dictationParts(d, t) {
   const transcribing = state === 'transcribing'
   const label = t(recording ? 'chat.composer.dictate.stop' : transcribing ? 'chat.composer.dictate.transcribing' : 'chat.composer.dictate.start')
   const look = recording ? ' is-recording' : transcribing ? ' is-transcribing' : ''
-  const seconds = recording ? `<span class="p-composer-rec">${clock(d.seconds)}</span>` : ''
-  const button = `<button type="button" id="chat-dictate" class="p-composer-btn p-composer-dictate${look}" data-chat="dictate" aria-pressed="${recording}" aria-label="${esc(label)}" title="${esc(label)}"${transcribing ? ' disabled' : ''}>${ICON.mic}${seconds}</button>`
+  // Recording shows the time; transcribing a spinner and a word, so the wait never looks like nothing happening.
+  const beside = recording
+    ? `<span class="p-composer-rec">${clock(d.seconds)}</span>`
+    : transcribing
+      ? `<span class="p-composer-rec" role="status">${esc(t('chat.composer.dictate.writing'))}</span>`
+      : ''
+  const icon = transcribing ? '<span class="p-composer-spin" aria-hidden="true"></span>' : ICON.mic
+  const button = `<button type="button" id="chat-dictate" class="p-composer-btn p-composer-dictate${look}" data-chat="dictate" aria-pressed="${recording}" aria-label="${esc(label)}" title="${esc(label)}"${transcribing ? ' disabled' : ''}>${icon}${beside}</button>`
   let strip = ''
   if (state === 'needsModel') {
     const size = `${Math.round((Number(d.size) || 0) / 1e6)} MB`
