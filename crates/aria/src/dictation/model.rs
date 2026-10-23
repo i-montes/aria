@@ -9,7 +9,7 @@ pub const SIZE: u64 = 574_041_195;
 pub const SHA256: &str = "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2";
 pub const URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ModelError {
     /// The download did not complete (no network, a server error, a write that failed).
     Failed(String),
