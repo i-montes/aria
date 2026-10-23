@@ -5,6 +5,20 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.13.0 — 2026-10-22
+
+### New
+
+- dictate with the microphone button
+- the dock dictates for the tab that asks
+- record, transcribe with Whisper, unload when idle
+- audio to 16 kHz mono, and the voice model's file
+
+### Fixed
+
+- whisper.cpp's load lines stay out of the dock's log; a live check of the microphone
+- /debug's wide surface keeps the monitor's height on Omarchy
+
 ## 0.12.2 — 2026-10-22
 
 ### Fixed
