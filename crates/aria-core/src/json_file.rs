@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 use std::io::{self, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +27,14 @@ pub fn read_json(path: &Path) -> Result<Option<Value>, JsonFileError> {
 
 /// Pretty JSON plus a trailing newline: temp file in the same directory, fsync, rename, chmod.
 pub fn write_json_atomic(path: &Path, value: &Value, mode: u32) -> io::Result<()> {
+    let mut text = serde_json::to_string_pretty(value)?;
+    text.push('\n');
+    write_bytes_atomic(path, text.as_bytes(), mode)
+}
+
+/// `bytes` as the whole of `path`, never half: a temp file in the same directory takes `mode` before it holds anything,
+/// is synced, then renamed over `path`.
+pub fn write_bytes_atomic(path: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     // Unique per write, so two threads writing the same file never share a temp file.
@@ -34,10 +42,9 @@ pub fn write_json_atomic(path: &Path, value: &Value, mode: u32) -> io::Result<()
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = dir.join(format!(".{name}.{}.{n}.tmp", std::process::id()));
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(&tmp)?;
+        let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(mode).open(&tmp)?;
         file.set_permissions(std::fs::Permissions::from_mode(mode))?;
-        file.write_all(serde_json::to_string_pretty(value)?.as_bytes())?;
-        file.write_all(b"\n")?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         std::fs::rename(&tmp, path)
     })();
@@ -96,6 +103,17 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn bytes_are_written_as_they_are_with_the_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("note");
+        std::fs::write(&file, "old").unwrap();
+        write_bytes_atomic(&file, b"not json \xff", 0o600).unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), b"not json \xff");
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "no temp file is left");
     }
 
     #[test]

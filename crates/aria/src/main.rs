@@ -9,6 +9,9 @@
 //! `aria bar install|remove` puts Aria's face in the Omarchy bar or takes it out (the installer runs it).
 //! `aria client-stdio` is the bridge `ssh <host> aria client-stdio` runs: the client's lines on stdin and stdout, the
 //! machine's clients socket on the other side.
+//! `aria hub-import` is what the owner's computer runs on a hub (`ssh <host> aria hub-import`): it reads one line from
+//! stdin, a bundle of settings and credentials, writes its files into `~/.aria` (mode 600, the old ones kept as
+//! `.bak`) and prints the names it wrote.
 //! `aria --version` prints the version.
 
 mod attachments;
@@ -24,6 +27,7 @@ mod dock;
 mod face;
 mod face_motion;
 mod handlers;
+mod hub_admin;
 mod jobs;
 mod jobs_socket;
 mod keyring_cli;
@@ -135,6 +139,7 @@ fn main() {
             }
         },
         Some("client-stdio") => std::process::exit(stdio_bridge::command()),
+        Some("hub-import") => std::process::exit(hub_import()),
         Some("start") => start_service(),
         Some("secret") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -144,10 +149,28 @@ fn main() {
         Some("bar") => std::process::exit(omarchy_bar::bar_command(std::env::args().nth(2).as_deref())),
         Some("--version" | "-V" | "version") => println!("aria {}", env!("CARGO_PKG_VERSION")),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [dock|serve|toggle|show|start|quit|keyring|secret|bar|update-ready|connect|client-stdio|--version]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [dock|serve|toggle|show|start|quit|keyring|secret|bar|update-ready|connect|client-stdio|hub-import|--version]");
             std::process::exit(2);
         }
         None => unreachable!("plain aria is the client or the dock"),
+    }
+}
+
+/// `aria hub-import`: one line of stdin (at most 16 MiB) is the bundle; each file it wrote is printed on its own line.
+fn hub_import() -> i32 {
+    let result = hub_admin::read_bundle_line(std::io::stdin().lock(), hub_admin::MAX_BUNDLE_BYTES)
+        .and_then(|line| hub_admin::import(&aria_core::paths::AriaPaths::from_env(), &line));
+    match result {
+        Ok(written) => {
+            for name in written {
+                println!("{name}");
+            }
+            0
+        }
+        Err(why) => {
+            eprintln!("aria hub-import: {why}");
+            1
+        }
     }
 }
 

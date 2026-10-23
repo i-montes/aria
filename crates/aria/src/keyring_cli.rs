@@ -26,7 +26,8 @@ fn exe() -> PathBuf {
     control::binary_path(std::env::current_exe().unwrap_or_else(|_| PathBuf::from("aria")))
 }
 
-fn vault_for(root: &Path) -> Result<Vault, KeyringError> {
+/// The vault of `root`'s system keyring (and the live folder its dock would use): what reading a key needs, nothing opened.
+pub(crate) fn vault_for(root: &Path) -> Result<Vault, KeyringError> {
     let keyring = keyring::system(&keyring::service_for(root, &home()))?;
     Ok(Vault { keyring, live: vault::live_dir(root), exe: exe() })
 }
