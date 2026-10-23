@@ -3420,6 +3420,13 @@ mod tests {
                 PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] },
             ));
             wait_session(&s, "ready", id, |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+            // a run still going would put the restart off until it settles, after the load below
+            wait_session(
+                &s,
+                "the first run settled",
+                id,
+                |m| matches!(m, DockMessage::ChatEvent { event } if event["type"] == "agent_settled"),
+            );
         }
         s.h.visible.store(false, Ordering::SeqCst);
         s.sessions.test_send_raw("aa", "ask");

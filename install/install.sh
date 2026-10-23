@@ -28,9 +28,10 @@ AGENT_DIR=$HOME/Library/LaunchAgents
 AGENT=com.aria.dock.plist
 LABEL=com.aria.dock
 # The dock's toolkit, plus bubblewrap (the sandbox runs every command in bwrap), iproute2 (the process guard tells the
-# model to find a port's process with `ss`) and libsecret (`secret-tool`, how Aria keeps keys in the keyring). bun is not
-# needed: only the checks use it.
-PACKAGES="gtk3 webkit2gtk-4.1 gtk-layer-shell bubblewrap iproute2 libsecret"
+# model to find a port's process with `ss`), libsecret (`secret-tool`, how Aria keeps keys in the keyring), and for
+# dictation alsa-lib (the microphone) and vulkan-icd-loader (whisper.cpp on the GPU; without a driver it runs on the CPU).
+# bun is not needed: only the checks use it.
+PACKAGES="gtk3 webkit2gtk-4.1 gtk-layer-shell bubblewrap iproute2 libsecret alsa-lib vulkan-icd-loader"
 
 # Only a real file has siblings: under `curl | sh` $0 is just "sh" and the current directory is not ours.
 SCRIPT_DIR=""

@@ -66,7 +66,7 @@ Run it again to update. An update does not cut a run: the running dock restarts 
 
 ### Build it yourself
 
-You need Rust and `bun` (for the UI tests). On Omarchy you also need the libraries `gtk3`, `webkit2gtk-4.1` and `gtk-layer-shell`; on macOS the AppKit/WebKit frameworks come with the system.
+You need Rust, `bun` (for the UI tests) and, for dictation's built-in whisper.cpp, `cmake` and `clang` (bindgen reads its headers through libclang). On Omarchy you also need the libraries `gtk3`, `webkit2gtk-4.1`, `gtk-layer-shell`, `alsa-lib` (the microphone) and, to build whisper.cpp on the GPU, `vulkan-headers` and `shaderc`; on macOS the AppKit/WebKit/CoreAudio frameworks come with the system, and `cmake` comes from Homebrew.
 
 ```sh
 cargo build --release

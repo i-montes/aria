@@ -26,5 +26,7 @@ for a in args:
 os.execv('$zig', ['$zig', 'cc', '-target', 'aarch64-macos'] + out)
 PY
 chmod +x "$wrapper"
-CC_aarch64_apple_darwin="$wrapper" cargo clippy -q --target aarch64-apple-darwin -p aria -p aria-mac -p aria-core -p aria-engine --all-targets
+# whisper.cpp (dictation) cannot be built for macOS from here (cmake, Metal, Apple's SDK). A type-check needs only its
+# bindings: whisper-rs-sys copies the ones it ships and stops before cmake when it thinks it runs on docs.rs.
+DOCS_RS=1 WHISPER_DONT_GENERATE_BINDINGS=1 CC_aarch64_apple_darwin="$wrapper" CXX_aarch64_apple_darwin="$wrapper" cargo clippy -q --target aarch64-apple-darwin -p aria -p aria-mac -p aria-core -p aria-engine --all-targets
 echo "macOS check passed"
