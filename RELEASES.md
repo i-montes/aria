@@ -5,6 +5,12 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.13.1 — 2026-10-22
+
+### Fixed
+
+- while a dictation is written, the microphone says so with a spinner
+
 ## 0.13.0 — 2026-10-22
 
 ### New
