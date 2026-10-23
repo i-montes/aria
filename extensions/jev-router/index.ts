@@ -28,7 +28,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
   bashWriteRequest,
-  CLASSIFIER,
+  classifierFor,
   classifierRequest,
   type Expert,
   expertRequest,
@@ -208,7 +208,10 @@ export default function (pi: ExtensionAPI) {
     },
   })
 
-  const classifier = (ctx: any) => ctx.modelRegistry.findOfType('classifier', CLASSIFIER.provider, CLASSIFIER.id)
+  const classifier = (ctx: any) => {
+    const c = classifierFor(ariaConfig().router.backend)
+    return ctx.modelRegistry.findOfType('classifier', c.provider, c.id)
+  }
 
   // Classify when a run starts from a user prompt and add the hints as a hidden message: it is
   // stored in the session and sent to the model after the prompt, but not shown in the TUI, and the

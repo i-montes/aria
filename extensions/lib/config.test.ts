@@ -9,7 +9,7 @@ const TODAY = {
   version: 1,
   models: { plan: { provider: 'opencode-go', id: 'mimo-v2.6-pro' }, planThinking: 'high', allowPayPerUse: false },
   quota: { switchAt: 98, planSwitchAt: 90, freeModel: { provider: 'opencode-go', id: 'cat-jam-free' }, askFirst: true, countdownMs: 300000, onNoAnswer: 'switch' },
-  router: { enabled: true },
+  router: { enabled: true, backend: 'opencode' },
   effort: { mode: 'auto', fixedLevel: null, maxOnFree: true },
   compaction: { percent: 40 },
   style: 'very-short',
@@ -67,6 +67,17 @@ describe("the extensions' settings (aria.json)", () => {
     write({ router: { enabled: false } })
     expect(ariaConfig().router.enabled).toBe(false)
     expect(ariaConfig().quota.switchAt).toBe(98)
+  })
+
+  test("the router's backend is the Jev's provider: TypeSafe, else OpenCode", () => {
+    write({ router: { enabled: true, backend: 'typesafe' } })
+    expect(ariaConfig().router).toEqual({ enabled: true, backend: 'typesafe' })
+    write({ router: { enabled: true, backend: 'opencode' } })
+    expect(ariaConfig().router.backend).toBe('opencode')
+    write({ router: { enabled: true } })
+    expect(ariaConfig().router.backend).toBe('opencode')
+    write({ router: { enabled: true, backend: 'somewhere' } })
+    expect(ariaConfig().router.backend).toBe('opencode')
   })
 
   test('is read again on every call', () => {

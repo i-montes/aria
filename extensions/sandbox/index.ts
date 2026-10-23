@@ -17,7 +17,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { createBashToolDefinition } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import { commandPreview, covers, coversPath, emptyGrants, grantDir, grantUnits } from './grants.ts'
-import { CLASSIFIER, parseReview, REVIEW_TIMEOUT_MS, reviewLine, reviewRequest } from './review.ts'
+import { classifierFor, parseReview, REVIEW_TIMEOUT_MS, reviewLine, reviewRequest } from './review.ts'
 import { canAsk, sandboxCard } from './card.ts'
 import { backgroundLine, bashRoute, refusalText, SAID_NO } from './route.ts'
 import { startProcess } from '../background/client.ts'
@@ -83,7 +83,8 @@ export default function sandbox(pi: ExtensionAPI) {
   const review = async (ctx: any, command: string, description: string) => {
     if (!ariaConfig().sandbox.jevReview) return null // Jev's review is off in Aria's settings
     try {
-      const jev = ctx.modelRegistry.findOfType('classifier', CLASSIFIER.provider, CLASSIFIER.id)
+      const c = classifierFor(ariaConfig().router.backend)
+      const jev = ctx.modelRegistry.findOfType('classifier', c.provider, c.id)
       if (!jev) return null
       const result = await ctx.modelRegistry.classify(jev, reviewRequest(command, description), {
         signal: AbortSignal.timeout(REVIEW_TIMEOUT_MS),

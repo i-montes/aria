@@ -17,8 +17,11 @@ pub fn extension_config_with_home(settings: &Settings, home: &Path) -> Value {
     let mut config = json!({
         "version": 1,
         "models": { "planThinking": settings.models.planning_effort, "allowPayPerUse": settings.models.allow_pay_per_use },
-        // Only OpenCode's Jev exists today: another backend leaves the router off (spec, "TypeSafe … not built").
-        "router": { "enabled": settings.router.enabled && settings.router.backend == "opencode" },
+        // Jev comes from OpenCode Go or from TypeSafe; the extensions pick the classifier model from the backend.
+        "router": {
+            "enabled": settings.router.enabled && matches!(settings.router.backend.as_str(), "opencode" | "typesafe"),
+            "backend": settings.router.backend,
+        },
         "effort": { "mode": settings.effort.mode, "fixedLevel": settings.effort.fixed_level, "maxOnFree": settings.effort.max_on_free },
         "compaction": { "percent": settings.compaction.percent },
         "style": settings.assistant.style,
@@ -74,7 +77,7 @@ mod tests {
             "models": { "plan": { "provider": "opencode-go", "id": "mimo-v2.6-pro" }, "planThinking": "high", "allowPayPerUse": false },
             "quota": { "switchAt": 98, "planSwitchAt": 90, "freeModel": { "provider": "opencode-go", "id": "cat-jam-free" },
                        "askFirst": true, "countdownMs": 300000, "onNoAnswer": "switch" },
-            "router": { "enabled": true },
+            "router": { "enabled": true, "backend": "opencode" },
             "effort": { "mode": "auto", "fixedLevel": null, "maxOnFree": true },
             "compaction": { "percent": 40 },
             "style": "very-short",
@@ -97,9 +100,17 @@ mod tests {
     }
 
     #[test]
-    fn the_typesafe_backend_turns_the_router_off() {
+    fn the_router_carries_its_backend() {
+        for backend in ["typesafe", "opencode"] {
+            let mut settings = golden();
+            settings.router.backend = backend.into();
+            let config = extension_config_with_home(&settings, Path::new("/home/u"));
+            assert_eq!(config["router"]["enabled"], true);
+            assert_eq!(config["router"]["backend"], backend);
+        }
         let mut settings = golden();
         settings.router.backend = "typesafe".into();
+        settings.router.enabled = false;
         assert_eq!(extension_config_with_home(&settings, Path::new("/home/u"))["router"]["enabled"], false);
     }
 

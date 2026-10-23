@@ -15,7 +15,7 @@ export interface AriaConfig {
   version: number
   models: { plan: Model; planThinking: string; allowPayPerUse: boolean }
   quota: { switchAt: number; planSwitchAt: number; freeModel: Model; askFirst: boolean; countdownMs: number; onNoAnswer: string }
-  router: { enabled: boolean }
+  router: { enabled: boolean; backend: 'opencode' | 'typesafe' }
   effort: { mode: string; fixedLevel: string | null; maxOnFree: boolean }
   compaction: { percent: number }
   style: string
@@ -35,7 +35,7 @@ export const DEFAULTS: AriaConfig = {
   version: 1,
   models: { plan: { provider: 'opencode-go', id: 'mimo-v2.6-pro' }, planThinking: 'high', allowPayPerUse: false },
   quota: { switchAt: 98, planSwitchAt: 90, freeModel: { provider: 'opencode-go', id: 'cat-jam-free' }, askFirst: true, countdownMs: 5 * 60_000, onNoAnswer: 'switch' },
-  router: { enabled: true },
+  router: { enabled: true, backend: 'opencode' },
   effort: { mode: 'auto', fixedLevel: null, maxOnFree: true },
   compaction: { percent: 40 },
   style: 'very-short',
@@ -56,6 +56,8 @@ function merge(fallback: unknown, value: unknown, path: string): unknown {
     const source = isObject(value) ? value : {}
     return Object.fromEntries(Object.entries(source).map(([key, level]) => [key, typeof level === 'string' && LEVELS.includes(level) ? level : 'ask']))
   }
+  // Where Jev comes from: TypeSafe, or OpenCode Go for anything else.
+  if (path === 'router.backend') return value === 'typesafe' ? value : fallback
   if (path in NULLABLE) return value === null || typeof value === NULLABLE[path] ? value : fallback
   if (Array.isArray(fallback)) return Array.isArray(value) ? value.filter((item) => typeof item === 'string') : fallback
   if (isObject(fallback)) {

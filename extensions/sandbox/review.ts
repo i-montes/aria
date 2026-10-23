@@ -2,7 +2,7 @@
 // comes from the model running the command, so Jev checks it against the command and flags the
 // effects that matter. Jev only answers choice/score/bool questions, so it reviews rather than
 // writes its own summary.
-export { CLASSIFIER } from '../jev-router/route.ts'
+export { CLASSIFIER, classifierFor } from '../jev-router/route.ts'
 
 export const REVIEW_TIMEOUT_MS = 4000
 const YES = 0.5

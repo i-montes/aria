@@ -4,6 +4,10 @@
 // Only the free Jev: the same OpenCode key also reaches the paid one.
 export const CLASSIFIER = { provider: 'opencode', id: 'jev-1.13-free' } as const
 
+// TypeSafe's own Jev, Pi's built-in classifier model: used when the setup has a TypeSafe key and no OpenCode Go.
+export const TYPESAFE_CLASSIFIER = { provider: 'typesafe', id: 'jev-latest' } as const
+export const classifierFor = (backend: string | undefined) => (backend === 'typesafe' ? TYPESAFE_CLASSIFIER : CLASSIFIER)
+
 export type Route = 'quick' | 'focused' | 'parallel' | 'think'
 
 export const ROUTE_CRITERIA: Record<Route, string> = {

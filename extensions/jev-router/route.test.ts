@@ -1,6 +1,6 @@
 // Run: bun test extensions
 import { describe, expect, test } from 'bun:test'
-import { CLASSIFIER, hintLine, jevStatus, methodNote, parseHints } from './route.ts'
+import { CLASSIFIER, classifierFor, hintLine, jevStatus, methodNote, parseHints } from './route.ts'
 
 const hints = (over: Record<string, unknown> = {}) => ({ route: 'focused', routeP: 0.9, memory: false, web: false, notion: false, readOnly: false, ...over }) as any
 
@@ -20,6 +20,13 @@ describe("the route line the dock shows", () => {
 
 test('the classifier is the free Jev, by its exact id (jev-1.13 is paid)', () => {
   expect(CLASSIFIER).toEqual({ provider: 'opencode', id: 'jev-1.13-free' })
+})
+
+test("the classifier follows the setup's backend: TypeSafe's Jev, else OpenCode's", () => {
+  expect(classifierFor('opencode')).toEqual({ provider: 'opencode', id: 'jev-1.13-free' })
+  expect(classifierFor('typesafe')).toEqual({ provider: 'typesafe', id: 'jev-latest' })
+  expect(classifierFor(undefined)).toEqual(CLASSIFIER)
+  expect(classifierFor('somewhere')).toEqual(CLASSIFIER)
 })
 
 describe('offering a plan for sizable work', () => {
