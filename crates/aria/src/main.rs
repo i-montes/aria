@@ -25,6 +25,7 @@ mod keyring_cli;
 mod lines;
 mod omarchy_bar;
 mod schedule_store;
+mod service;
 mod stdio_bridge;
 mod term;
 mod trace;
@@ -33,17 +34,17 @@ mod visibility;
 mod watch;
 mod worktree;
 
-use aria_core::bridge::{DockMessage, PageMessage};
+use aria_core::bridge::DockMessage;
 use aria_core::paths::AriaPaths;
 use aria_core::shortcut::{default_shortcut, InUse, Platform as ShortcutPlatform};
 #[cfg(target_os = "linux")]
 use aria_hyprland::Registration;
-use chat::{ChatCtx, PlatformNotifier, Sessions};
+use chat::PlatformNotifier;
 use dock::Dock;
-use jobs::{Jobs, UPDATE_NOTICE_AFTER};
+use service::Service;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::{mpsc, Arc};
+use std::time::Duration;
 use visibility::Event;
 
 /// What this run of `aria` is.
@@ -147,130 +148,16 @@ fn run_dock() {
     // WebKitGTK needs its renderer flag before GTK starts; on Mac this creates the app object.
     ui::init();
 
-    // Replies from any thread come back to the UI thread through this channel.
-    let (reply_sender, reply_receiver) = mpsc::channel::<DockMessage>();
-    let paths = AriaPaths::from_env();
-    let first_run = !paths.settings().exists();
-    // The keys: in the keyring, with the sealed files written live, before anything below reads a credential (the paths
-    // are cloned into the handlers, the chat and the jobs).
-    let initial = aria_core::settings::load(&paths).ok().flatten();
-    let (paths, vault) = keyring_cli::open_for_dock(paths, initial.as_ref());
-    // The scheduled tasks: changed through every session's jobs socket, run by the scheduler on the tick.
-    let schedules = schedule_store::ScheduleStore::open(paths.clone());
-    let scheduling = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let vault: keyring_cli::Shared = Arc::new(std::sync::Mutex::new(vault));
-    keyring_cli::spawn_sync(vault.clone());
-    let mut settings_watch = chat::SettingsWatch::new(paths.settings());
-    // The chat's messages go through one worker thread (below); the handlers reach it too, to restart every Pi after an
-    // MCP import.
-    let (chat_sender, chat_receiver) = mpsc::channel::<PageMessage>();
-    let ctx = {
-        let chat_sender = chat_sender.clone();
-        Arc::new(handlers::Ctx {
-            restart_engines: Arc::new(move || {
-                let _ = chat_sender.send(PageMessage::EnginesRestart);
-            }),
-            ..handlers::Ctx::real(paths.clone())
-        })
-    };
-
-    // The background work of every session, one for the dock's whole life: its spawner thread is what every job is tied
-    // to, so it must outlive them all. The page hears of every change (at most four times a second).
-    let jobs = {
-        let (slot, sender) = (Arc::new(OnceLock::<Jobs>::new()), reply_sender.clone());
-        let seen = slot.clone();
-        let jobs = Jobs::new(
-            paths.jobs(),
-            Arc::new(move || {
-                if let Some(jobs) = seen.get() {
-                    let _ = sender.send(chat::jobs_message(jobs));
-                }
-            }),
-        );
-        let _ = slot.set(jobs.clone());
-        jobs
-    };
-
-    // The chat owns Pi. Its messages go through one worker thread, in order, so a send is never
-    // overtaken by the abort that follows it.
+    // Everything that is not the window: the sessions, the background work, the scheduled tasks, the terminals.
     let dock_visible = Arc::new(AtomicBool::new(false));
     let visible_now = dock_visible.clone();
-    let run_dir =
-        control::control_socket_path().parent().map(std::path::Path::to_path_buf).unwrap_or_else(std::env::temp_dir);
-    // The sandbox hides `$XDG_RUNTIME_DIR` from boxed commands; without it (a run dir under /tmp) the sessions get no
-    // jobs socket. macOS has no box (every command asks first), so its run dir is as hidden as it needs to be.
-    #[cfg(target_os = "linux")]
-    let hidden_dir = std::env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty()).map(std::path::PathBuf::from);
-    #[cfg(target_os = "macos")]
-    let hidden_dir = Some(run_dir.clone());
-    // Terminal clients (`aria` in a terminal): they speak the page's messages; what they may send goes to the chat's
-    // worker or, for a secret, to the handlers, and what the dock says reaches them through `hub.route`.
-    let hub = {
-        let (ctx, sender) = (ctx.clone(), reply_sender.clone());
-        let handle: Arc<dyn Fn(PageMessage) + Send + Sync> = Arc::new(move |message| {
-            let (ctx, sender) = (ctx.clone(), sender.clone());
-            std::thread::spawn(move || {
-                handlers::handle(message, &ctx, &move |reply| {
-                    let _ = sender.send(reply);
-                })
-            });
-        });
-        clients::Hub::new(chat_sender.clone(), handle)
-    };
-    let chat = {
-        let sender = reply_sender.clone();
-        Sessions::new(
-            ChatCtx {
-                paths,
-                notifier: Arc::new(PlatformNotifier),
-                dock_visible: dock_visible.clone(),
-                chat_shown: Arc::new(AtomicBool::new(true)),
-                run_dir,
-                hidden_dir,
-                path_var: std::env::var("PATH").unwrap_or_default(),
-                quota_fetcher: Arc::new(aria_core::quota::real_fetcher),
-                jobs: jobs.clone(),
-                schedules: schedules.clone(),
-                watchers: hub.watchers(),
-            },
-            Arc::new(move |message| {
-                let _ = sender.send(message);
-            }),
-        )
-    };
-    chat.forget_gone_sessions();
-    match clients::bind(&clients::socket_path()) {
-        Ok(listener) => hub.serve(listener),
-        Err(error) => note(&format!("terminals cannot connect: {error}")),
-    }
-    let chat_for_visibility = chat.clone();
-    let chat_for_settings = chat.clone();
-    std::thread::spawn(move || {
-        for message in chat_receiver {
-            chat.handle(message);
-        }
-    });
+    let mut service =
+        Service::start(service::Options { notifier: Arc::new(PlatformNotifier), dock_visible: dock_visible.clone() });
+    let first_run = service.first_run;
 
     let dock = {
-        let reply_sender = reply_sender.clone();
-        Dock::new(
-            dock_visible,
-            Box::new(move |message, _dock| {
-                if handlers::is_chat(&message) {
-                    let _ = chat_sender.send(message);
-                    return;
-                }
-                let (ctx, sender) = (ctx.clone(), reply_sender.clone());
-                let emit = move |reply: DockMessage| {
-                    let _ = sender.send(reply);
-                };
-                if handlers::is_blocking(&message) {
-                    std::thread::spawn(move || handlers::handle(message, &ctx, &emit));
-                } else {
-                    handlers::handle(message, &ctx, &emit);
-                }
-            }),
-        )
+        let inlet = service.page_inlet();
+        Dock::new(dock_visible, Box::new(move |message, _dock| inlet.handle(message)))
     };
     // The page needs the shortcut for its notice and its "you are set up" screen: the default (Super + A on Omarchy,
     // Option + Space on macOS) until the one in use is known, and again whenever it changes.
@@ -335,17 +222,11 @@ fn run_dock() {
     // live on unseen (macOS has no PR_SET_PDEATHSIG to end it with the dock).
     #[cfg(target_os = "macos")]
     {
-        let (jobs, chat, vault) = (jobs.clone(), chat_for_visibility.clone(), vault.clone());
-        ui::on_terminate(move || {
-            eprintln!("aria: stopping");
-            jobs.stop_all();
-            chat.stop_for_update();
-            keyring_cli::close(&vault);
-        });
+        let stop = service.stopper();
+        ui::on_terminate(stop);
     }
-    let mut was_visible = false;
-    let mut update_ready = false;
-    let mut jobs_wait = JobsWait::default();
+    // The UI ticks since the start, for the Mac's shortcut retries (the service counts its own).
+    #[cfg(target_os = "macos")]
     let mut ticks: u32 = 0;
     // macOS: Aria's face beside the notch; a click on it does what the shortcut does.
     #[cfg(target_os = "macos")]
@@ -363,22 +244,15 @@ fn run_dock() {
         if let Some(wing) = &face_wing {
             wing.tick();
         }
-        if quit_requested(&QUIT, || {
-            eprintln!("aria: stopping");
-            jobs.stop_all();
-            chat_for_visibility.stop_for_update();
-            keyring_cli::close(&vault);
-        }) {
+        let tick = service.tick(visible_now.load(Ordering::SeqCst));
+        if tick.quit {
             std::process::exit(0);
         }
-        // About once a second: a settings change (the settings screen, `/effort`, `/autocompact`, an editor) reaches
-        // every session's Pi when its run settles, and the page reads the settings again.
-        ticks = ticks.wrapping_add(1);
-        let settings_changed = ticks.is_multiple_of(60) && settings_watch.changed();
-        if settings_changed {
-            // Off the UI thread: preparing the agent directory reads and writes files.
-            let sessions = chat_for_settings.clone();
-            std::thread::spawn(move || sessions.settings_changed());
+        #[cfg(target_os = "macos")]
+        {
+            ticks = ticks.wrapping_add(1);
+        }
+        if tick.settings_changed {
             dock.send(&DockMessage::SettingsChanged);
             #[cfg(target_os = "linux")]
             hotkey.settings_changed();
@@ -387,7 +261,7 @@ fn run_dock() {
         // fallback is in use (the retries are quiet: only a change of the shortcut in use is reported).
         #[cfg(target_os = "macos")]
         {
-            let retry_tick = ticks.is_multiple_of(MAC_HOTKEY_RETRY_TICKS);
+            let (settings_changed, retry_tick) = (tick.settings_changed, ticks.is_multiple_of(MAC_HOTKEY_RETRY_TICKS));
             if settings_changed || retry_tick {
                 let chosen = shortcut_setting(&AriaPaths::from_env());
                 if aria_mac::carbon::pass_due(mac_held.as_ref(), &chosen, settings_changed, retry_tick) {
@@ -398,36 +272,6 @@ fn run_dock() {
                 }
             }
         }
-        // Every 30 s, the turn watchdog: a run that got nothing from its Pi for `models.turnTimeoutMinutes` is stopped,
-        // and the chat says so. Off the UI thread: it reads the settings.
-        if ticks.is_multiple_of(WATCHDOG_TICKS) {
-            let sessions = chat_for_settings.clone();
-            std::thread::spawn(move || sessions.check_stalled(Instant::now()));
-        }
-        // Once a second, the scheduled tasks: each due one runs in its own tab (a time missed while the computer slept or
-        // Aria was off runs once, and only today's), and a run that waited for its busy tab starts once it is free. Off
-        // the UI thread, one check at a time: starting a tab's Pi takes a moment.
-        if ticks.is_multiple_of(60) && !scheduling.swap(true, Ordering::SeqCst) {
-            let (sessions, schedules, scheduling) = (chat_for_settings.clone(), schedules.clone(), scheduling.clone());
-            std::thread::spawn(move || {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_millis() as i64);
-                for (task, due_at) in schedules.take_due(now, &aria_core::schedules::SystemClock) {
-                    let late = if aria_core::schedules::late(due_at, now) { ", late" } else { "" };
-                    note(&format!("running the scheduled task {} ({}){late}", task.id, task.title));
-                    sessions.start_scheduled(&task, due_at);
-                }
-                sessions.flush_scheduled();
-                scheduling.store(false, Ordering::SeqCst);
-            });
-        }
-        // A dock that just hid with a question still open needs its notification.
-        let visible = visible_now.load(Ordering::SeqCst);
-        if was_visible && !visible {
-            chat_for_visibility.dock_visibility_changed();
-        }
-        was_visible = visible;
         while let Ok(command) = receiver.try_recv() {
             match command.as_str() {
                 "hotkey" => {
@@ -443,38 +287,12 @@ fn run_dock() {
                     note("asked to quit");
                     request_quit()
                 }
-                "update-ready" => {
-                    eprintln!("aria: a new version is installed; restarting once the dock is hidden and idle");
-                    update_ready = true;
-                }
+                "update-ready" => service.update_ready(),
                 _ => {}
             }
         }
-        // An update kept waiting by background work alone (a dev server can run all day): its sessions say how to
-        // update now, once per wait.
-        if update_ready && ticks.is_multiple_of(60) {
-            let only_jobs = !chat_for_visibility.busy_without_jobs() && jobs.active() > 0;
-            if jobs_wait.due(only_jobs, Instant::now()) {
-                chat_for_visibility.tell_update_waits();
-            }
-        }
-        // A new binary is installed: it takes over once nobody is looking and no run or background work would be cut.
-        // The tabs and their conversations come back as after any restart.
-        if update_ready && ticks.is_multiple_of(60) && !visible && !chat_for_visibility.busy() {
-            eprintln!("aria: restarting into the new version");
-            chat_for_visibility.stop_for_update();
-            // Nothing should be running (`busy` said so), but a job started since must not outlive this dock unseen.
-            jobs.stop_all();
-            // The live copies stay for the new process, which seals them when it opens the vault.
-            keyring_cli::sync_now(&vault);
-            let error = control::reexec();
-            eprintln!("aria: could not start the new version: {error}");
-            std::process::exit(75); // not a clean exit: systemd and launchd start the dock again
-        }
-        while let Ok(reply) = reply_receiver.try_recv() {
-            if hub.route(&reply) {
-                dock.send(&reply);
-            }
+        for reply in &tick.to_page {
+            dock.send(reply);
         }
         #[cfg(target_os = "linux")]
         while let Ok(state) = registration_receiver.try_recv() {
@@ -552,9 +370,6 @@ fn report_mac_hotkey(
 #[cfg(target_os = "macos")]
 const MAC_HOTKEY_RETRY_TICKS: u32 = 10_000 / 16;
 
-/// How often the turn watchdog looks, in UI ticks of 16 ms: every 30 s.
-const WATCHDOG_TICKS: u32 = 30_000 / 16;
-
 /// A line in the dock's log with the time (UTC), for what happens between a keypress and the dock on screen: when the
 /// dock does not open, the log says whether the shortcut arrived, what state the dock was in and whether the page
 /// answered.
@@ -611,40 +426,6 @@ fn install_quit_handlers() {
     }
 }
 
-/// Whether the dock should exit now: when a quit was asked for, after `shutdown` (which stops the background work and
-/// the sessions' Pis) ran.
-fn quit_requested(flag: &AtomicBool, shutdown: impl FnOnce()) -> bool {
-    if !flag.load(Ordering::SeqCst) {
-        return false;
-    }
-    shutdown();
-    true
-}
-
-/// How long an update has waited for background work alone, so the sessions with that work are told once per wait.
-#[derive(Default)]
-struct JobsWait {
-    since: Option<Instant>,
-    told: bool,
-}
-
-impl JobsWait {
-    /// `only_jobs`: the update waits for background work and nothing else right now. True once, when that has lasted
-    /// `UPDATE_NOTICE_AFTER`; anything else in the way (a run, a dialog) or no work left starts a new wait.
-    fn due(&mut self, only_jobs: bool, now: Instant) -> bool {
-        if !only_jobs {
-            *self = JobsWait::default();
-            return false;
-        }
-        let since = *self.since.get_or_insert(now);
-        if self.told || now.duration_since(since) < UPDATE_NOTICE_AFTER {
-            return false;
-        }
-        self.told = true;
-        true
-    }
-}
-
 /// Tests that start child processes or hold a listening socket take turns: a fork in one test
 /// leaves copies of every open descriptor in the child until it execs, which keeps a dropped socket
 /// "listening" and a freshly written script "busy" for a moment.
@@ -667,30 +448,4 @@ mod tests {
         assert_eq!(mode(Some("toggle"), true), Mode::Command);
     }
     use super::*;
-
-    #[test]
-    fn a_quit_stops_the_work_before_the_dock_exits() {
-        let flag = AtomicBool::new(false);
-        let mut stopped = 0;
-        assert!(!quit_requested(&flag, || stopped += 1), "no quit asked for: the dock goes on");
-        assert_eq!(stopped, 0);
-        flag.store(true, Ordering::SeqCst);
-        assert!(quit_requested(&flag, || stopped += 1));
-        assert_eq!(stopped, 1, "stopped before the exit");
-    }
-
-    #[test]
-    fn an_update_waiting_for_jobs_alone_is_told_once_per_wait() {
-        let start = Instant::now();
-        let mut wait = JobsWait::default();
-        assert!(!wait.due(true, start));
-        assert!(!wait.due(true, start + UPDATE_NOTICE_AFTER - Duration::from_secs(1)));
-        assert!(wait.due(true, start + UPDATE_NOTICE_AFTER));
-        assert!(!wait.due(true, start + UPDATE_NOTICE_AFTER * 2), "once per wait");
-        // A run in between starts a new wait.
-        assert!(!wait.due(false, start + UPDATE_NOTICE_AFTER * 2));
-        let again = start + UPDATE_NOTICE_AFTER * 3;
-        assert!(!wait.due(true, again));
-        assert!(wait.due(true, again + UPDATE_NOTICE_AFTER));
-    }
 }

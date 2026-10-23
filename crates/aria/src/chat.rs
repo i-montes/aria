@@ -185,9 +185,10 @@ pub struct ChatCtx {
     pub dock_visible: Arc<AtomicBool>,
     /// Is the chat what the dock shows? False while the settings are open: a prompt then needs a notification too.
     pub chat_shown: Arc<AtomicBool>,
-    /// Where the sessions' subagent sockets live (`$XDG_RUNTIME_DIR/aria`).
+    /// Where the sessions' subagent sockets live (`aria/` in the runtime directory, `control::runtime_dir`).
     pub run_dir: PathBuf,
-    /// The folder boxed commands cannot see (`$XDG_RUNTIME_DIR`, which the sandbox hides; `None` when unset). A jobs
+    /// The folder boxed commands cannot see (the runtime directory, which the sandbox hides; `None` when it is only the
+    /// `/tmp` fallback, which a boxed command sees). A jobs
     /// socket is opened only inside it: anywhere else a boxed command could reach it and start work outside the box.
     pub hidden_dir: Option<PathBuf>,
     /// The `PATH` Pi inherits (the shim directory goes in front of it).
@@ -2354,7 +2355,7 @@ impl Launcher for SessionLauncher {
 }
 
 /// Whether `run_dir` is inside `hidden`, the folder the sandbox hides from boxed commands.
-fn hidden_from_the_box(run_dir: &std::path::Path, hidden: Option<&std::path::Path>) -> bool {
+pub(crate) fn hidden_from_the_box(run_dir: &std::path::Path, hidden: Option<&std::path::Path>) -> bool {
     hidden.is_some_and(|hidden| hidden.is_absolute() && run_dir.starts_with(hidden))
 }
 
@@ -5790,7 +5791,7 @@ mod tests {
     #[test]
     fn no_jobs_socket_where_a_boxed_command_could_reach_it() {
         let h = harness();
-        // A run dir outside the hidden folder (`$XDG_RUNTIME_DIR` unset: the run dir falls back to /tmp).
+        // No hidden folder (the runtime directory is only the /tmp fallback): a boxed command could see the run dir.
         let ctx = ChatCtx {
             paths: h.paths.clone(),
             notifier: h.notifier.clone(),
@@ -5896,7 +5897,10 @@ mod tests {
         assert_eq!(args, ["--model", "opencode-go/x", "--thinking", "high"]);
         assert!(env.iter().any(|(k, v)| k == "PI_WATCH_SOCK" && v.ends_with("watch-s1.sock")), "{env:?}");
         assert!(env.iter().any(|(k, _)| k == "PI_CODING_AGENT_DIR"), "{env:?}");
-        assert!(env.iter().any(|(k, v)| k == "PONYTAIL_QUIET_STARTUP" && v == "1"), "subagents stay quiet too: {env:?}");
+        assert!(
+            env.iter().any(|(k, v)| k == "PONYTAIL_QUIET_STARTUP" && v == "1"),
+            "subagents stay quiet too: {env:?}"
+        );
         assert!(unset.iter().any(|name| name == "ARIA_JOBS_SOCK"), "{unset:?}");
 
         let mut settings = settings::load(&h.paths).unwrap().unwrap();
