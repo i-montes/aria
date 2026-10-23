@@ -444,13 +444,15 @@ fn conversation_marked(v: &SessionView, width: u16) -> (Vec<Line<'static>>, Vec<
                 lines
             }
             Entry::Tools { calls } => calls.iter().filter(|c| !c.think).map(|call| step_line(call, v, width)).collect(),
+            // Aria's own words (an extension's notice, the dock's): a mark and a colour of their own, never the answer's.
             Entry::Notice { tone, text } => {
-                let colour = match tone {
-                    Tone::Info => p.text,
-                    Tone::Warn => p.amber,
-                    Tone::Error => p.coral,
+                let (mark, mark_colour, colour) = match tone {
+                    Tone::Info => ("ⓘ ", p.accent, p.grey),
+                    Tone::Warn => ("▲ ", p.amber, p.amber),
+                    Tone::Error => ("✕ ", p.coral, p.coral),
                 };
-                wrap(&say(&v.lang, text), width, vec![Span::raw("  ")], "  ", Style::default().fg(colour))
+                let first = vec![Span::raw("  "), Span::styled(mark, Style::default().fg(mark_colour))];
+                wrap(&say(&v.lang, text), width, first, "    ", Style::default().fg(colour))
             }
             Entry::Note { text } => {
                 vec![Line::from(vec![Span::styled(format!("  · {}", say(&v.lang, text)), Style::default().fg(p.grey))])]
@@ -927,6 +929,21 @@ mod tests {
         let narrow = text(&render(&view(&s, true), 40, 12));
         let footer = narrow.lines().last().unwrap().trim_start();
         assert!(footer.starts_with("opus 5.5"), "the footer keeps its left side: {footer}");
+    }
+
+    #[test]
+    fn a_system_notice_stands_apart_from_the_answer() {
+        let mut s = worked();
+        s.entries.push(Entry::Notice {
+            tone: crate::term::state::Tone::Info,
+            text: crate::term::state::Text::Raw("Jev: jev-1.13-free is out of quota until 07:00 PM".into()),
+        });
+        let b = render(&view(&s, true), 100, 30);
+        let screen = text(&b);
+        assert!(screen.contains("ⓘ Jev: jev-1.13-free"), "a mark says it is Aria's, not the model's: {screen}");
+        let p = Palette::truecolor();
+        assert_ne!(colour_of(&b, "Jev: jev-1.13-free"), p.text, "never in the answer's colour");
+        assert_eq!(colour_of(&b, "ⓘ"), p.accent);
     }
 
     #[test]
