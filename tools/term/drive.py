@@ -80,6 +80,11 @@ os.write(fd, b"!pwd\r")
 until(fd, "!pwd", 30)
 screen = until(fd, folder.split("/")[-1], 30)
 ok("!pwd ran in the session")
+os.write(fd, b"/context\r")
+until(fd, "\u25a1", 30)  # the grid's free cells
+ok("/context draws what fills the context")
+os.write(fd, b"\x1b")
+time.sleep(0.5)
 os.write(fd, b"\x03")  # Ctrl+C
 time.sleep(1)
 done, status = os.waitpid(pid, os.WNOHANG)
@@ -90,11 +95,10 @@ ok("the session is still there after leaving")
 
 pid, fd = start()
 until(fd, folder)
+# The list shows the latest activity first: the session just used is on top.
 os.write(fd, b"\x1b[A" * 10)
 time.sleep(0.2)
-rows = [s for s in sessions() if s.get("schedule") is None]
-index = [s["id"] for s in rows].index(new[0]["id"])
-os.write(fd, b"\x1b[B" * index + b"\r")
+os.write(fd, b"\r")
 until(fd, "!pwd", 30)
 ok("attaching again shows the conversation (the !pwd is there)")
 os.write(fd, b"/exit\r")

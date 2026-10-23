@@ -127,6 +127,25 @@ every session, and leaving the terminal stops nothing.
   (the dock's own texts first, then the client's), `screen.rs` (raw mode, the alternate screen, the mouse, focus and
   pasted text, always given back). `tools/term/live-check.sh` drives it against a real dock in a scratch home.
 
+### Milestone 2
+
+- **What each session is doing** — each `Chat` keeps a status (`working`, `waiting` for an answer, `done` and not seen
+  yet, `idle`) and when it changed, and emits `sessionStatus` on every change and after a `sessionsLoad`; the hub sends
+  it to every client, attached or not. Looking at a session (a `chatLoad`, the dock becoming visible) turns `done` into
+  `idle` and takes its "it finished" notification away.
+- **Checkpoints** (`checkpoints.rs`) — a git repository of the dock's own per session (`~/.aria/checkpoints/<session>`,
+  the session's folder as its work tree, the project's `.git` untouched, files over 5 MB and what the project ignores
+  left out, 50 listed). One is taken before a turn's first message (`chatSend` without behavior, or a queued message when
+  Pi takes it); when the turn settles, `chatEvent { type: "changes", files, added, removed }`. `chatCheckpoints` lists
+  them; `chatUndo` restores the folder, forks Pi before that message (`get_fork_messages`, `fork`) and tells the
+  conversation again (`session_reset`, then the history; the new session id becomes the tab's segment). The projects
+  folder itself gets none.
+- **Notifications** — a run that settles where nobody looks raises one notification titled with the session's name;
+  the session's next one replaces it (`Notifier::dismiss_titled`), looking at it takes it away.
+- **Extensions** — `tasks` (`tasks_update`, drawn above the terminal's editor), `context` (the status `aria-context`,
+  drawn by `/context`), `verify` (the project's checks after edits, the status `aria-verify`), and the router's
+  `methodNote` for focused work.
+
 ## The messages
 
 One JSON object per message with a `type`, defined in `crates/aria-core/src/bridge.rs`. Requests that expect an answer carry an `id` that the answer repeats.
@@ -140,6 +159,7 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 | `openUrl` | open an `https://` link in the browser |
 | `installClaudeBridge`, `enginesRestart` | install the Claude provider; restart every Pi after a credential changed |
 | `sessionsLoad`, `sessionsSave`, `sessionClose`, `chatShown` | the tabs; is the chat on screen (not the settings) |
+| `session` (also wrapping `chatCheckpoints`, `chatUndo`) | the checkpoints of a session, and going back to one (answered `checkpoints`, `saved` or `error`: `busy`, `failed`) |
 | `sessionNew` | a terminal opens a tab, in its `workdir`; answered `sessionAdded` (or `error`: `too-many-sessions`, `session-failed`) |
 | `session` (wrapping `chatSend`, `chatAbort`, `chatLoad`, `chatEarlier`, `chatClearQueue`, `uiAnswer`, `listCommands`, `listModels`, `setModel`, `listFiles`) | everything about one tab's conversation. `chatEarlier { cursor? }` asks for the 40 earlier messages before `cursor` (none: the newest earlier page), read from the tab's segment files without Pi; it is answered with a `chatEvent` `{ type: 'earlier', messages, cursor, more }` (`cursor` `{ segment, index }` points at the page's first message; `more` says whether anything is before it). `chatSend` may carry `attachments: [{ name, mime, data }]` (base64; at most 10, 20 MB each, 50 MB together): the dock saves them under `~/.aria/attachments/<session>/<yyyy-mm-dd>/<n>-<safe name>` and adds a line per file to the message, `[attached: <name> (<mime>, <size>) at <path>]`, or `[attached image: <name> at <path>]` with the image itself in Pi's `images` when the session's model can see images. A save that fails, or a message with files when Pi cannot start, comes back as `command_failed` with the page's own text, so the page gives the text and the files back. `chatLoad` carries `fresh: true` from a page that just loaded (once per tab): a Pi that was already running sends that page its conversation again |
 | `jobStop`, `jobDismiss` | stop a background job; take a failed one off the strip (no answer: the next `jobs` shows it) |
@@ -155,6 +175,7 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 | `mcpFound` | the answer to `mcpScan`: per server its `id`, `name`, `importAs` (the name Pi accepts), `source` (`claude-code`, `claude-desktop`, `cursor`, `vscode`), `kind` (`stdio`, `http`, `sse`), `target` (the command's name or the URL's host), `secrets` (env and header names only, and `input:<id>` for a VS Code prompt), `warnings` (what may not work the same in Aria, shown in the row as "check it after importing": `expands:<NAME>` for a variable the other app fills in a command, argument, folder or URL where Pi does not, `default:<NAME>` for Claude Code's `${NAME:-default}`, `unsupported:<what>` for a `${what}` Aria cannot fill in such as `workspaceFolder`, `tilde-arg` for an argument starting with `~`, which Pi reads as the home folder, `envFile` for VS Code's env file, not imported), `importable` and `disabled`. Servers already in Aria's `mcp.json`, and `engram`, are left out |
 | `problem` | something prevents Aria from working (for example `hyprland-classic-config`) |
 | `sessions` | the saved tabs |
+| `sessionStatus` (wrapped in `session`) | what a session is doing and since when; the page ignores it, every terminal gets it |
 | `sessionAdded`, `sessionRemoved`, `sessionsChanged` | a tab the dock opened (a terminal's, or the one replacing the last tab closed: there is always one), a tab closed anywhere, the page saved the tabs |
 | `session` (wrapping `chatState`, `chatEvent`, `chatDialog`, `chatDialogClosed`, `chatEngine`, `chatQuota`, and the replies `commands`, `models`, `files`, `saved`, `error`) | what one tab's Pi says |
 | `jobs` | every session's background jobs, dismissed ones included (not wrapped in a session) |
