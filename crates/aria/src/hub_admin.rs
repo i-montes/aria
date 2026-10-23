@@ -303,17 +303,25 @@ const REMOTE_VERSION: &str = "~/.local/bin/aria --version";
 const REMOTE_BWRAP: &str = "bwrap --unshare-user --ro-bind / / true";
 const REMOTE_SSHD_CONFIG: &str = "cat /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config 2>/dev/null";
 
-/// Reads one validated key line from stdin and adds it to `authorized_keys` as the restricted line, once (a key already
-/// there, whatever its options or comment, is the same key: the blob is compared). Nothing is interpolated: the key
-/// arrives on stdin and the home is the remote shell's own `$HOME`. Plain POSIX, with no single quote in it.
+/// Reads one validated key line from stdin and adds it to `authorized_keys` as the restricted line, once. sshd uses the
+/// first line a key matches, so the blob is looked for in the lines that are not comments: none holds it, the line is
+/// added (after a newline, when the file lacks one at its end); the first one starts with `restrict,command=`, it is
+/// already allowed; any other is the same key with no restriction, which is reported (exit 3) and left for its owner.
+/// Nothing is interpolated: the key arrives on stdin and the home is the remote shell's own `$HOME`. Plain POSIX, with
+/// no single quote in it.
 const REMOTE_ALLOW_KEY: &str = concat!(
-    r#"umask 077; mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh" && touch "$HOME/.ssh/authorized_keys" "#,
-    r#"&& chmod 600 "$HOME/.ssh/authorized_keys" && IFS= read -r key "#,
+    r#"umask 077; f="$HOME/.ssh/authorized_keys"; mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh" "#,
+    r#"&& touch "$f" && chmod 600 "$f" && IFS= read -r key "#,
     r#"&& blob=$(printf "%s\n" "$key" | cut -d" " -f2) "#,
-    r#"&& if grep -Fq " $blob" "$HOME/.ssh/authorized_keys"; then echo "already allowed"; "#,
-    r#"else printf "restrict,command=\"%s/.local/bin/aria client-stdio\" %s\n" "$HOME" "$key" "#,
-    r#">> "$HOME/.ssh/authorized_keys" && echo "allowed"; fi"#,
+    r#"&& first=$(grep -v "^[[:space:]]*#" "$f" | grep -F " $blob" | head -n 1) "#,
+    r#"&& case "$first" in "") if [ -s "$f" ] && [ -n "$(tail -c 1 "$f")" ]; then echo >> "$f"; fi; "#,
+    r#"printf "restrict,command=\"%s/.local/bin/aria client-stdio\" %s\n" "$HOME" "$key" >> "$f" && echo "allowed" ;; "#,
+    r#""restrict,command="*) echo "already allowed" ;; "#,
+    r#"*) echo "unrestricted"; exit 3 ;; esac"#,
 );
+
+/// The exit status `REMOTE_ALLOW_KEY` ends with when the key is there without the restriction.
+const KEY_UNRESTRICTED: i32 = 3;
 
 /// The key types a bare public key line starts with.
 const KEY_TYPES: [&str; 7] = [
@@ -662,6 +670,17 @@ fn probe_text(host: &str, command: &str) -> Result<String, Failure> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// The listeners `ss -ltnH -n` shows, or none when `ss` fails, is missing or says nothing usable: a hub whose sshd cannot
+/// be seen is not one that has none, so an empty list means "could not tell" (every reachable hub listens on something).
+fn probe_listeners(host: &str) -> Result<Vec<Listener>, Failure> {
+    let output = remote(host, "ss -ltnH -n", None).map_err(|error| failed(describe_error(&error)))?;
+    match output.status.code() {
+        Some(255) => Err(failed(format!("ssh could not reach or log in to {host}: {}", first_line(&output.stderr)))),
+        Some(0) => Ok(parse_listeners(&String::from_utf8_lossy(&output.stdout))),
+        _ => Ok(Vec::new()),
+    }
+}
+
 /// What `ssh -G <host>` gives (the owner's ssh configuration, nothing is connected).
 fn ssh_config(host: &str) -> Result<(u16, String), Failure> {
     crate::connect::check_host(host).map_err(|_| usage_error(format!("{host}: not a host")))?;
@@ -764,7 +783,7 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
     if !home.starts_with('/') || home.chars().any(|c| c.is_control() || c.is_whitespace() || c == '"') {
         return Err(failed(format!("the hub's home directory ({home:?}) is not a plain absolute path")));
     }
-    let listeners = parse_listeners(&probe_text(host, "ss -ltnH -n")?);
+    let listeners = probe_listeners(host)?;
     let found = parse_found(&probe_text(host, "command -v xz bwrap node npm tailscale")?);
     let has = |name: &str| found.iter().any(|found| found == name);
     let node_version = if has("node") {
@@ -829,11 +848,26 @@ fn confirmed(yes: bool) -> bool {
     std::io::stdin().read_line(&mut answer).is_ok() && answer_is_yes(&answer)
 }
 
+/// What is already on the hub when a step fails, said honestly.
+fn on_the_hub_after(step: usize) -> &'static str {
+    match step {
+        1 => "The upload may be partial in `~/.aria/hub-src`; nothing else on the hub was changed",
+        2 => {
+            "`~/.aria/hub-src` is uploaded and the installer may have partly run; running `aria hub init` again is safe"
+        }
+        3 => "the installer ran; nothing was imported",
+        4 => "the credentials and settings are already on the hub, the service did not restart",
+        _ => "everything was installed and imported; only the version check failed",
+    }
+}
+
 /// The writes, in order. A failing step 1 to 5 stops the run; the key (6) and the checks (7) report and go on.
 fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -> Result<i32, Failure> {
     let host = args.host.as_str();
     let total = if args.client_key.is_some() { 6 } else { 5 };
-    let stopped = |step: usize, what: &str, detail: String| failed(format!("step {step} ({what}) failed: {detail}"));
+    let stopped = |step: usize, what: &str, detail: String| {
+        failed(format!("step {step} ({what}) failed: {detail}. {}", on_the_hub_after(step)))
+    };
 
     println!("step 1 of {total}: uploading to {HUB_SRC}");
     let mut files: Vec<(String, Vec<u8>, u32)> = Vec::new();
@@ -856,6 +890,9 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
     if !status.success() {
         return Err(stopped(2, "installer", describe(status)));
     }
+    // The installer may have put iproute2 on the hub: a `ss` that was missing is asked again before giving up.
+    let listeners =
+        if probe.listeners.is_empty() { probe_listeners(host).unwrap_or_default() } else { probe.listeners.clone() };
 
     println!("step 3 of {total}: sending settings and credentials");
     let output = remote(host, REMOTE_IMPORT, Some(bundle_line.as_bytes()))
@@ -881,11 +918,25 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
     println!("      the hub runs {}", first_line(&output.stdout));
 
     let mut code = 0;
-    if let Some(key) = &args.client_key {
+    // Whether the hub now has the key, restricted: only then is it said to be what protects the hub.
+    let mut key = KeyState::None;
+    if let Some(line) = &args.client_key {
         println!("step 6 of {total}: allowing your key, restricted to Aria's bridge");
-        let sent = format!("{key}\n");
+        let sent = format!("{line}\n");
+        key = KeyState::Unconfirmed;
         match remote(host, REMOTE_ALLOW_KEY, Some(sent.as_bytes())) {
-            Ok(output) if output.status.success() => println!("      {}", first_line(&output.stdout)),
+            Ok(output) if output.status.success() => {
+                println!("      {}", first_line(&output.stdout));
+                key = KeyState::Restricted;
+            }
+            Ok(output) if output.status.code() == Some(KEY_UNRESTRICTED) => {
+                eprintln!(
+                    "aria hub init: step 6 (key) failed: that key is already in authorized_keys WITHOUT the restriction: \
+                     edit it yourself to start with `{} `",
+                    authorized_line(&probe.home, "").trim_end()
+                );
+                code = 1;
+            }
             Ok(output) => {
                 eprintln!(
                     "aria hub init: step 6 (key) failed: {} {}",
@@ -902,7 +953,7 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
     }
 
     check_sandbox(host);
-    check_public_ssh(host, probe, args.client_key.is_some());
+    check_public_ssh(host, probe, &listeners, key);
     if code == 0 {
         println!("The hub is ready. Connect from this computer with: aria connect {host}");
     }
@@ -935,9 +986,26 @@ fn check_sandbox(host: &str) {
     );
 }
 
-/// Says once when sshd can be reached from beyond the hub's private networks. Nothing is changed.
-fn check_public_ssh(host: &str, probe: &Probe, has_key: bool) {
-    if !public_ssh(&probe.listeners, probe.sshd_port) {
+/// What the hub's `authorized_keys` holds of the owner's `--client-key` after step 6.
+#[derive(Clone, Copy, PartialEq)]
+enum KeyState {
+    /// No `--client-key` was given.
+    None,
+    /// One was given and step 6 did not end well: the hub is not known to hold it restricted.
+    Unconfirmed,
+    Restricted,
+}
+
+/// Says once when sshd can be reached from beyond the hub's private networks, or that it could not be checked. Nothing
+/// is changed.
+fn check_public_ssh(host: &str, probe: &Probe, listeners: &[Listener], key: KeyState) {
+    if listeners.is_empty() {
+        println!(
+            "warning: could not check whether sshd is open to the internet (`ss` failed or is missing); check it yourself."
+        );
+        return;
+    }
+    if !public_ssh(listeners, probe.sshd_port) {
         return;
     }
     println!(
@@ -945,10 +1013,16 @@ fn check_public_ssh(host: &str, probe: &Probe, has_key: bool) {
          yourself (Aria never edits sshd_config, the firewall or Tailscale).",
         probe.ssh_host, probe.sshd_port
     );
-    if has_key {
-        println!("  Meanwhile the restricted client key (it can only run `aria client-stdio`) and key-only login are the protection.");
-    } else {
-        println!("  Meanwhile the protection is key-only login; add a restricted client key with --client-key.");
+    match key {
+        KeyState::Restricted => println!(
+            "  Meanwhile the restricted client key (it can only run `aria client-stdio`) and key-only login are the protection."
+        ),
+        KeyState::Unconfirmed => println!(
+            "  Meanwhile the protection is key-only login; your client key is not known to be restricted yet (see step 6)."
+        ),
+        KeyState::None => {
+            println!("  Meanwhile the protection is key-only login; add a restricted client key with --client-key.")
+        }
     }
     // Best effort, and only what a user can read: no sudo.
     let config = remote(host, REMOTE_SSHD_CONFIG, None)

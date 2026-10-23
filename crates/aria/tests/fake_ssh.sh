@@ -6,6 +6,8 @@
 # recorded as `-G <host>`. Answers are canned, chosen by the command; env vars select variants:
 #   ARIA_FAKE_SSH_ARCH         the answer of `uname -m` (default aarch64)
 #   ARIA_FAKE_SSH_PUBLIC       0: sshd listens on a Tailscale address only (default: on every address)
+#   ARIA_FAKE_SSH_SS           fail: `ss` fails (not installed); empty: it answers nothing; fail-until-install: it fails
+#                              until the installer has run
 #   ARIA_FAKE_SSH_MISSING      names `command -v` does not find (default none): xz bwrap node npm tailscale
 #   ARIA_FAKE_SSH_NODE         the answer of `node --version` (default v18.19.1)
 #   ARIA_FAKE_SSH_BWRAP_FAIL   1: the sandbox probe fails
@@ -39,6 +41,12 @@ case "$cmd" in
   *os-release*) echo "Ubuntu 24.04.2 LTS" ;;
   'echo $HOME') echo /home/ana ;;
   "ss -ltnH -n")
+    case "${ARIA_FAKE_SSH_SS:-ok}" in
+      fail) echo "sh: ss: command not found" >&2; exit 127 ;;
+      empty) exit 0 ;;
+      fail-until-install)
+        if [ ! -f "$root/installed" ]; then echo "sh: ss: command not found" >&2; exit 127; fi ;;
+    esac
     echo "LISTEN 0 4096 127.0.0.1:631 0.0.0.0:*"
     if [ "${ARIA_FAKE_SSH_PUBLIC:-1}" = 0 ]; then
       echo "LISTEN 0 128 100.64.0.9:2222 0.0.0.0:*"
@@ -52,7 +60,7 @@ case "$cmd" in
     done ;;
   "node --version") echo "${ARIA_FAKE_SSH_NODE:-v18.19.1}" ;;
   *"tar -xf"*) HOME="$root/home" sh -c "$cmd" < "$stdin_file" ;;
-  *install.sh*) echo "fake installer: Aria is installed and running as aria-serve.service" ;;
+  *install.sh*) touch "$root/installed"; echo "fake installer: Aria is installed and running as aria-serve.service" ;;
   *hub-import*)
     if [ "${ARIA_FAKE_SSH_IMPORT_FAIL:-0}" = 1 ]; then
       printf 'aria hub-import: the bundle is not one: invalid value: %s\n' "$(cut -c1-60 "$stdin_file")" >&2

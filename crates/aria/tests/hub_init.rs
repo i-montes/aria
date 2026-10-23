@@ -7,7 +7,8 @@ use std::process::{Command, Output, Stdio};
 
 const PINS: [&str; 5] = ["pi-version", "pi-packages", "engram-version", "agent-browser-version", "node-version"];
 const KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl ana@laptop";
-const TOOLS: [&str; 11] = ["sh", "cat", "wc", "tr", "mkdir", "tar", "cut", "grep", "touch", "chmod", "rm"];
+const TOOLS: [&str; 13] =
+    ["sh", "head", "tail", "cat", "wc", "tr", "mkdir", "tar", "cut", "grep", "touch", "chmod", "rm"];
 
 /// An owner's computer (a home with settings) and a checkout of the repository, next to a hub that is only the fake ssh.
 struct World {
@@ -413,24 +414,159 @@ fn a_hub_that_would_need_xz_is_not_touched_and_told_the_command() {
     assert_eq!(fine.status.code(), Some(0), "{}{}", text(&fine.stdout), text(&fine.stderr));
 }
 
-#[test]
-fn a_failing_step_stops_and_says_which() {
-    let world = World::new();
-    // A hub whose installer dies: the fake's `install.sh` answer is replaced by a failure through a ssh that fails.
+/// An ssh that fails for the commands matching `pattern` (a shell `case` pattern) with `status`, and is the fake otherwise.
+fn failing_ssh(world: &World, pattern: &str, status: u8) -> String {
     let failing = world.path("bin/failing-ssh");
     std::fs::write(
         &failing,
         format!(
-            "#!/bin/sh\ncase \"$*\" in *install.sh*) echo 'installer said no' >&2; exit 3 ;; esac\nexec {} \"$@\"\n",
+            "#!/bin/sh\ncase \"$*\" in {pattern}) echo 'the hub said no' >&2; exit {status} ;; esac\nexec {} \"$@\"\n",
             concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_ssh.sh")
         ),
     )
     .unwrap();
     std::fs::set_permissions(&failing, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let output = world.init_yes(&[], &[("ARIA_SSH", failing.to_str().unwrap())]);
+    failing.to_str().unwrap().to_string()
+}
+
+#[test]
+fn a_failing_step_stops_and_says_which_and_what_is_already_on_the_hub() {
+    let world = World::new();
+    let ssh = failing_ssh(&world, "*install.sh*", 3);
+    let output = world.init_yes(&[], &[("ARIA_SSH", &ssh)]);
     let err = text(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{}{err}", text(&output.stdout));
     assert!(err.contains("step 2"), "{err}");
+    assert!(
+        err.contains(
+            "`~/.aria/hub-src` is uploaded and the installer may have partly run; running `aria hub init` again is safe"
+        ),
+        "{err}"
+    );
     let steps = writes(&world.log());
     assert!(!steps.iter().any(|c| c.contains("hub-import")), "{steps:?}");
+
+    let world = World::new();
+    let ssh = failing_ssh(&world, "*hub-import*", 1);
+    let err = text(&world.init_yes(&[], &[("ARIA_SSH", &ssh)]).stderr);
+    assert!(err.contains("step 3") && err.contains("the installer ran; nothing was imported"), "{err}");
+
+    let world = World::new();
+    let ssh = failing_ssh(&world, "*systemctl*", 1);
+    let output = world.init_yes(&[], &[("ARIA_SSH", &ssh)]);
+    let err = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(err.contains("step 4"), "{err}");
+    assert!(err.contains("the credentials and settings are already on the hub, the service did not restart"), "{err}");
+    assert!(!writes(&world.log()).iter().any(|c| c.contains("--version")), "it stops there");
+
+    let world = World::new();
+    let ssh = failing_ssh(&world, "*\"aria --version\"*", 1);
+    let err = text(&world.init_yes(&[], &[("ARIA_SSH", &ssh)]).stderr);
+    assert!(
+        err.contains("step 5") && err.contains("everything was installed and imported; only the version check failed"),
+        "{err}"
+    );
+}
+
+/// The key as a person keeps it in `authorized_keys` of the hub, written where the fake hub's `$HOME` is.
+fn seed_authorized_keys(world: &World, content: &str) {
+    let ssh = world.path("hub/home/.ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    std::fs::write(ssh.join("authorized_keys"), content).unwrap();
+}
+
+fn key_file(world: &World) -> String {
+    let file = world.path("laptop.pub");
+    std::fs::write(&file, format!("{KEY}\n")).unwrap();
+    file.to_str().unwrap().to_string()
+}
+
+fn restricted(world: &World) -> String {
+    format!("restrict,command=\"{}/.local/bin/aria client-stdio\" {KEY}", world.path("hub/home").display())
+}
+
+#[test]
+fn a_file_with_no_final_newline_does_not_get_the_new_line_glued_on() {
+    let world = World::new();
+    let other = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOtherKeyBlobOtherKeyBlobOtherKeyBlob10 ana@desktop";
+    seed_authorized_keys(&world, other);
+    let output = world.init_yes(&["--client-key", &key_file(&world)], &[]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(world.authorized_keys(), format!("{other}\n{}\n", restricted(&world)));
+    // A second run finds the key as it is now: still two lines.
+    let again = world.init_yes(&["--client-key", &key_file(&world)], &[]);
+    assert!(again.status.success());
+    assert_eq!(world.authorized_keys(), format!("{other}\n{}\n", restricted(&world)));
+}
+
+#[test]
+fn a_key_already_there_without_the_restriction_is_reported_not_duplicated() {
+    let world = World::new();
+    for existing in [KEY.to_string(), format!("no-pty {KEY}"), format!("command=\"sh\" {KEY}")] {
+        seed_authorized_keys(&world, &format!("{existing}\n"));
+        let output = world.init_yes(&["--client-key", &key_file(&world)], &[]);
+        let (out, err) = (text(&output.stdout), text(&output.stderr));
+        assert_eq!(output.status.code(), Some(1), "{existing}: {out}{err}");
+        assert!(err.contains("step 6"), "{err}");
+        assert!(err.contains("already in authorized_keys WITHOUT the restriction"), "{err}");
+        assert!(err.contains("restrict,command=\"/home/ana/.local/bin/aria client-stdio\""), "{err}");
+        assert_eq!(world.authorized_keys(), format!("{existing}\n"), "the file is not touched");
+        // The steps before it ran, and no claim is made that the key protects the hub.
+        assert!(writes(&world.log()).iter().any(|c| c.contains("systemctl")));
+        assert!(!out.contains("restricted client key (it can only run"), "{out}");
+        assert!(!out.contains("The hub is ready"), "{out}");
+        assert!(out.contains("stays open"), "the public sshd is still warned of: {out}");
+    }
+}
+
+#[test]
+fn a_key_already_there_with_the_restriction_is_left_as_it_is() {
+    let world = World::new();
+    seed_authorized_keys(&world, &format!("# mine\n{}\n", restricted(&world)));
+    let output = world.init_yes(&["--client-key", &key_file(&world)], &[]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(world.authorized_keys(), format!("# mine\n{}\n", restricted(&world)));
+    assert!(text(&output.stdout).contains("already allowed"), "{}", text(&output.stdout));
+}
+
+#[test]
+fn a_commented_out_copy_of_the_key_does_not_count() {
+    let world = World::new();
+    for comment in [format!("# {KEY}"), format!("   #{KEY}")] {
+        seed_authorized_keys(&world, &format!("{comment}\n"));
+        let output = world.init_yes(&["--client-key", &key_file(&world)], &[]);
+        assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+        assert_eq!(world.authorized_keys(), format!("{comment}\n{}\n", restricted(&world)));
+    }
+}
+
+#[test]
+fn an_ss_that_fails_is_said_not_taken_for_a_private_hub() {
+    let could_not = "could not check whether sshd is open to the internet";
+    // ss fails before and after the install, or answers nothing: one line says it, the run still succeeds.
+    for variant in ["fail", "empty"] {
+        let world = World::new();
+        let output = world.init_yes(&[], &[("ARIA_FAKE_SSH_SS", variant)]);
+        let out = text(&output.stdout);
+        assert_eq!(output.status.code(), Some(0), "{variant}: {out}{}", text(&output.stderr));
+        assert_eq!(out.lines().filter(|line| line.contains(could_not)).count(), 1, "{variant}: {out}");
+        assert!(out.contains("check it yourself"), "{out}");
+        assert!(!out.contains("stays open"), "{out}");
+        let asked = commands(&world.log()).iter().filter(|c| *c == "ss -ltnH -n").count();
+        assert_eq!(asked, 2, "asked again after the installer: {variant}");
+    }
+    // ss missing until the installer installs iproute2: the second try sees the public sshd.
+    let world = World::new();
+    let output = world.init_yes(&[], &[("ARIA_FAKE_SSH_SS", "fail-until-install")]);
+    let out = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
+    assert!(out.contains("stays open") && !out.contains(could_not), "{out}");
+    // The ordinary cases say what they always did, and ask once.
+    let world = World::new();
+    let public = text(&world.init_yes(&[], &[]).stdout);
+    assert!(public.contains("stays open") && !public.contains(could_not), "{public}");
+    assert_eq!(commands(&world.log()).iter().filter(|c| *c == "ss -ltnH -n").count(), 1);
+    let private = text(&world.init_yes(&[], &[("ARIA_FAKE_SSH_PUBLIC", "0")]).stdout);
+    assert!(!private.contains("stays open") && !private.contains(could_not), "{private}");
 }
