@@ -148,3 +148,17 @@ fn serve_keeps_keys_in_plain_files_when_there_is_no_keyring() {
     serve.ready(&machine.clients_socket());
     assert!(serve.log().contains("keys stay in plain files"), "{}", serve.log());
 }
+
+#[test]
+fn serve_exits_1_and_says_why_when_terminals_cannot_connect() {
+    // A folder where the clients socket must go: nothing can bind there, and a service nobody can reach is no service.
+    let machine = Machine::new();
+    std::fs::create_dir_all(machine.clients_socket()).unwrap();
+    let mut serve = machine.serve();
+    let status = serve.exit_within(Duration::from_secs(20));
+    assert_eq!(status.code(), Some(1), "{}", serve.log());
+    let log = serve.log();
+    assert!(log.contains("aria: terminals cannot connect"), "{log}");
+    assert!(log.contains("clients.sock"), "the message names the socket:\n{log}");
+    assert!(!log.contains("serving with no window"), "{log}");
+}

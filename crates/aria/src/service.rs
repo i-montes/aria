@@ -80,6 +80,9 @@ impl PageInlet {
 pub struct Service {
     /// There was no settings file when the service started: the page shows its welcome.
     pub first_run: bool,
+    /// Why terminals cannot connect (the clients socket did not bind), when that is so; the dock only logs it, `aria
+    /// serve` has nothing else to do and exits.
+    pub clients_error: Option<String>,
     #[cfg(any(test, feature = "gui"))]
     inlet: PageInlet,
     hub: clients::Hub,
@@ -194,10 +197,15 @@ impl Service {
             )
         };
         chat.forget_gone_sessions();
+        let mut clients_error = None;
         if let Some(socket) = clients_socket {
             match clients::bind(&socket) {
                 Ok(listener) => hub.serve(listener),
-                Err(error) => note(&format!("terminals cannot connect: {error}")),
+                Err(error) => {
+                    let message = format!("terminals cannot connect: {}: {error}", socket.display());
+                    note(&message);
+                    clients_error = Some(message);
+                }
             }
         }
         let worker = chat.clone();
@@ -209,6 +217,7 @@ impl Service {
 
         Service {
             first_run,
+            clients_error,
             #[cfg(any(test, feature = "gui"))]
             inlet: PageInlet { ctx, chat: chat_sender, replies: reply_sender },
             hub,

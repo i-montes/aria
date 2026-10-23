@@ -56,6 +56,12 @@ pub fn run() -> i32 {
         notifier: Arc::new(NullNotifier),
         dock_visible: Arc::new(AtomicBool::new(false)),
     });
+    // A service nobody can reach is not a service: say so and fail, so the unit is not "active" and useless.
+    if service.clients_error.is_some() {
+        service.shutdown();
+        eprintln!("aria: not serving: terminals have no way in (see above)");
+        return 1;
+    }
     note("serving with no window (`aria quit` stops it)");
     if service.first_run {
         note("no settings yet: this is a first run, sign in from a terminal (`aria connect`)");
