@@ -1,7 +1,7 @@
 # Drives the real `aria` client in a pseudo-terminal: a new session in a folder, !pwd there, Ctrl+C, back again, /exit.
 import json, os, pty, re, select, sys, time
 
-aria, folder, home = sys.argv[1], sys.argv[2], sys.argv[3]
+aria, folder, home, socket_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 ANSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[()][A-Z0-9]|\x1b[=>]")
 
 def start():
@@ -40,6 +40,29 @@ def ok(what):
 
 def sessions():
     return json.load(open(os.path.join(home, "sessions.json")))["sessions"]
+
+import socket
+
+def dock_alive():
+    s = socket.socket(socket.AF_UNIX)
+    try:
+        s.connect(socket_path)
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+# The client starts the dock; closing the client's terminal (a hang-up, no Ctrl+C) leaves the dock running.
+assert not dock_alive(), "FAIL: a dock was already running"
+pid, fd = start()
+until(fd, folder)
+assert dock_alive(), "FAIL: the client did not start the dock"
+os.close(fd)
+time.sleep(2)
+os.waitpid(pid, 0)
+assert dock_alive(), "FAIL: the dock died with the terminal that started it"
+ok("the dock the client started outlives the client's terminal")
 
 pid, fd = start()
 until(fd, folder)  # the list offers a new session in this folder

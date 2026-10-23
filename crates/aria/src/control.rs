@@ -167,19 +167,31 @@ pub fn command_or_start(path: &Path, exe: &Path, command: &str) -> Result<(), Co
     Err(ControlError::Io("the dock did not start".into()))
 }
 
-/// For a terminal client: the dock is reachable on its clients socket, or it is started (`aria dock`, detached) and
-/// waited for up to 3 s.
+/// `program args…` in a session of its own, with no terminal: closing the terminal that started it (SIGHUP to that
+/// session's processes) does not reach it.
+fn detached(program: &Path, args: &[&str]) -> Command {
+    use std::os::unix::process::CommandExt;
+    let mut command = Command::new(program);
+    command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // SAFETY: setsid is async-signal-safe and touches nothing of the parent.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
+}
+
+/// For a terminal client: the dock is reachable on its clients socket, or it is started (`aria dock`, in a session of
+/// its own, so leaving the terminal leaves it running) and waited for up to 3 s.
 pub fn ensure_running(exe: &Path, clients: &Path) -> Result<(), ControlError> {
     if UnixStream::connect(clients).is_ok() {
         return Ok(());
     }
-    Command::new(exe)
-        .arg("dock")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| ControlError::Io(e.to_string()))?;
+    detached(exe, &["dock"]).spawn().map_err(|e| ControlError::Io(e.to_string()))?;
     for _ in 0..60 {
         std::thread::sleep(Duration::from_millis(50));
         if UnixStream::connect(clients).is_ok() {
@@ -191,6 +203,19 @@ pub fn ensure_running(exe: &Path, clients: &Path) -> Result<(), ControlError> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_dock_a_terminal_starts_has_its_own_session() {
+        // Closing that terminal hangs up its session's processes: the dock must not be one of them.
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("sid");
+        let script = format!("ps -o sid= -p $$ > {}", out.display());
+        let mut child = detached(Path::new("/bin/sh"), &["-c", &script]).spawn().unwrap();
+        child.wait().unwrap();
+        let theirs: i32 = std::fs::read_to_string(&out).unwrap().trim().parse().unwrap();
+        let ours = unsafe { libc::getsid(0) };
+        assert_ne!(theirs, ours);
+    }
     #[cfg(target_os = "linux")]
     #[test]
     fn the_children_of_a_process_are_read_from_proc_even_with_odd_command_names() {
