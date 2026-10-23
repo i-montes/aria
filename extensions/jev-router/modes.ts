@@ -100,7 +100,7 @@ export function executePrompt(brief: string, name: string): string {
   ].join('\n')
 }
 
-export function modeHint(_mode: Mode): string {
+export function modeHint(): string {
   return `[router] plan mode (slice) on: phase A of the slice skill: one round of questions, then the plan; implement nothing. You may only write to docs/plans/ and .gitignore of a git repo under ${PROJECTS} (the one receiving the change), its .git (the commit), and /tmp. Plan mode ends when I approve the plan.`
 }
 

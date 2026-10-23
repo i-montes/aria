@@ -75,7 +75,7 @@ describe('the plan phase prompt', () => {
 
 describe('the plan mode hint', () => {
   test('mentions slice and docs/plans/', () => {
-    const hint = modeHint('plan')
+    const hint = modeHint()
     expect(hint).toContain('slice')
     expect(hint).toContain('docs/plans/')
   })

@@ -7,10 +7,11 @@
 // suspicious `bash` commands are checked with Jev, and `parallel` subagents are told the turn is
 // read-only.
 //
-// `/plan` and `/execute` switch to Superpowers modes (see modes.ts): routing pauses, a fixed hint
-// is sent instead, and plan mode has its own write guard and model. Plan mode picks a free model
-// when the Go quota is nearly spent, and ends by itself once the plan is written or when the user
-// sends something that is not planning.
+// `/plan` starts plan mode, phase A of the slice skill (see modes.ts and slice.ts): routing pauses,
+// a fixed hint is sent instead, and plan mode has its own write guard and model. Plan mode picks a
+// free model when the Go quota is nearly spent, and ends when the owner approves the plan
+// (`plan_ready`), with `/plan off`, or when the user sends something that is not planning. The
+// approved plan, or `/execute`, builds its next open phase in the background.
 //
 // Every `bash` call also goes through the process guard (process-guard.ts): the agent may only
 // stop processes of its own session or project.
@@ -23,7 +24,7 @@
 // left alone. Any failure (no classifier, no credential, a slow answer) sends the message unlabelled
 // and leaves the guard off.
 import { execFileSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
@@ -46,6 +47,7 @@ import {
   parsePlanning,
   planContinuationRequest,
   READ_ONLY_NOTE, jevStatus } from './route.ts'
+import { askApproval } from './approve.ts'
 import {
   executePrompt,
   gitRoot,
@@ -64,7 +66,7 @@ import {
   shouldClassify,
   SLICE_SKILL,
 } from './modes.ts'
-import { isPlanPath, nextStepHint, parseMarker, planProblem } from './slice.ts'
+import { buildBrief, firstOpenPhase, latestPlan, nextStepHint, parseMarker, parsePlan, planProblem } from './slice.ts'
 import { checkKill } from './process-guard.ts'
 import { exhausted, fetchGoUsage } from './usage.ts'
 import { confirmFreeSwitch } from '../quota-fallback/ask.ts'
@@ -123,8 +125,8 @@ export default function (pi: ExtensionAPI) {
   let restore: { model: any; thinking: string } | null = null
   // The model plan mode is using (GLM, or the free one when the quota is nearly spent).
   let planModelId: string = planModel().id
-  // Set when plan mode writes a plan file; plan mode ends when that run settles.
-  let planWritten = false
+  // The plan the owner approved with `plan_ready`: plan mode ends and its build starts when that run settles.
+  let pendingBuild: string | null = null
 
   const routed = (ctx: any) => routedMode(ctx?.mode)
 
@@ -247,7 +249,7 @@ export default function (pi: ExtensionAPI) {
     const text = String(event.prompt ?? '')
     current = null
     if (mode !== 'normal') {
-      return { message: { customType: 'jev-router', content: modeHint(mode), display: false, details: { mode } } }
+      return { message: { customType: 'jev-router', content: modeHint(), display: false, details: { mode } } }
     }
     if (!text.trim() || text.startsWith('/')) return
     if (!shouldClassify(ctx?.mode, ariaConfig())) return // the router is off in Aria's settings
@@ -310,7 +312,7 @@ export default function (pi: ExtensionAPI) {
     )
   }
 
-  // Where this turn may write, or null when writes are free: plan mode allows `docs/superpowers/`
+  // Where this turn may write, or null when writes are free: plan mode allows `docs/plans/`
   // and `.git` of a repo under ~/Projects plus /tmp; a read-only turn only the scratch dirs.
   type Guard = { allows: (path: string) => boolean; dirsText: string[]; reason: string }
   const writeGuard = (ctx: any): Guard | null => {
@@ -371,11 +373,10 @@ export default function (pi: ExtensionAPI) {
     }
   })
 
-  // --- Superpowers modes ---------------------------------------------------------------------
+  // --- Plan mode and the build ---------------------------------------------------------------------
 
   const setMode = (next: Mode, ctx: any) => {
     mode = next
-    if (next !== 'plan') planWritten = false
     const status = next === 'plan' ? `◆ plan mode · ${planModelId}` : undefined
     try {
       ctx.ui?.setStatus?.('jev-router-mode', status)
@@ -385,16 +386,13 @@ export default function (pi: ExtensionAPI) {
   }
 
   // Leave plan mode: back to the model and thinking level the user had before /plan.
-  const leavePlan = async () => {
-    if (!restore) return
-    const { model, thinking } = restore
-    restore = null
-    if (model) await pi.setModel(model)
-    setLevel(thinking)
-  }
-
   const endPlan = async (ctx: any, why: string) => {
-    await leavePlan()
+    if (restore) {
+      const { model, thinking } = restore
+      restore = null
+      if (model) await pi.setModel(model)
+      setLevel(thinking)
+    }
     setMode('normal', ctx)
     try {
       ctx.ui?.notify?.(why, 'info')
@@ -408,21 +406,6 @@ export default function (pi: ExtensionAPI) {
   pi.on('tool_result', (event: any, ctx: any) => {
     if (!routed(ctx) || event.toolName !== 'ask_user' || event.isError || event.details?.cancelled !== false) return
     if (mode === 'normal' && current?.readOnly) current = { ...current, readOnly: false }
-  })
-
-  // A plan file written in plan mode: planning is over once this run settles.
-  pi.on('tool_result', (event: any, ctx: any) => {
-    if (!routed(ctx) || mode !== 'plan' || event.isError) return
-    if (event.toolName !== 'write' && event.toolName !== 'edit') return
-    const raw = String(event.input?.path ?? '')
-    const path = isAbsolute(raw) ? raw : resolve(ctx.cwd, raw)
-    if (isPlanPath(path)) planWritten = true
-  })
-
-  pi.on('agent_settled', async (_event: any, ctx: any) => {
-    if (routed(ctx) && mode === 'plan' && planWritten) {
-      await endPlan(ctx, 'Plan written: plan mode off. Review it and run it with /execute <plan path>.')
-    }
   })
 
   // In plan mode, a message that is not part of planning ends it before the turn starts, so that
@@ -470,7 +453,7 @@ export default function (pi: ExtensionAPI) {
   const planExecute = ariaConfig().subagents.planExecute
   if (planExecute) pi.registerCommand('plan', {
     description:
-      'Design and plan with Superpowers (brainstorming → writing-plans) on a stronger model. Turns itself off once the plan is written; /plan off to leave earlier.',
+      'Plan sizable work with slice: one round of questions, then a plan of phases and tasks to approve. /plan off to leave.',
     handler: async (args: string, ctx: any) => {
       const idea = String(args ?? '').trim()
       if (idea === 'off') {
@@ -492,7 +475,7 @@ export default function (pi: ExtensionAPI) {
     name: 'start_plan',
     label: 'Plan first',
     description:
-      'Start plan mode for `idea` once your answer ends, as the /plan command does: questions, then an implementation plan. Only after the user accepted your offer to plan the work first.',
+      'Start plan mode (slice) for `idea` once your answer ends, as /plan does. Only after the user accepted your offer to plan the work first.',
     parameters: { type: 'object', properties: { idea: { type: 'string', description: 'What to plan, in one or two sentences, in the user\'s words.' } }, required: ['idea'] },
     async execute(_id: string, params: any) {
       const idea = String(params?.idea ?? '').trim()
@@ -503,7 +486,28 @@ export default function (pi: ExtensionAPI) {
     },
   } as any)
 
+  // The owner approves a plan the model wrote and committed: plan mode ends and the build starts once the answer has ended.
+  if (planExecute) pi.registerTool({
+    name: 'plan_ready',
+    label: 'Plan ready',
+    description:
+      'Show the user the slice plan you wrote and committed (docs/plans/…) and ask them to approve it. Only in plan mode. Approved, the build starts once your answer ends.',
+    parameters: { type: 'object', properties: { path: { type: 'string', description: 'The plan file.' } }, required: ['path'] },
+    async execute(_id: string, params: any, signal: any, _onUpdate: any, ctx: any) {
+      const r = await askApproval(ctx, String(params?.path ?? ''), ctx.cwd, { mode, noAsk: !!ariaConfig().noAsk, signal })
+      if (r.approved) pendingBuild = r.approved
+      return { content: [{ type: 'text', text: r.text }], details: r.details, isError: !!r.isError }
+    },
+  } as any)
+
   pi.on('agent_settled', async (_event: any, ctx: any) => {
+    if (routed(ctx) && pendingBuild) {
+      const plan = pendingBuild
+      pendingBuild = null
+      await endPlan(ctx, 'Plan approved: plan mode off.')
+      startBuild(plan, ctx)
+      return
+    }
     if (!routed(ctx) || !pendingPlan) return
     const idea = pendingPlan
     pendingPlan = null
@@ -536,42 +540,36 @@ export default function (pi: ExtensionAPI) {
     pi.sendUserMessage(planPrompt(idea))
   }
 
-  /** The newest plan under docs/superpowers/plans of the repo Pi runs in, or null. */
-  function latestPlan(cwd: string): string | null {
-    const root = gitRoot(cwd) ?? cwd
-    const dir = join(root, 'docs', 'superpowers', 'plans')
-    if (!existsSync(dir)) return null
-    const files = readdirSync(dir)
-      .filter((f) => f.endsWith('.md'))
-      .map((f) => join(dir, f))
-      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
-    return files[0] ?? null
+  /** Build the first open phase of `plan` in the background: the model starts the job with the brief. */
+  function startBuild(plan: string, ctx: any) {
+    let parsed
+    try {
+      parsed = parsePlan(readFileSync(plan, 'utf8'))
+    } catch {
+      ctx.ui.notify(`Can't read \`${plan}\`.`, 'error')
+      return
+    }
+    const phase = firstOpenPhase(parsed)
+    if (!phase) {
+      ctx.ui.notify(`Every phase of ${plan} is done.`, 'info')
+      return
+    }
+    const brief = buildBrief({ plan, phase: phase.number, name: phase.name, base: headOf(plan), skill: SLICE_SKILL })
+    pi.sendUserMessage(executePrompt(brief, phase.name))
   }
 
   if (planExecute) pi.registerCommand('execute', {
-    description:
-      'Execute a Superpowers plan with subagents (subagent-driven-development). Takes a plan, not a spec. /execute off to leave.',
+    description: 'Build the next open phase of a slice plan in the background (docs/plans/…).',
     handler: async (args: string, ctx: any) => {
       const arg = String(args ?? '').trim()
-      if (arg === 'off') {
-        await leavePlan()
-        setMode('normal', ctx)
-        ctx.ui.notify('Execute mode off.', 'info')
+      const path = arg || latestPlan(ctx.cwd)
+      const problem = path ? planProblem(path, ctx.cwd) : 'No plan found in docs/plans/.'
+      if (!path || problem) {
+        ctx.ui.notify(`${problem} Usage: /execute [plan path]`, 'error')
         return
       }
-      const plan = arg || latestPlan(ctx.cwd)
-      if (!plan) {
-        ctx.ui.notify('No plan found in docs/superpowers/plans/. Give me the path: /execute <plan path>.', 'error')
-        return
-      }
-      const problem = planProblem(plan, ctx.cwd)
-      if (problem) {
-        ctx.ui.notify(`${problem} /execute needs the implementation plan: write it first (writing-plans) and review it.`, 'error')
-        return
-      }
-      await leavePlan()
-      setMode('normal', ctx)
-      pi.sendUserMessage(executePrompt(`Execute the plan \`${plan}\`.`, 'Plan'))
+      if (mode === 'plan') await endPlan(ctx, 'Plan mode off.')
+      startBuild(isAbsolute(path) ? path : resolve(ctx.cwd, path), ctx)
     },
   })
 }
