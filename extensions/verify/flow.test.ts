@@ -47,3 +47,31 @@ describe('checks after editing', () => {
     expect(statuses).toEqual([])
   })
 })
+
+describe('checks never hold the session', () => {
+  test('an aborted run checks nothing', async () => {
+    const { v, statuses } = make([{ ok: false, output: 'x' }])
+    v.edited()
+    await v.runEnded(true)
+    expect(statuses).toEqual([])
+  })
+
+  test('a result that comes after a new run started is dropped', async () => {
+    let release: () => void = () => {}
+    const sent: string[] = []
+    const statuses: unknown[] = []
+    const v = new Verifier({
+      checks: () => [{ name: 'test', command: 'make test' }],
+      run: () => new Promise((done) => (release = () => done({ ok: false, timedOut: false, output: 'late' }))),
+      tell: (text) => sent.push(text),
+      status: (value) => statuses.push(value),
+    })
+    v.edited()
+    const pending = v.runEnded()
+    v.runStarted()
+    release()
+    await pending
+    expect(sent).toEqual([])
+    expect(statuses).toEqual([])
+  })
+})

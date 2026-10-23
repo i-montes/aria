@@ -36,6 +36,10 @@ describe('isWritable', () => {
   test('/tmp', () => expect(isWritable('/tmp/x', '/srv/app', home, none)).toBe(true))
   test('a cache', () => expect(isWritable(`${home}/.npm/_cacache/x`, '/srv/app', home, all)).toBe(true))
   test('dotfile in home', () => expect(isWritable(`${home}/.bashrc`, '/srv/app', home, all)).toBe(false))
+  test("the project's .aria (its checks run after edits) is never the model's to write", () => {
+    expect(isWritable('.aria/verify.json', '/srv/app', home, none)).toBe(false)
+    expect(isWritable('src/aria.ts', '/srv/app', home, none)).toBe(true)
+  })
   test('prefix trick /srv/app2', () => expect(isWritable('/srv/app2/x', '/srv/app', home, none)).toBe(false))
 })
 

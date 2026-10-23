@@ -40,7 +40,7 @@ export default function verify(pi: ExtensionAPI) {
       })
     },
     run: (command) => runCheck(process.platform === 'linux' ? wrapCommand(command, folder()) : command, folder(), LIMIT_MS),
-    tell: (text) => void pi.sendUserMessage(text),
+    tell: (text) => void pi.sendUserMessage(text, { deliverAs: 'followUp' }),
     status: (value) => ctxNow?.ui?.setStatus?.('aria-verify', JSON.stringify(value)),
   })
 
@@ -53,9 +53,12 @@ export default function verify(pi: ExtensionAPI) {
     if (subagent || event.isError) return
     if (event.toolName === 'edit' || event.toolName === 'write') verifier.edited()
   })
-  pi.on('agent_settled', async (_event: any, ctx: any) => {
+  pi.on('agent_start', () => verifier.runStarted())
+  // Not awaited: Pi waits for every agent_settled handler before the dock hears the run ended, and a check can take
+  // minutes. The checks run beside the session, which stays free (Esc, a new message, undo).
+  pi.on('agent_settled', (event: any, ctx: any) => {
     ctxNow = ctx
-    if (!subagent) await verifier.runEnded()
+    if (!subagent) void verifier.runEnded(event?.aborted === true)
   })
   pi.registerCommand('verify', {
     description: "The project's checks after each run that edits files: /verify off, /verify on.",

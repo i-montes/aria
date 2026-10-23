@@ -12,6 +12,8 @@ export class Verifier {
   private dirty = false
   private on = true
   private toldOnce = false
+  /** Counts runs: checks that finish after a new run started belong to the past and say nothing. */
+  private run = 0
 
   constructor(
     private deps: {
@@ -31,15 +33,23 @@ export class Verifier {
     this.dirty = true
   }
 
-  async runEnded() {
+  /** A new run starts: checks of the last one that are still going will be dropped. */
+  runStarted() {
+    this.run++
+  }
+
+  /** The run settled (`aborted`: the person stopped it, nothing is checked). Never awaited by Pi: checks run beside it. */
+  async runEnded(aborted = false) {
     const edited = this.dirty
     this.dirty = false
-    if (!edited || !this.on) return
+    if (!edited || !this.on || aborted) return
+    const mine = this.run
     const checks = this.deps.checks()
     if (!checks.length) return
     let passed: number | undefined
     for (const check of checks) {
       const outcome = await this.deps.run(check.command)
+      if (mine !== this.run) return
       const count = /(\d+)\s+pass/.exec(outcome.output)
       if (count) passed = Number(count[1])
       if (!outcome.ok) {

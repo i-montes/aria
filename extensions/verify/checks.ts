@@ -1,7 +1,7 @@
 // The project's own checks, run after a turn that edited files: what `.aria/verify.json` names ({ lint?, types?, test? }),
 // else (Linux only, where the commands run in the sandbox's box) what the project shows: package.json scripts lint,
-// typecheck and test (bun when there is a bun.lock), Cargo.toml (clippy, test), pyproject.toml (ruff, pytest). On macOS
-// there is no box, so only verify.json's commands run: the person named them.
+// typecheck and test (bun when there is a bun.lock), Cargo.toml (clippy, test), pyproject.toml (ruff, pytest). Never on
+// macOS: there is no box there and nobody would be asked. The model cannot write .aria/ (sandbox/policy.ts).
 import { spawn } from 'node:child_process'
 
 export interface Check {
@@ -18,6 +18,8 @@ export interface ProjectFiles {
 }
 
 export function checksFor(platform: string, files: ProjectFiles): Check[] {
+  // macOS has no box, and nothing here asks the person: no checks there (a command that asks first is for later).
+  if (platform === 'darwin') return []
   if (files.verifyJson) {
     try {
       const own = JSON.parse(files.verifyJson)
@@ -26,12 +28,13 @@ export function checksFor(platform: string, files: ProjectFiles): Check[] {
       return []
     }
   }
-  if (platform === 'darwin') return []
   if (files.packageJson) {
     try {
       const scripts = JSON.parse(files.packageJson)?.scripts ?? {}
       const runner = files.bunLock ? 'bun run' : 'npm run'
-      return ['lint', 'typecheck', 'test'].filter((k) => typeof scripts[k] === 'string').map((k) => ({ name: k, command: `${runner} ${k}` }))
+      // npm's own placeholder ("no test specified") always fails: it is not a check.
+      const real = (k: string) => typeof scripts[k] === 'string' && !scripts[k].includes('no test specified')
+      return ['lint', 'typecheck', 'test'].filter(real).map((k) => ({ name: k, command: `${runner} ${k}` }))
     } catch {
       return []
     }
@@ -67,9 +70,14 @@ export function runCheck(line: string, folder: string, limitMs: number): Promise
         child.kill('SIGKILL')
       }
     }, limitMs)
-    child.on('close', (code) => {
+    // On exit, not on close: a child the check left behind (a server, `setsid …`) may hold its output open forever.
+    child.on('exit', (code) => {
       clearTimeout(timer)
-      done({ ok: !timedOut && code === 0, timedOut, output })
+      setTimeout(() => {
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+        done({ ok: !timedOut && code === 0, timedOut, output })
+      }, 50)
     })
     child.on('error', (error) => {
       clearTimeout(timer)

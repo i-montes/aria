@@ -175,7 +175,8 @@ export function protectedPaths(cwd: string, home = HOME): string[] {
   const project = projectRoot(cwd, home)
   const { own, common } = gitDirs(project)
   const git = [...new Set([own, common].filter((d): d is string => !!d))].flatMap((d) => [join(d, 'config'), join(d, 'hooks')])
-  return [...(project ? [join(project, '.pi')] : []), ...git, ...TMP_PROTECTED]
+  // The project's .aria holds verify.json, whose commands run after edits: never the model's to write.
+  return [...(project ? [join(project, '.pi'), join(project, '.aria')] : []), ...git, ...TMP_PROTECTED]
 }
 
 export const secretDirs = (home = HOME, runtimeDir = RUNTIME) => [...SECRET_DIRS.map((d) => join(home, d)), runtimeDir]

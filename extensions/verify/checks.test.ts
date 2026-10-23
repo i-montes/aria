@@ -13,9 +13,9 @@ describe('the checks of a project', () => {
     expect(checksFor('linux', own).map((c) => c.command)).toEqual(['make lint', 'make test'])
   })
 
-  test('mac runs only verify.json', () => {
+  test('mac runs no checks: there is no box there, and nobody would be asked', () => {
     expect(checksFor('darwin', { cargoToml: true })).toEqual([])
-    expect(checksFor('darwin', { verifyJson: JSON.stringify({ test: 'make test' }) }).map((c) => c.command)).toEqual(['make test'])
+    expect(checksFor('darwin', { verifyJson: JSON.stringify({ test: 'make test' }) })).toEqual([])
   })
 
   test('a check that runs too long is stopped', async () => {
@@ -33,5 +33,19 @@ describe('the checks of a project', () => {
     const bad = await runCheck('echo broken; exit 1', '/tmp', 5_000)
     expect(bad.ok).toBe(false)
     expect(bad.output).toContain('broken')
+  })
+})
+
+describe('checks that leave children behind', () => {
+  test('a check whose child holds its output still ends at the limit', async () => {
+    const started = Date.now()
+    const got = await runCheck('setsid sleep 30 & sleep 60', '/tmp', 500)
+    expect(got.timedOut).toBe(true)
+    expect(Date.now() - started).toBeLessThan(3_000)
+  })
+
+  test("npm's placeholder test is not a check", () => {
+    const pkg = { packageJson: JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1', lint: 'eslint .' } }) }
+    expect(checksFor('linux', pkg).map((c) => c.command)).toEqual(['npm run lint'])
   })
 })
