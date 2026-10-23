@@ -1,6 +1,8 @@
 //! `aria` in a terminal: a client of the dock's sessions (docs/superpowers/specs/2026-10-23-terminal-design.md).
 
 pub mod link;
+pub mod state;
+pub mod texts;
 
 /// Runs the client; the process's exit code.
 pub fn run() -> i32 {
