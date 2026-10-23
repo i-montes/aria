@@ -426,7 +426,16 @@ pub fn max_scroll(v: &SessionView, width: u16, height: u16) -> usize {
     let pad = if width > 20 { 2 } else { 0 };
     let lines = conversation(v, width.saturating_sub(2 * pad)).len();
     let room = height.saturating_sub(bottom_height(v, width, height));
-    lines.saturating_sub(usize::from(room.saturating_sub(1)))
+    lines.saturating_sub(usize::from(conversation_rows(room)))
+}
+
+/// The rows the conversation shows in `room` rows: one blank above it and, room permitting, one below.
+fn conversation_rows(room: u16) -> u16 {
+    if room >= 4 {
+        room - 2
+    } else {
+        room.saturating_sub(1)
+    }
 }
 
 /// Whether to draw a frame now: something changed, or a turn runs and the spinner is due (every 80 ms).
@@ -483,10 +492,12 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) -> usize {
     if room == 0 {
         return 0;
     }
+    // A row of air above and below the conversation: it never touches the working line or the editor.
+    let shown_rows = conversation_rows(room);
     let lines = conversation(v, inner.width);
-    let above = lines.len().saturating_sub(usize::from(room.saturating_sub(1)));
+    let above = lines.len().saturating_sub(usize::from(shown_rows));
     let skip = above.saturating_sub(v.scroll);
-    let top = Rect { y: area.y + 1.min(room), height: room.saturating_sub(1).max(1), ..inner };
+    let top = Rect { y: area.y + 1.min(room), height: shown_rows.max(1), ..inner };
     let shown: Vec<Line<'static>> = lines.into_iter().skip(skip).collect();
     frame.render_widget(Paragraph::new(shown).style(Style::default().add_modifier(Modifier::empty())), top);
     // Over what is there: the conversation does not move.
@@ -771,6 +782,26 @@ mod tests {
         assert!(!should_draw(false, false, 5_000), "idle: nothing to draw");
         assert!(!should_draw(false, true, 40), "the spinner turns every 80 ms");
         assert!(should_draw(false, true, 80));
+    }
+
+    #[test]
+    fn the_conversation_breathes_above_the_editor() {
+        let mut s = worked();
+        s.running = true;
+        s.phase = "working".into();
+        let mut v = view(&s, true);
+        v.working_ms = Some(8_700);
+        // Short enough that the conversation fills the screen, as in a real one.
+        let screen = text(&render(&v, 100, 14));
+        let rows: Vec<&str> = screen.lines().collect();
+        let working = rows.iter().position(|l| l.contains("Trabajando")).unwrap();
+        assert_eq!(rows[working - 1].trim(), "", "a blank row before the working line: {screen}");
+        assert!(rows[working - 2].contains("Listo."), "{screen}");
+        let idle = text(&render(&view(&s, true), 100, 13));
+        let rows: Vec<&str> = idle.lines().collect();
+        let rule = rows.iter().position(|l| l.trim_start().starts_with("──")).unwrap();
+        assert_eq!(rows[rule - 1].trim(), "", "a blank row before the editor: {idle}");
+        assert!(rows[rule - 2].contains("Listo."), "{idle}");
     }
 
     #[test]
