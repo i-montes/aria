@@ -5,6 +5,7 @@ use crate::term::dialog::{saved_answer, Answer, DialogBox};
 use crate::term::editor::{bang, Editor, Trigger};
 use crate::term::picker::{models_for_picker, Item, Outcome, Picker};
 use crate::term::rewind::{self, Rewind};
+use crate::term::schedules::{self, Schedules};
 use crate::term::state::Session;
 use crate::term::texts::t;
 use crate::term::Key;
@@ -95,16 +96,21 @@ enum Pending {
     Context,
     /// An undo, with the text that goes back to the editor once it is done (empty when the conversation stays).
     Undo(String),
+    /// `/schedules`'s `schedulesList`: its reply opens the panel.
+    SchedulesOpen,
+    /// A pause, a resume or a delete from the panel: its reply is the new list.
+    SchedulesChange,
 }
 
 /// The client's own commands, before the session's.
-const OWN: [(&str, &str); 6] = [
+const OWN: [(&str, &str); 7] = [
     ("exit", "term.cmd.exit"),
     ("verbose", "term.cmd.verbose"),
     ("model", "term.cmd.model"),
     ("sessions", "term.cmd.sessions"),
     ("undo", "term.cmd.undo"),
     ("context", "term.cmd.context"),
+    ("schedules", "term.cmd.schedules"),
 ];
 
 pub struct App {
@@ -143,6 +149,8 @@ pub struct App {
     last_esc: Option<u64>,
     /// Rewind (Esc Esc, `/undo`), while it is open.
     rewind: Option<Rewind>,
+    /// `/schedules`'s panel, while it is open.
+    schedules: Option<Schedules>,
     /// What each open session is doing, and since when (ms).
     statuses: HashMap<String, (String, i64)>,
     /// The time now (ms), from `clock`.
@@ -184,6 +192,7 @@ impl App {
             context: None,
             strip_rows: None,
             rewind: None,
+            schedules: None,
             now_ms: 0,
         };
         let load = app.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
@@ -346,6 +355,7 @@ impl App {
         self.dialog = None;
         self.picker = None;
         self.commands = None;
+        self.schedules = None;
         self.scroll = 0;
         self.screen = Screen::Session;
         self.note = None;
@@ -358,6 +368,7 @@ impl App {
         self.screen = Screen::List;
         self.dialog = None;
         self.picker = None;
+        self.schedules = None;
         let load = self.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
         vec![Effect::Detach, load]
     }
@@ -437,6 +448,10 @@ impl App {
         if let Some(open) = self.rewind.as_mut() {
             let outcome = open.key(press.key);
             return self.rewound(outcome);
+        }
+        if let Some(open) = self.schedules.as_mut() {
+            let outcome = open.key(press.key);
+            return self.scheduled_outcome(outcome);
         }
         if self.context.is_some() {
             if press.key == Key::Esc {
@@ -594,6 +609,22 @@ impl App {
         }
     }
 
+    fn scheduled_outcome(&mut self, outcome: schedules::Outcome) -> Vec<Effect> {
+        match outcome {
+            schedules::Outcome::None => Vec::new(),
+            schedules::Outcome::Close => {
+                self.schedules = None;
+                Vec::new()
+            }
+            schedules::Outcome::Update { schedule, enabled } => {
+                vec![self.request(Pending::SchedulesChange, |id| PageMessage::ScheduleUpdate { id, schedule, enabled })]
+            }
+            schedules::Outcome::Delete { schedule } => {
+                vec![self.request(Pending::SchedulesChange, |id| PageMessage::ScheduleDelete { id, schedule })]
+            }
+        }
+    }
+
     /// The most rows a panel in the editor's place takes: two thirds of the screen.
     fn panel_rows(&self) -> usize {
         usize::from(self.height * 2 / 3).max(8)
@@ -631,6 +662,9 @@ impl App {
                 "model" => return vec![self.session_request(Pending::Models, |id| PageMessage::ListModels { id })],
                 "undo" => {
                     return vec![self.session_request(Pending::Checkpoints, |id| PageMessage::ChatCheckpoints { id })]
+                }
+                "schedules" => {
+                    return vec![self.request(Pending::SchedulesOpen, |id| PageMessage::SchedulesList { id })]
                 }
                 "context" => {
                     return vec![self.session_request(Pending::Context, |id| PageMessage::PiCommand {
@@ -686,6 +720,9 @@ impl App {
         width: u16,
     ) -> Option<Vec<ratatui::text::Line<'static>>> {
         if let Some(open) = &self.rewind {
+            return Some(open.lines(&self.config.lang, palette, width, self.panel_rows()));
+        }
+        if let Some(open) = &self.schedules {
             return Some(open.lines(&self.config.lang, palette, width, self.panel_rows()));
         }
         if let Some((used, window)) = self.context {
@@ -794,8 +831,36 @@ impl App {
             // Lost: the dock may only have dropped this client (it read too slowly); try once.
             DockMessage::Error { id: 0, code } if code == "gone" => vec![Effect::Reconnect],
             DockMessage::Error { id, code } => {
-                if self.pending.remove(&id) == Some(Pending::SessionNew) && code == "too-many-sessions" {
-                    self.note = Some(t(&self.config.lang, "term.tooMany", &json!({})));
+                match self.pending.remove(&id) {
+                    Some(Pending::SessionNew) if code == "too-many-sessions" => {
+                        self.note = Some(t(&self.config.lang, "term.tooMany", &json!({})));
+                    }
+                    Some(Pending::SchedulesOpen) => {
+                        self.session.entries.push(crate::term::state::Entry::Notice {
+                            tone: crate::term::state::Tone::Warn,
+                            text: crate::term::state::Text::Key {
+                                key: "term.schedules.failed".into(),
+                                vars: json!({}),
+                            },
+                        });
+                    }
+                    _ => {}
+                }
+                Vec::new()
+            }
+            DockMessage::Schedules { id, tasks } => {
+                match self.pending.remove(&id) {
+                    Some(Pending::SchedulesOpen) if self.screen == Screen::Session => {
+                        self.rewind = None;
+                        self.context = None;
+                        self.schedules = Some(Schedules::new(&tasks));
+                    }
+                    Some(Pending::SchedulesChange) => {
+                        if let Some(open) = self.schedules.as_mut() {
+                            open.replace(&tasks);
+                        }
+                    }
+                    _ => {}
                 }
                 Vec::new()
             }
@@ -1501,6 +1566,159 @@ mod tests {
             effects.iter().any(|e| matches!(e, Effect::Send(PageMessage::SessionNew { workdir: None, .. }))),
             "{effects:?}"
         );
+    }
+
+    fn scheduled(id: &str, title: &str, enabled: bool) -> serde_json::Value {
+        json!({
+            "id": id, "title": title, "prompt": "p", "enabled": enabled, "awaiting": false, "created": 1,
+            "when": {"at": "07:30", "days": ["mon", "tue", "wed", "thu", "fri"]},
+            "grants": {}, "lastRun": null, "lastResult": null, "next": null
+        })
+    }
+
+    fn panel_text(app: &App) -> String {
+        let palette = crate::term::theme::Palette::truecolor();
+        let lines = app.panel_lines(&palette, 80).unwrap_or_default();
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// An attached app whose `/schedules` panel is open on `tasks`.
+    fn with_schedules(tasks: serde_json::Value) -> App {
+        let mut app = attached();
+        typed(&mut app, "/schedules");
+        let effects = key(&mut app, Key::Enter);
+        let [Effect::Send(PageMessage::SchedulesList { id })] = effects[..] else { panic!("{effects:?}") };
+        app.update(Input::Dock(DockMessage::Schedules { id, tasks }));
+        app
+    }
+
+    #[test]
+    fn schedules_asks_the_dock_for_its_list() {
+        let mut app = attached();
+        typed(&mut app, "/schedules");
+        let effects = key(&mut app, Key::Enter);
+        assert!(
+            matches!(&effects[..], [Effect::Send(PageMessage::SchedulesList { .. })]),
+            "a request of its own, not a message to the session: {effects:?}"
+        );
+        assert_eq!(app.editor.text(), "");
+        assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_none(), "it opens with the reply");
+    }
+
+    #[test]
+    fn a_list_reply_opens_the_panel_with_a_row_per_task() {
+        let app =
+            with_schedules(json!([scheduled("s-1", "Notion tasks", true), scheduled("s-2", "Backup notes", false)]));
+        let shown = panel_text(&app);
+        assert!(shown.contains("Notion tasks") && shown.contains("Backup notes"), "{shown}");
+        assert!(shown.contains("Weekdays at 07:30"), "{shown}");
+        assert_eq!(shown.matches("paused").count(), 1, "only the paused one says so: {shown}");
+    }
+
+    #[test]
+    fn enter_pauses_a_running_task_and_resumes_a_paused_one() {
+        let mut app =
+            with_schedules(json!([scheduled("s-1", "Notion tasks", true), scheduled("s-2", "Backup notes", false)]));
+        let effects = key(&mut app, Key::Enter);
+        let [Effect::Send(PageMessage::ScheduleUpdate { id, schedule, enabled })] = &effects[..] else {
+            panic!("{effects:?}")
+        };
+        assert_eq!((schedule.as_str(), *enabled), ("s-1", false));
+        let reply = json!([scheduled("s-1", "Notion tasks", false), scheduled("s-2", "Backup notes", false)]);
+        app.update(Input::Dock(DockMessage::Schedules { id: *id, tasks: reply }));
+        assert_eq!(panel_text(&app).matches("paused").count(), 2, "the panel redraws from the reply");
+        key(&mut app, Key::Down);
+        let effects = key(&mut app, Key::Enter);
+        let [Effect::Send(PageMessage::ScheduleUpdate { schedule, enabled, .. })] = &effects[..] else {
+            panic!("{effects:?}")
+        };
+        assert_eq!((schedule.as_str(), *enabled), ("s-2", true));
+    }
+
+    #[test]
+    fn delete_needs_a_confirmation() {
+        let mut app = with_schedules(json!([scheduled("s-1", "Notion tasks", true)]));
+        assert!(key(&mut app, Key::Char('d')).is_empty(), "d alone sends nothing");
+        assert!(panel_text(&app).contains("Delete"), "it asks first");
+        let effects = key(&mut app, Key::Char('y'));
+        let [Effect::Send(PageMessage::ScheduleDelete { id, schedule })] = &effects[..] else { panic!("{effects:?}") };
+        assert_eq!(schedule, "s-1");
+        app.update(Input::Dock(DockMessage::Schedules { id: *id, tasks: json!([]) }));
+        assert!(panel_text(&app).contains("No scheduled tasks"));
+        for no in [Key::Char('n'), Key::Esc, Key::Char('x')] {
+            let mut app = with_schedules(json!([scheduled("s-1", "Notion tasks", true)]));
+            key(&mut app, Key::Char('d'));
+            assert!(key(&mut app, no).is_empty(), "{no:?} cancels");
+            assert!(key(&mut app, Key::Char('y')).is_empty(), "the question is over");
+            assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_some(), "the panel stays");
+        }
+    }
+
+    #[test]
+    fn an_empty_list_says_so() {
+        let mut app = with_schedules(json!([]));
+        assert!(panel_text(&app).contains("No scheduled tasks"));
+        assert!(key(&mut app, Key::Enter).is_empty());
+        key(&mut app, Key::Esc);
+        assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_none(), "Esc closes it");
+    }
+
+    #[test]
+    fn a_task_awaiting_approval_is_never_approved_from_the_terminal() {
+        let mut waiting = scheduled("s-9", "Writes notes", false);
+        waiting["awaiting"] = json!(true);
+        let mut app = with_schedules(json!([waiting]));
+        assert!(panel_text(&app).contains("waiting for approval in the dock"));
+        assert!(key(&mut app, Key::Enter).is_empty(), "Enter does nothing on it");
+    }
+
+    #[test]
+    fn a_reply_with_something_unexpected_does_not_break_the_panel() {
+        for tasks in [json!("nope"), json!(null), json!([1, null, {"title": "no id"}, {"id": "s-1"}])] {
+            let mut app = with_schedules(tasks);
+            assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_some());
+            key(&mut app, Key::Down);
+            key(&mut app, Key::Char('d'));
+            key(&mut app, Key::Esc);
+        }
+    }
+
+    #[test]
+    fn a_reply_after_the_panel_was_closed_does_not_open_it_again() {
+        let mut app = with_schedules(json!([scheduled("s-1", "Notion tasks", true)]));
+        let effects = key(&mut app, Key::Enter);
+        let [Effect::Send(PageMessage::ScheduleUpdate { id, .. })] = &effects[..] else { panic!("{effects:?}") };
+        key(&mut app, Key::Esc);
+        app.update(Input::Dock(DockMessage::Schedules {
+            id: *id,
+            tasks: json!([scheduled("s-1", "Notion tasks", false)]),
+        }));
+        assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_none());
+    }
+
+    #[test]
+    fn schedules_is_one_of_the_clients_own_commands() {
+        let mut app = attached();
+        typed(&mut app, "/");
+        let id = app.pending.iter().find(|(_, p)| **p == Pending::Commands).map(|(id, _)| *id).unwrap();
+        app.update(in_session(DockMessage::Commands { id, commands: json!([]) }));
+        typed(&mut app, "sched");
+        let effects = key(&mut app, Key::Enter);
+        assert!(matches!(&effects[..], [Effect::Send(PageMessage::SchedulesList { .. })]), "{effects:?}");
+    }
+
+    #[test]
+    fn a_request_the_dock_refuses_says_so_in_the_chat() {
+        let mut app = attached();
+        typed(&mut app, "/schedules");
+        let effects = key(&mut app, Key::Enter);
+        let [Effect::Send(PageMessage::SchedulesList { id })] = effects[..] else { panic!("{effects:?}") };
+        app.update(Input::Dock(DockMessage::Error { id, code: "not-allowed".into() }));
+        assert!(matches!(app.session().entries.last(), Some(crate::term::state::Entry::Notice { .. })));
     }
 
     #[test]

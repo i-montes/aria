@@ -8,6 +8,7 @@ pub mod link;
 pub mod markdown;
 pub mod picker;
 pub mod rewind;
+pub mod schedules;
 mod screen;
 pub mod select;
 pub mod state;
