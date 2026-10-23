@@ -43,6 +43,12 @@ describe('a run', () => {
     expect(state.messages).toEqual([])
   })
 
+  test('a message a terminal sent to this session shows up', () => {
+    let state = run(createChat(), ev({ type: 'agent_start' }))
+    state = reduce(state, ev({ type: 'message_start', message: { role: 'user', content: 'from the terminal' } }))
+    expect(state.messages).toEqual([{ kind: 'user', text: 'from the terminal' }])
+  })
+
   test('the echo of the user message is not added twice', () => {
     let state = addUser(createChat(), 'hi')
     state = reduce(state, ev({ type: 'message_start', message: { role: 'user', content: 'hi' } }))

@@ -27,7 +27,9 @@ import { parseCardTitle } from './parts/cards.js'
 export function createChat() {
   return {
     workdir: '', running: false, engine: 'idle', model: null, thinking: null, context: null, problem: null,
-    messages: [], dialogs: [], queue: [], delivered: [], phase: 'working', startedAt: null, quota: [], giveBack: null, agents: [], turnFrom: 0,
+    // own: the texts this page showed when it sent them (and scheduled runs): their echo is not shown again. Any other
+    // echo is a message sent to this session from elsewhere (a terminal) and is shown.
+    messages: [], dialogs: [], queue: [], delivered: [], own: [], phase: 'working', startedAt: null, quota: [], giveBack: null, agents: [], turnFrom: 0,
     // The dock's turn watchdog stopped the current run (its notice says so; the settle then is not "stopped by you").
     stoppedByWatchdog: false,
     // Until Pi sends the session's history (empty for a new one) the thread shows that it is loading, timed from here.
@@ -281,7 +283,7 @@ function reduceEvent(state, event) {
     case 'scheduled_run':
       // A scheduled task's prompt, sent by the dock: shown as the person's message, with its time. Pi's echo of it is
       // dropped below like any echo of a message already shown.
-      return push(state, { kind: 'user', text: event.text ?? '', scheduled: { at: event.at, late: !!event.late } })
+      return push({ ...state, own: [...(state.own ?? []), event.text ?? ''] }, { kind: 'user', text: event.text ?? '', scheduled: { at: event.at, late: !!event.late } })
     case 'message_start':
       if (event.message?.role === 'assistant') {
         return push(state, { kind: 'assistant', text: '', thinking: '', done: false, texts: {}, thoughts: {} })
@@ -295,7 +297,9 @@ function reduceEvent(state, event) {
         if (waiting >= 0) return push({ ...state, queue: state.queue.filter((_, i) => i !== waiting) }, entry)
         const left = state.delivered.indexOf(text)
         if (left >= 0) return push({ ...state, delivered: state.delivered.filter((_, i) => i !== left) }, entry)
-        return state // the echo of a message the page already showed
+        const own = (state.own ?? []).indexOf(text)
+        if (own >= 0) return { ...state, own: state.own.filter((_, i) => i !== own) } // the echo of a message the page showed
+        return push(state, entry) // sent from elsewhere (a terminal attached to this session)
       }
       if (event.message?.role === 'custom') {
         const note = backgroundNote(event.message)
@@ -469,7 +473,7 @@ export function reduce(state, message) {
 const marked = (file) => ('image' in file ? file : { ...file, image: String(file.mime ?? '').startsWith('image/') })
 const withFiles = (entry, files) => (files?.length ? { ...entry, files: files.map(marked) } : entry)
 /** `files`: what the message carries ([{ name, mime, size }]), drawn as chips before the dock has answered. */
-export const addUser = (state, text, files) => push(state, withFiles({ kind: 'user', text }, files))
+export const addUser = (state, text, files) => push({ ...state, own: [...(state.own ?? []), text] }, withFiles({ kind: 'user', text }, files))
 /** "Show earlier": `[state, message]`, the message to post (`chatEarlier`, with the last cursor once there is one), or
  * null while a page is on its way or when there is nothing older. */
 export function askEarlier(state) {
