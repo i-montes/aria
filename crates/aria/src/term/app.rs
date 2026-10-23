@@ -902,6 +902,14 @@ impl App {
                     self.editor.set(&text);
                 }
             }
+            DockMessage::Error { id, code } if matches!(self.pending.get(&id), Some(Pending::Undo(_))) => {
+                self.pending.remove(&id);
+                let key = if code == "busy" { "term.undo.busy" } else { "term.undo.failed" };
+                self.session.entries.push(crate::term::state::Entry::Notice {
+                    tone: crate::term::state::Tone::Warn,
+                    text: crate::term::state::Text::Key { key: key.into(), vars: json!({}) },
+                });
+            }
             DockMessage::Saved { id } | DockMessage::Error { id, .. } if self.pending.contains_key(&id) => {
                 self.pending.remove(&id);
             }
@@ -1389,6 +1397,28 @@ mod tests {
         assert!(app.panel_lines(&palette, 80).is_some());
         key(&mut app, Key::Esc);
         assert!(app.panel_lines(&palette, 80).is_none(), "Esc closes it");
+    }
+
+    #[test]
+    fn an_undo_that_could_not_be_done_says_so() {
+        let mut app = attached();
+        typed(&mut app, "/undo");
+        let effects = key(&mut app, Key::Enter);
+        let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
+        let PageMessage::ChatCheckpoints { id } = **message else { panic!("{message:?}") };
+        app.update(in_session(DockMessage::Checkpoints {
+            id,
+            list: json!([{"id": "c9", "text": "x", "at": 0, "files": 1}]),
+        }));
+        let effects = key(&mut app, Key::Enter);
+        let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
+        let PageMessage::ChatUndo { id, .. } = **message else { panic!("{message:?}") };
+        app.update(in_session(DockMessage::Error { id, code: "busy".into() }));
+        assert!(
+            matches!(app.session().entries.last(), Some(crate::term::state::Entry::Notice { .. })),
+            "{:?}",
+            app.session().entries
+        );
     }
 
     #[test]

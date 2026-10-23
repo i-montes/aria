@@ -36,6 +36,12 @@ const OWN: &[(&str, &str, &str)] = &[
     ("chat.tools.ls", "List folder", "Listar carpeta"),
     ("chat.tools.tool", "Tool", "Herramienta"),
     ("term.untitled", "untitled", "sin título"),
+    (
+        "term.undo.busy",
+        "Not now: Aria is working. Undo once it is quiet.",
+        "Ahora no: Aria está trabajando. Deshaz cuando termine.",
+    ),
+    ("term.undo.failed", "Could not go back there: nothing was changed.", "No se pudo volver ahí: no se cambió nada."),
     ("term.cmd.context", "what fills the context", "qué llena el contexto"),
     (
         "term.ctx.title",
