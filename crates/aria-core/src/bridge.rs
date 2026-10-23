@@ -145,6 +145,14 @@ pub enum PageMessage {
     /// Close a session's Pi (its conversation stays in Pi's session file).
     #[serde(rename = "sessionClose")]
     SessionClose { session: String },
+    /// Open a tab from outside the page (a terminal), working in `workdir` when given; replies `sessionAdded` with this
+    /// id, or an `error` whose code is `too-many-sessions` or `session-failed`.
+    #[serde(rename = "sessionNew")]
+    SessionNew {
+        id: u64,
+        #[serde(default)]
+        workdir: Option<String>,
+    },
     /// The scheduled tasks, for the `/schedules` panel; replies `schedules`.
     #[serde(rename = "schedulesList")]
     SchedulesList { id: u64 },
@@ -318,6 +326,20 @@ pub enum DockMessage {
     Session { session: String, message: Box<DockMessage> },
     #[serde(rename = "sessions")]
     Sessions { id: u64, sessions: Vec<SessionEntry>, active: Option<String> },
+    /// A tab the dock opened (a terminal's `sessionNew`, with its id; or the one that replaces the last tab closed): the
+    /// page adds it without taking the focus.
+    #[serde(rename = "sessionAdded")]
+    SessionAdded {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<u64>,
+        session: SessionEntry,
+    },
+    /// A tab closed (from the page or a terminal): every client drops it.
+    #[serde(rename = "sessionRemoved")]
+    SessionRemoved { session: String },
+    /// The page saved the tabs (a new one, a title, the order): a client showing the list reads it again.
+    #[serde(rename = "sessionsChanged")]
+    SessionsChanged,
     /// Every scheduled task (aria-core `schedules::Task`, camelCase, with `next`), the answer to a schedules request.
     #[serde(rename = "schedules")]
     Schedules { id: u64, tasks: Value },
@@ -544,7 +566,13 @@ mod tests {
         assert_eq!(
             page(r#"{"type":"sessionsSave","sessions":[{"id":"a1","title":"Fix"}],"active":"a1"}"#),
             PageMessage::SessionsSave {
-                sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into(), segments: vec![], schedule: None, workdir: None }],
+                sessions: vec![SessionEntry {
+                    id: "a1".into(),
+                    title: "Fix".into(),
+                    segments: vec![],
+                    schedule: None,
+                    workdir: None
+                }],
                 active: Some("a1".into())
             }
         );
@@ -563,7 +591,13 @@ mod tests {
         assert_eq!(
             value(DockMessage::Sessions {
                 id: 3,
-                sessions: vec![SessionEntry { id: "a1".into(), title: "Fix".into(), segments: vec![], schedule: None, workdir: None }],
+                sessions: vec![SessionEntry {
+                    id: "a1".into(),
+                    title: "Fix".into(),
+                    segments: vec![],
+                    schedule: None,
+                    workdir: None
+                }],
                 active: None
             }),
             json!({"type": "sessions", "id": 3, "sessions": [{"id": "a1", "title": "Fix", "segments": []}], "active": null})
@@ -723,5 +757,31 @@ mod tests {
             value(DockMessage::Error { id: 9, code: "unknown".into() }),
             json!({"type": "error", "id": 9, "code": "unknown"})
         );
+    }
+
+    #[test]
+    fn tabs_the_dock_opens_and_closes_have_their_messages() {
+        assert_eq!(
+            page(r#"{"type":"sessionNew","id":3,"workdir":"/home/ana/Projects/checkout-widget"}"#),
+            PageMessage::SessionNew { id: 3, workdir: Some("/home/ana/Projects/checkout-widget".into()) }
+        );
+        assert_eq!(page(r#"{"type":"sessionNew","id":4}"#), PageMessage::SessionNew { id: 4, workdir: None });
+        let value = |m: DockMessage| serde_json::to_value(m).unwrap();
+        let entry = SessionEntry {
+            id: "a1".into(),
+            title: "".into(),
+            segments: vec![],
+            schedule: None,
+            workdir: Some("/home/ana".into()),
+        };
+        assert_eq!(
+            value(DockMessage::SessionAdded { id: Some(3), session: entry }),
+            json!({"type": "sessionAdded", "id": 3, "session": {"id": "a1", "title": "", "segments": [], "workdir": "/home/ana"}})
+        );
+        assert_eq!(
+            value(DockMessage::SessionRemoved { session: "a1".into() }),
+            json!({"type": "sessionRemoved", "session": "a1"})
+        );
+        assert_eq!(value(DockMessage::SessionsChanged), json!({"type": "sessionsChanged"}));
     }
 }

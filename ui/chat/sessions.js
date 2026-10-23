@@ -93,6 +93,13 @@ export function addScheduled(tabs, id, title, schedule) {
   return withSessions(tabs, [...tabs.sessions, entry(id, title, schedule)])
 }
 
+/** A tab the dock opened (a terminal's new session, or the one replacing the last tab closed): at the end, without
+ * taking the focus, and only once. */
+export function addFromDock(tabs, id, title = '') {
+  if (find(tabs, id)) return tabs
+  return withSessions(tabs, [...tabs.sessions, entry(id, title)])
+}
+
 /** The tabs the bar shows: every regular one, and a scheduled one while it is active, unread, working or waiting. */
 export const shownSessions = (tabs) =>
   tabs.sessions.filter((s) => !s.schedule || s.id === tabs.active || s.unread || s.status === 'working' || s.status === 'needs')

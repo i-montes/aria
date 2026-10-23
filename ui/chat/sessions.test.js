@@ -9,6 +9,7 @@ import {
   regularCount,
   removeSession,
   shownSessions,
+  addFromDock,
 } from './sessions.js'
 
 let counter = 0
@@ -227,5 +228,21 @@ describe('scheduled tabs', () => {
     tabs = removeSession(tabs, 's-1')
     expect(tabs.sessions.map((s) => s.id)).toEqual(['a'])
     expect(tabs.active).toBe('a')
+  })
+})
+
+describe('tabs the dock opens (a terminal)', () => {
+  const base = () => createTabs({ sessions: [{ id: 'a', title: 'A' }], active: 'a' }, () => 'new')
+
+  test('come in at the end without taking the focus, once', () => {
+    const tabs = addFromDock(base(), 'b', '')
+    expect(tabs.sessions.map((s) => s.id)).toEqual(['a', 'b'])
+    expect(tabs.active).toBe('a')
+    expect(addFromDock(tabs, 'b', '')).toBe(tabs)
+  })
+
+  test('the one a terminal closed goes away', () => {
+    const tabs = removeSession(addFromDock(base(), 'b', ''), 'b')
+    expect(tabs.sessions.map((s) => s.id)).toEqual(['a'])
   })
 })

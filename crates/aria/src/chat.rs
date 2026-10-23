@@ -39,8 +39,13 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a compaction may take: a model call over the whole context.
 const COMPACT_TIMEOUT: Duration = Duration::from_secs(600);
 /// Pi's own commands the `/` menu offers, and how long each may take: a compaction is a model call over the whole context.
-const PI_COMMANDS: [(&str, Duration); 3] =
-    [("compact", COMPACT_TIMEOUT), ("get_session_stats", REQUEST_TIMEOUT), ("export_html", Duration::from_secs(60))];
+/// `bash` is a terminal's `!command`: the person's own command, run by Pi, its output joining the context.
+const PI_COMMANDS: [(&str, Duration); 4] = [
+    ("compact", COMPACT_TIMEOUT),
+    ("get_session_stats", REQUEST_TIMEOUT),
+    ("export_html", Duration::from_secs(60)),
+    ("bash", Duration::from_secs(600)),
+];
 const FILE_LIMIT: usize = 50;
 const QUOTA_MAX_AGE: Duration = Duration::from_secs(20);
 /// What a session with background work is told when an update has waited `UPDATE_NOTICE_AFTER` for that work alone.
@@ -2095,6 +2100,40 @@ impl Sessions {
         *self.dictation.lock().unwrap() = Some(make(Self::dictation_events(self.emit.clone())));
     }
 
+    /// A closed tab leaves `sessions.json` and every client is told; the last regular one is replaced by a fresh tab,
+    /// so there is always one to show.
+    fn drop_tab(&self, session: &str) {
+        let replacement = {
+            let _file = SESSIONS_FILE.lock().unwrap_or_else(|e| e.into_inner());
+            let mut list = sessions::load(&self.ctx.paths);
+            list.sessions.retain(|entry| entry.id != session);
+            let mut replacement = None;
+            if !list.sessions.iter().any(|entry| entry.schedule.is_none()) {
+                let entry = sessions::SessionEntry {
+                    id: sessions::new_id(),
+                    title: String::new(),
+                    segments: Vec::new(),
+                    schedule: None,
+                    workdir: None,
+                };
+                list.active = Some(entry.id.clone());
+                list.sessions.push(entry.clone());
+                replacement = Some(entry);
+            }
+            if list.active.as_deref() == Some(session) {
+                list.active = list.sessions.iter().find(|entry| entry.schedule.is_none()).map(|entry| entry.id.clone());
+            }
+            if let Err(error) = sessions::save(&self.ctx.paths, &list) {
+                crate::note(&format!("the tabs could not be saved after closing {session}: {error}"));
+            }
+            replacement
+        };
+        (self.emit)(DockMessage::SessionRemoved { session: session.to_string() });
+        if let Some(entry) = replacement {
+            (self.emit)(DockMessage::SessionAdded { id: None, session: entry });
+        }
+    }
+
     pub fn new(ctx: ChatCtx, emit: Emit) -> Sessions {
         let notifier: Arc<dyn Notifier> = Arc::new(CountingNotifier::new(ctx.notifier.clone()));
         let ctx = Arc::new(ChatCtx { notifier, ..ctx });
@@ -2273,6 +2312,22 @@ impl Sessions {
                 let tasks = self.ctx.schedules.ids();
                 let entries = sessions::merge_scheduled(entries, &stored, &tasks);
                 let _ = sessions::save(&self.ctx.paths, &SessionList { sessions: entries, active });
+                (self.emit)(DockMessage::SessionsChanged);
+            }
+            PageMessage::SessionNew { id, workdir } => {
+                let _ = self.ctx.paths.ensure_root();
+                let added = {
+                    let _file = SESSIONS_FILE.lock().unwrap_or_else(|e| e.into_inner());
+                    sessions::add(&self.ctx.paths, &sessions::new_id(), "", workdir.as_deref())
+                };
+                (self.emit)(match added {
+                    Ok(session) => DockMessage::SessionAdded { id: Some(id), session },
+                    Err(sessions::AddError::TooMany) => DockMessage::Error { id, code: "too-many-sessions".into() },
+                    Err(sessions::AddError::Io(error)) => {
+                        crate::note(&format!("a new tab could not be saved: {error}"));
+                        DockMessage::Error { id, code: "session-failed".into() }
+                    }
+                });
             }
             // Credentials or packages changed.
             PageMessage::EnginesRestart => self.restart_all(),
@@ -2296,7 +2351,8 @@ impl Sessions {
                     chat.forget_watch();
                     chat.forget_jobs();
                 }
-                self.close_jobs(session);
+                self.close_jobs(session.clone());
+                self.drop_tab(&session);
             }
             PageMessage::JobStop { job } => {
                 self.ctx.jobs.stop(&job);
@@ -3680,9 +3736,108 @@ mod tests {
             workdir: workdir.map(str::to_string),
         };
         let folder = "/home/ana/Projects/checkout-widget";
-        aria_core::sessions::save(&s.h.paths, &SessionList { sessions: vec![entry(Some(folder))], active: None }).unwrap();
+        aria_core::sessions::save(&s.h.paths, &SessionList { sessions: vec![entry(Some(folder))], active: None })
+            .unwrap();
         s.sessions.handle(PageMessage::SessionsSave { sessions: vec![entry(None)], active: Some("aa".into()) });
         assert_eq!(aria_core::sessions::load(&s.h.paths).sessions[0].workdir.as_deref(), Some(folder));
+    }
+
+    fn regular(id: &str) -> aria_core::sessions::SessionEntry {
+        aria_core::sessions::SessionEntry {
+            id: id.into(),
+            title: "".into(),
+            segments: vec![],
+            schedule: None,
+            workdir: None,
+        }
+    }
+
+    #[test]
+    fn a_new_session_is_saved_and_announced() {
+        let s = sessions_harness();
+        aria_core::sessions::save(
+            &s.h.paths,
+            &SessionList { sessions: vec![regular("aa")], active: Some("aa".into()) },
+        )
+        .unwrap();
+        s.sessions
+            .handle(PageMessage::SessionNew { id: 7, workdir: Some("/home/ana/Projects/checkout-widget".into()) });
+        let added = loop {
+            match s.messages.recv_timeout(Duration::from_secs(5)).expect("sessionAdded") {
+                DockMessage::SessionAdded { id, session } => break (id, session),
+                _ => {}
+            }
+        };
+        assert_eq!(added.0, Some(7));
+        assert_eq!(added.1.workdir.as_deref(), Some("/home/ana/Projects/checkout-widget"));
+        let list = aria_core::sessions::load(&s.h.paths);
+        assert_eq!(list.sessions.len(), 2);
+        assert_eq!(list.sessions[1].id, added.1.id);
+        assert_eq!(list.active.as_deref(), Some("aa"));
+    }
+
+    #[test]
+    fn a_ninth_session_is_refused() {
+        let s = sessions_harness();
+        let full: Vec<_> = (1..=8).map(|n| regular(&format!("t{n}"))).collect();
+        aria_core::sessions::save(&s.h.paths, &SessionList { sessions: full, active: None }).unwrap();
+        s.sessions.handle(PageMessage::SessionNew { id: 8, workdir: None });
+        let refused = s
+            .messages
+            .try_iter()
+            .any(|m| matches!(m, DockMessage::Error { id: 8, ref code } if code == "too-many-sessions"));
+        assert!(refused);
+    }
+
+    #[test]
+    fn closing_the_last_session_opens_a_new_one() {
+        let s = sessions_harness();
+        aria_core::sessions::save(
+            &s.h.paths,
+            &SessionList { sessions: vec![regular("aa")], active: Some("aa".into()) },
+        )
+        .unwrap();
+        s.sessions.handle(PageMessage::SessionClose { session: "aa".into() });
+        let got: Vec<DockMessage> = s.messages.try_iter().collect();
+        let removed = got.iter().position(|m| matches!(m, DockMessage::SessionRemoved { session } if session == "aa"));
+        let added = got.iter().position(|m| matches!(m, DockMessage::SessionAdded { id: None, .. }));
+        assert!(removed.is_some() && added.is_some() && removed < added, "removed, then a fresh one: {got:?}");
+        let list = aria_core::sessions::load(&s.h.paths);
+        assert_eq!(list.sessions.len(), 1);
+        assert_ne!(list.sessions[0].id, "aa");
+        assert_eq!(list.active.as_deref(), Some(list.sessions[0].id.as_str()));
+    }
+
+    #[test]
+    fn closing_one_of_two_sessions_removes_it_from_the_list() {
+        let s = sessions_harness();
+        aria_core::sessions::save(
+            &s.h.paths,
+            &SessionList { sessions: vec![regular("aa"), regular("bb")], active: Some("aa".into()) },
+        )
+        .unwrap();
+        s.sessions.handle(PageMessage::SessionClose { session: "aa".into() });
+        let got: Vec<DockMessage> = s.messages.try_iter().collect();
+        assert!(got.iter().any(|m| matches!(m, DockMessage::SessionRemoved { session } if session == "aa")));
+        assert!(!got.iter().any(|m| matches!(m, DockMessage::SessionAdded { .. })));
+        let list = aria_core::sessions::load(&s.h.paths);
+        assert_eq!(list.sessions.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["bb"]);
+    }
+
+    #[test]
+    fn a_save_is_announced_as_changed() {
+        let s = sessions_harness();
+        s.sessions.handle(PageMessage::SessionsSave { sessions: vec![regular("aa")], active: Some("aa".into()) });
+        assert!(s.messages.try_iter().any(|m| matches!(m, DockMessage::SessionsChanged)));
+    }
+
+    #[test]
+    fn a_bang_command_runs_in_pi_as_its_bash() {
+        let h = harness();
+        h.chat.handle(PageMessage::PiCommand { id: 5, command: "bash".into(), args: json!({"command": "pwd"}) });
+        let (ok, data, _) = pi_reply(&h, 5);
+        assert!(ok);
+        assert_eq!(data["output"], json!("ran pwd"));
     }
 
     #[test]
@@ -3711,6 +3866,7 @@ mod tests {
             workdir: None,
         }];
         s.sessions.handle(PageMessage::SessionsSave { sessions: entries.clone(), active: Some("aa".into()) });
+        assert!(matches!(s.messages.recv_timeout(Duration::from_secs(5)).unwrap(), DockMessage::SessionsChanged));
         s.sessions.handle(PageMessage::SessionsLoad { id: 9 });
         match s.messages.recv_timeout(Duration::from_secs(5)).unwrap() {
             DockMessage::Sessions { id: 9, sessions, active } => {

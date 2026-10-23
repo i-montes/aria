@@ -25,7 +25,7 @@ import { renderTasks } from './parts/tasks.js'
 import { autoCollapsed, renderTrace, visibleRows } from './parts/trace.js'
 import { formatElapsed } from './parts/working.js'
 import {
-  MAX_SESSIONS, addScheduled, addSession, applyStatus, closeSession, createTabs, hideScheduled, regularCount, removeSession, renameSession,
+  MAX_SESSIONS, addFromDock, addScheduled, addSession, applyStatus, closeSession, createTabs, hideScheduled, regularCount, removeSession, renameSession,
   selectSession, setTitleIfEmpty, shownSessions, toSaved, undoClose,
 } from './sessions.js'
 import { addNote, addNotice, addQueued, addUser, answerDialog, askEarlier, tookBack, answersForCard, clearQueue, createChat, reduce } from './state.js'
@@ -2049,6 +2049,14 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
     addScheduledTab({ id, title, schedule }) {
       const before = tabs
       tabs = addScheduled(tabs, id, title, schedule)
+      if (tabs === before) return
+      save()
+      render()
+    },
+    /** A tab the dock opened (the dock's `sessionAdded`): added without taking the focus. */
+    addDockTab({ id, title }) {
+      const before = tabs
+      tabs = addFromDock(tabs, id, title ?? '')
       if (tabs === before) return
       save()
       render()

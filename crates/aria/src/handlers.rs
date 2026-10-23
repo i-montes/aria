@@ -120,6 +120,7 @@ pub fn is_chat(message: &PageMessage) -> bool {
             | PageMessage::SessionsLoad { .. }
             | PageMessage::SessionsSave { .. }
             | PageMessage::SessionClose { .. }
+            | PageMessage::SessionNew { .. }
             | PageMessage::SchedulesList { .. }
             | PageMessage::ScheduleUpdate { .. }
             | PageMessage::ScheduleDelete { .. }
@@ -214,6 +215,7 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         | PageMessage::SessionsLoad { .. }
         | PageMessage::SessionsSave { .. }
         | PageMessage::SessionClose { .. }
+        | PageMessage::SessionNew { .. }
         | PageMessage::SchedulesList { .. }
         | PageMessage::ScheduleUpdate { .. }
         | PageMessage::ScheduleDelete { .. }

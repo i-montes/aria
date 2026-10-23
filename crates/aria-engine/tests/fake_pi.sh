@@ -98,6 +98,8 @@ while IFS= read -r line; do
       ( sleep 0.3; rm -f "$compacting"
         printf '{"type":"compaction_end","reason":"manual","result":{"summary":"S"},"aborted":false,"willRetry":false}\n'
         printf '{"type":"response","id":"%s","command":"compact","success":true,"data":{"tokensBefore":150000,"estimatedTokensAfter":32000,"instructions":"%s"}}\n' "$id" "$instructions" ) & ;;
+    bash)
+      printf '{"type":"response","id":"%s","command":"bash","success":true,"data":{"output":"ran %s","exitCode":0,"cancelled":false,"truncated":false}}\n' "$id" "$(field command "$line")" ;;
     export_html)
       printf '{"type":"response","id":"%s","command":"export_html","success":false,"error":"Nothing to export"}\n' "$id" ;;
     clear_queue)

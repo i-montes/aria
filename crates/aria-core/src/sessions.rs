@@ -275,7 +275,10 @@ mod tests {
         std::fs::write(paths.sessions(), r#"{"sessions":[{"id":"a1","title":"Old"}],"active":"a1"}"#).unwrap();
         assert_eq!(load(&paths).sessions[0].workdir, None);
         let mut list = load(&paths);
-        list.sessions.push(SessionEntry { workdir: Some("/home/ana/Projects/checkout-widget".into()), ..entry("b2", "Coupons") });
+        list.sessions.push(SessionEntry {
+            workdir: Some("/home/ana/Projects/checkout-widget".into()),
+            ..entry("b2", "Coupons")
+        });
         save(&paths, &list).unwrap();
         let written = std::fs::read_to_string(paths.sessions()).unwrap();
         assert_eq!(written.matches("workdir").count(), 1, "an entry without a folder is written without the field");
@@ -297,7 +300,9 @@ mod tests {
         assert!(matches!(add(&paths, "t9", "", None), Err(AddError::TooMany)));
         assert!(matches!(add(&paths, "a1", "", None), Err(AddError::Io(_))), "an id already there is refused");
         let id = new_id();
-        assert!(valid_id(&id) && id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(
+            valid_id(&id) && id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
     }
 
     #[test]
