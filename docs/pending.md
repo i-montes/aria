@@ -270,6 +270,9 @@ A tab continues in a new Pi session file after each compaction (see the
   update (Aria is not signed with a stable identity). The engine was checked live on the Mac: the real microphone
   (5 s at 16 kHz), and a 59 s recording transcribed in about 2 s warm.
 - No live text while speaking, no custom vocabulary (Supabase, Vercel…), no reading replies aloud.
+- `tools/check-macos.sh` (the macOS type-check from Linux, through zig) now has to build whisper.cpp for macOS
+  (`whisper-rs-sys`: cmake, bindgen, Metal) and will likely fail there; it needs a way around it (a feature that leaves
+  dictation out of that check, or checking without the `metal` feature).
 
 ## Known limits of the page (from the review, deferred)
 
