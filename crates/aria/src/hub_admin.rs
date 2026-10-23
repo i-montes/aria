@@ -29,6 +29,10 @@ pub const MAX_BUNDLE_BYTES: u64 = 16 * 1024 * 1024;
 #[serde(deny_unknown_fields)]
 pub struct Bundle {
     pub files: BTreeMap<String, String>,
+    /// What the export could not settle (a credential file left out because the keyring could not be opened to look for
+    /// it). Never sent: `aria hub init` prints them before anything is sent. Never holds a secret value.
+    #[serde(skip)]
+    pub warnings: Vec<String>,
 }
 
 /// One address a computer listens on, from `ss -ltnH`.
@@ -58,6 +62,7 @@ pub fn export_with(
     open_vault: &dyn Fn() -> Result<Vault, String>,
 ) -> Result<Bundle, String> {
     let mut files = BTreeMap::new();
+    let mut warnings = Vec::new();
 
     let settings_path = paths.settings();
     let mut settings = match read_json(&settings_path).map_err(|error| error.to_string())? {
@@ -79,14 +84,14 @@ pub fn export_with(
 
     for name in &BUNDLE_FILES[1..] {
         let sealed = SEALED.contains(name);
-        let found = if sealed { keys.sealed(name)? } else { read_object(&paths.root.join(name))? };
+        let found = if sealed { keys.sealed(name, &mut warnings)? } else { read_object(&paths.root.join(name))? };
         let Some(mut file) = found else { continue };
         if *name != "mcp-auth.json" {
             keys.plain(&mut file).map_err(|why| format!("{name}: {why}"))?;
         }
         files.insert(name.to_string(), render(&file));
     }
-    Ok(Bundle { files })
+    Ok(Bundle { files, warnings })
 }
 
 fn render(value: &Value) -> String {
@@ -126,7 +131,7 @@ impl Keys<'_> {
     /// else the plain file in the home, else the copy sealed in the keyring (not asked when the owner has the keyring
     /// off). None when there is none anywhere, or when the keyring cannot be reached and nothing else holds one (a
     /// computer that never had a keyring).
-    fn sealed(&self, name: &str) -> Result<Option<Value>, String> {
+    fn sealed(&self, name: &str, warnings: &mut Vec<String>) -> Result<Option<Value>, String> {
         let live = match &self.paths.vault {
             Some(vault) => vault.live.clone(),
             None => vault::live_dir(&self.paths.root),
@@ -139,7 +144,13 @@ impl Keys<'_> {
         if !self.keyring_on {
             return Ok(None);
         }
-        let Ok(vault) = self.vault() else { return Ok(None) };
+        let vault = match self.vault() {
+            Ok(vault) => vault,
+            Err(why) => {
+                warnings.push(format!("{name}: no copy found and the keyring could not be opened ({why})"));
+                return Ok(None);
+            }
+        };
         let account = format!("file:{name}");
         match vault.keyring.get(&account).map_err(|error| format!("{name}: {error}"))? {
             Some(text) => match serde_json::from_str(&text) {
@@ -396,6 +407,39 @@ mod tests {
         let bundle = export_plain(&paths, None).unwrap();
         assert!(!bundle.files.contains_key("mcp.json") && !bundle.files.contains_key("mcp-auth.json"));
         assert!(bundle.files.contains_key("auth.json"));
+    }
+
+    #[test]
+    fn export_warns_when_the_keyring_cannot_be_opened_to_look_for_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = plain_home(dir.path());
+        std::fs::remove_file(paths.root.join("mcp-auth.json")).unwrap();
+        let bundle = export_plain(&paths, None).unwrap();
+        assert!(!bundle.files.contains_key("mcp-auth.json"), "still skipped");
+        assert_eq!(
+            bundle.warnings,
+            ["mcp-auth.json: no copy found and the keyring could not be opened (no keyring here)"]
+        );
+        for secret in ["sk-test-1234", "tvly-test", "n-test"] {
+            assert!(!bundle.warnings.iter().any(|w| w.contains(secret)), "{secret}");
+        }
+        let sent = serde_json::to_string(&bundle).unwrap();
+        assert!(!sent.contains("warnings"), "warnings are never sent: {sent}");
+        assert_eq!(serde_json::from_str::<Bundle>(&sent).unwrap().files, bundle.files);
+    }
+
+    #[test]
+    fn export_does_not_warn_when_the_keyring_opens_and_the_file_is_simply_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (paths, keyring) = keyring_home(dir.path());
+        keyring.delete("file:mcp-auth.json").unwrap();
+        let shown = vault(dir.path(), keyring);
+        let bundle = export_with(&paths, "/home/hub", None, &|| Ok(shown.clone())).unwrap();
+        assert!(!bundle.files.contains_key("mcp-auth.json"));
+        assert!(bundle.warnings.is_empty(), "{:?}", bundle.warnings);
+        // A file found in the home needs no keyring and warns of nothing.
+        let plain = plain_home(&dir.path().join("p"));
+        assert!(export_plain(&plain, None).unwrap().warnings.is_empty());
     }
 
     #[test]
