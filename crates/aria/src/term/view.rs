@@ -316,6 +316,14 @@ fn conversation_marked(v: &SessionView, width: u16) -> (Vec<Line<'static>>, Vec<
             Entry::Divider { text } => {
                 vec![Line::from(Span::styled(format!("  ── {} ──", say(&v.lang, text)), Style::default().fg(p.faint)))]
             }
+            Entry::Changes { files, added, removed } => {
+                let key = if *files == 1 { "term.changes.one" } else { "term.changes.many" };
+                vec![Line::from(vec![
+                    Span::styled(format!("  {}", t(&v.lang, key, &json!({ "n": files }))), Style::default().fg(p.grey)),
+                    Span::styled(format!("  +{added}"), Style::default().fg(p.green)),
+                    Span::styled(format!(" −{removed}"), Style::default().fg(p.coral)),
+                ])]
+            }
         };
         if lines.is_empty() {
             continue;

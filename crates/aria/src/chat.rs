@@ -241,6 +241,8 @@ struct Inner {
     status: &'static str,
     status_at: i64,
     unseen_done: bool,
+    /// The checkpoint taken before the running turn's first message: its changes are said when it settles.
+    run_checkpoint: Option<crate::checkpoints::Checkpoint>,
     /// The tool executions under way (by `toolCallId`, nested ones too): while any is open the watchdog waits, since a
     /// long build or test is silent and has its own timeouts. The value is the tool's name (what the face shows).
     tools: HashMap<String, String>,
@@ -537,6 +539,11 @@ impl Chat {
             PageMessage::ListCommands { id } => self.list(id, "get_commands", "commands"),
             PageMessage::ListModels { id } => self.list(id, "get_available_models", "models"),
             PageMessage::PiCommand { id, command, args } => self.pi_command(id, command, args),
+            PageMessage::ChatCheckpoints { id } => {
+                let list = self.checkpoints().map(|c| c.list()).unwrap_or_default();
+                self.emit(DockMessage::Checkpoints { id, list: json!(list) });
+            }
+            PageMessage::ChatUndo { id, checkpoint } => self.undo(id, checkpoint),
             PageMessage::ChatBash { id, command } => {
                 self.pi_request(id, "bash", json!({ "command": command }), BASH_TIMEOUT)
             }
@@ -805,6 +812,10 @@ impl Chat {
             Ok(saved) => saved,
             Err(error) => return refuse(&error),
         };
+        // The folder as it is before this message, so its changes can be told and undone.
+        if behavior.is_none() {
+            self.take_checkpoint(text);
+        }
         let (message, images) = crate::attachments::message(text, &saved);
         let mut fields = json!({"message": message});
         if !images.is_empty() {
@@ -817,6 +828,102 @@ impl Chat {
         if engine.send_as(&id, "prompt", fields).is_err() {
             refuse("Pi is no longer running");
         }
+    }
+
+    /// The checkpoints of this session's folder (the one its Pi works in). None for the projects folder itself: it
+    /// holds the projects, each with its own `.git` a checkpoint cannot see into, so keeping it would be heavy and useless.
+    fn checkpoints(&self) -> Option<crate::checkpoints::Checkpoints> {
+        let projects = agent::workdir(self.settings().as_ref());
+        let folder = self
+            .inner
+            .lock()
+            .unwrap()
+            .workdir
+            .clone()
+            .or_else(|| self.own_folder())
+            .unwrap_or_else(|| projects.clone());
+        let same = |a: &std::path::Path, b: &std::path::Path| match (a.canonicalize(), b.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => a == b,
+        };
+        if same(&folder, &projects) {
+            return None;
+        }
+        crate::checkpoints::Checkpoints::open(&self.ctx.paths.root.join("checkpoints"), &self.session, &folder)
+    }
+
+    /// Keeps the folder before a turn's first message (once per turn).
+    fn take_checkpoint(&self, text: &str) {
+        if self.inner.lock().unwrap().run_checkpoint.is_some() {
+            return;
+        }
+        let Some(checkpoints) = self.checkpoints() else { return };
+        match checkpoints.take(text) {
+            Ok(checkpoint) => self.inner.lock().unwrap().run_checkpoint = Some(checkpoint),
+            Err(error) => crate::note(&format!("tab {}: no checkpoint: {error}", self.session)),
+        }
+    }
+
+    /// A turn settled: what it changed in the folder, told when it changed something.
+    fn tell_changes(&self) {
+        let Some(checkpoint) = self.inner.lock().unwrap().run_checkpoint.take() else { return };
+        let chat = self.clone();
+        std::thread::spawn(move || {
+            let Some(checkpoints) = chat.checkpoints() else { return };
+            if let Ok(changes) = checkpoints.changes_since(&checkpoint) {
+                if changes.files > 0 {
+                    let _ = checkpoints.set_files(&checkpoint, changes.files);
+                    chat.emit(DockMessage::ChatEvent {
+                        event: json!({"type": "changes", "files": changes.files, "added": changes.added, "removed": changes.removed}),
+                    });
+                }
+            }
+        });
+    }
+
+    /// Back to before `checkpoint`'s message: the folder, then the conversation (Pi forks before that message, the tab
+    /// records the new session and the conversation is told again).
+    fn undo(&self, id: u64, checkpoint: String) {
+        if self.inner.lock().unwrap().running {
+            return self.emit(DockMessage::Error { id, code: "busy".into() });
+        }
+        let chat = self.clone();
+        std::thread::spawn(move || {
+            let failed = |chat: &Chat, why: &str| {
+                crate::note(&format!("tab {}: undo failed: {why}", chat.session));
+                chat.emit(DockMessage::Error { id, code: "failed".into() });
+            };
+            let Some(checkpoints) = chat.checkpoints() else { return failed(&chat, "no checkpoints") };
+            let Some(target) = checkpoints.list().into_iter().find(|c| c.id == checkpoint) else {
+                return failed(&chat, "unknown checkpoint");
+            };
+            if let Err(error) = checkpoints.restore(&target) {
+                return failed(&chat, &error.to_string());
+            }
+            let engine = match chat.ensure_engine() {
+                Ok(engine) => engine,
+                Err(code) => return failed(&chat, code),
+            };
+            let entry =
+                engine.request("get_fork_messages", json!({}), REQUEST_TIMEOUT).ok().filter(|r| r.success).and_then(
+                    |r| {
+                        r.data["messages"]
+                            .as_array()?
+                            .iter()
+                            .rev()
+                            .find(|m| m["text"].as_str().is_some_and(|t| t.trim() == target.text.trim()))
+                            .and_then(|m| m["entryId"].as_str().map(str::to_string))
+                    },
+                );
+            let Some(entry) = entry else { return failed(&chat, "the message is not in the conversation") };
+            match engine.request("fork", json!({ "entryId": entry }), REQUEST_TIMEOUT) {
+                Ok(response) if response.success => {}
+                _ => return failed(&chat, "Pi did not fork"),
+            }
+            chat.emit(DockMessage::ChatEvent { event: json!({"type": "session_reset"}) });
+            chat.announce(&engine);
+            chat.emit(DockMessage::Saved { id });
+        });
     }
 
     /// Can the session's model be sent images? Read from `get_available_models` and kept per model until Pi restarts; a
@@ -1420,6 +1527,18 @@ impl Chat {
                             self.release_soon();
                         }
                         Some("compaction_start") => self.inner.lock().unwrap().compacting = true,
+                        // A queued message Pi takes now: the folder before it is kept (once per turn).
+                        Some("message_start") if raw["message"]["role"] == "user" => {
+                            let content = &raw["message"]["content"];
+                            let text = content.as_str().map(str::to_string).unwrap_or_else(|| {
+                                content.as_array().map_or(String::new(), |blocks| {
+                                    blocks.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("")
+                                })
+                            });
+                            let text: String =
+                                text.lines().filter(|l| !l.starts_with("[attached")).collect::<Vec<_>>().join("\n");
+                            self.take_checkpoint(text.trim_end());
+                        }
                         // The router's effort or /effort changed Pi's level: the header and every terminal say so.
                         Some("thinking_level_changed") => {
                             if let Some(level) = raw["level"].as_str() {
@@ -1497,6 +1616,7 @@ impl Chat {
                             let unseen = !self.seen();
                             self.inner.lock().unwrap().unseen_done = unseen;
                             self.update_status();
+                            self.tell_changes();
                             for id in open {
                                 self.close_dialog(&id);
                             }
@@ -3059,6 +3179,69 @@ mod tests {
         wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         s.sessions.handle(PageMessage::SessionsLoad { id: 4 });
         wait_session(&s, "aa's status after the list", "aa", |m| matches!(m, DockMessage::SessionStatus { .. }));
+    }
+
+    #[test]
+    fn a_turn_that_changed_files_says_how_many() {
+        let h = harness();
+        let own = h._dir.path().join("checkout-widget");
+        std::fs::create_dir_all(&own).unwrap();
+        with_own_folder(&h, &own);
+        send(&h, "WRITE");
+        match wait_for(&h, "the changes", |m| event_of(m, "changes")) {
+            DockMessage::ChatEvent { event } => {
+                assert_eq!(
+                    (event["files"].clone(), event["added"].clone(), event["removed"].clone()),
+                    (json!(1), json!(2), json!(0))
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn undo_puts_files_and_conversation_back() {
+        let h = harness();
+        let own = h._dir.path().join("checkout-widget");
+        std::fs::create_dir_all(&own).unwrap();
+        with_own_folder(&h, &own);
+        send(&h, "WRITE");
+        wait_for(&h, "the changes", |m| event_of(m, "changes"));
+        h.chat.handle(PageMessage::ChatCheckpoints { id: 3 });
+        let list = match wait_for(&h, "the list", |m| matches!(m, DockMessage::Checkpoints { id: 3, .. })) {
+            DockMessage::Checkpoints { list, .. } => list,
+            _ => unreachable!(),
+        };
+        assert_eq!(list[0]["text"], json!("WRITE"));
+        assert_eq!(list[0]["files"], json!(1));
+        let checkpoint = list[0]["id"].as_str().unwrap().to_string();
+        h.chat.handle(PageMessage::ChatUndo { id: 4, checkpoint });
+        wait_for(&h, "the fork", |m| event_of(m, "fork_seen"));
+        wait_for(&h, "saved", |m| matches!(m, DockMessage::Saved { id: 4 }));
+        assert!(!own.join("made.txt").exists(), "the file the turn made is gone");
+    }
+
+    #[test]
+    fn the_projects_folder_itself_gets_no_checkpoints() {
+        // It holds the projects (each with its own .git, which a checkpoint cannot see into): too big, and useless.
+        let h = harness();
+        send(&h, "WRITE");
+        wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
+        h.chat.handle(PageMessage::ChatCheckpoints { id: 6 });
+        match wait_for(&h, "the list", |m| matches!(m, DockMessage::Checkpoints { id: 6, .. })) {
+            DockMessage::Checkpoints { list, .. } => assert_eq!(list, json!([])),
+            _ => unreachable!(),
+        }
+        assert!(!h.paths.root.join("checkpoints").join("s1").exists());
+    }
+
+    #[test]
+    fn undo_is_refused_while_running() {
+        let h = harness();
+        ready(&h);
+        h.chat.inner.lock().unwrap().running = true;
+        h.chat.handle(PageMessage::ChatUndo { id: 5, checkpoint: "x".into() });
+        wait_for(&h, "busy", |m| matches!(m, DockMessage::Error { id: 5, code } if code == "busy"));
     }
 
     #[test]

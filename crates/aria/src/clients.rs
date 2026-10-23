@@ -45,6 +45,8 @@ fn allowed(message: &PageMessage) -> bool {
                 | PageMessage::ListFiles { .. }
                 | PageMessage::PiCommand { .. }
                 | PageMessage::ChatBash { .. }
+                | PageMessage::ChatCheckpoints { .. }
+                | PageMessage::ChatUndo { .. }
         ),
         _ => false,
     }

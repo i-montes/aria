@@ -53,12 +53,33 @@ pub struct Call {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entry {
-    User { text: String },
-    Assistant { text: String, thinking: String, done: bool },
-    Tools { calls: Vec<Call> },
-    Notice { tone: Tone, text: Text },
-    Note { text: Text },
-    Divider { text: Text },
+    User {
+        text: String,
+    },
+    Assistant {
+        text: String,
+        thinking: String,
+        done: bool,
+    },
+    Tools {
+        calls: Vec<Call>,
+    },
+    Notice {
+        tone: Tone,
+        text: Text,
+    },
+    Note {
+        text: Text,
+    },
+    Divider {
+        text: Text,
+    },
+    /// What an instruction changed in the folder.
+    Changes {
+        files: u32,
+        added: u32,
+        removed: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -462,6 +483,10 @@ impl Session {
                     self.entries = merged;
                 }
                 self.turn_from = self.entries.len();
+            }
+            "changes" => {
+                let n = |key: &str| event[key].as_u64().unwrap_or(0) as u32;
+                self.push(Entry::Changes { files: n("files"), added: n("added"), removed: n("removed") });
             }
             "session_reset" => {
                 self.entries.clear();

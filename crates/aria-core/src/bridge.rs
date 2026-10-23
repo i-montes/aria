@@ -121,6 +121,13 @@ pub enum PageMessage {
     /// WebView that shows the model's output) can never run a command.
     #[serde(skip)]
     ChatBash { id: u64, command: String },
+    /// The checkpoints undo can go back to (a session's), answered `checkpoints`.
+    #[serde(rename = "chatCheckpoints")]
+    ChatCheckpoints { id: u64 },
+    /// Back to before a checkpoint's message: its files and the conversation; answered `saved`, or `error` with `busy`
+    /// (a run is going) or `failed`.
+    #[serde(rename = "chatUndo")]
+    ChatUndo { id: u64, checkpoint: String },
     /// Download and list the Claude provider (`claude-bridge`) in Aria's Pi; replies `saved`, or an `error` whose `code` is
     /// `pi-missing`, `claude-code-missing` or `claude-bridge-install-failed`.
     #[serde(rename = "installClaudeBridge")]
@@ -343,6 +350,9 @@ pub enum DockMessage {
     /// ignores it.
     #[serde(rename = "sessionStatus")]
     SessionStatus { session: String, status: String, at: i64 },
+    /// A session's checkpoints, newest first: `[{ id, text, at, files }]`.
+    #[serde(rename = "checkpoints")]
+    Checkpoints { id: u64, list: Value },
     /// A tab closed (from the page or a terminal): every client drops it.
     #[serde(rename = "sessionRemoved")]
     SessionRemoved { session: String },

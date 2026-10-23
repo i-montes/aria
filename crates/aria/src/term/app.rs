@@ -76,6 +76,8 @@ enum PickerKind {
     Files,
     Commands,
     Models,
+    /// The checkpoints to go back to.
+    Undo,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,14 +89,18 @@ enum Pending {
     Models,
     Bang(String),
     Secret(String),
+    Checkpoints,
+    /// An undo, with the text that goes back to the editor once it is done.
+    Undo(String),
 }
 
 /// The client's own commands, before the session's.
-const OWN: [(&str, &str); 4] = [
+const OWN: [(&str, &str); 5] = [
     ("exit", "term.cmd.exit"),
     ("verbose", "term.cmd.verbose"),
     ("model", "term.cmd.model"),
     ("sessions", "term.cmd.sessions"),
+    ("undo", "term.cmd.undo"),
 ];
 
 pub struct App {
@@ -123,6 +129,10 @@ pub struct App {
     after_abort: Option<String>,
     /// Calls whose whole output is shown.
     expanded: std::collections::HashSet<String>,
+    /// When Esc was last pressed while idle (ms), for Esc Esc.
+    last_esc: Option<u64>,
+    /// The undo list's messages, by checkpoint.
+    undo_texts: HashMap<String, String>,
     /// What each open session is doing, and since when (ms).
     statuses: HashMap<String, (String, i64)>,
     /// The time now (ms), from `clock`.
@@ -159,6 +169,8 @@ impl App {
             expanded: Default::default(),
             more_rows: Vec::new(),
             statuses: HashMap::new(),
+            last_esc: None,
+            undo_texts: HashMap::new(),
             now_ms: 0,
         };
         let load = app.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
@@ -436,6 +448,16 @@ impl App {
             }
             Key::Enter => self.submit(),
             Key::Esc if self.session.running => vec![self.in_session(PageMessage::ChatAbort)],
+            // Esc Esc (two presses within 500 ms) while idle: back to before a message.
+            Key::Esc => {
+                let double = self.last_esc.is_some_and(|at| self.now_ms.saturating_sub(at) <= 500);
+                self.last_esc = if double { None } else { Some(self.now_ms) };
+                if double {
+                    vec![self.session_request(Pending::Checkpoints, |id| PageMessage::ChatCheckpoints { id })]
+                } else {
+                    Vec::new()
+                }
+            }
             Key::Up => {
                 self.editor.history_prev();
                 Vec::new()
@@ -520,6 +542,11 @@ impl App {
                     PickerKind::Models => {
                         vec![self.session_request(Pending::Models, |id| PageMessage::SetModel { id, model: value })]
                     }
+                    PickerKind::Undo => {
+                        let text = self.undo_texts.get(&value).cloned().unwrap_or_default();
+                        vec![self
+                            .session_request(Pending::Undo(text), |id| PageMessage::ChatUndo { id, checkpoint: value })]
+                    }
                 }
             }
         }
@@ -555,6 +582,9 @@ impl App {
                 }
                 "sessions" => return self.back_to_list(),
                 "model" => return vec![self.session_request(Pending::Models, |id| PageMessage::ListModels { id })],
+                "undo" => {
+                    return vec![self.session_request(Pending::Checkpoints, |id| PageMessage::ChatCheckpoints { id })]
+                }
                 _ => {}
             }
         }
@@ -774,6 +804,37 @@ impl App {
                     };
                     let exit = if ok { data["exitCode"].as_i64().unwrap_or(0) } else { 1 };
                     self.session.add_bang(&command, &output, exit);
+                }
+            }
+            DockMessage::Checkpoints { id, list } if self.pending.get(&id) == Some(&Pending::Checkpoints) => {
+                self.pending.remove(&id);
+                self.undo_texts.clear();
+                let lang = self.config.lang.clone();
+                let items: Vec<Item> = list
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .take(10)
+                    .filter_map(|c| {
+                        let id = c["id"].as_str()?.to_string();
+                        let text = c["text"].as_str().unwrap_or_default().to_string();
+                        let files = c["files"].as_u64().unwrap_or(0);
+                        let mut detail = self.ago(c["at"].as_i64().unwrap_or(0));
+                        if files > 0 {
+                            detail.push_str(&format!(" · {}", t(&lang, "term.files", &json!({ "n": files }))));
+                        }
+                        self.undo_texts.insert(id.clone(), text.clone());
+                        let label: String = text.lines().next().unwrap_or_default().chars().take(60).collect();
+                        Some(Item { label, detail, value: id, group: None })
+                    })
+                    .collect();
+                if !items.is_empty() {
+                    self.picker = Some((PickerKind::Undo, Picker::new(items)));
+                }
+            }
+            DockMessage::Saved { id } if matches!(self.pending.get(&id), Some(Pending::Undo(_))) => {
+                if let Some(Pending::Undo(text)) = self.pending.remove(&id) {
+                    self.editor.set(&text);
                 }
             }
             DockMessage::Saved { id } | DockMessage::Error { id, .. } if self.pending.contains_key(&id) => {
@@ -1180,6 +1241,59 @@ mod tests {
         assert!(rows[2].0.starts_with("+ new in"));
         key(&mut app, Key::Enter);
         assert_eq!(app.attached_session(), Some("bb"), "Enter opens the row shown first");
+    }
+
+    #[test]
+    fn esc_esc_opens_the_undo_list() {
+        let mut app = attached();
+        app.clock(1_000);
+        assert!(key(&mut app, Key::Esc).is_empty());
+        app.clock(1_300);
+        let effects = key(&mut app, Key::Esc);
+        assert!(
+            matches!(&effects[..], [Effect::Send(PageMessage::Session { message, .. })] if matches!(**message, PageMessage::ChatCheckpoints { .. }))
+        );
+    }
+
+    #[test]
+    fn a_single_esc_while_idle_does_nothing() {
+        let mut app = attached();
+        app.clock(1_000);
+        assert!(key(&mut app, Key::Esc).is_empty());
+        app.clock(2_000);
+        assert!(key(&mut app, Key::Esc).is_empty(), "too far apart: two single presses");
+    }
+
+    #[test]
+    fn picking_a_checkpoint_undoes_and_gives_the_text_back() {
+        let mut app = attached();
+        app.clock(10_000_000);
+        typed(&mut app, "/undo");
+        let effects = key(&mut app, Key::Enter);
+        let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
+        let PageMessage::ChatCheckpoints { id } = **message else { panic!("{message:?}") };
+        app.update(in_session(DockMessage::Checkpoints {
+            id,
+            list: json!([{"id": "c9", "text": "fix the coupon", "at": 10_000_000 - 120_000, "files": 3}]),
+        }));
+        let effects = key(&mut app, Key::Enter);
+        let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
+        let PageMessage::ChatUndo { id, ref checkpoint } = **message else { panic!("{message:?}") };
+        assert_eq!(checkpoint, "c9");
+        app.update(in_session(DockMessage::Saved { id }));
+        assert_eq!(app.editor.text(), "fix the coupon");
+    }
+
+    #[test]
+    fn the_changes_of_an_instruction_show_after_it() {
+        let mut app = attached();
+        app.update(in_session(DockMessage::ChatEvent {
+            event: json!({"type": "changes", "files": 3, "added": 40, "removed": 12}),
+        }));
+        assert!(matches!(
+            app.session().entries.last(),
+            Some(crate::term::state::Entry::Changes { files: 3, added: 40, removed: 12 })
+        ));
     }
 
     #[test]

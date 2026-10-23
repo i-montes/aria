@@ -16,6 +16,12 @@ while IFS= read -r line; do
   id=$(field id "$line")
   type=$(field type "$line")
   case "$type" in
+    get_fork_messages)
+      printf '{"type":"response","id":"%s","command":"get_fork_messages","success":true,"data":{"messages":[{"entryId":"e1","text":"WRITE"}]}}\n' "$id" ;;
+    fork)
+      printf '{"type":"fork_seen","entryId":"%s"}\n' "$(field entryId "$line")"
+      sid="forked-1"
+      printf '{"type":"response","id":"%s","command":"fork","success":true,"data":{"text":"WRITE","cancelled":false}}\n' "$id" ;;
     get_state)
       printf '{"type":"response","id":"%s","command":"get_state","success":true,"data":{"isStreaming":false,"thinkingLevel":"%s","model":{"provider":"%s","id":"%s"},"sessionId":"%s","sessionFile":"%s"}}\n' "$id" "$thinking" "$provider" "$model" "$sid" "${sdir:+$sdir/$sid.jsonl}" ;;
     prompt)
@@ -45,6 +51,15 @@ while IFS= read -r line; do
         printf '{"type":"agent_start"}\n'
         exit 3 ;;
       esac
+      # A turn that changes the folder: the person's message, then a new file in the working folder.
+      if [ "$(field message "$line")" = "WRITE" ]; then
+        printf '{"type":"response","id":"%s","command":"prompt","success":true,"data":{"disposition":"started"}}\n' "$id"
+        printf '{"type":"agent_start"}\n'
+        printf '{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"WRITE"}]}}\n'
+        printf 'one\ntwo\n' > made.txt
+        printf '{"type":"agent_settled","aborted":false}\n'
+        continue
+      fi
       if [ "$(field message "$line")" = "FAIL" ]; then
         printf '{"type":"response","id":"%s","command":"prompt","success":false,"error":"Cannot submit a prompt while compaction is in progress"}\n' "$id"
         continue

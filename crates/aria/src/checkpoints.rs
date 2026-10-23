@@ -178,7 +178,11 @@ impl Checkpoints {
         for path in String::from_utf8_lossy(&made.stdout).split('\0').filter(|p| !p.is_empty()) {
             let _ = std::fs::remove_file(self.folder.join(path));
         }
-        self.git(&["checkout", "-q", &checkpoint.id, "--", "."])?;
+        // A checkpoint of an empty folder has nothing to bring back (and git refuses a pathspec that matches nothing).
+        let kept = self.git(&["ls-tree", "-r", "--name-only", &checkpoint.id])?;
+        if !kept.stdout.is_empty() {
+            self.git(&["checkout", "-q", &checkpoint.id, "--", "."])?;
+        }
         Ok(())
     }
 
@@ -243,6 +247,18 @@ mod tests {
         assert_eq!(fs::read_to_string(p.folder.join("notes.txt")).unwrap(), "mine\n", "a deleted file returns");
         assert!(!p.folder.join("src/new.ts").exists(), "a file made since goes");
         assert_eq!(fs::read_to_string(p.folder.join("build/out.bin")).unwrap(), "old build", "what was there stays");
+    }
+
+    #[test]
+    fn undo_in_a_folder_that_was_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("empty");
+        fs::create_dir_all(&folder).unwrap();
+        let c = Checkpoints::open_in(&dir.path().join("cp"), "s1", &folder, Path::new("/home/ana")).unwrap();
+        let cp = c.take("start").unwrap();
+        fs::write(folder.join("made.txt"), "x").unwrap();
+        c.restore(&cp).unwrap();
+        assert!(!folder.join("made.txt").exists());
     }
 
     #[test]
