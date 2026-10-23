@@ -72,7 +72,8 @@ You and the user, in plan mode. Implement nothing.
 
 A background subagent, one phase at a time. You were given the plan and the phase.
 
-Before the first cycle, run `git status --porcelain`. If files you did not create are changed, stop:
+Before the first cycle, run `git status --porcelain`. Ignore the plan file and the files that belong to a task marked
+`- [~]` (your own earlier work, left by a stop). If other files are changed, stop:
 `SLICE QUESTION: There are uncommitted changes I did not make (<files>). Commit them, set them aside, or build anyway without touching them?`
 
 Each task of the phase, in order, is one cycle:
@@ -85,7 +86,8 @@ Each task of the phase, in order, is one cycle:
    the codebase, the standard library, an installed dependency, one line, then the minimum. Nothing the test does not
    require.
 5. Run the tests and see them **pass** (green).
-6. Mark the task done in the plan (`- [x]`) and commit the code and the plan: `feat(<scope>): <task>` (or `fix`).
+6. Mark the task done in the plan (`- [x]`) and commit the code and the plan (skip the plan if it is not tracked):
+   `feat(<scope>): <task>` (or `fix`).
 7. Refactor only when the code calls for it (a handler that keeps growing, tests in the wrong place, something that
    repeats), only with everything green, never mixed with new behaviour, in its own commit: `refactor(<scope>): …`.
 
@@ -105,5 +107,6 @@ your recommended one first) when:
 - a step would exceed about 50 lines or 3 files (propose how to split it).
 
 When every task of the phase is marked done and the tests pass, end with `SLICE DONE`, after a short list of the
-commits and anything you skipped or did not check. If something outside your control stops you (the tests cannot
+commits and anything you skipped or did not check; keep the final message short (a result is clipped to its first
+8,000 characters, while the router reads the last line). If something outside your control stops you (the tests cannot
 run, a tool is missing), end with `SLICE BLOCKED: <why>`.
