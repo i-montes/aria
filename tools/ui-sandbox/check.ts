@@ -26,11 +26,12 @@ for (const [pid] of stale) try { process.kill(Number(pid)) } catch {}
 const profile = `/tmp/aria-check-${process.pid}`
 // Port 0: Chrome picks a free one and writes it to DevToolsActivePort, so two runs never talk to each other's page.
 const chrome = Bun.spawn([browser, '--headless=new', '--disable-gpu', '--no-sandbox', `--user-data-dir=${profile}`, '--remote-debugging-port=0', '--window-size=940,940', 'about:blank'], { stderr: 'ignore', stdout: 'ignore' })
-const quit = () => { chrome.kill(); try { rmSync(profile, { recursive: true, force: true }) } catch {} }
-process.on('exit', quit)
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => process.exit(130))
-process.on('uncaughtException', (e) => { console.error(e); process.exit(1) })
-process.on('unhandledRejection', (e) => { console.error(e); process.exit(1) })
+// Chrome writes its profile while it shuts down: the profile goes once it has exited, so every way out waits for it.
+const stop = async (code: number) => { chrome.kill(); await chrome.exited; process.exit(code) }
+process.on('exit', () => { chrome.kill(); try { rmSync(profile, { recursive: true, force: true }) } catch {} })
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => stop(130))
+process.on('uncaughtException', (e) => { console.error(e); stop(1) })
+process.on('unhandledRejection', (e) => { console.error(e); stop(1) })
 let target: any
 for (let i = 0; i < 50 && !target; i++) {
   await Bun.sleep(200)
@@ -39,7 +40,7 @@ for (let i = 0; i < 50 && !target; i++) {
     target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t: any) => t.type === 'page')
   } catch {}
 }
-if (!target) { console.error(`could not reach ${browser}`); process.exit(1) }
+if (!target) { console.error(`could not reach ${browser}`); await stop(1) }
 const ws = new WebSocket(target.webSocketDebuggerUrl)
 await new Promise((r) => (ws.onopen = r))
 let id = 0
@@ -937,6 +938,7 @@ await tap('Enter'); await tap('Escape')
 const cancelled = await row()
 realChecks.push(['real keys: Esc cancels the recording and leaves the dock open', !!cancelled && !cancelled.recording && cancelled.open && cancelled.keys === 'Alt + Space', JSON.stringify(cancelled)])
 chrome.kill()
+await chrome.exited
 if (!Array.isArray(reply?.result?.value)) {
   console.error('the checks did not run:', JSON.stringify(reply.exceptionDetails ?? reply).slice(0, 600))
   process.exit(1)
