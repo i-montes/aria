@@ -47,7 +47,7 @@ import {
   parsePlanning,
   planContinuationRequest,
   READ_ONLY_NOTE, jevStatus } from './route.ts'
-import { askApproval } from './approve.ts'
+import { askApproval, pendingBuild } from './approve.ts'
 import {
   executePrompt,
   gitRoot,
@@ -126,7 +126,7 @@ export default function (pi: ExtensionAPI) {
   // The model plan mode is using (GLM, or the free one when the quota is nearly spent).
   let planModelId: string = planModel().id
   // The plan the owner approved with `plan_ready`: plan mode ends and its build starts when that run settles.
-  let pendingBuild: string | null = null
+  const build = pendingBuild()
 
   const routed = (ctx: any) => routedMode(ctx?.mode)
 
@@ -377,6 +377,8 @@ export default function (pi: ExtensionAPI) {
 
   const setMode = (next: Mode, ctx: any) => {
     mode = next
+    // Leaving plan mode (/plan off, /execute, a message that is not planning) cancels an approved build that has not started.
+    if (next !== 'plan') build.cancel()
     const status = next === 'plan' ? `◆ plan mode · ${planModelId}` : undefined
     try {
       ctx.ui?.setStatus?.('jev-router-mode', status)
@@ -386,6 +388,14 @@ export default function (pi: ExtensionAPI) {
   }
 
   // Leave plan mode: back to the model and thinking level the user had before /plan.
+  const tell = (ctx: any, text: string, level: 'info' | 'error') => {
+    try {
+      ctx.ui?.notify?.(text, level)
+    } catch {
+      // no UI
+    }
+  }
+
   const endPlan = async (ctx: any, why: string) => {
     if (restore) {
       const { model, thinking } = restore
@@ -394,11 +404,7 @@ export default function (pi: ExtensionAPI) {
       setLevel(thinking)
     }
     setMode('normal', ctx)
-    try {
-      ctx.ui?.notify?.(why, 'info')
-    } catch {
-      // no UI
-    }
+    tell(ctx, why, 'info')
   }
 
   // The user answered an `ask_user` question: they are taking part in this turn, so it stops being
@@ -495,15 +501,14 @@ export default function (pi: ExtensionAPI) {
     parameters: { type: 'object', properties: { path: { type: 'string', description: 'The plan file.' } }, required: ['path'] },
     async execute(_id: string, params: any, signal: any, _onUpdate: any, ctx: any) {
       const r = await askApproval(ctx, String(params?.path ?? ''), ctx.cwd, { mode, noAsk: !!ariaConfig().noAsk, signal })
-      if (r.approved) pendingBuild = r.approved
+      if (r.approved) build.queue(r.approved)
       return { content: [{ type: 'text', text: r.text }], details: r.details, isError: !!r.isError }
     },
   } as any)
 
   pi.on('agent_settled', async (_event: any, ctx: any) => {
-    if (routed(ctx) && pendingBuild) {
-      const plan = pendingBuild
-      pendingBuild = null
+    const plan = routed(ctx) ? build.take() : null
+    if (plan) {
       await endPlan(ctx, 'Plan approved: plan mode off.')
       startBuild(plan, ctx)
       return
@@ -546,12 +551,12 @@ export default function (pi: ExtensionAPI) {
     try {
       parsed = parsePlan(readFileSync(plan, 'utf8'))
     } catch {
-      ctx.ui.notify(`Can't read \`${plan}\`.`, 'error')
+      tell(ctx, `Can't read \`${plan}\`.`, 'error')
       return
     }
     const phase = firstOpenPhase(parsed)
     if (!phase) {
-      ctx.ui.notify(`Every phase of ${plan} is done.`, 'info')
+      tell(ctx, `Every phase of ${plan} is done.`, 'info')
       return
     }
     const brief = buildBrief({ plan, phase: phase.number, name: phase.name, base: headOf(plan), skill: SLICE_SKILL })

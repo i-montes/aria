@@ -33,3 +33,18 @@ export async function askApproval(
     details: { status: 'draft', plan },
   }
 }
+
+/** The plan the owner approved, waiting for the model's answer to end. Approving queues one build; leaving plan mode cancels it. */
+export function pendingBuild() {
+  let plan: string | null = null
+  return {
+    queue: (path: string) => void (plan = path),
+    cancel: () => void (plan = null),
+    /** The queued plan, once: a second take finds nothing. */
+    take: () => {
+      const path = plan
+      plan = null
+      return path
+    },
+  }
+}

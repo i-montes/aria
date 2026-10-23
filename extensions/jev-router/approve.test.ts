@@ -3,7 +3,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { askApproval } from './approve.ts'
+import { askApproval, pendingBuild } from './approve.ts'
 import { parsePlan, planCard } from './slice.ts'
 
 const PLAN = `# Checkout widget
@@ -87,5 +87,29 @@ describe('askApproval', () => {
     const r = await askApproval(ctx, plan, root, plain)
     expect(r.approved).toBeUndefined()
     expect(r.details.status).toBe('draft')
+  })
+})
+
+describe('pendingBuild', () => {
+  test('approving then settling builds once', () => {
+    const build = pendingBuild()
+    build.queue(plan)
+    expect(build.take()).toBe(plan)
+    expect(build.take()).toBeNull()
+  })
+
+  test('leaving plan mode before the answer ends cancels the build (/plan off)', () => {
+    const build = pendingBuild()
+    build.queue(plan)
+    build.cancel()
+    expect(build.take()).toBeNull()
+  })
+
+  test('/execute in that window builds once: it ends plan mode, which cancels the queued one', () => {
+    const build = pendingBuild()
+    build.queue(plan)
+    build.cancel() // endPlan -> setMode('normal')
+    const builds = [plan, build.take()].filter(Boolean) // /execute's own startBuild, then agent_settled
+    expect(builds).toEqual([plan])
   })
 })
