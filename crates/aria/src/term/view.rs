@@ -35,6 +35,8 @@ pub struct SessionView<'a> {
     pub palette: Palette,
     /// Seconds since the epoch, for the time to a quota's reset.
     pub now: i64,
+    /// Lines scrolled up from the bottom of the conversation.
+    pub scroll: usize,
 }
 
 /// `claude-bridge/claude-opus-5-5` → `opus 5.5`, `opencode-go/mimo-v2.6-pro` → `mimo v2.6 pro`.
@@ -353,6 +355,27 @@ pub fn draw_list(frame: &mut Frame, rows: &[(String, String)], selected: usize, 
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+/// How far the conversation can scroll up in a `width` × `height` screen (its lines above the ones shown).
+pub fn max_scroll(v: &SessionView, width: u16, height: u16) -> usize {
+    let pad = if width > 20 { 2 } else { 0 };
+    let lines = conversation(v, width.saturating_sub(2 * pad)).len();
+    let panel = v.panel.as_ref().map_or(1, Vec::len);
+    lines.saturating_sub(usize::from(height).saturating_sub(4 + panel))
+}
+
+/// Where the terminal's cursor goes for the editor's `cursor` (a byte index into `text`): its line, counted from the
+/// bottom rule up, and its column after the `› ` and the margin. Long lines are not wrapped here.
+pub fn cursor_position(text: &str, cursor: usize, width: u16, height: u16) -> (u16, u16) {
+    let pad = if width > 20 { 2 } else { 0 };
+    let before = &text[..cursor.min(text.len())];
+    let line = before.matches('\n').count();
+    let lines = text.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().unwrap_or_default().width();
+    let below = (lines - 1 - line).min(EDITOR_LINES - 1) as u16;
+    let x = (pad + 2 + column).min(usize::from(width.saturating_sub(1))) as u16;
+    (x, height.saturating_sub(3 + below))
+}
+
 pub fn draw_session(frame: &mut Frame, v: &SessionView) {
     let area = frame.area();
     if area.width == 0 || area.height == 0 {
@@ -380,7 +403,7 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) {
         return;
     }
     let lines = conversation(v, inner.width);
-    let skip = lines.len().saturating_sub(usize::from(room.saturating_sub(1)));
+    let skip = lines.len().saturating_sub(usize::from(room.saturating_sub(1))).saturating_sub(v.scroll);
     let top = Rect { y: area.y + 1.min(room), height: room.saturating_sub(1).max(1), ..inner };
     let shown: Vec<Line<'static>> = lines.into_iter().skip(skip).collect();
     frame.render_widget(Paragraph::new(shown).style(Style::default().add_modifier(Modifier::empty())), top);
@@ -460,6 +483,7 @@ mod tests {
             palette: Palette::truecolor(),
             // 2026-10-23T13:00:00Z: the 5-hour window resets in 1h12.
             now: 1_792_760_400,
+            scroll: 0,
         }
     }
 
@@ -556,6 +580,30 @@ mod tests {
         v.panel = Some(vec![ratatui::text::Line::from("volver a antes de")]);
         let screen = text(&render(&v, 100, 30));
         assert!(screen.contains("volver a antes de"), "{screen}");
+    }
+
+    #[test]
+    fn scrolling_shows_earlier_lines() {
+        let mut s = Session::default();
+        for n in 0..60 {
+            s.add_user(&format!("message {n}"));
+        }
+        let mut v = view(&s, true);
+        let bottom = text(&render(&v, 80, 20));
+        assert!(bottom.contains("message 59") && !bottom.contains("message 40"), "{bottom}");
+        v.scroll = 20;
+        let up = text(&render(&v, 80, 20));
+        assert!(up.contains("message 49") && !up.contains("message 59"), "each message takes two lines: {up}");
+        v.scroll = 10_000;
+        let top = text(&render(&v, 80, 20));
+        assert!(top.contains("message 0"), "scrolled past the top shows the top: {top}");
+    }
+
+    #[test]
+    fn the_cursor_follows_the_editor() {
+        assert_eq!(cursor_position("ab\ncd", 1, 80, 20), (5, 16), "after a, on the first of two lines");
+        assert_eq!(cursor_position("ab\ncd", 6, 80, 20), (6, 17), "the end of the last line");
+        assert_eq!(cursor_position("", 0, 10, 5), (2, 2), "no margin below 21 columns");
     }
 
     #[test]

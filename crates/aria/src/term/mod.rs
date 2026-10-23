@@ -25,6 +25,8 @@ pub enum Key {
     Right,
     Backspace,
     Tab,
+    PageUp,
+    PageDown,
 }
 
 /// Runs the client; the process's exit code.

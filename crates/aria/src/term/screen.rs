@@ -6,7 +6,7 @@ use crate::term::app::{App, Config, Effect, Input, Press, Screen};
 use crate::term::git::{self, GitStatus};
 use crate::term::link::Link;
 use crate::term::theme::Palette;
-use crate::term::view::{draw_list, draw_session, SessionView};
+use crate::term::view::{cursor_position, draw_list, draw_session, max_scroll as max_scroll_of, SessionView};
 use crate::term::Key;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
@@ -20,7 +20,6 @@ use ratatui::Terminal;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use unicode_width::UnicodeWidthStr;
 
 fn restore() {
     let _ = disable_raw_mode();
@@ -31,6 +30,21 @@ fn restore() {
         DisableBracketedPaste,
         LeaveAlternateScreen
     );
+}
+
+/// Gives the terminal back when it goes out of scope: every return, an error's `?` included.
+struct Guard<F: FnMut()>(F);
+
+impl<F: FnMut()> Guard<F> {
+    fn new(restore: F) -> Guard<F> {
+        Guard(restore)
+    }
+}
+
+impl<F: FnMut()> Drop for Guard<F> {
+    fn drop(&mut self) {
+        (self.0)();
+    }
 }
 
 fn key_of(code: KeyCode) -> Option<Key> {
@@ -44,6 +58,8 @@ fn key_of(code: KeyCode) -> Option<Key> {
         KeyCode::Right => Key::Right,
         KeyCode::Backspace => Key::Backspace,
         KeyCode::Tab => Key::Tab,
+        KeyCode::PageUp => Key::PageUp,
+        KeyCode::PageDown => Key::PageDown,
         _ => return None,
     })
 }
@@ -66,9 +82,12 @@ fn inputs(event: Event) -> Vec<Input> {
                 Input::Key(Press { key, ctrl: false, alt: c == '\n' })
             })
             .collect(),
-        Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
-            vec![Input::Click { row: mouse.row }]
-        }
+        Event::Mouse(mouse) => match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => vec![Input::Click { row: mouse.row }],
+            MouseEventKind::ScrollUp => vec![Input::Scroll(3)],
+            MouseEventKind::ScrollDown => vec![Input::Scroll(-3)],
+            _ => Vec::new(),
+        },
         Event::Resize(_, height) => vec![Input::Resize { height }],
         Event::FocusGained => vec![Input::Focus(true)],
         Event::FocusLost => vec![Input::Focus(false)],
@@ -117,6 +136,7 @@ pub fn run(
         previous(info);
     }));
     enable_raw_mode()?;
+    let _guard = Guard::new(restore);
     execute!(std::io::stdout(), EnterAlternateScreen, EnableMouseCapture, EnableFocusChange, EnableBracketedPaste)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let size = terminal.size()?;
@@ -124,7 +144,9 @@ pub fn run(
     let folder = Arc::new(Mutex::new(String::new()));
     let git_status = watch_git(folder.clone());
     let mut quit = false;
+    let mut max_scroll = 0;
     while !quit {
+        app.clamp_scroll(max_scroll);
         *folder.lock().unwrap() = app.session().workdir.clone();
         terminal.draw(|frame| match app.screen() {
             Screen::List => draw_list(frame, &app.list_rows(), app.selected(), app.note().as_deref(), &palette),
@@ -147,13 +169,13 @@ pub fn run(
                     now: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map_or(0, |d| d.as_secs() as i64),
+                    scroll: app.scroll(),
                 };
+                max_scroll = max_scroll_of(&view, area.width, area.height);
                 draw_session(frame, &view);
                 if !has_panel && area.height > 3 {
-                    let text = app.editor.text();
-                    let last = text.rsplit('\n').next().unwrap_or_default();
-                    let x = (4 + last.width()).min(usize::from(area.width.saturating_sub(1))) as u16;
-                    frame.set_cursor_position(Position { x, y: area.height - 3 });
+                    let (x, y) = cursor_position(app.editor.text(), app.editor.cursor(), area.width, area.height);
+                    frame.set_cursor_position(Position { x, y });
                 }
             }
         })?;
@@ -180,6 +202,25 @@ pub fn run(
             }
         }
     }
-    restore();
     Ok(app.note())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn the_terminal_is_given_back_on_an_error_exit() {
+        static RESTORED: AtomicU32 = AtomicU32::new(0);
+        fn fails() -> std::io::Result<()> {
+            let _guard = Guard::new(|| {
+                RESTORED.fetch_add(1, Ordering::SeqCst);
+            });
+            Err(std::io::Error::other("the terminal went away"))?;
+            Ok(())
+        }
+        assert!(fails().is_err());
+        assert_eq!(RESTORED.load(Ordering::SeqCst), 1);
+    }
 }

@@ -41,6 +41,8 @@ pub enum Input {
     Resize {
         height: u16,
     },
+    /// The mouse wheel: lines up (negative: down).
+    Scroll(i32),
     Focus(bool),
     Dock(DockMessage),
 }
@@ -105,6 +107,8 @@ pub struct App {
     next_id: u64,
     note: Option<String>,
     height: u16,
+    /// Lines scrolled up from the bottom of the conversation.
+    scroll: usize,
 }
 
 fn folder_name(path: &str) -> String {
@@ -128,6 +132,7 @@ impl App {
             next_id: 1,
             note: None,
             height: 24,
+            scroll: 0,
         };
         let load = app.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
         (app, vec![load])
@@ -143,6 +148,23 @@ impl App {
 
     pub fn note(&self) -> Option<String> {
         self.note.clone()
+    }
+
+    pub fn scroll(&self) -> usize {
+        self.scroll
+    }
+
+    /// Never past the top: `max` is how far the conversation can scroll.
+    pub fn clamp_scroll(&mut self, max: usize) {
+        self.scroll = self.scroll.min(max);
+    }
+
+    fn scroll_by(&mut self, lines: i32) {
+        self.scroll = if lines >= 0 {
+            self.scroll.saturating_add(lines as usize)
+        } else {
+            self.scroll.saturating_sub(lines.unsigned_abs() as usize)
+        };
     }
 
     pub fn verbose(&self) -> bool {
@@ -216,6 +238,7 @@ impl App {
         self.dialog = None;
         self.picker = None;
         self.commands = None;
+        self.scroll = 0;
         self.screen = Screen::Session;
         self.note = None;
         let load = self.in_session(PageMessage::ChatLoad { fresh: true });
@@ -246,6 +269,10 @@ impl App {
                 Vec::new()
             }
             Input::Focus(focused) => vec![Effect::Focus(focused)],
+            Input::Scroll(lines) => {
+                self.scroll_by(lines);
+                Vec::new()
+            }
             Input::Dock(message) => self.dock(message),
         }
     }
@@ -283,7 +310,16 @@ impl App {
                 _ => {}
             }
         }
+        let half = i32::from(self.height / 2).max(1);
         match press.key {
+            Key::PageUp => {
+                self.scroll_by(half);
+                Vec::new()
+            }
+            Key::PageDown => {
+                self.scroll_by(-half);
+                Vec::new()
+            }
             Key::Enter if press.alt => {
                 self.editor.newline();
                 Vec::new()
@@ -380,6 +416,7 @@ impl App {
 
     fn submit(&mut self) -> Vec<Effect> {
         let text = self.editor.take();
+        self.scroll = 0;
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return Vec::new();
@@ -843,6 +880,23 @@ mod tests {
         }));
         assert!(matches!(&effects[0], Effect::Send(PageMessage::Session { message, .. })
             if matches!(&**message, PageMessage::UiAnswer { value: Some(v), .. } if v == "saved:GH_TOKEN")));
+    }
+
+    #[test]
+    fn page_up_scrolls_and_sending_returns_to_the_bottom() {
+        let mut app = attached();
+        app.update(Input::Resize { height: 30 });
+        key(&mut app, Key::PageUp);
+        assert_eq!(app.scroll(), 15);
+        app.update(Input::Scroll(3));
+        assert_eq!(app.scroll(), 18);
+        key(&mut app, Key::PageDown);
+        assert_eq!(app.scroll(), 3);
+        app.clamp_scroll(2);
+        assert_eq!(app.scroll(), 2, "never past the top");
+        typed(&mut app, "hi");
+        key(&mut app, Key::Enter);
+        assert_eq!(app.scroll(), 0);
     }
 
     #[test]
