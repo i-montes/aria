@@ -261,6 +261,16 @@ A tab continues in a new Pi session file after each compaction (see the
 - No setting hides the wing; no right-click menu or hover details.
 - Omarchy's bar keeps its QML widget; `face_motion.rs` is not used there.
 
+## Dictation
+
+- Linux builds Whisper on the CPU: its GPU backend (CUDA or Vulkan) is Linux's next step, and the microphone path
+  (cpal on ALSA/PipeWire) has not been run there yet.
+- A denied macOS microphone is told by exact silence (cpal gives zeros, not an error).
+- Not tried live in the dock yet: the first permission prompt from Aria itself, and whether macOS asks again after an
+  update (Aria is not signed with a stable identity). The engine was checked live on the Mac: the real microphone
+  (5 s at 16 kHz), and a 59 s recording transcribed in about 2 s warm.
+- No live text while speaking, no custom vocabulary (Supabase, Vercel…), no reading replies aloud.
+
 ## Known limits of the page (from the review, deferred)
 
 - The thread is redrawn on every streamed fragment, so text cannot be selected or copied while a run streams; the other regions only redraw when they change.

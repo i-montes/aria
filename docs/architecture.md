@@ -170,6 +170,17 @@ is that widget's logic ported to Rust (springs, timers, sequences; pure and seed
 `dock/face_wing.rs` is the black wing beside the notch (`aria_mac::wing` decides where), stepped by the dock's 16 ms tick
 while it is visible; a click sends `toggle`. `ARIA_FACE=<word>` forces a face, to look at one.
 
+## Dictation
+
+`crates/aria/src/dictation/` is the same on both platforms: `recorder.rs` reads the default microphone with `cpal`,
+`audio.rs` turns it into 16 kHz mono as it arrives, `whisper.rs` runs whisper.cpp through `whisper-rs` (Metal on macOS)
+with the `large-v3-turbo` q5_0 model, and `worker.rs` is the dock's one dictation on its own thread: it records, loads the
+model while the person speaks, transcribes when they stop, gives the text to the tab that asked, and unloads the model
+after five idle minutes. `model.rs` downloads the model (only when the person agrees) through a `.part` file checked by
+size and SHA-256. The page's `dictationStart/Stop/Cancel/Download` reach it through `chat::Sessions`; its
+`dictationState`/`dictationText` go back to that tab. On macOS the microphone's reason comes from an `Info.plist` linked
+into the binary (`crates/aria/build.rs`). Building needs cmake (whisper.cpp).
+
 ## Data and safety
 
 - Keys live in the system keyring (`aria-core/src/keyring.rs`: Apple's `security` on macOS, `secret-tool` on Linux).

@@ -37,6 +37,9 @@ A personal assistant that lives on your desktop. Press **Super + A** (**Option +
   for you, a scheduled run, done, failed, asleep after ten quiet minutes); a click opens the dock.
 - **On a Mac, Aria's face beside the notch**: a small black wing at the notch's right edge (a pill at the top centre on
   a screen without one) plays the same faces, drawn natively with Core Animation; a click opens or closes the dock.
+- **Dictation**: the microphone beside the input (or Alt+D) records you, and Whisper (large-v3-turbo, on this computer;
+  the voice never leaves it) writes what you said into the input when you stop, in Aria's language; you review and send.
+  The first time, Aria asks before downloading the voice model (574 MB, to `~/.aria/models/`).
 - **Updates that never cut a run**: the dock restarts into a new version once it is hidden and idle.
 
 ## Install
