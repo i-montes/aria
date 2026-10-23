@@ -157,6 +157,7 @@ pub fn run(
     let mut quit = false;
     let mut max_scroll = 0;
     let mut more_rows: Vec<(u16, String)> = Vec::new();
+    let mut strip_rows: Option<(u16, u16)> = None;
     let mut overlay_top = 0;
     // A frame is drawn only when something changed (a key, the mouse, the dock, the size, git) or the spinner is due.
     let mut changed = true;
@@ -171,6 +172,7 @@ pub fn run(
         }
         app.clamp_scroll(max_scroll);
         app.set_more_rows(std::mem::take(&mut more_rows));
+        app.set_strip_rows(strip_rows);
         app.set_overlay_top(overlay_top);
         let now_ms =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
@@ -210,6 +212,7 @@ pub fn run(
                             tick: now_ms,
                             overlay: app.overlay_lines(&palette),
                             expanded: app.expanded().clone(),
+                            tasks_folded: app.tasks_folded(),
                         };
                         let floating = view.overlay.as_ref().map_or(0, Vec::len) as u16;
                         overlay_top =
@@ -217,6 +220,7 @@ pub fn run(
                         let drawn = draw_session(frame, &view);
                         max_scroll = drawn.above;
                         more_rows = drawn.more;
+                        strip_rows = drawn.strip;
                         if !has_panel && area.height > 3 {
                             let (x, y) =
                                 cursor_position(app.editor.text(), app.editor.cursor(), area.width, area.height);

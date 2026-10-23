@@ -36,6 +36,7 @@ const OWN: &[(&str, &str, &str)] = &[
     ("chat.tools.ls", "List folder", "Listar carpeta"),
     ("chat.tools.tool", "Tool", "Herramienta"),
     ("term.untitled", "untitled", "sin título"),
+    ("term.tasks", "tasks", "tareas"),
     ("term.changes.one", "1 file changed", "1 archivo cambiado"),
     ("term.changes.many", "{n} files changed", "{n} archivos cambiados"),
     ("term.cmd.undo", "back to before a message", "volver a antes de un mensaje"),

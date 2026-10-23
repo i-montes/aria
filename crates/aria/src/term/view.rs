@@ -45,6 +45,59 @@ pub struct SessionView<'a> {
     pub overlay: Option<Vec<Line<'static>>>,
     /// Calls whose whole output is shown (a click on their `… N more lines`).
     pub expanded: std::collections::HashSet<String>,
+    /// The task strip shows only its first row.
+    pub tasks_folded: bool,
+}
+
+/// Rows the task strip shows at most below its first one.
+const TASK_ROWS: usize = 6;
+
+/// The task strip: `tasks  ✓✓●○○  2/5`, then the running tasks (with their subagent) and the pending ones; done tasks
+/// only count. Folded, its first row alone. None without tasks.
+fn task_lines(v: &SessionView, width: usize) -> Vec<Line<'static>> {
+    let p = &v.palette;
+    let tasks = &v.session.tasks;
+    if tasks.is_empty() {
+        return Vec::new();
+    }
+    let done = tasks.iter().filter(|t| t.status == "done").count();
+    let mut head =
+        vec![Span::styled(format!("  {}  ", t(&v.lang, "term.tasks", &json!({}))), Style::default().fg(p.faint))];
+    for task in tasks {
+        let (mark, colour) = match task.status.as_str() {
+            "done" => ("✓", p.green),
+            "active" => ("●", p.amber),
+            _ => ("○", p.faint),
+        };
+        head.push(Span::styled(mark, Style::default().fg(colour)));
+    }
+    head.push(Span::styled(format!("  {done}/{}", tasks.len()), Style::default().fg(p.grey)));
+    let mut out = vec![Line::from(head)];
+    if v.tasks_folded {
+        return out;
+    }
+    let open: Vec<_> =
+        tasks.iter().filter(|t| t.status == "active").chain(tasks.iter().filter(|t| t.status == "todo")).collect();
+    for task in open.iter().take(TASK_ROWS) {
+        let active = task.status == "active";
+        let (mark, colour) = if active { ("●", p.amber) } else { ("○", p.faint) };
+        let title: String = task.title.chars().take(width.saturating_sub(24)).collect();
+        let mut row = vec![
+            Span::styled(format!("  {mark} "), Style::default().fg(colour)),
+            Span::styled(title, Style::default().fg(if active { p.text } else { p.grey })),
+        ];
+        if let Some(agent) = task.agent.as_ref().filter(|_| active) {
+            row.push(Span::styled(format!("  {agent}"), Style::default().fg(p.grey)));
+        }
+        out.push(Line::from(row));
+    }
+    if open.len() > TASK_ROWS {
+        out.push(Line::styled(
+            format!("  {}", t(&v.lang, "term.more", &json!({"n": open.len() - TASK_ROWS}))),
+            Style::default().fg(p.faint),
+        ));
+    }
+    out
 }
 
 /// What a frame drew that the input needs: how far the conversation can scroll up, and the screen rows of the
@@ -53,6 +106,8 @@ pub struct SessionView<'a> {
 pub struct Drawn {
     pub above: usize,
     pub more: Vec<(u16, String)>,
+    /// The task strip's rows on screen (first, last), when it is shown.
+    pub strip: Option<(u16, u16)>,
 }
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -482,7 +537,13 @@ pub fn bottom_height(v: &SessionView, width: u16, height: u16) -> u16 {
     let width = usize::from(width.saturating_sub(2 * pad).max(1));
     let middle = v.panel.as_ref().map_or_else(|| editor_lines(v, width).len(), Vec::len);
     let room = usize::from(height).saturating_sub(4).max(1);
-    let rows = usize::from(v.working_ms.is_some()) + v.session.queue.len() + 1 + middle.min(room) + 1 + 1;
+    let rows = task_lines(v, width).len()
+        + usize::from(v.working_ms.is_some())
+        + v.session.queue.len()
+        + 1
+        + middle.min(room)
+        + 1
+        + 1;
     (rows as u16).min(height)
 }
 
@@ -536,7 +597,9 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) -> Drawn {
         Some(panel) => panel.clone(),
         None => editor_lines(v, width),
     };
-    let mut bottom: Vec<Line<'static>> = Vec::new();
+    // The task strip on top, then the working line and the queue, then the editor.
+    let mut bottom: Vec<Line<'static>> = task_lines(v, width);
+    let strip_rows = bottom.len();
     if let Some(ms) = v.working_ms {
         bottom.push(working_line(v, ms));
     }
@@ -548,6 +611,10 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) -> Drawn {
     bottom.push(footer(v, inner.width));
     let bottom_height = (bottom.len() as u16).min(area.height);
     let skip = bottom.len().saturating_sub(usize::from(bottom_height));
+    let strip = (strip_rows > skip).then(|| {
+        let first = bottom_area_y(area, bottom_height);
+        (first, first + (strip_rows - skip) as u16 - 1)
+    });
     let bottom_area = Rect { y: area.y + area.height - bottom_height, height: bottom_height, ..inner };
     let overlay_area = v.overlay.as_ref().map(|lines| {
         let height = (lines.len() as u16).min(bottom_area.y.saturating_sub(area.y));
@@ -576,7 +643,12 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) -> Drawn {
         .filter(|(at, _)| *at >= skip && *at < skip + usize::from(shown_rows))
         .map(|(at, id)| (top.y + (at - skip) as u16, id))
         .collect();
-    Drawn { above, more }
+    Drawn { above, more, strip }
+}
+
+/// The first row of the editor's block at the bottom.
+fn bottom_area_y(area: Rect, bottom_height: u16) -> u16 {
+    area.y + area.height - bottom_height
 }
 
 #[cfg(test)]
@@ -658,6 +730,7 @@ mod tests {
             tick: 0,
             overlay: None,
             expanded: Default::default(),
+            tasks_folded: false,
         }
     }
 
@@ -910,6 +983,31 @@ mod tests {
         assert!(!screen.contains("line 19"));
         v.expanded.insert("c1".into());
         assert!(text(&render(&v, 80, 40)).contains("line 19"));
+    }
+
+    #[test]
+    fn the_task_strip_shows_progress_and_folds() {
+        let mut s = worked();
+        let task = |id: &str, title: &str, status: &str, agent: Option<&str>| crate::term::state::Task {
+            id: id.into(),
+            title: title.into(),
+            status: status.into(),
+            agent: agent.map(str::to_string),
+        };
+        s.tasks = vec![
+            task("a", "Types", "done", None),
+            task("b", "Endpoint", "active", Some("backend")),
+            task("c", "Remove the old form", "todo", None),
+        ];
+        let screen = text(&render(&view(&s, true), 100, 30));
+        assert!(screen.contains("✓●○") && screen.contains("1/3"), "{screen}");
+        assert!(screen.contains("● Endpoint") && screen.contains("backend"), "{screen}");
+        assert!(screen.contains("○ Remove the old form"), "{screen}");
+        assert!(!screen.contains("✓ Types"), "done tasks only count: {screen}");
+        let mut folded = view(&s, true);
+        folded.tasks_folded = true;
+        let screen = text(&render(&folded, 100, 30));
+        assert!(screen.contains("1/3") && !screen.contains("● Endpoint"), "{screen}");
     }
 
     #[test]

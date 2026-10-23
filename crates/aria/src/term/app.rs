@@ -129,6 +129,10 @@ pub struct App {
     after_abort: Option<String>,
     /// Calls whose whole output is shown.
     expanded: std::collections::HashSet<String>,
+    /// The task strip shows only its first row (Ctrl+T, a click on it).
+    tasks_folded: bool,
+    /// The task strip's rows on screen.
+    strip_rows: Option<(u16, u16)>,
     /// When Esc was last pressed while idle (ms), for Esc Esc.
     last_esc: Option<u64>,
     /// The undo list's messages, by checkpoint.
@@ -170,6 +174,8 @@ impl App {
             more_rows: Vec::new(),
             statuses: HashMap::new(),
             last_esc: None,
+            tasks_folded: false,
+            strip_rows: None,
             undo_texts: HashMap::new(),
             now_ms: 0,
         };
@@ -414,6 +420,10 @@ impl App {
             return match press.key {
                 Key::Char('o') => self.set_verbose(!self.config.verbose),
                 Key::Char('l') => vec![Effect::Redraw],
+                Key::Char('t') => {
+                    self.tasks_folded = !self.tasks_folded;
+                    Vec::new()
+                }
                 Key::Enter if self.dialog.is_none() => self.interrupt(),
                 _ => Vec::new(),
             };
@@ -642,6 +652,15 @@ impl App {
         self.picker.as_ref().map(|(_, picker)| picker.lines(palette))
     }
 
+    pub fn tasks_folded(&self) -> bool {
+        self.tasks_folded
+    }
+
+    /// Where the screen drew the task strip.
+    pub fn set_strip_rows(&mut self, rows: Option<(u16, u16)>) {
+        self.strip_rows = rows;
+    }
+
     pub fn expanded(&self) -> &std::collections::HashSet<String> {
         &self.expanded
     }
@@ -666,6 +685,9 @@ impl App {
                     self.selected = at;
                     effects.extend(self.open_selected());
                 }
+            }
+            Screen::Session if self.strip_rows.is_some_and(|(first, last)| row >= first && row <= last) => {
+                self.tasks_folded = !self.tasks_folded;
             }
             Screen::Session if self.more_rows.iter().any(|(r, _)| *r == row) => {
                 if let Some((_, id)) = self.more_rows.iter().find(|(r, _)| *r == row).cloned() {
@@ -1294,6 +1316,16 @@ mod tests {
             app.session().entries.last(),
             Some(crate::term::state::Entry::Changes { files: 3, added: 40, removed: 12 })
         ));
+    }
+
+    #[test]
+    fn ctrl_t_folds_the_strip() {
+        let mut app = attached();
+        assert!(!app.tasks_folded());
+        ctrl(&mut app, 't');
+        assert!(app.tasks_folded());
+        ctrl(&mut app, 't');
+        assert!(!app.tasks_folded());
     }
 
     #[test]

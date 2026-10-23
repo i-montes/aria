@@ -82,6 +82,33 @@ pub enum Entry {
     },
 }
 
+/// A task of the model's list (`tasks_update`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Task {
+    pub id: String,
+    pub title: String,
+    /// `todo`, `active` or `done`.
+    pub status: String,
+    pub agent: Option<String>,
+}
+
+/// The tasks in a `tasks_update` result's details.
+fn tasks_of(details: &Value) -> Vec<Task> {
+    details["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| {
+            Some(Task {
+                id: t["id"].as_str()?.to_string(),
+                title: t["title"].as_str()?.to_string(),
+                status: t["status"].as_str().unwrap_or("todo").to_string(),
+                agent: t["agent"].as_str().map(str::to_string),
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Dialog {
     pub id: String,
@@ -106,6 +133,8 @@ pub struct Session {
     pub agents: Value,
     /// What the run is doing (`ui/chat/parts/working.js`'s phases): `working`, `thinking`, `reading files`…
     pub phase: String,
+    /// The model's task list, from its last `tasks_update`.
+    pub tasks: Vec<Task>,
     pub loaded: bool,
     /// A refused message's text, back to the editor.
     pub give_back: Option<String>,
@@ -371,6 +400,13 @@ impl Session {
                 self.stream(&event["assistantMessageEvent"]);
             }
             "message_end" if event["message"]["role"] == "assistant" => self.end_assistant(&event["message"]),
+            // The task list is drawn above the editor, never as a step of the conversation.
+            "tool_execution_start" if event["toolName"] == "tasks_update" => {}
+            "tool_execution_end" if event["toolName"] == "tasks_update" => {
+                if event["isError"] != json!(true) {
+                    self.tasks = tasks_of(&event["result"]["details"]);
+                }
+            }
             "tool_execution_start" => {
                 self.phase = phase_for(event["toolName"].as_str().unwrap_or_default()).into();
                 let call = new_call(
@@ -556,7 +592,7 @@ impl Session {
                         .as_array()
                         .into_iter()
                         .flatten()
-                        .filter(|b| b["type"] == "toolCall")
+                        .filter(|b| b["type"] == "toolCall" && b["name"] != "tasks_update")
                         .map(|b| {
                             new_call(
                                 b["id"].as_str().unwrap_or_default(),
@@ -576,6 +612,11 @@ impl Session {
                 )),
                 Some("compactionSummary") => {
                     entries.push(Entry::Divider { text: Text::key("chat.compacted", json!({})) })
+                }
+                Some("toolResult") if message["toolName"] == "tasks_update" => {
+                    if message["isError"] != json!(true) {
+                        self.tasks = tasks_of(&message["details"]);
+                    }
                 }
                 Some("toolResult") => {
                     let id = message["toolCallId"].as_str().unwrap_or_default();
@@ -786,6 +827,44 @@ mod tests {
             s.entries.iter().any(|e| matches!(e, Entry::User { text } if text == "x")),
             "sent again from elsewhere, it shows"
         );
+    }
+
+    #[test]
+    fn tasks_come_from_the_last_update_and_the_history() {
+        let list = |status: &str| {
+            json!({"tasks": [{"id": "a", "title": "Write the test", "status": "done"},
+            {"id": "b", "title": "Make it pass", "status": status, "agent": "backend"}]})
+        };
+        let mut s = Session::default();
+        feed(
+            &mut s,
+            &[
+                event(
+                    json!({"type": "tool_execution_start", "toolCallId": "t1", "toolName": "tasks_update", "args": list("todo")}),
+                ),
+                event(
+                    json!({"type": "tool_execution_end", "toolCallId": "t1", "toolName": "tasks_update", "isError": false,
+                "result": {"content": [{"type": "text", "text": "1/2 done"}], "details": list("active")}}),
+                ),
+            ],
+        );
+        assert_eq!(s.tasks.len(), 2);
+        assert_eq!((s.tasks[1].status.as_str(), s.tasks[1].agent.as_deref()), ("active", Some("backend")));
+        assert!(
+            !s.entries
+                .iter()
+                .any(|e| matches!(e, Entry::Tools { calls } if calls.iter().any(|c| c.name == "tasks_update"))),
+            "the strip shows them, not the conversation"
+        );
+        let mut back = Session::default();
+        feed(
+            &mut back,
+            &[event(json!({"type": "history", "messages": [
+                {"role": "assistant", "content": [{"type": "toolCall", "id": "t1", "name": "tasks_update", "arguments": list("todo")}]},
+                {"role": "toolResult", "toolCallId": "t1", "toolName": "tasks_update", "content": [], "details": list("done"), "isError": false},
+            ]}))],
+        );
+        assert_eq!(back.tasks[1].status, "done", "they come back with the history");
     }
 
     #[test]
