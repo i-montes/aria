@@ -4,7 +4,7 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-ExecStart=%h/.local/bin/aria
+ExecStart=%h/.local/bin/aria dock
 Restart=on-failure
 
 [Install]

@@ -101,7 +101,7 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-ExecStart=$exec_path
+ExecStart=$exec_path dock
 Restart=on-failure
 
 [Install]
@@ -119,7 +119,7 @@ print_agent() {
 <plist version="1.0">
 <dict>
   <key>Label</key><string>$LABEL</string>
-  <key>ProgramArguments</key><array><string>$BIN_DIR/aria</string></array>
+  <key>ProgramArguments</key><array><string>$BIN_DIR/aria</string><string>dock</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ProcessType</key><string>Interactive</string>

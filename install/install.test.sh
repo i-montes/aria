@@ -137,6 +137,10 @@ at_bar=$(line_of "$out" "would: $HOME/.local/bin/aria bar remove")
 at_rm=$(line_of "$out" "would: rm -f")
 [ -n "$at_bar" ] && [ -n "$at_rm" ] && [ "$at_bar" -lt "$at_rm" ] && pass "uninstall takes Aria's face out of the Omarchy bar before deleting the binary" || fail "uninstall does not run 'aria bar remove' before deleting the binary"
 
+# the service manager runs the dock as `aria dock`: plain `aria` in a terminal is the client
+sh "$installer" --print-unit | grep -qx 'ExecStart=%h/.local/bin/aria dock' && pass "the unit runs aria dock" || fail "the unit does not run aria dock"
+grep -qF '<key>ProgramArguments</key><array><string>$BIN_DIR/aria</string><string>dock</string></array>' "$installer" && pass "the LaunchAgent runs aria dock" || fail "the LaunchAgent does not run aria dock"
+
 # the unit embedded in the script is the one in the repo
 if sh "$installer" --print-unit | diff -u "$here/aria.service" - >/dev/null; then pass "embedded unit matches install/aria.service"; else fail "embedded unit differs from install/aria.service"; fi
 

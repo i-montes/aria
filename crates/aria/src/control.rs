@@ -152,6 +152,7 @@ pub fn command_or_start(path: &Path, exe: &Path, command: &str) -> Result<(), Co
         return Ok(());
     }
     Command::new(exe)
+        .arg("dock")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -160,6 +161,28 @@ pub fn command_or_start(path: &Path, exe: &Path, command: &str) -> Result<(), Co
     for _ in 0..60 {
         std::thread::sleep(Duration::from_millis(50));
         if send(path, command).is_ok() {
+            return Ok(());
+        }
+    }
+    Err(ControlError::Io("the dock did not start".into()))
+}
+
+/// For a terminal client: the dock is reachable on its clients socket, or it is started (`aria dock`, detached) and
+/// waited for up to 3 s.
+pub fn ensure_running(exe: &Path, clients: &Path) -> Result<(), ControlError> {
+    if UnixStream::connect(clients).is_ok() {
+        return Ok(());
+    }
+    Command::new(exe)
+        .arg("dock")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| ControlError::Io(e.to_string()))?;
+    for _ in 0..60 {
+        std::thread::sleep(Duration::from_millis(50));
+        if UnixStream::connect(clients).is_ok() {
             return Ok(());
         }
     }

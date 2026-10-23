@@ -21,6 +21,7 @@ mod keyring_cli;
 mod lines;
 mod omarchy_bar;
 mod schedule_store;
+mod term;
 mod trace;
 mod ui;
 mod visibility;
@@ -40,8 +41,34 @@ use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 use visibility::Event;
 
+/// What this run of `aria` is.
+#[derive(Debug, PartialEq)]
+enum Mode {
+    /// The terminal client (`aria` in a terminal).
+    Client,
+    /// The service: the dock and every session (`aria dock`, or plain `aria` with no terminal, as an old unit runs it).
+    Dock,
+    /// One of the small commands (`toggle`, `quit`, `secret`…).
+    Command,
+}
+
+fn mode(arg: Option<&str>, terminal: bool) -> Mode {
+    match arg {
+        None if terminal => Mode::Client,
+        None | Some("dock") => Mode::Dock,
+        Some(_) => Mode::Command,
+    }
+}
+
 fn main() {
-    match std::env::args().nth(1).as_deref() {
+    use std::io::IsTerminal;
+    let arg = std::env::args().nth(1);
+    match mode(arg.as_deref(), std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
+        Mode::Client => std::process::exit(term::run()),
+        Mode::Dock => return run_dock(),
+        Mode::Command => {}
+    }
+    match arg.as_deref() {
         Some(command @ ("toggle" | "show")) => {
             let exe = std::env::current_exe().expect("own path");
             if let Err(error) = control::command_or_start(&control::control_socket_path(), &exe, command) {
@@ -77,11 +104,11 @@ fn main() {
         Some("keyring") => std::process::exit(keyring_cli::keyring_command(std::env::args().nth(2).as_deref())),
         Some("bar") => std::process::exit(omarchy_bar::bar_command(std::env::args().nth(2).as_deref())),
         Some("--version" | "-V" | "version") => println!("aria {}", env!("CARGO_PKG_VERSION")),
-        None => run_dock(),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [toggle|show|start|quit|keyring|secret|bar|update-ready|--version]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [dock|toggle|show|start|quit|keyring|secret|bar|update-ready|--version]");
             std::process::exit(2);
         }
+        None => unreachable!("plain aria is the client or the dock"),
     }
 }
 
@@ -613,6 +640,19 @@ pub(crate) static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn with_a_terminal_plain_aria_is_the_client() {
+        assert_eq!(mode(None, true), Mode::Client);
+    }
+
+    #[test]
+    fn without_one_it_is_the_dock() {
+        assert_eq!(mode(None, false), Mode::Dock, "an old unit that still runs plain aria keeps its dock");
+        assert_eq!(mode(Some("dock"), true), Mode::Dock);
+        assert_eq!(mode(Some("dock"), false), Mode::Dock);
+        assert_eq!(mode(Some("toggle"), true), Mode::Command);
+    }
     use super::*;
 
     #[test]
