@@ -7,13 +7,11 @@ use serde_json::json;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Mutex;
 
 pub struct Link {
     out: Mutex<UnixStream>,
-    next: AtomicU64,
     events: Mutex<Option<Receiver<DockMessage>>>,
 }
 
@@ -32,7 +30,7 @@ impl Link {
             }
             let _ = sender.send(DockMessage::Error { id: 0, code: "gone".into() });
         });
-        Ok(Link { out: Mutex::new(stream), next: AtomicU64::new(1), events: Mutex::new(Some(events)) })
+        Ok(Link { out: Mutex::new(stream), events: Mutex::new(Some(events)) })
     }
 
     fn line(&self, value: serde_json::Value) {
@@ -46,15 +44,12 @@ impl Link {
         }
     }
 
-    /// Sends the message `make` builds with a fresh id, and returns that id.
-    pub fn request(&self, make: impl FnOnce(u64) -> PageMessage) -> u64 {
-        let id = self.next.fetch_add(1, Ordering::SeqCst);
-        self.send(&make(id));
-        id
-    }
-
     pub fn attach(&self, session: &str) {
         self.line(json!({"type": "attach", "session": session}));
+    }
+
+    pub fn detach(&self) {
+        self.line(json!({"type": "detach"}));
     }
 
     pub fn focus(&self, focused: bool) {
@@ -106,11 +101,10 @@ mod tests {
     }
 
     #[test]
-    fn requests_get_increasing_ids() {
+    fn messages_go_out_as_the_page_writes_them() {
         let mut dock = fake_dock();
-        let first = dock.link.request(|id| PageMessage::SessionsLoad { id });
-        let second = dock.link.request(|id| PageMessage::SessionNew { id, workdir: Some("/home/ana".into()) });
-        assert_eq!((first, second), (1, 2));
+        dock.link.send(&PageMessage::SessionsLoad { id: 1 });
+        dock.link.send(&PageMessage::SessionNew { id: 2, workdir: Some("/home/ana".into()) });
         assert_eq!(dock.read(), json!({"type": "sessionsLoad", "id": 1}));
         assert_eq!(dock.read(), json!({"type": "sessionNew", "id": 2, "workdir": "/home/ana"}));
     }

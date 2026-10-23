@@ -202,7 +202,7 @@ fn add_steps(entries: &mut Vec<Entry>, steps: Vec<Call>, from: usize) {
 /// (passed, total) from a test runner's output (`43 pass` / `0 fail`, `43 passed; 0 failed`).
 fn test_counts(output: &str) -> Option<(u32, u32)> {
     let number_before = |word: &str| -> Option<u32> {
-        output.split(|c: char| c == '\n' || c == ';' || c == ',').find_map(|part| {
+        output.split(['\n', ';', ',']).find_map(|part| {
             let mut words = part.split_whitespace();
             let mut previous = None;
             for w in words.by_ref() {
@@ -217,6 +217,14 @@ fn test_counts(output: &str) -> Option<(u32, u32)> {
     let passed = number_before("pass")?;
     let failed = number_before("fail").unwrap_or(0);
     Some((passed, passed + failed))
+}
+
+fn bang_entry(command: &str, output: &str, exit_code: i64) -> Entry {
+    let status = if exit_code == 0 { Status::Done } else { Status::Error };
+    let mut call = new_call("bang", "bash", &json!({"command": command}), status);
+    call.summary = format!("!{command}");
+    call.output = output.chars().take(RESULT_LIMIT).collect();
+    Entry::Tools { calls: vec![call] }
 }
 
 impl Session {
@@ -250,15 +258,7 @@ impl Session {
 
     /// A `!command` the person ran (Pi's `bash`) with its output.
     pub fn add_bang(&mut self, command: &str, output: &str, exit_code: i64) {
-        let mut call = new_call(
-            "bang",
-            "bash",
-            &json!({"command": command}),
-            if exit_code == 0 { Status::Done } else { Status::Error },
-        );
-        call.summary = format!("!{command}");
-        call.output = output.chars().take(RESULT_LIMIT).collect();
-        self.push(Entry::Tools { calls: vec![call] });
+        self.push(bang_entry(command, output, exit_code));
     }
 
     pub fn apply(&mut self, message: &DockMessage) {
@@ -432,7 +432,7 @@ impl Session {
             }
             "history" => {
                 self.loaded = true;
-                let past = self.from_history(&event["messages"]);
+                let past = self.read_history(&event["messages"]);
                 if self.entries.is_empty() {
                     self.entries = past;
                 } else if let Some(first) = self.entries.iter().find_map(|e| match e {
@@ -502,7 +502,7 @@ impl Session {
         }
     }
 
-    fn from_history(&mut self, messages: &Value) -> Vec<Entry> {
+    fn read_history(&mut self, messages: &Value) -> Vec<Entry> {
         let mut entries = Vec::new();
         for message in messages.as_array().into_iter().flatten() {
             match message["role"].as_str() {
@@ -530,6 +530,12 @@ impl Session {
                         .collect();
                     add_steps(&mut entries, calls, 0);
                 }
+                // A command the person ran (`!pwd`, Pi's `bash`).
+                Some("bashExecution") => entries.push(bang_entry(
+                    message["command"].as_str().unwrap_or_default(),
+                    message["output"].as_str().unwrap_or_default(),
+                    message["exitCode"].as_i64().unwrap_or(0),
+                )),
                 Some("compactionSummary") => {
                     entries.push(Entry::Divider { text: Text::key("chat.compacted", json!({})) })
                 }
@@ -717,6 +723,20 @@ mod tests {
         assert!(matches!(&s.entries[0], Entry::User { text } if text == "fix it"));
         assert!(matches!(&s.entries[2], Entry::Tools { calls } if calls[0].output == "body"));
         assert!(matches!(&s.entries[3], Entry::Assistant { text, .. } if text == "Fixed."));
+    }
+
+    #[test]
+    fn a_command_the_person_ran_comes_back_with_the_history() {
+        let mut s = Session::default();
+        feed(
+            &mut s,
+            &[event(json!({"type": "history", "messages": [
+                {"role": "bashExecution", "command": "pwd", "output": "/home/ana\n", "exitCode": 0, "cancelled": false, "truncated": false, "timestamp": 1},
+            ]}))],
+        );
+        assert!(
+            matches!(&s.entries[0], Entry::Tools { calls } if calls[0].summary == "!pwd" && calls[0].output == "/home/ana\n")
+        );
     }
 
     #[test]

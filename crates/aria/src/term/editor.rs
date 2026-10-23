@@ -30,10 +30,6 @@ impl Editor {
         &self.text
     }
 
-    pub fn cursor(&self) -> usize {
-        self.cursor
-    }
-
     pub fn set(&mut self, text: &str) {
         self.text = text.to_string();
         self.cursor = self.text.len();

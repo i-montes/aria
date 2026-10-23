@@ -323,6 +323,36 @@ fn editor_lines(v: &SessionView, width: usize) -> Vec<Line<'static>> {
     lines.into_iter().skip(skip).collect()
 }
 
+/// The start screen: the open sessions (title, folder) and the new one in the current folder last; `note` under them.
+pub fn draw_list(frame: &mut Frame, rows: &[(String, String)], selected: usize, note: Option<&str>, p: &Palette) {
+    let area = frame.area();
+    if area.width < 4 || area.height < 2 {
+        return;
+    }
+    let inner = Rect { x: area.x + 2, y: area.y + 1, width: area.width - 4, height: area.height - 1 };
+    let title_width = rows.iter().map(|(title, _)| title.width()).max().unwrap_or(0).min(usize::from(inner.width) / 2);
+    let mut lines: Vec<Line<'static>> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, (title, folder))| {
+            let on = i == selected;
+            let style = Style::default().fg(if on { p.accent } else { p.text });
+            let cut: String = title.chars().take(title_width).collect();
+            let pad = title_width.saturating_sub(cut.width());
+            Line::from(vec![
+                Span::styled(if on { "› " } else { "  " }, style),
+                Span::styled(format!("{cut}{}", " ".repeat(pad)), style),
+                Span::styled(format!("    {folder}"), Style::default().fg(p.grey)),
+            ])
+        })
+        .collect();
+    if let Some(note) = note {
+        lines.push(Line::default());
+        lines.push(Line::styled(format!("  {note}"), Style::default().fg(p.amber)));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
 pub fn draw_session(frame: &mut Frame, v: &SessionView) {
     let area = frame.area();
     if area.width == 0 || area.height == 0 {
