@@ -638,6 +638,16 @@ mod tests {
     }
 
     #[test]
+    fn the_slice_skill_is_written_into_pis_skills_and_hidden_from_the_model() {
+        let (_dir, paths) = paths();
+        prepare(&paths, None).unwrap();
+        let skill = std::fs::read_to_string(paths.agent().join("skills/slice/SKILL.md")).unwrap();
+        assert_eq!(skill, include_str!("../../../agent-files/skills/slice/SKILL.md"));
+        let front_matter = skill.split("---").nth(1).unwrap();
+        assert!(front_matter.lines().any(|line| line == "disable-model-invocation: true"));
+    }
+
+    #[test]
     fn a_file_nobody_edited_follows_a_new_version_of_aria() {
         let (_dir, paths) = paths();
         std::fs::create_dir_all(paths.agent().join("agents")).unwrap();
