@@ -5,6 +5,34 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.19.0 — 2026-10-23
+
+### New
+
+- a slice phase's tasks, live in the dock and the terminal
+- the slice plan as a card, approved in the thread
+- slice instead of Superpowers
+- plan_ready approves a slice plan and starts its build
+- after a slice job, the next step
+- the slice skill
+- plan mode is slice's phase A
+- read slice plans and brief their phases
+- a slice phase's subagent commits in its folder
+- a subagent may be allowed to commit
+- Ponytail in every session; from Superpowers only systematic-debugging
+- Jev through TypeSafe when its key is the one stored
+- TypeSafe as a provider for Jev; Jev stays on under Claude with a Go or TypeSafe key
+
+### Fixed
+
+- slice.ts no longer loads modes.ts, so a test's projects folder is not fixed by whoever imports it first
+- texts that still described /plan as Superpowers' spec and plan
+- the slice skill's dirty-tree check accepts its own leftovers
+- the build starts in the plan's repo, unclassified, with a marker that survives an empty base
+- leaving plan mode cancels an approved build that has not started
+- a fresh onboarding turns on only systematic-debugging
+- no Jev key at finish turns Jev's sandbox review off with the router
+
 ## 0.18.0 — 2026-10-23
 
 ### New
