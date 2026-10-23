@@ -45,6 +45,7 @@ HEADLESS_PACKAGES="bubblewrap iproute2"
 DRY_RUN=0
 HEADLESS=0
 NODE_PRIVATE=0
+NODE_PINS=""
 RESTART_NOW=0
 SERVICE_CHANGED=0
 LOCAL=""
@@ -269,28 +270,34 @@ node_is_current() {
   [ "$major" -gt 22 ] || { [ "$major" -eq 22 ] && [ "$minor" -ge 19 ]; }
 }
 
-# Sets NODE_VERSION to the pinned Node: the repo's node-version file next to this script, else the published one.
+# Sets NODE_VERSION and NODE_PINS from the pinned Node: the repo's node-version file next to this script, else the
+# published one. Its first line is the version, then one "linux-<arch> <sha256>" line per build, like engram-version.
 read_node_version() {
   detect_platform
-  if [ -n "${ARIA_NODE_VERSION:-}" ]; then
-    NODE_VERSION=$ARIA_NODE_VERSION
-  elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../node-version" ]; then
-    NODE_VERSION=$(tr -d '[:space:]' < "$SCRIPT_DIR/../node-version")
+  if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../node-version" ]; then
+    NODE_PINS=$(cat "$SCRIPT_DIR/../node-version")
   elif [ "$DRY_RUN" = 1 ]; then
     say "would: download $NODE_VERSION_URL"
     NODE_VERSION=PINNED
+    NODE_PINS=""
     return
   else
-    NODE_VERSION=$(curl -fsSL "$NODE_VERSION_URL") || die "could not download the pinned Node version from $NODE_VERSION_URL"
-    NODE_VERSION=$(printf '%s' "$NODE_VERSION" | tr -d '[:space:]')
+    NODE_PINS=$(curl -fsSL "$NODE_VERSION_URL") || die "could not download the pinned Node version from $NODE_VERSION_URL"
   fi
+  NODE_VERSION=$(printf '%s\n' "$NODE_PINS" | head -1 | tr -d '[:space:]')
   case "$NODE_VERSION" in *[!0-9.]* | "") die "the pinned Node version is not a version number: '$NODE_VERSION'" ;; esac
+  bad=$(printf '%s\n' "$NODE_PINS" | sed 1d | tr -s ' \t' ' ' | sed 's/^ //; s/ $//' | grep -v '^$' | grep -vE '^linux-[a-z0-9]+ [0-9a-f]{64}$' || true)
+  [ -z "$bad" ] || die "node-version has a line that is not '<build> <sha256>': '$bad'"
 }
 
 # The pinned Node into $DATA_DIR/node, for a server whose own is missing or too old (never replaced: Ubuntu's apt Node is
-# what its other software uses). The tarball is checked against the SHASUMS256.txt of the same release.
+# what its other software uses). What is checked: the tarball's sha256 equals the one pinned for this CPU in node-version,
+# which is in the repo (or published with the installer), so a changed or corrupt download, or a mirror that serves
+# something else, is refused. It does not prove nodejs.org's own release is trustworthy: the pin is only as good as the
+# moment someone compared it with nodejs.org's SHASUMS256.txt.
 install_private_node() {
   detect_platform
+  case "$NODE_DIST" in https://* | file://*) ;; *) die "ARIA_NODE_DIST must be an https:// address (or file:// for a local mirror): '$NODE_DIST'" ;; esac
   read_node_version
   case "$(uname -m)" in
     aarch64 | arm64) node_arch=arm64 ;;
@@ -300,24 +307,29 @@ install_private_node() {
   NODE_PRIVATE=1
   tarball=node-v$NODE_VERSION-linux-$node_arch.tar.xz
   base=$NODE_DIST/v$NODE_VERSION
-  if [ "$DRY_RUN" = 1 ]; then
-    say "would: install Node $NODE_VERSION into $DATA_DIR/node from $base/$tarball (verified against $base/SHASUMS256.txt)"
+  if [ "$NODE_VERSION" = PINNED ]; then
+    say "would: install the pinned Node into $DATA_DIR/node from $base/$tarball (verified against the checksum pinned for linux-$node_arch in node-version)"
     return
   fi
-  work=$(mktemp -d)
-  if ! curl -fsSL "$base/$tarball" -o "$work/$tarball"; then rm -rf "$work"; die "could not download Node from $base/$tarball"; fi
-  if ! curl -fsSL "$base/SHASUMS256.txt" -o "$work/SHASUMS256.txt"; then rm -rf "$work"; die "could not download $base/SHASUMS256.txt"; fi
-  expected=$(awk -v f="$tarball" '$2 == f { print $1 }' "$work/SHASUMS256.txt")
-  if [ -z "$expected" ] || [ "$(sha256_of "$work/$tarball")" != "$expected" ]; then
-    rm -rf "$work"
-    die "the Node download does not match its checksum in SHASUMS256.txt; nothing was installed"
+  expected=$(printf '%s\n' "$NODE_PINS" | awk -v k="linux-$node_arch" '$1 == k { print $2 }')
+  [ -n "$expected" ] || die "node-version pins no checksum for linux-$node_arch; nothing was installed"
+  if [ "$DRY_RUN" = 1 ]; then
+    say "would: install Node $NODE_VERSION into $DATA_DIR/node from $base/$tarball (verified against the checksum pinned for linux-$node_arch in node-version)"
+    return
   fi
-  mkdir "$work/node"
-  if ! tar -xJf "$work/$tarball" -C "$work/node" --strip-components 1; then rm -rf "$work"; die "could not unpack the Node download (is xz installed? on Ubuntu: sudo apt-get install xz-utils)"; fi
+  command -v xz >/dev/null 2>&1 || die "xz is needed to unpack Node (on Ubuntu: sudo apt-get install xz-utils)"
   install -d -m 700 "$DATA_DIR"
-  rm -rf "$DATA_DIR/node"
-  mv "$work/node" "$DATA_DIR/node"
+  # Inside $DATA_DIR, so the final move is a rename on one filesystem; removed on any exit.
+  work=$(mktemp -d "$DATA_DIR/.node-install.XXXXXX")
+  trap 'rm -rf "$work"' EXIT
+  curl -fsSL "$base/$tarball" -o "$work/$tarball" || die "could not download Node from $base/$tarball"
+  [ "$(sha256_of "$work/$tarball")" = "$expected" ] || die "the Node download does not match the checksum pinned in node-version; nothing was installed"
+  mkdir "$work/stage"
+  tar -xJf "$work/$tarball" -C "$work/stage" --strip-components 1 || die "could not unpack the Node download"
+  [ ! -e "$DATA_DIR/node" ] || mv "$DATA_DIR/node" "$work/old"
+  mv "$work/stage" "$DATA_DIR/node"
   rm -rf "$work"
+  trap - EXIT
   say "Installed Node $NODE_VERSION into $DATA_DIR/node"
 }
 

@@ -24,7 +24,7 @@ The permission and write cards (sandbox, with its four choices), the quota card 
 The settings reach Pi and the extensions (`~/.aria/agent/aria.json`, the rendered persona and experts, Aria's Engram
 entry) and a change applies when each session's run settles. Left:
 
-- A release must publish `pi-version`, `pi-packages`, `engram-version` and `agent-browser-version` next to the
+- A release must publish `pi-version`, `pi-packages`, `engram-version`, `agent-browser-version` and `node-version` next to the
   binary: the `curl | sh` install reads them from there. `tools/release.sh` tags a version and writes its notes
   (`RELEASES.md`), but nothing is published yet: no binaries, no hosted `install.sh`.
 - Pi packages come only from a local folder (`integrations.packages.path`); npm, git, a gallery and trusting

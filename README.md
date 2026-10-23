@@ -101,6 +101,7 @@ sh install/install.sh --local target/release/aria
 | `~/.aria/agent/skills/` | Skills: Aria's own `install-from-link` and `verify-in-browser`, `slice` (hidden from the model's own choice: reached through `/plan` or the router's offer), Ponytail's `ponytail` and `ponytail-review`, and the ones you ask Aria to install (paste a link and say "install this"; MCP servers you install that way go in `~/.aria/mcp.json`) |
 | `~/.aria/agent/aria.json` | what the extensions read from your settings (models, quota, effort, compaction, router, sandbox, subagents); no secrets |
 | `~/.aria/engram/`, `~/.aria/bin/engram` | Aria's memory: its own Engram database and the pinned Engram the installer brings (`engram-version`) |
+| `~/.aria/node/` | on a server (`install.sh --headless`) whose Node is older than 22.19 or missing: the pinned Node (`node-version`: the version and one sha256 per CPU), kept apart from the system's |
 | `~/.aria/agent-browser/`, `~/.aria/bin/agent-browser` | the pinned `agent-browser` (`agent-browser-version`) the agents use to check pages; its Chrome lives in `~/.agent-browser/browsers` |
 | `~/.aria/agent/npm/`, `git/` | the pinned packages they use (`pi-packages`), installed by the installer |
 | `~/.aria/bin/` | `pi` (a shim to the pinned version, for Pi's own subagents), `node` (a link the service uses), `engram` and `agent-browser` |

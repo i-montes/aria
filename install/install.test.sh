@@ -131,7 +131,7 @@ rm -r "$tmp"
 
 # --headless: a server with no desktop. No GUI packages, no bar, no Hyprland; the user unit aria-serve.service; a private
 # Node when the system's is too old; bubblewrap and iproute2 through the package manager it has.
-node_pin=$(tr -d '[:space:]' < "$here/../node-version")
+node_pin=$(head -1 "$here/../node-version" | tr -d '[:space:]')
 tmp=$(mktemp -d)
 fake_node old v18.19.1
 fake_node new v22.23.2
@@ -185,7 +185,9 @@ rm -f "$tmp/bare/node" "$tmp/bare/npm"
 out=$(PATH="$tmp/bare" HOME="$tmp/user" ARIA_HOME="$tmp/home" /bin/sh "$installer" --headless --dry-run --local /tmp/fake-aria 2>&1) || true
 printf '%s\n' "$out" | grep -qF "Node $node_pin into $tmp/home/node" && pass "a missing Node gets a private one" || fail "a missing Node does not get a private one: $out"
 out=$(headless "$tmp/old" --dry-run --local /tmp/fake-aria 2>&1)
-printf '%s\n' "$out" | grep -qF 'SHASUMS256.txt' && pass "the Node download is checked against SHASUMS256.txt" || fail "the Node download is not checked against SHASUMS256.txt"
+printf '%s\n' "$out" | grep -qF 'pinned for linux-' && ! printf '%s\n' "$out" | grep -qF 'SHASUMS256.txt' && pass "the Node download is checked against the checksum pinned in node-version" || fail "the Node download is not checked against the pinned checksum"
+# the private Node is planned but not on disk yet (a fresh install): the link still points at it
+printf '%s\n' "$out" | grep -qF "would: link $tmp/home/bin/node to $tmp/home/node/bin/node" && pass "a planned private Node is what link_node links on a fresh install" || fail "a planned private Node is not linked: $out"
 printf '%s\n' "$out" | grep -qF "https://nodejs.org/dist/v$node_pin/node-v$node_pin-linux-" && pass "the private Node comes from nodejs.org" || fail "the private Node's address is wrong"
 case "$(uname -m)" in aarch64 | arm64) node_arch=arm64 ;; x86_64) node_arch=x64 ;; *) node_arch="" ;; esac
 if [ -n "$node_arch" ]; then
@@ -196,12 +198,27 @@ if [ -n "$node_arch" ]; then
   printf '#!/bin/sh\necho v%s\n' "$node_pin" > "$tmp/nodepkg/node-v$node_pin-linux-$node_arch/bin/node"
   chmod +x "$tmp/nodepkg/node-v$node_pin-linux-$node_arch/bin/node"
   tar cJf "$dist/$tarball" -C "$tmp/nodepkg" "node-v$node_pin-linux-$node_arch" 2>/dev/null || tar cf - -C "$tmp/nodepkg" "node-v$node_pin-linux-$node_arch" | xz > "$dist/$tarball"
-  printf '%s  %s\n' 0000000000000000000000000000000000000000000000000000000000000000 "$tarball" > "$dist/SHASUMS256.txt"
-  if ARIA_NODE_DIST="file://$tmp/dist" HOME="$tmp/user" ARIA_HOME="$tmp/nodehome" sh "$installer" --install-node >/dev/null 2>"$tmp/err"; then fail "a Node with the wrong checksum was installed"
-  else grep -qi 'checksum' "$tmp/err" && [ ! -e "$tmp/nodehome/node" ] && pass "a Node download with the wrong checksum is refused and deleted" || fail "the Node checksum refusal is unclear or left files: $(cat "$tmp/err")"; fi
-  printf '%s  %s\n' "$(sha256sum "$dist/$tarball" | cut -d ' ' -f 1)" "$tarball" > "$dist/SHASUMS256.txt"
-  if ARIA_NODE_DIST="file://$tmp/dist" HOME="$tmp/user" ARIA_HOME="$tmp/nodehome" sh "$installer" --install-node >/dev/null 2>&1 && [ "$("$tmp/nodehome/node/bin/node" --version)" = "v$node_pin" ]; then pass "a verified Node is unpacked under ~/.aria/node"; else fail "a verified Node was not installed"; fi
+  # the pin is the trust root: a piped installer reads it from ARIA_NODE_VERSION_URL, and the mirror serves only the tarball
+  piped_node() { (cd "$here" && HOME="$tmp/user" ARIA_HOME="$tmp/nodehome" ARIA_NODE_VERSION_URL="file://$tmp/pin" ARIA_NODE_DIST="$1" sh -s -- --install-node < "$installer"); }
+  printf '%s\nlinux-%s 0000000000000000000000000000000000000000000000000000000000000000\n' "$node_pin" "$node_arch" > "$tmp/pin"
+  if piped_node "file://$tmp/dist" >/dev/null 2>"$tmp/err"; then fail "a Node whose hash is not the pinned one was installed"
+  else grep -qi 'checksum' "$tmp/err" && [ ! -e "$tmp/nodehome/node" ] && [ -z "$(ls -A "$tmp/nodehome")" ] && pass "a Node download that does not match the pin is refused and leaves nothing" || fail "the Node pin refusal is unclear or left files: $(cat "$tmp/err")"; fi
+  printf '%s\nlinux-%s %s\n' "$node_pin" "$node_arch" "$(sha256sum "$dist/$tarball" | cut -d ' ' -f 1)" > "$tmp/pin"
+  if piped_node "file://$tmp/dist" >/dev/null 2>&1 && [ "$("$tmp/nodehome/node/bin/node" --version)" = "v$node_pin" ] && [ "$(ls -A "$tmp/nodehome")" = node ]; then pass "a Node that matches the pin is unpacked under ~/.aria/node"; else fail "a Node that matches the pin was not installed cleanly"; fi
+  # a pin with no line for this CPU dies
+  printf '%s\nlinux-other %s\n' "$node_pin" "$(sha256sum "$dist/$tarball" | cut -d ' ' -f 1)" > "$tmp/pin"
+  rm -rf "$tmp/nodehome"
+  if piped_node "file://$tmp/dist" >/dev/null 2>"$tmp/err"; then fail "a pin with no line for this CPU was accepted"
+  else grep -qF "linux-$node_arch" "$tmp/err" && [ ! -e "$tmp/nodehome/node" ] && pass "a pin with no checksum for this CPU dies" || fail "the missing-pin message is unclear: $(cat "$tmp/err")"; fi
+  # a malformed hash is refused when the pin is read
+  printf '%s\nlinux-%s nothex\n' "$node_pin" "$node_arch" > "$tmp/pin"
+  if piped_node "file://$tmp/dist" >/dev/null 2>"$tmp/err"; then fail "a malformed pinned hash was accepted"
+  else grep -qF 'not' "$tmp/err" && pass "a malformed pinned hash is refused" || fail "the malformed-hash message is unclear"; fi
+  # http:// (or anything but https:// and a local file://) is refused: the download would be open to tampering
+  if piped_node "http://nodejs.org/dist" >/dev/null 2>"$tmp/err"; then fail "an http:// Node mirror was accepted"
+  else grep -qF 'https://' "$tmp/err" && pass "an http:// Node mirror is refused" || fail "the http refusal is unclear"; fi
   # the node link goes to it
+  mkdir -p "$tmp/nodehome/node/bin" && printf '#!/bin/sh\n' > "$tmp/nodehome/node/bin/node" && chmod +x "$tmp/nodehome/node/bin/node"
   PATH="$tmp/new:/usr/bin:/bin" ARIA_HOME="$tmp/nodehome" sh "$installer" --link-node >/dev/null 2>&1
   [ "$(readlink "$tmp/nodehome/bin/node")" = "$tmp/nodehome/node/bin/node" ] && pass "link_node prefers the private Node" || fail "link_node ignored the private Node"
 else echo "skip: no Node build for $(uname -m)"; fi
@@ -210,7 +227,7 @@ mkdir -p "$tmp/riscv" && printf '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) e
 if PATH="$tmp/riscv:/usr/bin:/bin" HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --install-node >/dev/null 2>"$tmp/err"; then fail "an unsupported CPU was accepted"
 else grep -qF 'riscv64' "$tmp/err" && pass "an unsupported CPU dies with a clear message" || fail "the unsupported CPU message is unclear"; fi
 # the pin is next to the script, else published beside pi-version
-printf '9.9.9\n' > "$tmp/published-node"
+printf '9.9.9\nlinux-x64 %s\n' 0000000000000000000000000000000000000000000000000000000000000000 > "$tmp/published-node"
 piped=$(cd "$here" && ARIA_NODE_VERSION_URL="file://$tmp/published-node" sh -s -- --print-node-version < "$installer" 2>&1)
 [ "$piped" = "9.9.9" ] && pass "a piped installer reads the published Node pin" || fail "piped installer used '$piped' for the Node pin"
 direct=$(sh "$installer" --print-node-version 2>&1)
