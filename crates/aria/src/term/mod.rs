@@ -11,6 +11,7 @@ pub mod rewind;
 pub mod schedules;
 mod screen;
 pub mod select;
+pub mod signin;
 pub mod state;
 pub mod texts;
 pub mod theme;

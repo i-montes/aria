@@ -8,6 +8,7 @@ use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::json_file::JsonFileError;
 use aria_core::mcp::{self, McpError};
 use aria_core::mcp_import::{self, ImportError};
+use aria_core::oauth::loopback::{Paste, Pastes};
 use aria_core::oauth::{self, OAuthError};
 use aria_core::paths::AriaPaths;
 use aria_core::providers;
@@ -15,9 +16,11 @@ use aria_core::secrets;
 use aria_core::settings::{self, Settings, SettingsError};
 use aria_core::validate::{check_key, KeyCheck, KeyKind, ProbeRequest};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 /// The program that opens a link in the user's browser.
@@ -25,6 +28,12 @@ use std::time::Duration;
 const OPENER: &str = "xdg-open";
 #[cfg(target_os = "macos")]
 const OPENER: &str = "open";
+
+/// Opens `url` with `program`. A computer with no browser (a server has no `xdg-open`) is not an error: the program
+/// that is not there is ignored, and the person is shown the address instead.
+fn open_with(program: &str, url: &str) {
+    let _ = Command::new(program).arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+}
 
 pub type Validator = Arc<dyn Fn(KeyKind, &str) -> KeyCheck + Send + Sync>;
 pub type Opener = Arc<dyn Fn(&str) + Send + Sync>;
@@ -53,6 +62,45 @@ pub struct Ctx {
     pub config_dir: PathBuf,
     /// Every session's Pi starts again when its run settles (`enginesRestart`); the dock wires it to the chat.
     pub restart_engines: Arc<dyn Fn() + Send + Sync>,
+    /// The sign-ins waiting for a browser, by service (`anthropic`, `notion`): where a pasted redirect address goes
+    /// (`OAuthCode`). A sign-in registers on starting and leaves when its wait ends; starting another of the same
+    /// service replaces it, which cancels the older one. By service and not by request id: a hub rewrites every client's
+    /// ids, so the id of the message that started a sign-in is not one a later message could carry.
+    ///
+    /// Security: a remote client may start a sign-in and so re-bind this computer's Claude or Notion account to its own;
+    /// a stolen client key could do that, which is accepted (it can already chat with the model and use those accounts).
+    pub oauth_codes: Mutex<HashMap<String, PendingSignIn>>,
+}
+
+/// A sign-in waiting for its browser: `token` tells it apart from the one that replaced it.
+pub struct PendingSignIn {
+    token: u64,
+    sender: mpsc::Sender<Paste>,
+}
+
+/// Registered while a sign-in waits; leaves the map when dropped (unless a newer sign-in already took its place).
+struct Waiting<'a> {
+    ctx: &'a Ctx,
+    service: &'static str,
+    token: u64,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        let mut pending = self.ctx.oauth_codes.lock().unwrap();
+        if pending.get(self.service).is_some_and(|p| p.token == self.token) {
+            pending.remove(self.service);
+        }
+    }
+}
+
+/// Makes `service`'s sign-in the pending one (the older one's channel closes, which ends its wait).
+fn wait_for_pastes<'a>(ctx: &'a Ctx, service: &'static str) -> (Waiting<'a>, mpsc::Receiver<Paste>) {
+    static TOKENS: AtomicU64 = AtomicU64::new(1);
+    let token = TOKENS.fetch_add(1, Ordering::SeqCst);
+    let (sender, inbox) = mpsc::channel();
+    ctx.oauth_codes.lock().unwrap().insert(service.to_string(), PendingSignIn { token, sender });
+    (Waiting { ctx, service, token }, inbox)
 }
 
 impl Ctx {
@@ -62,14 +110,7 @@ impl Ctx {
             paths,
             validator: Arc::new(check_key),
             oauth_checker: Arc::new(aria_core::validate::check),
-            opener: Arc::new(|url| {
-                let _ = Command::new(OPENER)
-                    .arg(url)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn();
-            }),
+            opener: Arc::new(|url| open_with(OPENER, url)),
             oauth_timeout: Duration::from_secs(300),
             notion_url: mcp::NOTION_URL.to_string(),
             installer: Arc::new(|command| {
@@ -90,6 +131,7 @@ impl Ctx {
             home: home.clone(),
             config_dir: mcp_import::config_dir(&home, std::env::var_os("XDG_CONFIG_HOME").as_deref()),
             restart_engines: Arc::new(|| {}),
+            oauth_codes: Mutex::default(),
         }
     }
 }
@@ -182,6 +224,14 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
                 notion_flow(id, ctx, emit);
             } else {
                 emit(DockMessage::Error { id, code: "unknown-service".into() });
+            }
+        }
+        PageMessage::OAuthCode { id, service, redirect } => {
+            let sender = ctx.oauth_codes.lock().unwrap().get(&service).map(|pending| pending.sender.clone());
+            // The wait checks the address (it alone knows the state) and answers `bad-redirect` itself.
+            let sent = sender.is_some_and(|sender| sender.send(Paste { text: redirect, tag: id }).is_ok());
+            if !sent {
+                emit(DockMessage::Error { id, code: "no-sign-in".into() });
             }
         }
         PageMessage::InstallClaudeBridge { id } => {
@@ -511,7 +561,11 @@ fn oauth_error_key(error: &OAuthError) -> &'static str {
         OAuthError::Denied(_) => "oauth-denied",
         OAuthError::Timeout => "oauth-timeout",
         OAuthError::Network(_) => "network-unavailable",
-        OAuthError::NoCode | OAuthError::BadToken(_) | OAuthError::Io(_) | OAuthError::Setup(_) => "oauth-failed",
+        OAuthError::NoCode
+        | OAuthError::Cancelled
+        | OAuthError::BadToken(_)
+        | OAuthError::Io(_)
+        | OAuthError::Setup(_) => "oauth-failed",
     }
 }
 
@@ -524,9 +578,11 @@ fn notion_flow(id: u64, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         Ok(sign_in) => sign_in,
         Err(error) => return emit(result(Some(oauth_error_key(&error)))),
     };
+    let (_waiting, inbox) = wait_for_pastes(ctx, "notion");
+    let refused = |tag: u64| emit(DockMessage::Error { id: tag, code: "bad-redirect".into() });
     emit(DockMessage::OAuthUrl { id, url: sign_in.url.clone() });
     (ctx.opener)(&sign_in.url);
-    let record = match sign_in.wait(ctx.oauth_timeout) {
+    let record = match sign_in.wait_with_paste(ctx.oauth_timeout, Some(&Pastes { inbox: &inbox, refused: &refused })) {
         Ok(record) => record,
         Err(error) => return emit(result(Some(oauth_error_key(&error)))),
     };
@@ -542,9 +598,11 @@ fn oauth_flow(id: u64, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         Ok(sign_in) => sign_in,
         Err(error) => return emit(result(Some(oauth_error_key(&error)))),
     };
+    let (_waiting, inbox) = wait_for_pastes(ctx, "anthropic");
+    let refused = |tag: u64| emit(DockMessage::Error { id: tag, code: "bad-redirect".into() });
     emit(DockMessage::OAuthUrl { id, url: sign_in.url.clone() });
     (ctx.opener)(&sign_in.url);
-    match sign_in.wait(ctx.oauth_timeout) {
+    match sign_in.wait_with_paste(ctx.oauth_timeout, Some(&Pastes { inbox: &inbox, refused: &refused })) {
         Ok(credential) => match AuthStore::for_paths(&ctx.paths).set("anthropic", &credential) {
             Ok(()) => emit(result(None)),
             Err(_) => emit(result(Some("auth-file-broken"))),
@@ -600,6 +658,7 @@ mod tests {
             restart_engines: Arc::new(move || {
                 r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }),
+            oauth_codes: Mutex::default(),
         };
         Harness { dir, ctx, opened, seen_keys, checked_oauth, restarts }
     }
@@ -1278,6 +1337,202 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(h.ctx.paths.mcp()).unwrap()).unwrap();
         assert!(mcp["mcpServers"]["notion"]["url"].as_str().unwrap().ends_with("/mcp"));
         assert!(mcp["mcpServers"]["notion"].get("headers").is_none());
+    }
+
+    // ---- signing in by pasting the redirect address ------------------------------------------------------
+
+    /// Starts Notion's sign-in on a thread of its own against the fake server and returns its replies once `act` has
+    /// run (which gets the sign-in's redirect address and state). The harness opener does nothing: no browser.
+    fn notion_sign_in(
+        h: &mut Harness,
+        act: impl FnOnce(&Harness, &str, &str) + Send,
+    ) -> (Vec<DockMessage>, aria_core::testing::Fake) {
+        let server = aria_core::testing::fake(true, 201);
+        h.ctx.notion_url = format!("{}/mcp", server.base);
+        h.ctx.oauth_timeout = Duration::from_secs(10);
+        h.ctx.opener = Arc::new(|_| {});
+        let out = Mutex::new(Vec::new());
+        let h = &*h;
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                handle(PageMessage::StartMcpOAuth { id: 40, service: "notion".into() }, &h.ctx, &|m| {
+                    out.lock().unwrap().push(m)
+                })
+            });
+            let url = loop {
+                let found = out.lock().unwrap().iter().find_map(|m| match m {
+                    DockMessage::OAuthUrl { url, .. } => Some(url.clone()),
+                    _ => None,
+                });
+                match found {
+                    Some(url) => break url,
+                    None => std::thread::sleep(Duration::from_millis(10)),
+                }
+            };
+            let q: HashMap<String, String> = url::Url::parse(&url).unwrap().query_pairs().into_owned().collect();
+            act(h, &q["redirect_uri"], &q["state"]);
+        });
+        (out.into_inner().unwrap(), server)
+    }
+
+    fn paste(h: &Harness, id: u64, service: &str, text: &str) -> Vec<DockMessage> {
+        run(h, PageMessage::OAuthCode { id, service: service.into(), redirect: text.into() })
+    }
+
+    #[test]
+    fn an_oauth_code_for_a_pending_sign_in_finishes_it() {
+        let mut h = harness(KeyCheck::Valid);
+        let (replies, server) = notion_sign_in(&mut h, |h, redirect, state| {
+            // the browser on another computer could not load this address; its address bar is pasted
+            let pasted = format!("{redirect}?code=pasted&state={state}\n");
+            assert_eq!(paste(h, 41, "notion", &pasted), vec![], "success is answered by the sign-in's own result");
+        });
+        assert!(matches!(&replies[0], DockMessage::OAuthUrl { id: 40, .. }));
+        assert_eq!(replies[1], DockMessage::OAuthResult { id: 40, ok: true, error: None });
+        assert_eq!(replies.len(), 2);
+        let form: HashMap<String, String> =
+            url::form_urlencoded::parse(server.requests("POST", "/token")[0].body.as_bytes()).into_owned().collect();
+        assert_eq!(form["code"], "pasted");
+        assert!(h.ctx.paths.mcp_auth().exists());
+        assert!(h.ctx.oauth_codes.lock().unwrap().is_empty(), "the finished sign-in is no longer pending");
+    }
+
+    #[test]
+    fn an_oauth_code_for_nothing_is_an_error() {
+        let h = harness(KeyCheck::Valid);
+        assert_eq!(
+            paste(&h, 5, "notion", "code=a&state=b"),
+            vec![DockMessage::Error { id: 5, code: "no-sign-in".into() }]
+        );
+        assert_eq!(
+            paste(&h, 6, "anthropic", "code=a&state=b"),
+            vec![DockMessage::Error { id: 6, code: "no-sign-in".into() }]
+        );
+    }
+
+    #[test]
+    fn a_sign_in_waiting_for_a_service_does_not_take_another_services_code() {
+        let mut h = harness(KeyCheck::Valid);
+        let (replies, _) = notion_sign_in(&mut h, |h, redirect, state| {
+            assert_eq!(
+                paste(h, 42, "anthropic", &format!("code=a&state={state}")),
+                vec![DockMessage::Error { id: 42, code: "no-sign-in".into() }]
+            );
+            paste(h, 43, "notion", &format!("{redirect}?code=a&state={state}"));
+        });
+        assert_eq!(replies[1], DockMessage::OAuthResult { id: 40, ok: true, error: None });
+    }
+
+    #[test]
+    fn a_typo_is_refused_and_the_sign_in_keeps_waiting() {
+        let mut h = harness(KeyCheck::Valid);
+        let (replies, _) = notion_sign_in(&mut h, |h, redirect, state| {
+            // refused answers come from the waiting sign-in (the paste itself has nothing to say)
+            assert_eq!(paste(h, 44, "notion", "not an address"), vec![]);
+            assert_eq!(paste(h, 45, "notion", &format!("{redirect}?code=a&state=someone-elses")), vec![]);
+            std::thread::sleep(Duration::from_millis(200));
+            assert!(h.ctx.oauth_codes.lock().unwrap().contains_key("notion"), "still waiting");
+            paste(h, 46, "notion", &format!("{redirect}?code=a&state={state}"));
+        });
+        let bad: Vec<_> = replies
+            .iter()
+            .filter(|m| matches!(m, DockMessage::Error { code, .. } if code == "bad-redirect"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            bad,
+            vec![
+                DockMessage::Error { id: 44, code: "bad-redirect".into() },
+                DockMessage::Error { id: 45, code: "bad-redirect".into() }
+            ]
+        );
+        assert_eq!(replies.last(), Some(&DockMessage::OAuthResult { id: 40, ok: true, error: None }));
+    }
+
+    #[test]
+    fn a_pasted_code_never_reaches_a_reply() {
+        let mut h = harness(KeyCheck::Valid);
+        let (replies, _) = notion_sign_in(&mut h, |h, redirect, state| {
+            paste(h, 47, "notion", "code=TOPSECRET&state=wrong");
+            std::thread::sleep(Duration::from_millis(150));
+            paste(h, 48, "notion", &format!("{redirect}?code=ok&state={state}"));
+        });
+        assert!(!format!("{replies:?}").contains("TOPSECRET"));
+    }
+
+    #[test]
+    fn a_newer_sign_in_of_the_same_service_replaces_the_older_one() {
+        let mut h = harness(KeyCheck::Valid);
+        let (replies, _) = notion_sign_in(&mut h, |h, redirect, state| {
+            // a second one starts: the first ends (nothing is written) and the paste now goes to the second
+            let second = Mutex::new(Vec::new());
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    handle(PageMessage::StartMcpOAuth { id: 50, service: "notion".into() }, &h.ctx, &|m| {
+                        second.lock().unwrap().push(m)
+                    })
+                });
+                let (redirect2, state2) = loop {
+                    let found = second.lock().unwrap().iter().find_map(|m| match m {
+                        DockMessage::OAuthUrl { url, .. } => Some(url.clone()),
+                        _ => None,
+                    });
+                    if let Some(url) = found {
+                        let q: HashMap<String, String> =
+                            url::Url::parse(&url).unwrap().query_pairs().into_owned().collect();
+                        break (q["redirect_uri"].clone(), q["state"].clone());
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                };
+                assert_ne!(state, state2);
+                // the first one's address is no longer anybody's
+                assert_eq!(paste(h, 51, "notion", &format!("{redirect}?code=a&state={state}")), vec![]);
+                paste(h, 52, "notion", &format!("{redirect2}?code=b&state={state2}"));
+            });
+            let second = second.into_inner().unwrap();
+            assert_eq!(second.last(), Some(&DockMessage::OAuthResult { id: 50, ok: true, error: None }));
+        });
+        assert_eq!(
+            replies.last(),
+            Some(&DockMessage::OAuthResult { id: 40, ok: false, error: Some("oauth-failed".into()) })
+        );
+    }
+
+    #[test]
+    fn a_sign_in_that_times_out_is_no_longer_pending() {
+        let h = harness(KeyCheck::Valid);
+        run(&h, PageMessage::StartOAuth { id: 60 });
+        assert!(h.ctx.oauth_codes.lock().unwrap().is_empty());
+        assert_eq!(
+            paste(&h, 61, "anthropic", "code=a&state=b"),
+            vec![DockMessage::Error { id: 61, code: "no-sign-in".into() }]
+        );
+    }
+
+    #[test]
+    fn claudes_sign_in_takes_pastes_and_still_sends_its_url_when_the_opener_does_nothing() {
+        // Claude's token endpoint is fixed, so a whole sign-in cannot run against the fake: this covers the wait.
+        let mut h = harness(KeyCheck::Valid);
+        h.ctx.opener = Arc::new(|_| {});
+        h.ctx.oauth_timeout = Duration::from_millis(800);
+        let out = Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            scope.spawn(|| handle(PageMessage::StartOAuth { id: 70 }, &h.ctx, &|m| out.lock().unwrap().push(m)));
+            while out.lock().unwrap().is_empty() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(h.ctx.oauth_codes.lock().unwrap().contains_key("anthropic"));
+            assert_eq!(paste(&h, 71, "anthropic", "garbage"), vec![]);
+        });
+        let replies = out.into_inner().unwrap();
+        assert!(matches!(&replies[0], DockMessage::OAuthUrl { id: 70, .. }));
+        assert!(replies.contains(&DockMessage::Error { id: 71, code: "bad-redirect".into() }));
+    }
+
+    #[test]
+    fn a_computer_without_a_browser_still_signs_in() {
+        // the program that opens links is not there: nothing panics, nothing waits
+        open_with("/nonexistent/aria-test-opener", "https://example.test/");
     }
 
     #[test]

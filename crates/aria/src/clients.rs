@@ -12,6 +12,12 @@
 //!   hub answers with its own `hello` (no `remote`), and a different `protocol` is answered `protocol-mismatch` and the
 //!   connection closed. `remote: true` marks a client that came in from another machine: it can never send `secretSave`
 //!   or a `!command` (`not-for-remote`), and a later `hello` cannot lift the mark.
+//! - Sign-ins: a client (local or remote) may start Claude's or Notion's (`startOauth`, `startMcpOauth`) and paste the
+//!   address its browser could not load (`oauthCode`); they go to the handlers, not the chat. A sign-in answers twice
+//!   (`oauthUrl`, then `oauthResult` or `error`), so its id stays until the last of them. Security: a remote client can
+//!   therefore re-bind the hub's Claude or Notion account, so a stolen client key could point them at the attacker's;
+//!   accepted, since that key can already chat with the model and use those accounts. Pasted text holds a code: never
+//!   logged.
 
 use aria_core::bridge::{DockMessage, PageMessage, PROTOCOL};
 use serde_json::{json, Value};
@@ -59,6 +65,17 @@ fn allowed(message: &PageMessage) -> bool {
         ),
         _ => false,
     }
+}
+
+/// What goes to the handlers and not the chat: a secret to keep, and the sign-ins.
+fn for_handlers(message: &PageMessage) -> bool {
+    matches!(
+        message,
+        PageMessage::SecretSave { .. }
+            | PageMessage::StartOAuth { .. }
+            | PageMessage::StartMcpOAuth { .. }
+            | PageMessage::OAuthCode { .. }
+    )
 }
 
 /// What a client that came in from another machine may not do, whatever a local terminal may: save a secret, or run a
@@ -120,9 +137,25 @@ pub struct Hub {
     handlers: Arc<dyn Fn(PageMessage) + Send + Sync>,
     clients: Watchers,
     next: Arc<AtomicU64>,
-    /// The ids given to clients' requests: (the client, its own id). A reply whose id is not here is the page's.
-    asked: Arc<Mutex<HashMap<u64, (u64, u64)>>>,
+    /// The ids given to clients' requests. A reply whose id is not here is the page's.
+    asked: Arc<Mutex<HashMap<u64, Ask>>>,
     next_ask: Arc<AtomicU64>,
+}
+
+/// A client's request in flight: who asked, with which id, and what kind of request it was.
+struct Ask {
+    client: u64,
+    own: u64,
+    kind: AskKind,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum AskKind {
+    Plain,
+    /// `startOauth` / `startMcpOauth`: answers `oauthUrl` and then `oauthResult` (or `error`).
+    SignIn,
+    /// `oauthCode`: answered only when refused; a good one is answered by the sign-in's own result.
+    Code,
 }
 
 /// The numeric request id of a message (at its top, or inside a `session` wrapper), as a mutable slot.
@@ -200,6 +233,8 @@ impl Hub {
         if let Some(client) = self.clients.0.lock().unwrap().remove(&number) {
             let _ = client.stream.shutdown(std::net::Shutdown::Both);
         }
+        // Nobody is left to answer: a request still waiting (a sign-in, a paste) would stay for ever.
+        self.asked.lock().unwrap().retain(|_, ask| ask.client != number);
     }
 
     /// Closes a client after what is queued for it: its queue is closed (the writer thread drains it, then shuts the
@@ -256,13 +291,27 @@ impl Hub {
             Some("focus") => return self.set(number, |c| c.focused = value["focused"].as_bool().unwrap_or(true)),
             _ => {}
         }
-        let own = id_slot(&mut value).and_then(|slot| {
-            let id = slot.as_u64()?;
+        let kind = match value["type"].as_str() {
+            Some("startOauth" | "startMcpOauth") => AskKind::SignIn,
+            Some("oauthCode") => AskKind::Code,
+            _ => AskKind::Plain,
+        };
+        // (the client's own id, the hub's)
+        let ids = id_slot(&mut value).and_then(|slot| {
+            let own = slot.as_u64()?;
             let ours = self.next_ask.fetch_add(1, Ordering::SeqCst);
-            self.asked.lock().unwrap().insert(ours, (number, id));
+            self.asked.lock().unwrap().insert(ours, Ask { client: number, own, kind });
             *slot = json!(ours);
-            Some(id)
+            Some((own, ours))
         });
+        let own = ids.map(|(own, _)| own);
+        // A request that is refused is never asked of anyone, so nothing is waited for.
+        let refuse = |code: &str| {
+            if let Some((_, ours)) = ids {
+                self.asked.lock().unwrap().remove(&ours);
+            }
+            self.send_to(number, &json!({"type": "error", "id": own.unwrap_or(0), "code": code}));
+        };
         // A client's `!command`: its own message, which the page can never send.
         let message = serde_json::from_value::<PageMessage>(value).ok().map(|message| match message {
             PageMessage::Session { session, message } => match *message {
@@ -278,14 +327,12 @@ impl Hub {
             other => other,
         });
         match message {
-            Some(message) if remote && refused_for_remote(&message) => {
-                self.send_to(number, &json!({"type": "error", "id": own.unwrap_or(0), "code": "not-for-remote"}))
-            }
+            Some(message) if remote && refused_for_remote(&message) => refuse("not-for-remote"),
             Some(message) if allowed(&message) => {
                 let _ = self.chat.lock().unwrap().send(message);
             }
-            Some(message @ PageMessage::SecretSave { .. }) => (self.handlers)(message),
-            _ => self.send_to(number, &json!({"type": "error", "id": own.unwrap_or(0), "code": "not-for-clients"})),
+            Some(message) if for_handlers(&message) => (self.handlers)(message),
+            _ => refuse("not-for-clients"),
         }
     }
 
@@ -299,10 +346,25 @@ impl Hub {
     /// to a client's request).
     pub fn route(&self, message: &DockMessage) -> bool {
         let Ok(mut value) = serde_json::to_value(message) else { return true };
+        let is_url = value["type"] == "oauthUrl";
         if let Some(slot) = id_slot(&mut value) {
             let id = slot.as_u64().unwrap_or(0);
-            let asked = self.asked.lock().unwrap().remove(&id);
-            if let Some((number, own)) = asked {
+            let asked = {
+                let mut asked = self.asked.lock().unwrap();
+                // A sign-in answers twice: its URL leaves the id in place for the result (or error) that follows. Any
+                // other reply is the last: it also ends what the client pasted into that sign-in.
+                let url_of_a_sign_in = is_url && asked.get(&id).is_some_and(|a| a.kind == AskKind::SignIn);
+                let found = if url_of_a_sign_in {
+                    asked.get(&id).map(|a| Ask { client: a.client, own: a.own, kind: a.kind })
+                } else {
+                    asked.remove(&id)
+                };
+                if let Some(ask) = found.as_ref().filter(|a| a.kind == AskKind::SignIn && !url_of_a_sign_in) {
+                    asked.retain(|_, other| !(other.client == ask.client && other.kind == AskKind::Code));
+                }
+                found
+            };
+            if let Some(Ask { client: number, own, .. }) = asked {
                 *slot = json!(own);
                 self.send_to(number, &value);
                 // A tab a client opened is everyone's: the page and the other clients get it, without the asker's id.
@@ -714,6 +776,121 @@ mod tests {
         a.send(json!({"type": "secretSave", "id": 5, "name": "GH_TOKEN", "value": "v", "purpose": ""}));
         let handled = f.handled.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(matches!(handled, PageMessage::SecretSave { .. }));
+    }
+
+    fn sign_in_start(id: u64) -> Value {
+        json!({"type": "startOauth", "id": id})
+    }
+
+    fn remembered(f: &Fixture) -> usize {
+        f.hub.asked.lock().unwrap().len()
+    }
+
+    fn handled_id(f: &Fixture) -> u64 {
+        match f.handled.recv_timeout(Duration::from_secs(5)).unwrap() {
+            PageMessage::StartOAuth { id }
+            | PageMessage::StartMcpOAuth { id, .. }
+            | PageMessage::OAuthCode { id, .. } => id,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_oauth_sign_in_keeps_the_clients_id_until_its_result() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(sign_in_start(3));
+        let ours = handled_id(&f);
+        assert_ne!(ours, 3);
+        assert!(f.chat.try_recv().is_err(), "a sign-in is for the handlers, not the chat");
+        // the URL, then the result: both reach the asker with its own id, and neither is the page's
+        assert!(!f.hub.route(&DockMessage::OAuthUrl { id: ours, url: "https://x".into() }));
+        assert_eq!(a.next(), json!({"type": "oauthUrl", "id": 3, "url": "https://x"}));
+        assert_eq!(remembered(&f), 1, "the id is kept after the URL");
+        assert!(!f.hub.route(&DockMessage::OAuthResult { id: ours, ok: true, error: None }));
+        assert_eq!(a.next(), json!({"type": "oauthResult", "id": 3, "ok": true, "error": null}));
+        assert_eq!(remembered(&f), 0, "and dropped after the result");
+        // a sign-in that fails after its URL ends the same way
+        a.send(json!({"type": "startMcpOauth", "id": 4, "service": "notion"}));
+        let ours = handled_id(&f);
+        assert!(!f.hub.route(&DockMessage::OAuthUrl { id: ours, url: "u".into() }));
+        a.next();
+        assert!(!f.hub.route(&DockMessage::Error { id: ours, code: "oauth-failed".into() }));
+        assert_eq!(a.next(), json!({"type": "error", "id": 4, "code": "oauth-failed"}));
+        assert_eq!(remembered(&f), 0);
+    }
+
+    #[test]
+    fn a_pasted_address_reaches_the_handlers_and_its_refusal_the_client() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(sign_in_start(3));
+        let start = handled_id(&f);
+        f.hub.route(&DockMessage::OAuthUrl { id: start, url: "u".into() });
+        a.next();
+        a.send(json!({"type": "oauthCode", "id": 4, "service": "anthropic", "redirect": "nonsense"}));
+        match f.handled.recv_timeout(Duration::from_secs(5)).unwrap() {
+            PageMessage::OAuthCode { id, service, redirect } => {
+                assert_ne!(id, 4);
+                assert_eq!((service.as_str(), redirect.as_str()), ("anthropic", "nonsense"));
+                assert!(!f.hub.route(&DockMessage::Error { id, code: "bad-redirect".into() }));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(a.next(), json!({"type": "error", "id": 4, "code": "bad-redirect"}));
+        // the sign-in is still waiting for its result
+        assert_eq!(remembered(&f), 1);
+        assert!(f.chat.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_paste_that_the_sign_in_took_leaves_nothing_behind_once_the_sign_in_ends() {
+        let f = fixture();
+        let mut a = connect(&f);
+        let mut b = connect(&f);
+        a.send(sign_in_start(3));
+        let start = handled_id(&f);
+        a.send(json!({"type": "oauthCode", "id": 4, "service": "anthropic", "redirect": "code=a&state=s"}));
+        handled_id(&f);
+        b.send(json!({"type": "oauthCode", "id": 4, "service": "anthropic", "redirect": "code=a&state=s"}));
+        handled_id(&f);
+        assert_eq!(remembered(&f), 3);
+        // a good paste has no reply of its own: the result of the sign-in ends it, and what its client pasted with it
+        f.hub.route(&DockMessage::OAuthResult { id: start, ok: true, error: None });
+        a.next();
+        assert_eq!(remembered(&f), 1, "only the other client's paste is left");
+        drop(b);
+        wait_until("the other client's entries are gone", || remembered(&f) == 0);
+    }
+
+    #[test]
+    fn a_remote_client_may_sign_in_but_still_not_save_a_secret() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(hello(PROTOCOL, Some(true)));
+        a.next();
+        a.send(sign_in_start(3));
+        handled_id(&f);
+        a.send(json!({"type": "oauthCode", "id": 4, "service": "notion", "redirect": "code=a&state=s"}));
+        handled_id(&f);
+        a.send(secret_save(5));
+        assert_eq!(a.next(), json!({"type": "error", "id": 5, "code": "not-for-remote"}));
+        assert!(f.handled.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_refused_request_leaves_no_id_behind() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(json!({"type": "saveSettings", "id": 4, "settings": {}}));
+        assert_eq!(a.next(), json!({"type": "error", "id": 4, "code": "not-for-clients"}));
+        assert_eq!(remembered(&f), 0);
+        let mut r = connect(&f);
+        r.send(hello(PROTOCOL, Some(true)));
+        r.next();
+        r.send(secret_save(5));
+        assert_eq!(r.next(), json!({"type": "error", "id": 5, "code": "not-for-remote"}));
+        assert_eq!(remembered(&f), 0);
     }
 
     #[test]

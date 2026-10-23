@@ -6,6 +6,7 @@ use crate::term::editor::{bang, Editor, Trigger};
 use crate::term::picker::{models_for_picker, Item, Outcome, Picker};
 use crate::term::rewind::{self, Rewind};
 use crate::term::schedules::{self, Schedules};
+use crate::term::signin::{self, SignIn};
 use crate::term::state::Session;
 use crate::term::texts::t;
 use crate::term::Key;
@@ -102,10 +103,14 @@ enum Pending {
     SchedulesChange,
     /// Enter on a paused task: the fresh list that says whether it may be resumed (it is not waiting for approval).
     SchedulesResume(String),
+    /// `/signin`'s `startOauth` or `startMcpOauth` (the service): answered with the URL and then the result.
+    SignIn(String),
+    /// An address sent to the sign-in: only a refusal answers it.
+    SignInCode,
 }
 
 /// The client's own commands, before the session's.
-const OWN: [(&str, &str); 7] = [
+const OWN: [(&str, &str); 8] = [
     ("exit", "term.cmd.exit"),
     ("verbose", "term.cmd.verbose"),
     ("model", "term.cmd.model"),
@@ -113,6 +118,7 @@ const OWN: [(&str, &str); 7] = [
     ("undo", "term.cmd.undo"),
     ("context", "term.cmd.context"),
     ("schedules", "term.cmd.schedules"),
+    ("signin", "term.cmd.signin"),
 ];
 
 pub struct App {
@@ -153,6 +159,8 @@ pub struct App {
     rewind: Option<Rewind>,
     /// `/schedules`'s panel, while it is open.
     schedules: Option<Schedules>,
+    /// `/signin`'s panel, while it is open.
+    signin: Option<SignIn>,
     /// What each open session is doing, and since when (ms).
     statuses: HashMap<String, (String, i64)>,
     /// The time now (ms), from `clock`.
@@ -195,6 +203,7 @@ impl App {
             strip_rows: None,
             rewind: None,
             schedules: None,
+            signin: None,
             now_ms: 0,
         };
         let load = app.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
@@ -358,6 +367,7 @@ impl App {
         self.picker = None;
         self.commands = None;
         self.drop_schedules();
+        self.drop_signin();
         self.scroll = 0;
         self.screen = Screen::Session;
         self.note = None;
@@ -371,6 +381,7 @@ impl App {
         self.dialog = None;
         self.picker = None;
         self.drop_schedules();
+        self.drop_signin();
         let load = self.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
         vec![Effect::Detach, load]
     }
@@ -405,6 +416,13 @@ impl App {
                 }
                 None => vec![self.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id })],
             },
+            Input::Paste(text) if self.signin.is_some() => {
+                // The address goes to the panel whole: its newlines are not Enter, and it never reaches the editor.
+                if let Some(open) = self.signin.as_mut() {
+                    open.paste(&text);
+                }
+                Vec::new()
+            }
             Input::Paste(text) => {
                 let text = text.replace("\r\n", "\n").replace('\r', "\n");
                 let mut effects = Vec::new();
@@ -450,6 +468,10 @@ impl App {
         if let Some(open) = self.rewind.as_mut() {
             let outcome = open.key(press.key);
             return self.rewound(outcome);
+        }
+        if let Some(open) = self.signin.as_mut() {
+            let outcome = open.key(press.key);
+            return self.signed_in_outcome(outcome);
         }
         if let Some(open) = self.schedules.as_mut() {
             let outcome = open.key(press.key);
@@ -638,6 +660,43 @@ impl App {
         }
     }
 
+    /// The panel goes, and so do the requests it waits on: a late reply is no one's (the dock's own sign-in times out on
+    /// its own).
+    fn drop_signin(&mut self) {
+        self.signin = None;
+        self.pending.retain(|_, p| !matches!(p, Pending::SignIn(_) | Pending::SignInCode));
+    }
+
+    fn signed_in_outcome(&mut self, outcome: signin::Outcome) -> Vec<Effect> {
+        match outcome {
+            signin::Outcome::None => Vec::new(),
+            signin::Outcome::Close => {
+                self.drop_signin();
+                Vec::new()
+            }
+            signin::Outcome::Send { service, redirect } => {
+                vec![self.request(Pending::SignInCode, |id| PageMessage::OAuthCode { id, service, redirect })]
+            }
+        }
+    }
+
+    /// A line in the conversation, in the client's own words.
+    fn say(&mut self, tone: crate::term::state::Tone, key: &str, vars: serde_json::Value) {
+        self.session.entries.push(crate::term::state::Entry::Notice {
+            tone,
+            text: crate::term::state::Text::Key { key: key.into(), vars },
+        });
+    }
+
+    /// The sign-in is over without a result of its own to show: `code` is the dock's error key.
+    fn sign_in_failed(&mut self, code: &str) {
+        self.drop_signin();
+        let lang = self.config.lang.clone();
+        let text = t(&lang, &format!("ob.error.{code}"), &json!({}));
+        let why = if text.starts_with("ob.error.") { code.to_string() } else { text };
+        self.say(crate::term::state::Tone::Warn, "term.signin.failed", json!({ "why": why }));
+    }
+
     /// The most rows a panel in the editor's place takes: two thirds of the screen.
     fn panel_rows(&self) -> usize {
         usize::from(self.height * 2 / 3).max(8)
@@ -678,6 +737,26 @@ impl App {
                 }
                 "schedules" => {
                     return vec![self.request(Pending::SchedulesOpen, |id| PageMessage::SchedulesList { id })]
+                }
+                "signin" => {
+                    let services: Vec<&str> = words.collect();
+                    return match services[..] {
+                        ["anthropic"] => {
+                            self.drop_signin();
+                            vec![self.request(Pending::SignIn("anthropic".into()), |id| PageMessage::StartOAuth { id })]
+                        }
+                        ["notion"] => {
+                            self.drop_signin();
+                            vec![self.request(Pending::SignIn("notion".into()), |id| PageMessage::StartMcpOAuth {
+                                id,
+                                service: "notion".into(),
+                            })]
+                        }
+                        _ => {
+                            self.say(crate::term::state::Tone::Warn, "term.signin.usage", json!({}));
+                            Vec::new()
+                        }
+                    };
                 }
                 "context" => {
                     return vec![self.session_request(Pending::Context, |id| PageMessage::PiCommand {
@@ -734,6 +813,9 @@ impl App {
     ) -> Option<Vec<ratatui::text::Line<'static>>> {
         if let Some(open) = &self.rewind {
             return Some(open.lines(&self.config.lang, palette, width, self.panel_rows()));
+        }
+        if let Some(open) = &self.signin {
+            return Some(open.lines(&self.config.lang, palette, width));
         }
         if let Some(open) = &self.schedules {
             return Some(open.lines(&self.config.lang, palette, width, self.panel_rows()));
@@ -857,7 +939,40 @@ impl App {
                             },
                         });
                     }
+                    // The address was not this sign-in's: the panel waits for another.
+                    Some(Pending::SignInCode) if code == "bad-redirect" => {
+                        if let Some(open) = self.signin.as_mut() {
+                            open.refuse();
+                        }
+                    }
+                    Some(Pending::SignInCode) if code == "no-sign-in" => {
+                        self.drop_signin();
+                        self.say(crate::term::state::Tone::Warn, "term.signin.nothing", json!({}));
+                    }
+                    Some(Pending::SignInCode | Pending::SignIn(_)) => self.sign_in_failed(&code),
                     _ => {}
+                }
+                Vec::new()
+            }
+            DockMessage::OAuthUrl { id, url } => {
+                if let Some(Pending::SignIn(service)) = self.pending.get(&id) {
+                    if self.screen == Screen::Session {
+                        self.rewind = None;
+                        self.context = None;
+                        self.schedules = None;
+                        self.signin = Some(SignIn::new(service, &url));
+                    }
+                }
+                Vec::new()
+            }
+            DockMessage::OAuthResult { id, ok, error } => {
+                if let Some(Pending::SignIn(_)) = self.pending.get(&id) {
+                    if ok {
+                        self.drop_signin();
+                        self.say(crate::term::state::Tone::Info, "term.signin.done", json!({}));
+                    } else {
+                        self.sign_in_failed(&error.unwrap_or_else(|| "oauth-failed".into()));
+                    }
                 }
                 Vec::new()
             }
@@ -1864,6 +1979,196 @@ mod tests {
         let [Effect::Send(PageMessage::SchedulesList { id })] = effects[..] else { panic!("{effects:?}") };
         app.update(Input::Dock(DockMessage::Error { id, code: "not-allowed".into() }));
         assert!(matches!(app.session().entries.last(), Some(crate::term::state::Entry::Notice { .. })));
+    }
+
+    // ---- /signin ---------------------------------------------------------------------------------------------
+
+    const REDIRECT: &str = "http://localhost:53692/callback?code=SECRETCODE&state=st";
+
+    fn last_notice(app: &App) -> Option<(crate::term::state::Tone, String, String)> {
+        match app.session().entries.last() {
+            Some(crate::term::state::Entry::Notice { tone, text: crate::term::state::Text::Key { key, vars } }) => {
+                Some((*tone, key.clone(), vars.to_string()))
+            }
+            _ => None,
+        }
+    }
+
+    /// An app whose `/signin <service>` has been answered with `url`: the panel is open. Returns it with the id of the
+    /// request that started the sign-in.
+    fn signing_in(service: &str, url: &str) -> (App, u64) {
+        let mut app = attached();
+        typed(&mut app, &format!("/signin {service}"));
+        let effects = key(&mut app, Key::Enter);
+        let id = match &effects[..] {
+            [Effect::Send(PageMessage::StartOAuth { id })] if service == "anthropic" => *id,
+            [Effect::Send(PageMessage::StartMcpOAuth { id, service: s })] if s == service => *id,
+            other => panic!("{other:?}"),
+        };
+        app.update(Input::Dock(DockMessage::OAuthUrl { id, url: url.into() }));
+        (app, id)
+    }
+
+    #[test]
+    fn signin_shows_the_url_then_sends_the_pasted_address() {
+        let url = "https://auth.example/authorize?client_id=abc&redirect_uri=http%3A%2F%2F127.0.0.1%3A5%2Fcallback&state=st&code_challenge=0123456789abcdef";
+        let mut app = attached();
+        typed(&mut app, "/signin notion");
+        let effects = key(&mut app, Key::Enter);
+        let [Effect::Send(PageMessage::StartMcpOAuth { id, service })] = &effects[..] else { panic!("{effects:?}") };
+        assert_eq!(service, "notion");
+        let id = *id;
+        assert_eq!(app.editor.text(), "");
+        assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_none(), "it opens with the URL");
+
+        app.update(Input::Dock(DockMessage::OAuthUrl { id, url: url.into() }));
+        let shown = panel_text(&app);
+        // wrapped to the screen, every character of the address still there in order
+        assert!(shown.replace('\n', "").contains(url), "{shown}");
+        assert!(shown.lines().all(|l| l.chars().count() <= 80), "{shown}");
+        assert!(shown.to_lowercase().contains("browser"), "{shown}");
+
+        let entries = app.session().entries.len();
+        let effects = app.update(Input::Paste(format!("{REDIRECT}\n")));
+        assert!(effects.is_empty(), "a paste does not send by itself: {effects:?}");
+        assert_eq!(app.editor.text(), "", "the editor is not where it goes");
+        assert_eq!(app.session().entries.len(), entries, "and the conversation never hears of it");
+        assert!(!panel_text(&app).contains("SECRETCODE"), "it is not echoed back");
+
+        let effects = key(&mut app, Key::Enter);
+        let [Effect::Send(PageMessage::OAuthCode { id: code_id, service, redirect })] = &effects[..] else {
+            panic!("{effects:?}")
+        };
+        assert_ne!(*code_id, id);
+        assert_eq!((service.as_str(), redirect.as_str()), ("notion", REDIRECT));
+
+        app.update(Input::Dock(DockMessage::OAuthResult { id, ok: true, error: None }));
+        assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_none(), "the sign-in is over");
+        let (tone, key, _) = last_notice(&app).expect("a notice");
+        assert_eq!((tone, key.as_str()), (crate::term::state::Tone::Info, "term.signin.done"));
+        assert!(t("en", "term.signin.done", &json!({})).to_lowercase().contains("signed in"));
+    }
+
+    #[test]
+    fn signin_anthropic_starts_claudes_sign_in_and_takes_typed_text_too() {
+        let (mut app, id) = signing_in("anthropic", "https://claude.example/oauth");
+        typed(&mut app, "code=a&state=b");
+        key(&mut app, Key::Backspace);
+        typed(&mut app, "c");
+        let effects = key(&mut app, Key::Enter);
+        let [Effect::Send(PageMessage::OAuthCode { service, redirect, .. })] = &effects[..] else {
+            panic!("{effects:?}")
+        };
+        assert_eq!((service.as_str(), redirect.as_str()), ("anthropic", "code=a&state=c"));
+        assert_eq!(app.editor.text(), "");
+        let _ = id;
+    }
+
+    #[test]
+    fn signin_without_a_known_service_says_how_to_use_it() {
+        for line in ["/signin", "/signin figma", "/signin anthropic notion"] {
+            let mut app = attached();
+            typed(&mut app, line);
+            let effects = key(&mut app, Key::Enter);
+            assert!(effects.is_empty(), "{line}: {effects:?}");
+            let (_, key, _) = last_notice(&app).expect("the usage");
+            assert_eq!(key, "term.signin.usage", "{line}");
+            assert!(t("en", "term.signin.usage", &json!({})).contains("anthropic"));
+            assert!(t("es", "term.signin.usage", &json!({})).contains("notion"));
+        }
+    }
+
+    #[test]
+    fn a_refused_address_is_said_and_the_panel_keeps_waiting() {
+        let (mut app, _) = signing_in("notion", "https://auth.example/a");
+        app.update(Input::Paste("not an address".into()));
+        let effects = key(&mut app, Key::Enter);
+        let [Effect::Send(PageMessage::OAuthCode { id, .. })] = &effects[..] else { panic!("{effects:?}") };
+        let before = panel_text(&app);
+        assert!(!before.contains("not an address"), "{before}");
+        app.update(Input::Dock(DockMessage::Error { id: *id, code: "bad-redirect".into() }));
+        let shown = panel_text(&app).split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(shown.contains(&t("en", "term.signin.refused", &json!({}))), "{shown}");
+        assert!(last_notice(&app).is_none(), "it is the panel that says it");
+        // the person pastes it again
+        app.update(Input::Paste(REDIRECT.into()));
+        let effects = key(&mut app, Key::Enter);
+        assert!(
+            matches!(&effects[..], [Effect::Send(PageMessage::OAuthCode { redirect, .. })] if redirect == REDIRECT)
+        );
+    }
+
+    #[test]
+    fn an_empty_address_is_not_sent() {
+        let (mut app, _) = signing_in("notion", "https://auth.example/a");
+        assert!(key(&mut app, Key::Enter).is_empty());
+    }
+
+    #[test]
+    fn a_sign_in_nobody_waits_for_says_so_and_closes() {
+        let (mut app, _) = signing_in("notion", "https://auth.example/a");
+        app.update(Input::Paste(REDIRECT.into()));
+        let effects = key(&mut app, Key::Enter);
+        let [Effect::Send(PageMessage::OAuthCode { id, .. })] = &effects[..] else { panic!("{effects:?}") };
+        app.update(Input::Dock(DockMessage::Error { id: *id, code: "no-sign-in".into() }));
+        assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_none());
+        let (tone, key, _) = last_notice(&app).expect("a notice");
+        assert_eq!((tone, key.as_str()), (crate::term::state::Tone::Warn, "term.signin.nothing"));
+    }
+
+    #[test]
+    fn a_failed_sign_in_says_why_in_the_dock_s_words() {
+        let (mut app, id) = signing_in("anthropic", "https://claude.example/oauth");
+        app.update(Input::Dock(DockMessage::OAuthResult { id, ok: false, error: Some("oauth-timeout".into()) }));
+        assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_none());
+        let (tone, key, vars) = last_notice(&app).expect("a notice");
+        assert_eq!((tone, key.as_str()), (crate::term::state::Tone::Warn, "term.signin.failed"));
+        assert!(vars.contains(&t("en", "ob.error.oauth-timeout", &json!({}))), "{vars}");
+        assert!(!vars.contains("ob.error"), "the key was found: {vars}");
+    }
+
+    #[test]
+    fn a_sign_in_the_dock_cannot_start_says_so_without_a_panel() {
+        let mut app = attached();
+        typed(&mut app, "/signin notion");
+        let effects = key(&mut app, Key::Enter);
+        let [Effect::Send(PageMessage::StartMcpOAuth { id, .. })] = &effects[..] else { panic!("{effects:?}") };
+        app.update(Input::Dock(DockMessage::OAuthResult {
+            id: *id,
+            ok: false,
+            error: Some("network-unavailable".into()),
+        }));
+        assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_none());
+        assert_eq!(last_notice(&app).map(|n| n.1).as_deref(), Some("term.signin.failed"));
+    }
+
+    #[test]
+    fn esc_closes_the_panel_and_a_late_result_is_ignored() {
+        let (mut app, id) = signing_in("notion", "https://auth.example/a");
+        app.update(Input::Paste(REDIRECT.into()));
+        assert!(key(&mut app, Key::Esc).is_empty());
+        assert!(app.panel_lines(&crate::term::theme::Palette::truecolor(), 80).is_none());
+        let entries = app.session().entries.len();
+        app.update(Input::Dock(DockMessage::OAuthResult { id, ok: true, error: None }));
+        assert_eq!(app.session().entries.len(), entries);
+        // and what was pasted is gone: the next panel starts empty
+        let (mut again, _) = signing_in("notion", "https://auth.example/b");
+        assert!(key(&mut again, Key::Enter).is_empty());
+    }
+
+    #[test]
+    fn the_pasted_address_is_not_in_the_editor_history() {
+        let (mut app, _) = signing_in("notion", "https://auth.example/a");
+        app.update(Input::Paste(REDIRECT.into()));
+        key(&mut app, Key::Enter);
+        key(&mut app, Key::Esc);
+        key(&mut app, Key::Up);
+        assert!(!app.editor.text().contains("SECRETCODE"), "{}", app.editor.text());
+    }
+
+    #[test]
+    fn signin_is_one_of_the_clients_own_commands() {
+        assert!(OWN.iter().any(|(name, key)| *name == "signin" && !t("es", key, &json!({})).starts_with("term.")));
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! PKCE and the `resource` it wants, and trades the code that comes back to a loopback address for
 //! tokens. The result is a record in the shape Pi stores in `mcp-auth.json`.
 
-use super::loopback::wait_for_code;
+use super::loopback::{wait_for_code, Pastes};
 use super::pkce::{pkce, Pkce};
 use super::OAuthError;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -184,7 +184,12 @@ impl McpSignIn {
     /// Waits for the browser (up to `timeout`), trades the code for tokens, and returns the record to
     /// store in `mcp-auth.json`.
     pub fn wait(self, timeout: Duration) -> Result<Value, OAuthError> {
-        let code = wait_for_code(&self.listener, CALLBACK_PATH, &self.state, timeout)?;
+        self.wait_with_paste(timeout, None)
+    }
+
+    /// Like `wait`, and an address pasted meanwhile (the browser was on another computer) counts as the callback.
+    pub fn wait_with_paste(self, timeout: Duration, paste: Option<&Pastes>) -> Result<Value, OAuthError> {
+        let code = wait_for_code(&self.listener, CALLBACK_PATH, &self.state, timeout, paste)?;
         let token_endpoint = endpoint(&self.discovery.authorization_server, "token_endpoint")?;
         let client_id = self.client_information["client_id"].as_str().unwrap_or_default();
         let tokens: Value = ureq::post(&token_endpoint)
@@ -354,6 +359,26 @@ mod tests {
         let go = std::thread::spawn(move || browser(&redirect, &format!("error=access_denied&state={state}")));
         assert_eq!(sign_in.wait(Duration::from_secs(5)).unwrap_err(), OAuthError::Denied("access_denied".into()));
         go.join().unwrap();
+    }
+
+    #[test]
+    fn a_pasted_redirect_finishes_the_sign_in_without_the_browser_reaching_the_listener() {
+        use crate::oauth::loopback::{Paste, Pastes};
+        let server = fake(true, 201);
+        let sign_in = start(&format!("{}/mcp", server.base)).unwrap();
+        let q = query(&sign_in.url);
+        let pasted = format!("{}?code=pasted-code&state={}", q["redirect_uri"], q["state"]);
+        let (sender, inbox) = std::sync::mpsc::channel();
+        sender.send(Paste { text: pasted, tag: 1 }).unwrap();
+        let refused = |_: u64| panic!("a good paste is not refused");
+        let record = sign_in
+            .wait_with_paste(Duration::from_secs(5), Some(&Pastes { inbox: &inbox, refused: &refused }))
+            .unwrap();
+        assert_eq!(record["tokens"]["access_token"], "at");
+        let token_request = &server.requests("POST", "/token")[0].body;
+        let form: std::collections::HashMap<String, String> =
+            url::form_urlencoded::parse(token_request.as_bytes()).into_owned().collect();
+        assert_eq!(form["code"], "pasted-code");
     }
 
     #[test]

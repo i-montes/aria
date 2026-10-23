@@ -1,7 +1,7 @@
 //! Anthropic (Claude Pro/Max) sign-in: OAuth authorization code + PKCE with a localhost callback.
 //! The values are the ones Pi's own `/login` uses, which is what the Claude Max route runs on today.
 
-use super::loopback::wait_for_code;
+use super::loopback::{wait_for_code, Pastes};
 use super::pkce::{pkce, Pkce};
 use super::OAuthError;
 use crate::auth::Credential;
@@ -77,7 +77,12 @@ pub fn start() -> Result<SignIn, OAuthError> {
 impl SignIn {
     /// Waits for the browser to come back (up to `timeout`), then exchanges the code for tokens.
     pub fn wait(self, timeout: Duration) -> Result<Credential, OAuthError> {
-        let code = wait_for_code(&self.listener, CALLBACK_PATH, &self.pkce.verifier, timeout)?;
+        self.wait_with_paste(timeout, None)
+    }
+
+    /// Like `wait`, and an address pasted meanwhile (the browser was on another computer) counts as the callback.
+    pub fn wait_with_paste(self, timeout: Duration, paste: Option<&Pastes>) -> Result<Credential, OAuthError> {
+        let code = wait_for_code(&self.listener, CALLBACK_PATH, &self.pkce.verifier, timeout, paste)?;
         self.exchange(&code)
     }
 

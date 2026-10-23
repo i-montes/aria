@@ -64,6 +64,12 @@ pub enum PageMessage {
     /// Start an MCP server's OAuth sign-in (`service` is `notion`).
     #[serde(rename = "startMcpOauth")]
     StartMcpOAuth { id: u64, service: String },
+    /// The address a person pasted because the browser could not reach this computer's loopback listener (a sign-in
+    /// started from a terminal elsewhere): the whole redirect address or only its query. `service` is the pending
+    /// sign-in's (`anthropic` or `notion`). Replies `error` (`no-sign-in`, `bad-redirect`); success is answered by the
+    /// sign-in's own `oauthResult`. Holds the authorization code: never log it.
+    #[serde(rename = "oauthCode")]
+    OAuthCode { id: u64, service: String, redirect: String },
     #[serde(rename = "openUrl")]
     OpenUrl { url: String },
     /// A chat message. `behavior` is `steer` or `followUp` when a run is already going. `attachments` are the files the
@@ -458,6 +464,10 @@ mod tests {
         assert_eq!(
             page(r#"{"type":"startMcpOauth","id":5,"service":"notion"}"#),
             PageMessage::StartMcpOAuth { id: 5, service: "notion".into() }
+        );
+        assert_eq!(
+            page(r#"{"type":"oauthCode","id":8,"service":"notion","redirect":"code=a&state=b"}"#),
+            PageMessage::OAuthCode { id: 8, service: "notion".into(), redirect: "code=a&state=b".into() }
         );
         assert_eq!(page(r#"{"type":"openUrl","url":"https://x"}"#), PageMessage::OpenUrl { url: "https://x".into() });
         assert_eq!(

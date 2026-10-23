@@ -15,6 +15,8 @@ pub enum OAuthError {
     NoCode,
     #[error("sign-in timed out")]
     Timeout,
+    #[error("a newer sign-in replaced this one")]
+    Cancelled,
     #[error("unexpected token response: {0}")]
     BadToken(String),
     #[error("network error: {0}")]
