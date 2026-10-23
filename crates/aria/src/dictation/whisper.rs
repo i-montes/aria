@@ -38,9 +38,8 @@ impl Transcriber for Whisper {
 
     fn transcribe(&mut self, audio: &[f32], language: &str) -> Result<String, DictationError> {
         let context = self.context.as_ref().ok_or_else(|| failed("the model is not loaded"))?;
-        if audio.len() < 1600 {
-            return Ok(String::new()); // under a tenth of a second: nothing was said
-        }
+        // Only the speech, and only when there is more than a second of it: given silence, Whisper makes up words.
+        let Some(audio) = super::audio::speech(audio) else { return Ok(String::new()) };
         let mut state = context.create_state().map_err(failed)?;
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_language(Some(if language == "es" { "es" } else { "en" }));
@@ -49,8 +48,12 @@ impl Transcriber for Whisper {
         params.set_print_special(false);
         params.set_print_timestamps(false);
         params.set_no_timestamps(true);
+        params.set_suppress_blank(true);
+        params.set_suppress_nst(true);
         state.full(params, audio).map_err(failed)?;
-        Ok(state.as_iter().map(|segment| segment.to_string()).collect::<String>().trim().to_string())
+        let segments: Vec<(String, f32)> =
+            state.as_iter().map(|segment| (segment.to_string(), segment.no_speech_probability())).collect();
+        Ok(clean(&segments))
     }
 
     fn unload(&mut self) {
@@ -58,9 +61,88 @@ impl Transcriber for Whisper {
     }
 }
 
+/// What Whisper heard, without what it makes up: segments it says are probably not speech, and the closing lines of
+/// the videos it learned from ("Gracias por ver el video") when they are a whole segment.
+pub fn clean(segments: &[(String, f32)]) -> String {
+    segments
+        .iter()
+        .filter(|(text, no_speech)| *no_speech <= NO_SPEECH && !MADE_UP.contains(&plain(text).as_str()))
+        .map(|(text, _)| text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Above this, Whisper itself thinks a segment is not speech.
+const NO_SPEECH: f32 = 0.6;
+
+/// The lines Whisper makes up from silence (the endings of the videos it learned from), as `plain` writes them.
+const MADE_UP: &[&str] = &[
+    "gracias por ver el video",
+    "gracias por ver el video hasta la proxima",
+    "gracias por ver",
+    "suscribete",
+    "suscribete al canal",
+    "no olvides suscribirte",
+    "subtitulos realizados por la comunidad de amaraorg",
+    "subtitulos por la comunidad de amaraorg",
+    "thanks for watching",
+    "thank you for watching",
+    "please subscribe",
+    "subtitles by the amaraorg community",
+];
+
+/// Lower case, no accents, letters and digits and single spaces only.
+fn plain(text: &str) -> String {
+    let folded: String = text
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'ä' => 'a',
+            'é' | 'è' | 'ë' => 'e',
+            'í' | 'ì' | 'ï' => 'i',
+            'ó' | 'ò' | 'ö' => 'o',
+            'ú' | 'ù' | 'ü' => 'u',
+            'ñ' => 'n',
+            c if c.is_alphanumeric() || c.is_whitespace() => c,
+            _ => ' ',
+        })
+        .collect();
+    folded.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn seg(text: &str, no_speech: f32) -> (String, f32) {
+        (text.into(), no_speech)
+    }
+
+    #[test]
+    fn made_up_closings_and_non_speech_go() {
+        let heard = [
+            seg(" Revisa el despliegue de Vercel.", 0.02),
+            seg(" Gracias por ver el video.", 0.1),
+            seg(" ¡Suscríbete!", 0.05),
+            seg(" algo que no se oyó", 0.9),
+            seg(" y avísame.", 0.03),
+        ];
+        assert_eq!(clean(&heard), "Revisa el despliegue de Vercel. y avísame.");
+    }
+
+    #[test]
+    fn a_closing_said_inside_a_sentence_stays() {
+        assert_eq!(
+            clean(&[seg(" Dile gracias por ver el video a Ana.", 0.02)]),
+            "Dile gracias por ver el video a Ana."
+        );
+    }
+
+    #[test]
+    fn english_closings_go_too() {
+        assert_eq!(clean(&[seg(" Thanks for watching!", 0.1)]), "");
+    }
 
     /// A 16 kHz mono 16-bit WAV's samples (its `data` chunk).
     fn wav(path: &str) -> Vec<f32> {
