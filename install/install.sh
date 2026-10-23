@@ -135,6 +135,10 @@ install_binary() {
   if [ "$PLATFORM" = Darwin ]; then
     run mkdir -p "$BIN_DIR"
     run install -m 755 "$SOURCE" "$BIN_DIR/aria"
+    # The linker signs it ad hoc under a name that changes with every build and leaves its Info.plist (the microphone's
+    # reason) unbound; signed again ad hoc as com.aria.dock, the plist is bound and the name stays. macOS still asks for
+    # the microphone once per version (an ad hoc signature is a new app to it on every update).
+    run codesign --force --sign - --identifier com.aria.dock "$BIN_DIR/aria" || warn "could not sign $BIN_DIR/aria"
   else
     run install -Dm755 "$SOURCE" "$BIN_DIR/aria"
   fi
