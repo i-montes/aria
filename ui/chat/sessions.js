@@ -97,7 +97,18 @@ export function addScheduled(tabs, id, title, schedule) {
  * taking the focus, and only once. */
 export function addFromDock(tabs, id, title = '') {
   if (find(tabs, id)) return tabs
-  return withSessions(tabs, [...tabs.sessions, entry(id, title)])
+  const added = withSessions(tabs, [...tabs.sessions, entry(id, title)])
+  // The replacement of the last tab closed: nothing is active, so it is.
+  return tabs.active && find(tabs, tabs.active) ? added : { ...added, active: id }
+}
+
+/** A tab closed elsewhere (a terminal's `/exit`): the active one moves to another regular tab; with none left nothing is
+ * active until the dock's replacement comes (`addFromDock`). */
+export function removeFromDock(tabs, id) {
+  if (!find(tabs, id)) return tabs
+  const rest = tabs.sessions.filter((s) => s.id !== id)
+  const active = tabs.active === id ? (rest.find((s) => !s.schedule)?.id ?? null) : tabs.active
+  return { ...withSessions(tabs, rest), active }
 }
 
 /** The tabs the bar shows: every regular one, and a scheduled one while it is active, unread, working or waiting. */

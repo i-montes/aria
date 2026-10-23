@@ -25,7 +25,7 @@ import { renderTasks } from './parts/tasks.js'
 import { autoCollapsed, renderTrace, visibleRows } from './parts/trace.js'
 import { formatElapsed } from './parts/working.js'
 import {
-  MAX_SESSIONS, addFromDock, addScheduled, addSession, applyStatus, closeSession, createTabs, hideScheduled, regularCount, removeSession, renameSession,
+  MAX_SESSIONS, addFromDock, addScheduled, removeFromDock, addSession, applyStatus, closeSession, createTabs, hideScheduled, regularCount, removeSession, renameSession,
   selectSession, setTitleIfEmpty, shownSessions, toSaved, undoClose,
 } from './sessions.js'
 import { addNote, addNotice, addQueued, addUser, answerDialog, askEarlier, tookBack, answersForCard, clearQueue, createChat, reduce } from './state.js'
@@ -2059,6 +2059,29 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
       tabs = addFromDock(tabs, id, title ?? '')
       if (tabs === before) return
       save()
+      // The replacement of the last tab closed is the active one now: its conversation loads.
+      if (tabs.active === id && before.active !== id) post({ type: 'chatLoad' })
+      render()
+    },
+    /** A tab closed elsewhere (the dock's `sessionRemoved`: a terminal's `/exit`). The active one moves to another tab,
+     * which loads; with none left nothing is saved until the dock's replacement comes (`addDockTab`). */
+    removeDockTab(id) {
+      if (!tabs.sessions.some((s) => s.id === id)) return
+      const wasActive = id === tabs.active
+      if (wasActive) closePicker(false)
+      tabs = removeFromDock(tabs, id)
+      chats.delete(id)
+      drafts.delete(id)
+      traces.delete(id)
+      if (!tabs.active) return render()
+      save()
+      if (wasActive) {
+        ui.view = 'chat'
+        ui.job = null
+        stopOutputs()
+        if (input) input.value = drafts.get(tabs.active) ?? ''
+        post({ type: 'chatLoad' })
+      }
       render()
     },
     /** A task the model made or widened to write waits for the person (the dock's `scheduleAwaiting`): the panel

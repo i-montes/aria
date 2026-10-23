@@ -87,7 +87,7 @@ const handlers = {
   scheduleRemoved: (message) => booted.then(() => chat.removeScheduledTab(message.id)),
   // A tab a terminal opened or closed (or the one that replaces the last tab closed).
   sessionAdded: (message) => booted.then(() => chat.addDockTab(message.session ?? {})),
-  sessionRemoved: (message) => booted.then(() => chat.removeScheduledTab(message.session)),
+  sessionRemoved: (message) => booted.then(() => chat.removeDockTab(message.session)),
   scheduleAwaiting: () => booted.then(() => chat.showAwaiting()),
   // Aria's version, sent once when the dock starts; the settings overview shows it.
   version: (message) => {

@@ -10,6 +10,7 @@ import {
   removeSession,
   shownSessions,
   addFromDock,
+  removeFromDock,
 } from './sessions.js'
 
 let counter = 0
@@ -242,7 +243,22 @@ describe('tabs the dock opens (a terminal)', () => {
   })
 
   test('the one a terminal closed goes away', () => {
-    const tabs = removeSession(addFromDock(base(), 'b', ''), 'b')
+    const tabs = removeFromDock(addFromDock(base(), 'b', ''), 'b')
     expect(tabs.sessions.map((s) => s.id)).toEqual(['a'])
+    expect(tabs.active).toBe('a')
+  })
+
+  test('closing the active one moves to another regular tab, never to itself', () => {
+    const tabs = removeFromDock(addFromDock(base(), 'b', ''), 'a')
+    expect(tabs.sessions.map((s) => s.id)).toEqual(['b'])
+    expect(tabs.active).toBe('b')
+  })
+
+  test('closing the last one leaves no active tab until the dock sends its replacement, which takes the focus', () => {
+    const empty = removeFromDock(base(), 'a')
+    expect(empty.sessions).toEqual([])
+    expect(empty.active).toBe(null)
+    const replaced = addFromDock(empty, 'n', '')
+    expect(replaced.active).toBe('n')
   })
 })
