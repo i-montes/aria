@@ -54,6 +54,8 @@ const OWN: &[(&str, &str, &str)] = &[
     ),
     ("term.queued", "queued", "en cola"),
     ("term.free", "free", "gratis"),
+    ("term.week", "wk", "sem"),
+    ("term.month", "mo", "mes"),
     ("term.verbose.on", "showing everything", "mostrando todo"),
     ("term.verbose.off", "showing one line per turn", "una línea por turno"),
     ("term.cmd.exit", "close this session", "cerrar esta sesión"),

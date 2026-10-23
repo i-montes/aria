@@ -553,11 +553,13 @@ impl Session {
         entries
     }
 
-    /// What the turn that starts at entry `turn` did, up to the next message of the person.
+    /// What the turn that starts at entry `turn` (the person's message, or the turn's first step) did, up to the next
+    /// message of the person.
     pub fn turn_summary(&self, turn: usize) -> TurnSummary {
         let mut summary = TurnSummary::default();
-        for entry in self.entries.iter().skip(turn + 1) {
+        for (i, entry) in self.entries.iter().enumerate().skip(turn) {
             match entry {
+                Entry::User { .. } if i == turn => {}
                 Entry::User { .. } => break,
                 Entry::Tools { calls } => {
                     for call in calls.iter().filter(|c| !c.think) {
