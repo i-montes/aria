@@ -111,8 +111,12 @@ every session, and leaving the terminal stops nothing.
 
 - **`clients.rs`** — `clients.sock` beside the control socket (folder `700`, socket `600`). A client speaks the page's
   messages, one JSON object per line: what `handlers::is_chat` accepts goes to the chat's worker, `secretSave` to the
-  handlers, anything else is answered `error { code: "not-for-clients" }`. Client-only lines: `attach { session }`,
-  `detach`, `focus { focused }`. `Hub::route` delivers each dock message: a reply to a page request (a numeric id) to
+  handlers, anything else is answered `error { code: "not-for-clients" }` (the scheduled tasks' list, pause and
+  delete go to the chat's worker too). Client-only lines: `hello { protocol, version, remote? }` (only as a
+  connection's first line: answered with the hub's own `hello`, and a different `protocol`, `aria_core::bridge::PROTOCOL`,
+  is answered `error { code: "protocol-mismatch" }` and the connection closed; `remote: true` marks a client that came
+  in from another machine, which `secretSave` and a `!command` answer `not-for-remote`, and a later `hello` cannot lift
+  the mark), `attach { session }`, `detach`, `focus { focused }`. `Hub::route` delivers each dock message: a reply to a page request (a numeric id) to
   the page only; a client's request ids are moved to `2^40 + client × 10^6 + id` going in and back coming out, so its
   reply reaches it alone (a `sessionAdded` it asked for reaches everyone, without its id); a `session` message to the
   page and the clients attached to that session; the rest to everyone. A client whose queue (1024 lines) is full is

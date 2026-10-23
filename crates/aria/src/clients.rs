@@ -6,10 +6,14 @@
 //!   id) and its own back coming out, so the reply reaches only the one that asked; any other reply (a numeric id) is the
 //!   page's and goes to the page only, whatever its id (the page counts from `Date.now() * 1000`).
 //! - A client that does not read is dropped once its queue (`QUEUE` lines) is full: the dock never waits for one.
-//! - Client-only lines: `attach { session }`, `detach`, `focus { focused }`. A session is seen while a client attached
+//! - Client-only lines: `hello { protocol, version, remote? }`, `attach { session }`, `detach`, `focus { focused }`. A session is seen while a client attached
 //!   to it has the focus (a client that never said counts as focused).
+//! - `hello` only counts as a connection's first line (any other first line means there is none: a local terminal): the
+//!   hub answers with its own `hello` (no `remote`), and a different `protocol` is answered `protocol-mismatch` and the
+//!   connection closed. `remote: true` marks a client that came in from another machine: it can never send `secretSave`
+//!   or a `!command` (`not-for-remote`), and a later `hello` cannot lift the mark.
 
-use aria_core::bridge::{DockMessage, PageMessage};
+use aria_core::bridge::{DockMessage, PageMessage, PROTOCOL};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -28,11 +32,16 @@ pub fn socket_path() -> PathBuf {
     crate::control::control_socket_path().with_file_name("clients.sock")
 }
 
-/// What a terminal may ask the dock: its sessions, and inside one what the client's screen does. Nothing that changes
-/// the dock's own state (what it shows, its tabs' order, its engines, the schedules, dictation).
+/// What a terminal may ask the dock: its sessions, and inside one what the client's screen does, and the scheduled tasks.
+/// Nothing that changes the dock's own state (what it shows, its tabs' order, its engines, dictation).
 fn allowed(message: &PageMessage) -> bool {
     match message {
-        PageMessage::SessionsLoad { .. } | PageMessage::SessionNew { .. } | PageMessage::SessionClose { .. } => true,
+        PageMessage::SessionsLoad { .. }
+        | PageMessage::SessionNew { .. }
+        | PageMessage::SessionClose { .. }
+        | PageMessage::SchedulesList { .. }
+        | PageMessage::ScheduleUpdate { .. }
+        | PageMessage::ScheduleDelete { .. } => true,
         PageMessage::Session { message, .. } => matches!(
             **message,
             PageMessage::ChatSend { .. }
@@ -48,6 +57,16 @@ fn allowed(message: &PageMessage) -> bool {
                 | PageMessage::ChatCheckpoints { .. }
                 | PageMessage::ChatUndo { .. }
         ),
+        _ => false,
+    }
+}
+
+/// What a client that came in from another machine may not do, whatever a local terminal may: save a secret, or run a
+/// `!command` (already turned into `ChatBash`).
+fn refused_for_remote(message: &PageMessage) -> bool {
+    match message {
+        PageMessage::SecretSave { .. } => true,
+        PageMessage::Session { message, .. } => matches!(**message, PageMessage::ChatBash { .. }),
         _ => false,
     }
 }
@@ -69,6 +88,10 @@ struct Client {
     stream: UnixStream,
     session: Option<String>,
     focused: bool,
+    /// Came in from another machine (its `hello` said so): see `refused_for_remote`.
+    remote: bool,
+    /// It has sent its first line: a `hello` only counts as that one.
+    spoke: bool,
 }
 
 /// Which sessions a client is looking at; `ChatCtx` asks it whether anyone sees a session.
@@ -81,7 +104,8 @@ impl Watchers {
     pub fn watching(session: &str) -> Watchers {
         let (stream, _) = UnixStream::pair().unwrap();
         let (lines, _) = mpsc::sync_channel(1);
-        let client = Client { lines, stream, session: Some(session.to_string()), focused: true };
+        let client =
+            Client { lines, stream, session: Some(session.to_string()), focused: true, remote: false, spoke: true };
         Watchers(Arc::new(Mutex::new(HashMap::from([(1, client)]))))
     }
 
@@ -147,7 +171,11 @@ impl Hub {
         };
         let number = self.next.fetch_add(1, Ordering::SeqCst);
         let (lines, queue) = mpsc::sync_channel::<String>(QUEUE);
-        self.clients.0.lock().unwrap().insert(number, Client { lines, stream: kept, session: None, focused: true });
+        self.clients
+            .0
+            .lock()
+            .unwrap()
+            .insert(number, Client { lines, stream: kept, session: None, focused: true, remote: false, spoke: false });
         let hub = self.clone();
         std::thread::spawn(move || {
             for line in queue {
@@ -155,6 +183,8 @@ impl Hub {
                     break;
                 }
             }
+            // The queue is done (or the peer is gone): what was queued has been written, so now the end can be shut.
+            let _ = writer.shutdown(std::net::Shutdown::Both);
             hub.drop_client(number);
         });
         let hub = self.clone();
@@ -172,6 +202,33 @@ impl Hub {
         }
     }
 
+    /// Closes a client after what is queued for it: its queue is closed (the writer thread drains it, then shuts the
+    /// socket), so a last line (an error) is not cut off by the shutdown.
+    fn drop_after_flush(&self, number: u64) {
+        self.clients.0.lock().unwrap().remove(&number);
+    }
+
+    /// Notes that client `number` has sent a line; returns whether it was its first and whether it is remote (`None`
+    /// when the client is gone: its lines are not taken any more).
+    fn spoke(&self, number: u64) -> Option<(bool, bool)> {
+        let mut clients = self.clients.0.lock().unwrap();
+        let client = clients.get_mut(&number)?;
+        let first = !std::mem::replace(&mut client.spoke, true);
+        Some((first, client.remote))
+    }
+
+    /// A client's first line was a `hello`: marks it remote or not, answers with the hub's own, and refuses another
+    /// protocol.
+    fn hello(&self, number: u64, value: &Value) {
+        self.set(number, |c| c.remote = value["remote"] == true);
+        let version = env!("CARGO_PKG_VERSION");
+        self.send_to(number, &json!({"type": "hello", "protocol": PROTOCOL, "version": version}));
+        if value["protocol"].as_u64() != Some(u64::from(PROTOCOL)) {
+            self.send_to(number, &json!({"type": "error", "id": 0, "code": "protocol-mismatch"}));
+            self.drop_after_flush(number);
+        }
+    }
+
     fn send_to(&self, number: u64, value: &Value) {
         let mut clients = self.clients.0.lock().unwrap();
         let Some(client) = clients.get(&number) else { return };
@@ -184,8 +241,16 @@ impl Hub {
 
     /// A line from client `number`.
     fn take(&self, number: u64, line: &str) {
+        // Any first line counts as the one a `hello` has to be, so garbage first does not make room for a late `hello`.
+        let Some((first, remote)) = self.spoke(number) else { return };
         let Ok(mut value) = serde_json::from_str::<Value>(line) else { return };
         match value["type"].as_str() {
+            Some("hello") => {
+                if first {
+                    self.hello(number, &value);
+                }
+                return;
+            }
             Some("attach") => return self.set(number, |c| c.session = value["session"].as_str().map(str::to_string)),
             Some("detach") => return self.set(number, |c| c.session = None),
             Some("focus") => return self.set(number, |c| c.focused = value["focused"].as_bool().unwrap_or(true)),
@@ -213,6 +278,9 @@ impl Hub {
             other => other,
         });
         match message {
+            Some(message) if remote && refused_for_remote(&message) => {
+                self.send_to(number, &json!({"type": "error", "id": own.unwrap_or(0), "code": "not-for-remote"}))
+            }
             Some(message) if allowed(&message) => {
                 let _ = self.chat.lock().unwrap().send(message);
             }
@@ -278,7 +346,7 @@ impl Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aria_core::bridge::{DockMessage, PageMessage};
+    use aria_core::bridge::{DockMessage, PageMessage, PROTOCOL};
     use serde_json::{json, Value};
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
@@ -461,7 +529,6 @@ mod tests {
             json!({"type": "sessionsSave", "sessions": [], "active": null}),
             json!({"type": "enginesRestart"}),
             json!({"type": "session", "session": "aa", "message": {"type": "dictationStart"}}),
-            json!({"type": "scheduleDelete", "id": 3, "schedule": "s-1"}),
         ]
         .into_iter()
         .enumerate()
@@ -472,6 +539,122 @@ mod tests {
         assert!(f.chat.try_recv().is_err(), "none of them reached the chat");
         a.send(json!({"type": "session", "session": "aa", "message": {"type": "chatAbort"}}));
         assert!(f.chat.recv_timeout(Duration::from_secs(5)).is_ok());
+    }
+
+    fn hello(protocol: u32, remote: Option<bool>) -> Value {
+        let mut line = json!({"type": "hello", "protocol": protocol, "version": "9.9.9"});
+        if let Some(remote) = remote {
+            line["remote"] = json!(remote);
+        }
+        line
+    }
+
+    fn secret_save(id: u64) -> Value {
+        json!({"type": "secretSave", "id": id, "name": "GH_TOKEN", "value": "v", "purpose": ""})
+    }
+
+    #[test]
+    fn hello_is_answered_with_the_protocol() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(hello(PROTOCOL, None));
+        assert_eq!(a.next(), json!({"type": "hello", "protocol": PROTOCOL, "version": env!("CARGO_PKG_VERSION")}));
+    }
+
+    #[test]
+    fn a_different_protocol_is_refused_and_the_client_dropped() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(hello(PROTOCOL + 1, None));
+        assert_eq!(a.next()["type"], "hello");
+        assert_eq!(a.next(), json!({"type": "error", "id": 0, "code": "protocol-mismatch"}));
+        wait_until("dropped", || f.hub.count() == 0);
+    }
+
+    #[test]
+    fn a_remote_client_cannot_save_secrets_or_run_bash() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(hello(PROTOCOL, Some(true)));
+        assert_eq!(a.next()["type"], "hello");
+        a.send(secret_save(5));
+        assert_eq!(a.next(), json!({"type": "error", "id": 5, "code": "not-for-remote"}));
+        a.send(json!({"type": "session", "session": "aa", "message": {"type": "piCommand", "id": 6, "command": "bash", "args": {"command": "pwd"}}}));
+        assert_eq!(a.next(), json!({"type": "error", "id": 6, "code": "not-for-remote"}));
+        assert!(f.handled.try_recv().is_err(), "no secret reached the handlers");
+        assert!(f.chat.try_recv().is_err(), "no command reached the chat");
+        a.send(json!({"type": "session", "session": "aa", "message": {"type": "chatAbort"}}));
+        match f.chat.recv_timeout(Duration::from_secs(5)).unwrap() {
+            PageMessage::Session { session, message } => {
+                assert_eq!(session, "aa");
+                assert!(matches!(*message, PageMessage::ChatAbort));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_second_hello_cannot_lift_the_remote_mark() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(hello(PROTOCOL, Some(true)));
+        assert_eq!(a.next()["type"], "hello");
+        a.send(hello(PROTOCOL, Some(false)));
+        a.send(secret_save(7));
+        assert_eq!(a.next(), json!({"type": "error", "id": 7, "code": "not-for-remote"}));
+        assert!(f.handled.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_hello_after_another_line_does_not_mark_the_client() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(json!({"type": "focus", "focused": true}));
+        a.send(hello(PROTOCOL, Some(true)));
+        a.send(secret_save(8));
+        assert!(matches!(f.handled.recv_timeout(Duration::from_secs(5)).unwrap(), PageMessage::SecretSave { .. }));
+    }
+
+    #[test]
+    fn a_local_client_without_hello_keeps_working() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(secret_save(5));
+        assert!(matches!(f.handled.recv_timeout(Duration::from_secs(5)).unwrap(), PageMessage::SecretSave { .. }));
+        a.send(json!({"type": "session", "session": "aa", "message": {"type": "piCommand", "id": 6, "command": "bash", "args": {"command": "pwd"}}}));
+        match f.chat.recv_timeout(Duration::from_secs(5)).unwrap() {
+            PageMessage::Session { message, .. } => assert!(matches!(*message, PageMessage::ChatBash { .. })),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn clients_may_manage_schedules() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(json!({"type": "schedulesList", "id": 1}));
+        a.send(json!({"type": "scheduleUpdate", "id": 2, "schedule": "s-1", "enabled": false}));
+        a.send(json!({"type": "scheduleDelete", "id": 3, "schedule": "s-1"}));
+        let mut ids = vec![];
+        for expected in ["list", "update", "delete"] {
+            let message = f.chat.recv_timeout(Duration::from_secs(5)).unwrap();
+            let id = match (expected, &message) {
+                ("list", PageMessage::SchedulesList { id }) => *id,
+                ("update", PageMessage::ScheduleUpdate { id, schedule, enabled }) => {
+                    assert_eq!((schedule.as_str(), *enabled), ("s-1", false));
+                    *id
+                }
+                ("delete", PageMessage::ScheduleDelete { id, schedule }) => {
+                    assert_eq!(schedule, "s-1");
+                    *id
+                }
+                _ => panic!("{expected}: {message:?}"),
+            };
+            assert!(![1, 2, 3].contains(&id), "ids are remapped");
+            ids.push(id);
+        }
+        ids.dedup();
+        assert_eq!(ids.len(), 3);
     }
 
     #[test]

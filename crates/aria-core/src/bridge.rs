@@ -9,6 +9,10 @@ use crate::shortcut::{InUse, Platform, Shortcut};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// The version of the client lines (`clients.sock`): the first line of a connection may be a `hello` carrying it, and a
+/// hub that speaks another one answers `protocol-mismatch` and closes the connection.
+pub const PROTOCOL: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum PageMessage {
