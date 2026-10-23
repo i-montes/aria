@@ -182,39 +182,62 @@ fn call_lines(call: &Call, v: &SessionView, width: usize) -> Vec<Line<'static>> 
     out
 }
 
-/// One line for a whole turn (verbose off): `✓ 3 reads · 2 edits · tests 43/43`.
-fn summary_line(v: &SessionView, turn: usize, running: bool) -> Line<'static> {
-    let p = &v.palette;
-    let s = v.session.turn_summary(turn);
-    let count = |n: u32, one: &str, many: &str| -> Option<String> {
-        match n {
-            0 => None,
-            1 => Some(t(&v.lang, one, &json!({}))),
-            n => Some(t(&v.lang, many, &json!({ "n": n }))),
+/// A step's title, as the dock's accordion says it: what the tool does ("Leer archivo", "Escribir 3 líneas"), or a
+/// command's reason.
+fn step_title(call: &Call, lang: &str) -> String {
+    let say = |key: &str, vars: serde_json::Value| t(lang, key, &vars);
+    match call.name.as_str() {
+        "bash" if !call.reason.is_empty() => call.reason.clone(),
+        "bash" => say("chat.tools.run", json!({})),
+        "read" => say("chat.tools.read", json!({})),
+        "edit" => say("chat.tools.edit", json!({})),
+        "write" => match call.added {
+            0 => say("chat.tools.write_file", json!({})),
+            1 => say("chat.tools.write_one", json!({})),
+            n => say("chat.tools.write_n", json!({ "n": n })),
+        },
+        "grep" => say("chat.tools.grep", json!({})),
+        "find" => say("chat.tools.find", json!({})),
+        "ls" => say("chat.tools.ls", json!({})),
+        name => {
+            let words = name.replace(['_', '-'], " ");
+            let mut chars = words.chars();
+            chars.next().map_or_else(|| say("chat.tools.tool", json!({})), |c| c.to_uppercase().chain(chars).collect())
         }
-    };
-    let mut parts: Vec<String> = [
-        count(s.reads, "term.summary.read", "term.summary.reads"),
-        count(s.edits, "term.summary.edit", "term.summary.edits"),
-        count(s.writes, "term.summary.write", "term.summary.writes"),
-        count(s.commands, "term.summary.command", "term.summary.commands"),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    if let Some((passed, total)) = s.tests {
-        parts.push(t(&v.lang, "term.summary.tests", &json!({"passed": passed, "total": total})));
     }
-    let mark = if running {
-        Span::styled("●", Style::default().fg(p.amber))
+}
+
+/// What a step works on: a file by its name, a command, a pattern.
+fn step_chip(call: &Call) -> String {
+    if matches!(call.name.as_str(), "read" | "write" | "edit") {
+        return call.summary.rsplit('/').next().unwrap_or_default().to_string();
+    }
+    if call.summary == call.name {
+        String::new()
     } else {
-        Span::styled("✓", Style::default().fg(p.green))
-    };
-    Line::from(vec![
+        call.summary.clone()
+    }
+}
+
+/// One line per step (verbose off), as the dock's accordion rows: `✓ Leer archivo  coupon.ts`.
+fn step_line(call: &Call, v: &SessionView, width: usize) -> Line<'static> {
+    let p = &v.palette;
+    let mut spans = vec![
         Span::raw("  "),
-        mark,
-        Span::styled(format!(" {}", parts.join(" · ")), Style::default().fg(p.grey)),
-    ])
+        mark(call, p),
+        Span::styled(format!(" {}", step_title(call, &v.lang)), Style::default().fg(p.text)),
+    ];
+    let chip = step_chip(call);
+    if !chip.is_empty() {
+        let used: usize = spans.iter().map(|s| s.content.width()).sum();
+        let cut: String = chip.chars().take(width.saturating_sub(used + 2)).collect();
+        spans.push(Span::styled(format!("  {cut}"), Style::default().fg(p.grey)));
+    }
+    if call.added > 0 || call.removed > 0 {
+        spans.push(Span::styled(format!("  +{}", call.added), Style::default().fg(p.green)));
+        spans.push(Span::styled(format!(" −{}", call.removed), Style::default().fg(p.coral)));
+    }
+    Line::from(spans)
 }
 
 /// The conversation as lines, a blank line between entries.
@@ -222,21 +245,16 @@ pub fn conversation(v: &SessionView, width: u16) -> Vec<Line<'static>> {
     let width = usize::from(width.max(1));
     let p = &v.palette;
     let mut out: Vec<Line<'static>> = Vec::new();
-    let mut turn: usize = 0;
-    let mut summarized: Option<usize> = None;
     let entries = &v.session.entries;
-    for (i, entry) in entries.iter().enumerate() {
+    for entry in entries {
         let lines: Vec<Line<'static>> = match entry {
-            Entry::User { text } => {
-                turn = i;
-                wrap(
-                    text,
-                    width,
-                    vec![Span::styled("› ", Style::default().fg(p.accent))],
-                    "  ",
-                    Style::default().fg(p.text),
-                )
-            }
+            Entry::User { text } => wrap(
+                text,
+                width,
+                vec![Span::styled("› ", Style::default().fg(p.accent))],
+                "  ",
+                Style::default().fg(p.text),
+            ),
             Entry::Assistant { text, thinking, .. } => {
                 let mut lines = Vec::new();
                 if v.verbose && !thinking.is_empty() {
@@ -250,14 +268,7 @@ pub fn conversation(v: &SessionView, width: u16) -> Vec<Line<'static>> {
                 lines
             }
             Entry::Tools { calls } if v.verbose => calls.iter().flat_map(|call| call_lines(call, v, width)).collect(),
-            Entry::Tools { .. } => {
-                if summarized == Some(turn) {
-                    continue;
-                }
-                summarized = Some(turn);
-                let last_turn = !entries[i + 1..].iter().any(|e| matches!(e, Entry::User { .. }));
-                vec![summary_line(v, turn, v.session.running && last_turn)]
-            }
+            Entry::Tools { calls } => calls.iter().filter(|c| !c.think).map(|call| step_line(call, v, width)).collect(),
             Entry::Notice { tone, text } => {
                 let colour = match tone {
                     Tone::Info => p.text,
@@ -627,10 +638,21 @@ mod tests {
     }
 
     #[test]
-    fn verbose_off_shows_one_line_per_turn() {
-        let s = worked();
+    fn verbose_off_lists_each_step_as_the_docks_accordion() {
+        let mut s = worked();
+        s.apply(
+            &serde_json::from_value::<DockMessage>(event(json!({"type": "tool_execution_start", "toolCallId": "c4",
+            "toolName": "bash", "args": {"command": "git push", "reason": "Push the branch"}})))
+            .unwrap(),
+        );
         let screen = text(&render(&view(&s, false), 100, 30));
-        assert!(screen.contains("✓ 1 lectura · 1 comando · tests 43/43"), "{screen}");
+        assert!(screen.contains("✓ Leer archivo"), "{screen}");
+        assert!(screen.contains("coupon.ts") && !screen.contains("src/coupon.ts"), "a file by its name: {screen}");
+        assert!(screen.contains("✓ Ejecutar comando") && screen.contains("bun test coupon"), "{screen}");
+        assert!(
+            screen.contains("● Push the branch") && screen.contains("git push"),
+            "the command's reason is its title: {screen}"
+        );
         assert!(!screen.contains("export const x = 1"), "{screen}");
         assert!(!screen.contains("Read first."), "{screen}");
         assert!(screen.contains("Listo."), "{screen}");

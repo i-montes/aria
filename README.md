@@ -60,7 +60,7 @@ Run it again to update. An update does not cut a run: the running dock restarts 
 
 | Command | What it does |
 |---|---|
-| `aria` (in a terminal) | Aria in the terminal: the dock's open sessions, and a new one in the folder you are in. It is a window onto the dock's sessions, not a session of its own: Ctrl+C or Ctrl+D leave and the work goes on (`aria` again finds it), Esc stops the running turn, `/exit` closes the session (in the dock too). `@` picks a file, `!command` runs a command in the session, `/model` changes the model, `/verbose` or Ctrl+O switches between everything and one line per turn, `/sessions` goes back to the list. Starts the dock first if it is not running |
+| `aria` (in a terminal) | Aria in the terminal: the dock's open sessions, and a new one in the folder you are in. It is a window onto the dock's sessions, not a session of its own: Ctrl+C or Ctrl+D leave and the work goes on (`aria` again finds it), Esc stops the running turn, `/exit` closes the session (in the dock too). `@` picks a file, `!command` runs a command in the session, `/model` changes the model, `/verbose` or Ctrl+O switches between everything and one line per step, `/sessions` goes back to the list. Starts the dock first if it is not running |
 | `aria dock` | The dock itself: what the login service runs |
 | `aria toggle` / `aria show` | Opens or closes the dock (the shortcut does the same) / only opens it; starts it first if it is not running |
 | `aria start` / `aria quit` | Starts the dock under its login service / stops it (its background work and engines first). In the dock, Cmd+Q asks first and quits on a second press |

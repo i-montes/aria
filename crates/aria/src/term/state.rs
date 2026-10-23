@@ -47,6 +47,8 @@ pub struct Call {
     pub think: bool,
     pub added: u32,
     pub removed: u32,
+    /// What a command does, in the model's words (the sandbox asks for it): the step's title, as in the dock.
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,17 +66,6 @@ pub struct Dialog {
     pub id: String,
     pub method: String,
     pub request: Value,
-}
-
-/// What a turn did, for the one-line view (verbose off).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct TurnSummary {
-    pub reads: u32,
-    pub edits: u32,
-    pub writes: u32,
-    pub commands: u32,
-    /// (passed, total) of the last test run in the turn.
-    pub tests: Option<(u32, u32)>,
 }
 
 #[derive(Debug, Default)]
@@ -153,6 +144,9 @@ pub fn tool_summary(name: &str, args: &Value) -> String {
     match name {
         "bash" => field("command").map(|c| c.lines().next().unwrap_or_default().to_string()),
         "read" | "write" | "edit" => field("path").or_else(|| field("file_path")).map(str::to_string),
+        "grep" => field("pattern").map(str::to_string),
+        "find" => field("pattern").or_else(|| field("path")).map(str::to_string),
+        "ls" => Some(field("path").unwrap_or(".").to_string()),
         _ => None,
     }
     .unwrap_or_else(|| name.to_string())
@@ -190,6 +184,7 @@ fn new_call(id: &str, name: &str, args: &Value, status: Status) -> Call {
         think: false,
         added,
         removed,
+        reason: args["reason"].as_str().unwrap_or_default().trim().to_string(),
     }
 }
 
@@ -221,26 +216,6 @@ fn add_steps(entries: &mut Vec<Entry>, steps: Vec<Call>, from: usize) {
     }
 }
 
-/// (passed, total) from a test runner's output (`43 pass` / `0 fail`, `43 passed; 0 failed`).
-fn test_counts(output: &str) -> Option<(u32, u32)> {
-    let number_before = |word: &str| -> Option<u32> {
-        output.split(['\n', ';', ',']).find_map(|part| {
-            let mut words = part.split_whitespace();
-            let mut previous = None;
-            for w in words.by_ref() {
-                if w.starts_with(word) {
-                    return previous.and_then(|p: &str| p.parse().ok());
-                }
-                previous = Some(w);
-            }
-            None
-        })
-    };
-    let passed = number_before("pass")?;
-    let failed = number_before("fail").unwrap_or(0);
-    Some((passed, passed + failed))
-}
-
 fn bang_entry(command: &str, output: &str, exit_code: i64) -> Entry {
     let status = if exit_code == 0 { Status::Done } else { Status::Error };
     let mut call = new_call("bang", "bash", &json!({"command": command}), status);
@@ -269,6 +244,7 @@ impl Session {
             think: true,
             added: 0,
             removed: 0,
+            reason: String::new(),
         }]
     }
 
@@ -591,36 +567,6 @@ impl Session {
         }
         entries
     }
-
-    /// What the turn that starts at entry `turn` (the person's message, or the turn's first step) did, up to the next
-    /// message of the person.
-    pub fn turn_summary(&self, turn: usize) -> TurnSummary {
-        let mut summary = TurnSummary::default();
-        for (i, entry) in self.entries.iter().enumerate().skip(turn) {
-            match entry {
-                Entry::User { .. } if i == turn => {}
-                Entry::User { .. } => break,
-                Entry::Tools { calls } => {
-                    for call in calls.iter().filter(|c| !c.think) {
-                        match call.name.as_str() {
-                            "read" | "grep" | "find" | "ls" => summary.reads += 1,
-                            "edit" => summary.edits += 1,
-                            "write" => summary.writes += 1,
-                            "bash" => {
-                                summary.commands += 1;
-                                if call.summary.contains("test") {
-                                    summary.tests = test_counts(&call.output).or(summary.tests);
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        summary
-    }
 }
 
 #[cfg(test)]
@@ -854,15 +800,6 @@ mod tests {
         assert!(
             matches!(&s.entries[0], Entry::Tools { calls } if calls[0].name == "bash" && calls[0].summary == "!pwd" && calls[0].output == "/home/ana\n")
         );
-    }
-
-    #[test]
-    fn the_turn_summary_counts_tools_and_tests() {
-        let mut s = Session::default();
-        feed(&mut s, &turn_with_tools());
-        let summary = s.turn_summary(0);
-        assert_eq!((summary.reads, summary.edits, summary.writes, summary.commands), (1, 1, 0, 1));
-        assert_eq!(summary.tests, Some((43, 43)));
     }
 
     #[test]
