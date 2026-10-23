@@ -16,6 +16,8 @@ pub struct AgentStart {
     pub task: String,
     pub folder: PathBuf,
     pub writes: bool,
+    /// Allowed to commit in its folder: a slice phase.
+    pub commits: bool,
     /// `auto`, `folder` or `worktree`.
     pub isolation: String,
     /// Where its worktree goes, if it gets one: `.aria-worktrees` in the projects folder.
@@ -90,8 +92,12 @@ fn answer(line: &[u8]) -> Option<Answer> {
 }
 
 /// The task as the subagent reads it: where to work and what it may change.
-fn brief(task: &str, cwd: &Path, writes: bool) -> String {
-    let rule = if writes { "Do not commit." } else { "Do not change any file." };
+fn brief(task: &str, cwd: &Path, writes: bool, commits: bool) -> String {
+    let rule = match (writes, commits) {
+        (true, true) => "Commit locally as the task says; never push, merge or rebase.",
+        (true, false) => "Do not commit.",
+        _ => "Do not change any file.",
+    };
     format!("Task: {task}\n\nWork in {}.\n{rule}", cwd.display())
 }
 
@@ -234,7 +240,7 @@ impl Core {
         if let Some(hook) = &start.before_spawn {
             hook(&job);
         }
-        let brief = brief(&start.task, &cwd, start.writes);
+        let brief = brief(&start.task, &cwd, start.writes, start.commits);
         let spawned = match self.spawner.upgrade() {
             Some(spawner) => {
                 let AgentStart { program, args, env, unset, .. } = start;
@@ -522,6 +528,7 @@ exit "${FAKE_EXIT:-0}"
             task: "fix it".into(),
             folder: folder.to_path_buf(),
             writes: false,
+            commits: false,
             isolation: "auto".into(),
             // Beside the fake `pi`: outside any repository a test makes, as the projects folder is.
             worktrees: program.parent().unwrap().canonicalize().unwrap().join(".aria-worktrees"),
@@ -604,6 +611,13 @@ exit "${FAKE_EXIT:-0}"
         let text = fs::read_to_string(&brief).unwrap();
         assert!(text.ends_with("\nDo not change any file."), "{text}");
         assert!(!text.contains("Do not commit."), "{text}");
+
+        let start = AgentStart { commits: true, ..writer(&pi, &folder, "folder", &env) };
+        let job = jobs.start_agent(start).unwrap();
+        ends(&jobs, &job.id, Duration::from_secs(3));
+        let text = fs::read_to_string(&brief).unwrap();
+        let rule = "Commit locally as the task says; never push, merge or rebase.";
+        assert_eq!(text, format!("Task: fix it\n\nWork in {}.\n{rule}", folder.display()));
     }
 
     #[test]

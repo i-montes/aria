@@ -424,10 +424,23 @@ fn start_agent(session: &Session, request: &Value) -> Result<Job, String> {
         Value::Bool(b) => *b,
         _ => return Err("writes must be true or false".into()),
     };
+    let commits = match &request["commits"] {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        _ => return Err("commits must be true or false".into()),
+    };
     let isolation = text(request, "isolation", Some("auto"))?;
     if !matches!(isolation, "auto" | "folder" | "worktree") {
         return Err("isolation must be \"auto\", \"folder\" or \"worktree\"".into());
     }
+    if commits && !writes {
+        return Err("commits needs writes".into());
+    }
+    if commits && isolation == "worktree" {
+        return Err("a subagent that commits works in its folder: isolation must be \"folder\" or \"auto\"".into());
+    }
+    // Its commits must land in the person's repository: a worktree's work comes back as one uncommitted patch.
+    let isolation = if commits { "folder" } else { isolation };
     let model = text(request, "model", Some("session"))?;
     if !matches!(model, "session" | "heavy") {
         return Err("model must be \"session\" or \"heavy\"".into());
@@ -442,6 +455,7 @@ fn start_agent(session: &Session, request: &Value) -> Result<Job, String> {
         task: task.to_string(),
         folder,
         writes,
+        commits,
         isolation: isolation.to_string(),
         worktrees,
         program,
@@ -781,6 +795,40 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
         eventually("the agent ends", || s.jobs.get(&id).is_some_and(|j| j.result.is_some()));
         assert_eq!(s.jobs.get(&id).unwrap().result.as_deref(), Some("all green"));
         assert_eq!(s.launcher.spawned.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_subagent_that_commits_works_in_its_folder() {
+        let _turn = crate::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let s = setup(true);
+        let socket = bind(&s, "s1");
+        let mut c = Client::connect(&socket);
+        let folder = s.dir.path().to_str().unwrap();
+        let ask = |c: &mut Client, id: u64, extra: Value| {
+            let mut request = json!({"id": id, "op": "start", "kind": "agent", "task": "slice it",
+                "title": "slice", "folder": folder, "commits": true});
+            for (key, value) in extra.as_object().unwrap() {
+                request[key] = value.clone();
+            }
+            c.ask(request)
+        };
+        let worktree = ask(&mut c, 1, json!({"isolation": "worktree"}));
+        let message = "a subagent that commits works in its folder: isolation must be \"folder\" or \"auto\"";
+        assert_eq!(worktree, json!({"re": 1, "ok": false, "error": message}));
+        let read_only = ask(&mut c, 2, json!({"writes": false}));
+        assert_eq!(read_only, json!({"re": 2, "ok": false, "error": "commits needs writes"}));
+        let text = ask(&mut c, 3, json!({"commits": "yes"}));
+        assert_eq!(text, json!({"re": 3, "ok": false, "error": "commits must be true or false"}));
+        assert!(s.jobs.list(None).is_empty(), "nothing started");
+        assert_eq!(s.launcher.spawned.load(Ordering::SeqCst), 0);
+
+        for (id, extra) in [(4, json!({})), (5, json!({"isolation": "auto"})), (6, json!({"isolation": "folder"}))] {
+            let started = ask(&mut c, id, extra);
+            assert_eq!(started["ok"], true, "{started}");
+            let job = started["job"]["id"].as_str().unwrap().to_string();
+            eventually("the agent ends", || s.jobs.get(&job).is_some_and(|j| j.result.is_some()));
+            assert_eq!(s.jobs.get(&job).unwrap().isolation.as_deref(), Some("folder"));
+        }
     }
 
     #[test]
