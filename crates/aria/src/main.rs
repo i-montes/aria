@@ -4,6 +4,8 @@
 //! restart into the new binary as soon as it is hidden and no session has a run going; it fails when no dock answers,
 //! and the installer then restarts the service itself.
 //! `aria bar install|remove` puts Aria's face in the Omarchy bar or takes it out (the installer runs it).
+//! `aria client-stdio` is the bridge `ssh <host> aria client-stdio` runs: the client's lines on stdin and stdout, the
+//! machine's clients socket on the other side.
 //! `aria --version` prints the version.
 
 mod attachments;
@@ -22,6 +24,7 @@ mod keyring_cli;
 mod lines;
 mod omarchy_bar;
 mod schedule_store;
+mod stdio_bridge;
 mod term;
 mod trace;
 mod ui;
@@ -97,6 +100,7 @@ fn main() {
                 std::process::exit(1);
             }
         },
+        Some("client-stdio") => std::process::exit(stdio_bridge::command()),
         Some("start") => start_service(),
         Some("secret") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -106,7 +110,7 @@ fn main() {
         Some("bar") => std::process::exit(omarchy_bar::bar_command(std::env::args().nth(2).as_deref())),
         Some("--version" | "-V" | "version") => println!("aria {}", env!("CARGO_PKG_VERSION")),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [dock|toggle|show|start|quit|keyring|secret|bar|update-ready|--version]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [dock|toggle|show|start|quit|keyring|secret|bar|update-ready|client-stdio|--version]");
             std::process::exit(2);
         }
         None => unreachable!("plain aria is the client or the dock"),

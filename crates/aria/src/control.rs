@@ -1,5 +1,5 @@
 //! One dock at a time, reached through a Unix socket. On Omarchy it lives in `$XDG_RUNTIME_DIR/aria/`
-//! (or `/tmp/aria/`); on macOS it lives in `~/.aria/run/`, so a dock started by the LaunchAgent
+//! (else `/run/user/<uid>/aria/` when that exists, else `/tmp/aria/`); on macOS it lives in `~/.aria/run/`, so a dock started by the LaunchAgent
 //! and a dock started from a terminal agree on the same path. `aria toggle` sends a line to the running
 //! dock, and starts the dock first when nothing answers. `aria update-ready` (the installer's) asks the running dock to
 //! restart into the new binary once nothing is running, and waits for its answer.
@@ -29,11 +29,32 @@ impl std::fmt::Display for ControlError {
     }
 }
 
+/// Where Aria's runtime files live on Linux: `$XDG_RUNTIME_DIR`, else the user's own `/run/user/<uid>` when there is
+/// one (a login over ssh may not set the variable), else `/tmp`.
+#[cfg(target_os = "linux")]
+fn runtime_dir_from(xdg: Option<std::ffi::OsString>, uid: u32, exists: impl Fn(&Path) -> bool) -> PathBuf {
+    if let Some(dir) = xdg.filter(|dir| !dir.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    let users = PathBuf::from(format!("/run/user/{uid}"));
+    if exists(&users) {
+        users
+    } else {
+        PathBuf::from("/tmp")
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn runtime_dir() -> PathBuf {
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    runtime_dir_from(std::env::var_os("XDG_RUNTIME_DIR"), uid, Path::exists)
+}
+
 pub fn control_socket_path() -> PathBuf {
     #[cfg(target_os = "linux")]
     {
-        let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp"));
-        runtime.join("aria").join("control.sock")
+        runtime_dir().join("aria").join("control.sock")
     }
     #[cfg(target_os = "macos")]
     {
@@ -234,6 +255,16 @@ mod tests {
         let ours = unsafe { libc::getsid(0) };
         assert_ne!(theirs, ours);
     }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn without_xdg_the_users_run_dir_is_used_when_it_exists() {
+        let users = |p: &Path| p == Path::new("/run/user/1001");
+        assert_eq!(runtime_dir_from(None, 1001, users), PathBuf::from("/run/user/1001"));
+        assert_eq!(runtime_dir_from(None, 1001, |_| false), PathBuf::from("/tmp"));
+        assert_eq!(runtime_dir_from(Some("/run/user/7".into()), 1001, users), PathBuf::from("/run/user/7"));
+        assert_eq!(runtime_dir_from(Some("".into()), 1001, users), PathBuf::from("/run/user/1001"), "empty is unset");
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn the_children_of_a_process_are_read_from_proc_even_with_odd_command_names() {
