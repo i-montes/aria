@@ -123,7 +123,7 @@ export function hintLine(h: Hints): string {
  * the check that proves it. Never names a method: that is the router's business, not the person's. */
 export function methodNote(h: Hints): string {
   if (h.route !== 'focused' || h.readOnly || h.planWorth) return ''
-  return 'Before changing anything, state in one line the outcome and the check that will prove it (a test when there is one), then make the check fail, then pass.'
+  return 'When the change is code in a project with tests, state in one line the outcome and the test that will prove it, write or name that test first and see it fail, then make it pass. Otherwise just do it and check the result once.'
 }
 
 // The text of the last assistant message on the branch (Pi session entries), or ''.

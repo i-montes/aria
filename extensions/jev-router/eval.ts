@@ -30,6 +30,8 @@ const CASES: [string, Expect, string?][] = [
   ['compara Wompi, ePayco y Mercado Pago para donaciones recurrentes en Colombia: comisiones, API y soporte de Bre-B', { route: 'parallel', web: true, readOnly: true }],
   ['Quiero que crees un nuevo proyecto, es una pagina web llamada openmovie en la que se podran ver peliculas, el tema por defecto quiero que sea dark', { route: 'focused', readOnly: false, planWorth: true }],
   ['ejecuta el dev server para poder verlo', { route: 'quick', readOnly: false, planWorth: false }],
+  ['puedes hacer un archivo que diga hora en la carpeta de downloads?', { route: 'quick', readOnly: false, planWorth: false }],
+  ['Crea un archivo en downloads con un resumen de esa transcripcion', { route: ['quick', 'focused'], readOnly: false, planWorth: false }],
   ['arregla el test que falla en src/lib/money.test.ts', { route: 'focused', readOnly: false, planWorth: false }],
   ['Me mentiste, si hiciste cambios en el proyecto, quiero que dejes el repositorio como estaba', { route: 'focused', readOnly: false }],
   ['Si, agrega el analisis a los logs y di que no es posible hacer una solucion a la medida', { route: 'focused', notion: true, readOnly: false }, 'Puedo agregar este análisis a los logs de la tarea Rifatón en Notion. ¿Lo agrego?'],
