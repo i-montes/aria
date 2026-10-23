@@ -111,6 +111,8 @@ pub struct App {
     scroll: usize,
     /// When the running turn started (ms), for the working line's timer.
     started: Option<u64>,
+    /// The row the suggestions start at on screen.
+    overlay_top: u16,
 }
 
 fn folder_name(path: &str) -> String {
@@ -136,6 +138,7 @@ impl App {
             height: 24,
             scroll: 0,
             started: None,
+            overlay_top: 0,
         };
         let load = app.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
         (app, vec![load])
@@ -491,20 +494,31 @@ impl App {
         }
     }
 
-    /// The rows the bottom panel (a dialog or a picker) starts at, as `view` draws it: the footer, a rule, the panel.
+    /// The row a dialog starts at, as `view` draws it in the editor's place: above the footer and a rule.
     fn panel_top(&self, panel_len: usize) -> u16 {
         self.height.saturating_sub(2 + panel_len as u16)
     }
 
+    /// A dialog, in the editor's place.
     pub fn panel_lines(
         &self,
         palette: &crate::term::theme::Palette,
         width: u16,
     ) -> Option<Vec<ratatui::text::Line<'static>>> {
-        if let Some(dialog) = &self.dialog {
-            return Some(dialog.lines(&self.config.lang, palette, width));
+        self.dialog.as_ref().map(|dialog| dialog.lines(&self.config.lang, palette, width))
+    }
+
+    /// The suggestions (`/`, `@`, `/model`), floating above the editor; none while a dialog is open.
+    pub fn overlay_lines(&self, palette: &crate::term::theme::Palette) -> Option<Vec<ratatui::text::Line<'static>>> {
+        if self.dialog.is_some() {
+            return None;
         }
         self.picker.as_ref().map(|(_, picker)| picker.lines(palette))
+    }
+
+    /// The row the suggestions start at, as the screen drew them.
+    pub fn set_overlay_top(&mut self, row: u16) {
+        self.overlay_top = row;
     }
 
     fn click(&mut self, row: u16) -> Vec<Effect> {
@@ -532,18 +546,20 @@ impl App {
             }
             Screen::Session => {
                 let palette = crate::term::theme::Palette::truecolor();
-                let Some(lines) = self.panel_lines(&palette, 80) else { return effects };
-                let top = self.panel_top(lines.len());
-                if row < top {
-                    return effects;
-                }
-                let at = usize::from(row - top);
-                if let Some(dialog) = self.dialog.as_mut() {
-                    let answer = dialog.click(at);
-                    effects.extend(self.answered(answer));
-                } else if let Some((kind, picker)) = self.picker.as_ref() {
-                    let (kind, outcome) = (*kind, picker.click(at));
-                    effects.extend(self.picked(kind, outcome));
+                if let Some(lines) = self.panel_lines(&palette, 80) {
+                    let top = self.panel_top(lines.len());
+                    if row >= top {
+                        let answer = self.dialog.as_mut().and_then(|dialog| dialog.click(usize::from(row - top)));
+                        effects.extend(self.answered(answer));
+                    }
+                } else if let Some(lines) = self.overlay_lines(&palette) {
+                    let top = self.overlay_top;
+                    if row >= top && usize::from(row - top) < lines.len() {
+                        if let Some((kind, picker)) = self.picker.as_ref() {
+                            let (kind, outcome) = (*kind, picker.click(usize::from(row - top)));
+                            effects.extend(self.picked(kind, outcome));
+                        }
+                    }
                 }
             }
         }
@@ -928,6 +944,21 @@ mod tests {
         app.update(in_session(DockMessage::ChatEvent { event: json!({"type": "agent_settled"}) }));
         app.clock(6_000);
         assert_eq!(app.working_ms(6_000), None);
+    }
+
+    #[test]
+    fn a_click_on_a_suggestion_picks_it_and_the_editor_stays() {
+        let mut app = attached();
+        let effects = key(&mut app, Key::Char('/'));
+        let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
+        let PageMessage::ListCommands { id } = **message else { panic!("{message:?}") };
+        app.update(in_session(DockMessage::Commands { id, commands: json!([]) }));
+        let palette = crate::term::theme::Palette::truecolor();
+        assert!(app.panel_lines(&palette, 80).is_none(), "the editor keeps its place");
+        assert!(app.overlay_lines(&palette).is_some());
+        app.set_overlay_top(10);
+        app.update(Input::Click { row: 10 });
+        assert_eq!(app.editor.text(), "/exit ");
     }
 
     #[test]

@@ -6,7 +6,9 @@ use crate::term::app::{App, Config, Effect, Input, Press, Screen};
 use crate::term::git::{self, GitStatus};
 use crate::term::link::Link;
 use crate::term::theme::Palette;
-use crate::term::view::{cursor_position, draw_list, draw_session, max_scroll as max_scroll_of, SessionView};
+use crate::term::view::{
+    bottom_height, cursor_position, draw_list, draw_session, max_scroll as max_scroll_of, SessionView,
+};
 use crate::term::Key;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
@@ -145,8 +147,10 @@ pub fn run(
     let git_status = watch_git(folder.clone());
     let mut quit = false;
     let mut max_scroll = 0;
+    let mut overlay_top = 0;
     while !quit {
         app.clamp_scroll(max_scroll);
+        app.set_overlay_top(overlay_top);
         let now_ms =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
         app.clock(now_ms);
@@ -175,7 +179,10 @@ pub fn run(
                     scroll: app.scroll(),
                     working_ms: app.working_ms(now_ms),
                     tick: now_ms,
+                    overlay: app.overlay_lines(&palette),
                 };
+                let floating = view.overlay.as_ref().map_or(0, Vec::len) as u16;
+                overlay_top = area.height.saturating_sub(bottom_height(&view, area.width, area.height) + floating);
                 max_scroll = max_scroll_of(&view, area.width, area.height);
                 draw_session(frame, &view);
                 if !has_panel && area.height > 3 {

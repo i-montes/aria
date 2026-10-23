@@ -41,6 +41,8 @@ pub struct SessionView<'a> {
     pub working_ms: Option<u64>,
     /// A clock in ms that turns the spinner.
     pub tick: u64,
+    /// Suggestions (`/`, `@`, `/model`) floating over the conversation, right above the editor.
+    pub overlay: Option<Vec<Line<'static>>>,
 }
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -386,6 +388,17 @@ pub fn draw_list(frame: &mut Frame, rows: &[(String, String)], selected: usize, 
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+/// The rows the editor's block takes at the bottom (the working line, the rules, the editor or a dialog, the footer):
+/// suggestions float right above it.
+pub fn bottom_height(v: &SessionView, width: u16, height: u16) -> u16 {
+    let pad = if width > 20 { 2 } else { 0 };
+    let width = usize::from(width.saturating_sub(2 * pad).max(1));
+    let middle = v.panel.as_ref().map_or_else(|| editor_lines(v, width).len(), Vec::len);
+    let room = usize::from(height).saturating_sub(4).max(1);
+    let rows = usize::from(v.working_ms.is_some()) + 1 + middle.min(room) + 1 + 1;
+    (rows as u16).min(height)
+}
+
 /// How far the conversation can scroll up in a `width` × `height` screen (its lines above the ones shown).
 pub fn max_scroll(v: &SessionView, width: u16, height: u16) -> usize {
     let pad = if width > 20 { 2 } else { 0 };
@@ -432,6 +445,10 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) {
     let bottom_height = (bottom.len() as u16).min(area.height);
     let skip = bottom.len().saturating_sub(usize::from(bottom_height));
     let bottom_area = Rect { y: area.y + area.height - bottom_height, height: bottom_height, ..inner };
+    let overlay_area = v.overlay.as_ref().map(|lines| {
+        let height = (lines.len() as u16).min(bottom_area.y.saturating_sub(area.y));
+        Rect { y: bottom_area.y - height, height, ..inner }
+    });
     frame.render_widget(Paragraph::new(bottom.into_iter().skip(skip).collect::<Vec<_>>()), bottom_area);
     let room = area.height - bottom_height;
     if room == 0 {
@@ -442,6 +459,11 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) {
     let top = Rect { y: area.y + 1.min(room), height: room.saturating_sub(1).max(1), ..inner };
     let shown: Vec<Line<'static>> = lines.into_iter().skip(skip).collect();
     frame.render_widget(Paragraph::new(shown).style(Style::default().add_modifier(Modifier::empty())), top);
+    // Over what is there: the conversation does not move.
+    if let (Some(lines), Some(overlay)) = (&v.overlay, overlay_area) {
+        frame.render_widget(ratatui::widgets::Clear, overlay);
+        frame.render_widget(Paragraph::new(lines.clone()).style(Style::default().bg(v.palette.ground)), overlay);
+    }
 }
 
 #[cfg(test)]
@@ -521,6 +543,7 @@ mod tests {
             scroll: 0,
             working_ms: None,
             tick: 0,
+            overlay: None,
         }
     }
 
@@ -657,6 +680,25 @@ mod tests {
         let mut idle = view(&s, true);
         idle.working_ms = None;
         assert!(!text(&render(&idle, 100, 30)).contains("Leyendo archivos"));
+    }
+
+    #[test]
+    fn suggestions_float_above_the_editor_without_pushing_the_chat() {
+        let s = worked();
+        let mut plain = view(&s, true);
+        plain.input = "/mo";
+        let before = text(&render(&plain, 100, 30));
+        let mut with = view(&s, true);
+        with.input = "/mo";
+        with.overlay =
+            Some(vec![ratatui::text::Line::from("› /model   change the model"), ratatui::text::Line::from("  /exit")]);
+        let after = text(&render(&with, 100, 30));
+        let (b, a): (Vec<&str>, Vec<&str>) = (before.lines().collect(), after.lines().collect());
+        let editor = a.iter().position(|l| l.trim() == "› /mo").expect("the editor stays");
+        // Right above the editor's top rule.
+        assert!(a[editor - 3].contains("/model") && a[editor - 2].contains("/exit"), "{after}");
+        assert_eq!(&b[..editor - 3], &a[..editor - 3], "the conversation above did not move");
+        assert_eq!(&b[editor - 1..], &a[editor - 1..], "the editor, its rules and the footer are unchanged");
     }
 
     #[test]
