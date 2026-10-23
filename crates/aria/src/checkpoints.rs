@@ -33,9 +33,23 @@ pub struct Changes {
     pub removed: u32,
 }
 
+/// A path as a literal gitignore pattern.
+fn escape_pattern(path: &str) -> String {
+    path.replace('\\', "\\\\").replace('*', "\\*").replace('?', "\\?").replace('[', "\\[").replace('!', "\\!")
+}
+
+/// Was `file` made after `at` (ms)? Its birth time where the system keeps one, else its last change.
+fn born_after(file: &Path, at: i64) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(file) else { return false };
+    let when = meta.created().or_else(|_| meta.modified());
+    when.ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).is_some_and(|d| d.as_millis() as i64 >= at)
+}
+
 pub struct Checkpoints {
     git_dir: PathBuf,
     folder: PathBuf,
+    /// A global git config to read instead of the person's (tests).
+    pub(crate) global_config: Option<PathBuf>,
 }
 
 fn now_ms() -> i64 {
@@ -55,7 +69,7 @@ impl Checkpoints {
             return None;
         }
         let git_dir = root.join(session);
-        let made = Checkpoints { git_dir, folder };
+        let made = Checkpoints { git_dir, folder, global_config: None };
         if !made.git_dir.join("HEAD").exists() {
             std::fs::create_dir_all(&made.git_dir).ok()?;
             made.git(&["init", "-q"]).ok()?;
@@ -70,16 +84,21 @@ impl Checkpoints {
                 command.env_remove(key);
             }
         }
-        let output = command
+        command
             .arg("--git-dir")
             .arg(&self.git_dir)
             .arg("--work-tree")
             .arg(&self.folder)
             .args(["-c", "user.name=aria", "-c", "user.email=aria@localhost", "-c", "core.autocrlf=false"])
+            // The person's signing and hooks are for their commits, never Aria's own.
+            .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "core.hooksPath=/dev/null"])
             .args(args)
             .current_dir(&self.folder)
-            .stdin(Stdio::null())
-            .output()?;
+            .stdin(Stdio::null());
+        if let Some(global) = &self.global_config {
+            command.env("GIT_CONFIG_GLOBAL", global);
+        }
+        let output = command.output()?;
         if !output.status.success() {
             return Err(io::Error::other(format!(
                 "git {}: {}",
@@ -101,13 +120,43 @@ impl Checkpoints {
             .collect())
     }
 
+    /// What the project's own repository ignores in this folder (its `.gitignore` above the folder, its own excludes):
+    /// a package's `node_modules` ignored at a monorepo's root is not the session's to keep. Empty outside a repository.
+    fn ignored_by_the_project(&self) -> Vec<String> {
+        let mut command = Command::new("git");
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("GIT_") {
+                command.env_remove(key);
+            }
+        }
+        let out = command
+            .args(["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"])
+            .current_dir(&self.folder)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output();
+        match out {
+            Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+                .split('\0')
+                .filter(|p| !p.is_empty() && !p.starts_with("../"))
+                .map(str::to_string)
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The folder as it is now, as a commit.
     fn snapshot(&self) -> io::Result<String> {
         let big = self.big_files()?;
         let mut exclude = String::from(".git\n");
+        for path in self.ignored_by_the_project() {
+            exclude.push('/');
+            exclude.push_str(&escape_pattern(&path));
+            exclude.push('\n');
+        }
         for path in &big {
             exclude.push('/');
-            exclude.push_str(&path.replace('\\', "\\\\").replace('*', "\\*").replace('?', "\\?").replace('[', "\\["));
+            exclude.push_str(&escape_pattern(path));
             exclude.push('\n');
         }
         std::fs::create_dir_all(self.git_dir.join("info"))?;
@@ -138,7 +187,9 @@ impl Checkpoints {
 
     /// Keeps the folder as it is now, before the message `text`.
     pub fn take(&self, text: &str) -> io::Result<Checkpoint> {
-        let checkpoint = Checkpoint { id: self.snapshot()?, text: text.to_string(), at: now_ms(), files: 0 };
+        // When it starts, not when it ends: what is born after this moment is the turn's.
+        let at = now_ms();
+        let checkpoint = Checkpoint { id: self.snapshot()?, text: text.to_string(), at, files: 0 };
         let mut list = self.read_index();
         list.push(checkpoint.clone());
         self.write_index(&list)?;
@@ -176,7 +227,14 @@ impl Checkpoints {
         let now = self.snapshot()?;
         let made = self.git(&["diff", "--name-only", "-z", "--diff-filter=A", &checkpoint.id, &now])?;
         for path in String::from_utf8_lossy(&made.stdout).split('\0').filter(|p| !p.is_empty()) {
-            let _ = std::fs::remove_file(self.folder.join(path));
+            // New to the snapshot is not new to the folder: a file the checkpoint left out (ignored then, or too big)
+            // may show up now. Only a file born after the checkpoint goes.
+            let file = self.folder.join(path);
+            // Filesystems stamp with a coarse clock, a few ms behind: a margin keeps a file made right after the
+            // checkpoint from looking older than it.
+            if born_after(&file, checkpoint.at - 20) {
+                let _ = std::fs::remove_file(file);
+            }
         }
         // A checkpoint of an empty folder has nothing to bring back (and git refuses a pathspec that matches nothing).
         let kept = self.git(&["ls-tree", "-r", "--name-only", &checkpoint.id])?;
@@ -259,6 +317,51 @@ mod tests {
         fs::write(folder.join("made.txt"), "x").unwrap();
         c.restore(&cp).unwrap();
         assert!(!folder.join("made.txt").exists());
+    }
+
+    #[test]
+    fn undo_never_deletes_a_file_the_checkpoint_left_out() {
+        let p = place();
+        fs::write(p.folder.join(".gitignore"), ".env\n").unwrap();
+        fs::write(p.folder.join(".env"), "SECRET=1").unwrap();
+        // A file that was there before, as files are: not in the last milliseconds before the message.
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let c = open(&p);
+        let cp = c.take("drop the ignore line").unwrap();
+        fs::write(p.folder.join(".gitignore"), "").unwrap();
+        c.restore(&cp).unwrap();
+        assert_eq!(fs::read_to_string(p.folder.join(".env")).unwrap(), "SECRET=1", "it was there before: it stays");
+        assert_eq!(fs::read_to_string(p.folder.join(".gitignore")).unwrap(), ".env\n");
+    }
+
+    #[test]
+    fn a_global_git_config_cannot_break_checkpoints() {
+        let p = place();
+        let global = p._dir.path().join("gitconfig");
+        fs::write(
+            &global,
+            "[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = false\n[core]\n\thooksPath = /nonexistent\n",
+        )
+        .unwrap();
+        let mut c = open(&p);
+        c.global_config = Some(global);
+        assert!(c.take("signed?").is_ok(), "the user's signing and hooks never apply to Aria's own commits");
+    }
+
+    #[test]
+    fn what_the_enclosing_repo_ignores_is_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("monorepo");
+        let folder = repo.join("packages").join("checkout-widget");
+        fs::create_dir_all(folder.join("node_modules").join("lib")).unwrap();
+        fs::write(folder.join("node_modules").join("lib").join("x.js"), "dep").unwrap();
+        fs::write(folder.join("index.ts"), "a").unwrap();
+        fs::write(repo.join(".gitignore"), "node_modules/\n").unwrap();
+        std::process::Command::new("git").args(["init", "-q"]).current_dir(&repo).output().unwrap();
+        let c = Checkpoints::open_in(&dir.path().join("cp"), "s1", &folder, Path::new("/home/ana")).unwrap();
+        let cp = c.take("x").unwrap();
+        fs::write(folder.join("node_modules").join("lib").join("x.js"), "changed dep").unwrap();
+        assert_eq!(c.changes_since(&cp).unwrap(), Changes::default(), "node_modules is not the session's to keep");
     }
 
     #[test]
