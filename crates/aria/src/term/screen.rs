@@ -12,7 +12,8 @@ use crate::term::view::{
 use crate::term::Key;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
-    EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+    EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton,
+    MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
@@ -24,6 +25,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 fn restore() {
+    // Harmless where it was never pushed.
+    let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     let _ = disable_raw_mode();
     let _ = execute!(
         std::io::stdout(),
@@ -140,6 +143,11 @@ pub fn run(
     enable_raw_mode()?;
     let _guard = Guard::new(restore);
     execute!(std::io::stdout(), EnterAlternateScreen, EnableMouseCapture, EnableFocusChange, EnableBracketedPaste)?;
+    // Where the terminal speaks the extended keyboard protocol (kitty, ghostty, foot, WezTerm, recent Alacritty),
+    // Ctrl+Enter and Shift+Enter are told apart from Enter.
+    if crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false) {
+        execute!(std::io::stdout(), PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?;
+    }
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let size = terminal.size()?;
     app.update(Input::Resize { height: size.height });

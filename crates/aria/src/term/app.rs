@@ -113,6 +113,8 @@ pub struct App {
     started: Option<u64>,
     /// The row the suggestions start at on screen.
     overlay_top: u16,
+    /// A message Ctrl+Enter sends once the turn it stopped settles.
+    after_abort: Option<String>,
 }
 
 fn folder_name(path: &str) -> String {
@@ -139,6 +141,7 @@ impl App {
             scroll: 0,
             started: None,
             overlay_top: 0,
+            after_abort: None,
         };
         let load = app.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
         (app, vec![load])
@@ -314,6 +317,7 @@ impl App {
         if press.ctrl {
             return match press.key {
                 Key::Char('o') => self.set_verbose(!self.config.verbose),
+                Key::Enter if self.dialog.is_none() => self.interrupt(),
                 _ => Vec::new(),
             };
         }
@@ -326,7 +330,7 @@ impl App {
             match press.key {
                 Key::Up | Key::Down | Key::Esc | Key::Tab | Key::Enter => {
                     let outcome = picker.key(press.key);
-                    return self.picked(kind, outcome);
+                    return self.picked(kind, outcome, press.key == Key::Enter);
                 }
                 _ => {}
             }
@@ -404,7 +408,9 @@ impl App {
         }
     }
 
-    fn picked(&mut self, kind: PickerKind, outcome: Outcome) -> Vec<Effect> {
+    /// `run`: a command picked with Enter runs at once; with Tab or a click it is only completed in the editor (a stray
+    /// click never closes a session).
+    fn picked(&mut self, kind: PickerKind, outcome: Outcome, run: bool) -> Vec<Effect> {
         match outcome {
             Outcome::None => Vec::new(),
             Outcome::Closed => {
@@ -417,6 +423,10 @@ impl App {
                     PickerKind::Files => {
                         self.editor.complete(&value);
                         Vec::new()
+                    }
+                    PickerKind::Commands if run => {
+                        self.editor.set(&format!("/{value}"));
+                        self.submit()
                     }
                     PickerKind::Commands => {
                         self.editor.set(&format!("/{value} "));
@@ -472,7 +482,8 @@ impl App {
             })];
         }
         let behavior = if self.session.running {
-            Some("followUp".to_string())
+            // For the next gap: after the thinking or the tool that runs now (Pi's steering).
+            Some("steer".to_string())
         } else {
             self.session.add_user(trimmed);
             None
@@ -557,7 +568,7 @@ impl App {
                     if row >= top && usize::from(row - top) < lines.len() {
                         if let Some((kind, picker)) = self.picker.as_ref() {
                             let (kind, outcome) = (*kind, picker.click(usize::from(row - top)));
-                            effects.extend(self.picked(kind, outcome));
+                            effects.extend(self.picked(kind, outcome, false));
                         }
                     }
                 }
@@ -683,7 +694,28 @@ impl App {
             }
         }
         self.follow_dialogs();
+        // A Ctrl+Enter stopped the turn: its message goes now that the turn settled.
+        if !self.session.running {
+            if let Some(text) = self.after_abort.take() {
+                self.session.add_user(&text);
+                return vec![self.in_session(PageMessage::ChatSend { text, behavior: None, attachments: Vec::new() })];
+            }
+        }
         Vec::new()
+    }
+
+    /// Ctrl+Enter: while a turn runs, stop it and send the message once it settles; otherwise send it.
+    fn interrupt(&mut self) -> Vec<Effect> {
+        if !self.session.running {
+            return self.submit();
+        }
+        let text = self.editor.take().trim().to_string();
+        if text.is_empty() {
+            return Vec::new();
+        }
+        self.scroll = 0;
+        self.after_abort = Some(text);
+        vec![self.in_session(PageMessage::ChatAbort)]
     }
 
     /// The first open dialog takes the editor's place; one closed elsewhere goes away.
@@ -834,8 +866,11 @@ mod tests {
         app.update(in_session(DockMessage::ChatEvent { event: json!({"type": "agent_start"}) }));
         typed(&mut app, "and the tests");
         let effects = key(&mut app, Key::Enter);
-        assert!(matches!(&effects[0], Effect::Send(PageMessage::Session { message, .. })
-            if matches!(&**message, PageMessage::ChatSend { behavior: Some(b), .. } if b == "followUp")));
+        assert!(
+            matches!(&effects[0], Effect::Send(PageMessage::Session { message, .. })
+            if matches!(&**message, PageMessage::ChatSend { behavior: Some(b), .. } if b == "steer")),
+            "while it works, Enter queues the message for the next gap (after thinking or a tool)"
+        );
     }
 
     #[test]
@@ -959,6 +994,56 @@ mod tests {
         app.set_overlay_top(10);
         app.update(Input::Click { row: 10 });
         assert_eq!(app.editor.text(), "/exit ");
+    }
+
+    #[test]
+    fn ctrl_enter_stops_the_turn_and_sends_once_it_settles() {
+        let mut app = attached();
+        app.update(in_session(DockMessage::ChatEvent { event: json!({"type": "agent_start"}) }));
+        typed(&mut app, "stop, do this instead");
+        let effects = app.update(Input::Key(Press { key: Key::Enter, ctrl: true, alt: false }));
+        assert!(
+            matches!(&effects[..], [Effect::Send(PageMessage::Session { message, .. })] if **message == PageMessage::ChatAbort)
+        );
+        assert_eq!(app.editor.text(), "");
+        let effects =
+            app.update(in_session(DockMessage::ChatEvent { event: json!({"type": "agent_settled", "aborted": true}) }));
+        assert!(matches!(&effects[..], [Effect::Send(PageMessage::Session { message, .. })]
+            if **message == PageMessage::ChatSend { text: "stop, do this instead".into(), behavior: None, attachments: vec![] }));
+        assert!(app
+            .session()
+            .entries
+            .iter()
+            .any(|e| matches!(e, crate::term::state::Entry::User { text } if text == "stop, do this instead")));
+    }
+
+    #[test]
+    fn ctrl_enter_while_idle_just_sends() {
+        let mut app = attached();
+        typed(&mut app, "hi");
+        let effects = app.update(Input::Key(Press { key: Key::Enter, ctrl: true, alt: false }));
+        assert!(matches!(&effects[..], [Effect::Send(PageMessage::Session { message, .. })]
+            if matches!(&**message, PageMessage::ChatSend { behavior: None, .. })));
+    }
+
+    #[test]
+    fn enter_on_a_command_suggestion_runs_it_and_tab_completes_it() {
+        let mut app = attached();
+        typed(&mut app, "/");
+        let id = app.pending.iter().find(|(_, p)| **p == Pending::Commands).map(|(id, _)| *id).unwrap();
+        app.update(in_session(DockMessage::Commands { id, commands: json!([]) }));
+        typed(&mut app, "exit");
+        assert_eq!(
+            key(&mut app, Key::Enter),
+            vec![Effect::Send(PageMessage::SessionClose { session: "aa".into() }), Effect::Quit]
+        );
+        let mut other = attached();
+        typed(&mut other, "/");
+        let id = other.pending.iter().find(|(_, p)| **p == Pending::Commands).map(|(id, _)| *id).unwrap();
+        other.update(in_session(DockMessage::Commands { id, commands: json!([]) }));
+        typed(&mut other, "verb");
+        key(&mut other, Key::Tab);
+        assert_eq!(other.editor.text(), "/verbose ");
     }
 
     #[test]

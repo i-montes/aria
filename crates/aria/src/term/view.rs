@@ -58,6 +58,27 @@ fn elapsed(ms: u64) -> String {
     }
 }
 
+/// The messages waiting for the next gap of the running turn, oldest first, right above the editor.
+fn queue_lines(v: &SessionView, width: usize) -> Vec<Line<'static>> {
+    let p = &v.palette;
+    let label = t(&v.lang, "term.queued", &json!({}));
+    let indent = label.width() + 4;
+    v.session
+        .queue
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let first = text.lines().next().unwrap_or_default();
+            let cut: String = first.chars().take(width.saturating_sub(indent + 1)).collect();
+            let head = if i == 0 { format!("  {label}  ") } else { " ".repeat(indent) };
+            Line::from(vec![
+                Span::styled(head, Style::default().fg(p.faint)),
+                Span::styled(cut, Style::default().fg(p.grey)),
+            ])
+        })
+        .collect()
+}
+
 /// The working line: the spinner, what the run is doing and for how long.
 fn working_line(v: &SessionView, ms: u64) -> Line<'static> {
     let p = &v.palette;
@@ -395,7 +416,7 @@ pub fn bottom_height(v: &SessionView, width: u16, height: u16) -> u16 {
     let width = usize::from(width.saturating_sub(2 * pad).max(1));
     let middle = v.panel.as_ref().map_or_else(|| editor_lines(v, width).len(), Vec::len);
     let room = usize::from(height).saturating_sub(4).max(1);
-    let rows = usize::from(v.working_ms.is_some()) + 1 + middle.min(room) + 1 + 1;
+    let rows = usize::from(v.working_ms.is_some()) + v.session.queue.len() + 1 + middle.min(room) + 1 + 1;
     (rows as u16).min(height)
 }
 
@@ -437,6 +458,7 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) {
     if let Some(ms) = v.working_ms {
         bottom.push(working_line(v, ms));
     }
+    bottom.extend(queue_lines(v, width));
     bottom.push(rule.clone());
     let room = usize::from(area.height).saturating_sub(4).max(1);
     bottom.extend(middle.into_iter().take(room));
@@ -699,6 +721,21 @@ mod tests {
         assert!(a[editor - 3].contains("/model") && a[editor - 2].contains("/exit"), "{after}");
         assert_eq!(&b[..editor - 3], &a[..editor - 3], "the conversation above did not move");
         assert_eq!(&b[editor - 1..], &a[editor - 1..], "the editor, its rules and the footer are unchanged");
+    }
+
+    #[test]
+    fn the_queue_waits_above_the_editor() {
+        let mut s = worked();
+        s.queue = vec!["and run the tests".into(), "then commit".into()];
+        let screen = text(&render(&view(&s, true), 100, 30));
+        let rows: Vec<&str> = screen.lines().collect();
+        let rule = rows.iter().rposition(|l| l.trim_start().starts_with("──") && l.len() > 40).unwrap();
+        let editor_top = rows[..rule].iter().rposition(|l| l.trim_start().starts_with("──")).unwrap();
+        assert!(
+            rows[editor_top - 2].contains("and run the tests") && rows[editor_top - 1].contains("then commit"),
+            "{screen}"
+        );
+        assert!(rows[editor_top - 2].contains("en cola"), "{screen}");
     }
 
     #[test]
