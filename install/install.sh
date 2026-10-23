@@ -6,6 +6,7 @@
 #   sh install.sh --uninstall                          remove Aria (asks before deleting ~/.aria)
 #   sh install.sh --dry-run [...]                      print what would happen and change nothing
 #   sh install.sh --restart-now [...]                  restart a running dock at once, even mid-run
+#   sh install.sh --headless [...]                     a server with no desktop (Linux): `aria serve` as a user unit
 #
 # An update does not cut a run: the running dock is told a new version is installed and restarts into it once it
 # is hidden and no session has a run going. Only a changed service file, --restart-now, or a dock too old to
@@ -24,6 +25,7 @@ BIN_DIR=${ARIA_BIN_DIR:-$HOME/.local/bin}
 DATA_DIR=${ARIA_HOME:-$HOME/.aria}
 UNIT_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
 UNIT=aria.service
+SERVE_UNIT=aria-serve.service
 AGENT_DIR=$HOME/Library/LaunchAgents
 AGENT=com.aria.dock.plist
 LABEL=com.aria.dock
@@ -37,8 +39,12 @@ PACKAGES="gtk3 webkit2gtk-4.1 gtk-layer-shell bubblewrap iproute2 libsecret alsa
 SCRIPT_DIR=""
 if [ -f "$0" ]; then SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || SCRIPT_DIR=""; fi
 PI_PACKAGE=@earendil-works/pi-coding-agent
+# A server has no toolkit: the sandbox (bwrap) and `ss` for the process guard are all it needs from the system.
+HEADLESS_PACKAGES="bubblewrap iproute2"
 
 DRY_RUN=0
+HEADLESS=0
+NODE_PRIVATE=0
 RESTART_NOW=0
 SERVICE_CHANGED=0
 LOCAL=""
@@ -65,6 +71,8 @@ PLATFORM=""
 # Placeholders until releases are published; override with the environment.
 DOWNLOAD_URL=${ARIA_DOWNLOAD_URL:-}
 PI_VERSION_URL=${ARIA_PI_VERSION_URL:-}
+NODE_VERSION_URL=${ARIA_NODE_VERSION_URL:-}
+NODE_DIST=${ARIA_NODE_DIST:-https://nodejs.org/dist}
 
 detect_platform() {
   [ -n "$PLATFORM" ] && return
@@ -84,10 +92,12 @@ detect_platform() {
   PLATFORM=$platform
   if [ -z "$DOWNLOAD_URL" ]; then DOWNLOAD_URL=https://aria.example/releases/latest/$artifact; fi
   if [ -z "$PI_VERSION_URL" ]; then PI_VERSION_URL=${DOWNLOAD_URL%/*}/pi-version; fi
+  if [ -z "$NODE_VERSION_URL" ]; then NODE_VERSION_URL=${DOWNLOAD_URL%/*}/node-version; fi
+  if [ "$HEADLESS" = 1 ] && [ "$PLATFORM" != Linux ]; then die "--headless is for Linux servers (this is $PLATFORM); a Mac runs the dock"; fi
 }
 
 usage() {
-  sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # The unit file. `curl | sh` has no sibling files, so the script carries it (install/aria.service
@@ -106,6 +116,26 @@ Restart=on-failure
 
 [Install]
 WantedBy=graphical-session.target
+UNIT
+}
+
+# The server's unit file (install/aria-serve.service is the same text; install.test.sh checks they match). No graphical
+# session: it starts with the user manager (loginctl enable-linger keeps that running with nobody logged in). Its PATH
+# starts with the private Node, which the service's own PATH would otherwise not have.
+print_serve_unit() {
+  if [ "$BIN_DIR" = "$HOME/.local/bin" ]; then exec_path='%h/.local/bin/aria'; else exec_path="$BIN_DIR/aria"; fi
+  if [ "$DATA_DIR" = "$HOME/.aria" ]; then data_path='%h/.aria'; else data_path="$DATA_DIR"; fi
+  cat <<UNIT
+[Unit]
+Description=Aria service
+
+[Service]
+Environment=PATH=$data_path/node/bin:$data_path/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=$exec_path serve
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
 UNIT
 }
 
@@ -147,7 +177,7 @@ install_binary() {
 
 print_service() {
   detect_platform
-  if [ "$PLATFORM" = Darwin ]; then print_agent; else print_unit; fi
+  if [ "$PLATFORM" = Darwin ]; then print_agent; elif [ "$HEADLESS" = 1 ]; then print_serve_unit; else print_unit; fi
 }
 
 check_session() {
@@ -163,6 +193,7 @@ check_session() {
     [ "$major" -ge 12 ] || die "Aria needs macOS 12 or newer (found $version)"
     return
   fi
+  if [ "$HEADLESS" = 1 ]; then return; fi # a server has no session to check
   if [ "$DRY_RUN" = 1 ]; then
     say "would: check this is a Hyprland session with the Lua config (hyprctl eval 'return 1' prints ok)"
     return
@@ -187,6 +218,122 @@ install_packages() {
   if ! pacman -Qq $PACKAGES >/dev/null 2>&1; then run sudo pacman -S --needed $PACKAGES; fi
 }
 
+# A server's packages: the sandbox and `ss`, with the package manager it has. Never fatal: without them (or without
+# sudo) the owner gets the command to run and the sandbox asks every time, as on a Mac.
+install_headless_packages() {
+  detect_platform
+  if command -v apt-get >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    set -- sudo apt-get install -y $HEADLESS_PACKAGES
+  elif command -v pacman >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    set -- sudo pacman -S --needed $HEADLESS_PACKAGES
+  else
+    say "No apt-get or pacman here: install $HEADLESS_PACKAGES with your package manager (until then every command asks before it runs)"
+    return 0
+  fi
+  if [ "$DRY_RUN" = 1 ]; then
+    run "$@"
+    return 0
+  fi
+  if command -v bwrap >/dev/null 2>&1 && command -v ss >/dev/null 2>&1; then return 0; fi
+  "$@" || {
+    warn "could not install $HEADLESS_PACKAGES (no sudo?)"
+    say "Run this yourself: $*"
+    say "Until then every command asks before it runs."
+    return 0
+  }
+}
+
+# Without linger the user manager (and Aria with it) stops when the last login ends.
+enable_linger() {
+  who=${USER:-$(id -un)}
+  if [ "$DRY_RUN" = 1 ]; then
+    run loginctl enable-linger "$who"
+    return 0
+  fi
+  loginctl enable-linger "$who" || {
+    warn "could not enable linger, so Aria stops when you log out"
+    say "Run this yourself: sudo loginctl enable-linger $who"
+  }
+}
+
+# True when the Node on PATH (with its npm) is 22.19 or newer. Silent: a server falls back to a private Node.
+node_is_current() {
+  command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 || return 1
+  version=$(node --version 2>/dev/null | sed 's/^v//')
+  major=${version%%.*}
+  rest=${version#*.}
+  minor=${rest%%.*}
+  case "$major$minor" in *[!0-9]* | "") return 1 ;; esac
+  [ "$major" -gt 22 ] || { [ "$major" -eq 22 ] && [ "$minor" -ge 19 ]; }
+}
+
+# Sets NODE_VERSION to the pinned Node: the repo's node-version file next to this script, else the published one.
+read_node_version() {
+  detect_platform
+  if [ -n "${ARIA_NODE_VERSION:-}" ]; then
+    NODE_VERSION=$ARIA_NODE_VERSION
+  elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../node-version" ]; then
+    NODE_VERSION=$(tr -d '[:space:]' < "$SCRIPT_DIR/../node-version")
+  elif [ "$DRY_RUN" = 1 ]; then
+    say "would: download $NODE_VERSION_URL"
+    NODE_VERSION=PINNED
+    return
+  else
+    NODE_VERSION=$(curl -fsSL "$NODE_VERSION_URL") || die "could not download the pinned Node version from $NODE_VERSION_URL"
+    NODE_VERSION=$(printf '%s' "$NODE_VERSION" | tr -d '[:space:]')
+  fi
+  case "$NODE_VERSION" in *[!0-9.]* | "") die "the pinned Node version is not a version number: '$NODE_VERSION'" ;; esac
+}
+
+# The pinned Node into $DATA_DIR/node, for a server whose own is missing or too old (never replaced: Ubuntu's apt Node is
+# what its other software uses). The tarball is checked against the SHASUMS256.txt of the same release.
+install_private_node() {
+  detect_platform
+  read_node_version
+  case "$(uname -m)" in
+    aarch64 | arm64) node_arch=arm64 ;;
+    x86_64) node_arch=x64 ;;
+    *) die "there is no Node build for this machine ($(uname -m)); install Node 22.19 or newer yourself" ;;
+  esac
+  NODE_PRIVATE=1
+  tarball=node-v$NODE_VERSION-linux-$node_arch.tar.xz
+  base=$NODE_DIST/v$NODE_VERSION
+  if [ "$DRY_RUN" = 1 ]; then
+    say "would: install Node $NODE_VERSION into $DATA_DIR/node from $base/$tarball (verified against $base/SHASUMS256.txt)"
+    return
+  fi
+  work=$(mktemp -d)
+  if ! curl -fsSL "$base/$tarball" -o "$work/$tarball"; then rm -rf "$work"; die "could not download Node from $base/$tarball"; fi
+  if ! curl -fsSL "$base/SHASUMS256.txt" -o "$work/SHASUMS256.txt"; then rm -rf "$work"; die "could not download $base/SHASUMS256.txt"; fi
+  expected=$(awk -v f="$tarball" '$2 == f { print $1 }' "$work/SHASUMS256.txt")
+  if [ -z "$expected" ] || [ "$(sha256_of "$work/$tarball")" != "$expected" ]; then
+    rm -rf "$work"
+    die "the Node download does not match its checksum in SHASUMS256.txt; nothing was installed"
+  fi
+  mkdir "$work/node"
+  if ! tar -xJf "$work/$tarball" -C "$work/node" --strip-components 1; then rm -rf "$work"; die "could not unpack the Node download (is xz installed? on Ubuntu: sudo apt-get install xz-utils)"; fi
+  install -d -m 700 "$DATA_DIR"
+  rm -rf "$DATA_DIR/node"
+  mv "$work/node" "$DATA_DIR/node"
+  rm -rf "$work"
+  say "Installed Node $NODE_VERSION into $DATA_DIR/node"
+}
+
+# A server's Node: the private one (when an earlier run put it there) or the system's, kept when it is new enough, else
+# the pinned one is installed under $DATA_DIR/node. Pi and npm then run on it.
+ensure_server_node() {
+  if [ -x "$DATA_DIR/node/bin/node" ]; then PATH="$DATA_DIR/node/bin:$PATH"; export PATH; fi
+  if node_is_current; then
+    say "Node $(node --version | sed 's/^v//') is new enough; keeping it"
+    if [ -x "$DATA_DIR/node/bin/node" ]; then NODE_PRIVATE=1; fi
+    return
+  fi
+  install_private_node
+  PATH="$DATA_DIR/node/bin:$PATH"; export PATH
+}
+
 # Node 22.19 or newer runs Pi. Prints the reason and fails when it is missing or too old.
 check_node() {
   command -v node >/dev/null 2>&1 || die "Node 22.19 or newer is required (install it with your package manager or mise)"
@@ -204,10 +351,20 @@ check_node() {
 # The service has no mise on its PATH: a link to the Node found now lets it, and Pi's children, run.
 link_node() {
   run install -d -m 700 "$DATA_DIR/bin"
-  if [ "$DRY_RUN" = 1 ]; then
-    say "would: link $DATA_DIR/bin/node to the Node on your PATH (and claude, when Claude Code is installed)"
+  if [ -x "$DATA_DIR/node/bin/node" ] || [ "$NODE_PRIVATE" = 1 ]; then
+    # a server's private Node: it is the one the service runs, whatever the system has
+    node_bin=$DATA_DIR/node/bin/node
   else
-    ln -sf "$(command -v node)" "$DATA_DIR/bin/node"
+    node_bin=""
+  fi
+  if [ "$DRY_RUN" = 1 ]; then
+    if [ -n "$node_bin" ]; then
+      say "would: link $DATA_DIR/bin/node to $node_bin (and claude, when Claude Code is installed)"
+    else
+      say "would: link $DATA_DIR/bin/node to the Node on your PATH (and claude, when Claude Code is installed)"
+    fi
+  else
+    ln -sf "${node_bin:-$(command -v node)}" "$DATA_DIR/bin/node"
     # Claude Code, when installed, is what the Claude provider runs; Pi's processes find it through the same directory.
     if command -v claude >/dev/null 2>&1; then ln -sf "$(command -v claude)" "$DATA_DIR/bin/claude"; fi
   fi
@@ -387,7 +544,11 @@ write_unit() {
     return
   fi
   run mkdir -p "$UNIT_DIR"
-  write_service_file "$UNIT_DIR/$UNIT" "$(print_unit)"
+  if [ "$HEADLESS" = 1 ]; then
+    write_service_file "$UNIT_DIR/$SERVE_UNIT" "$(print_serve_unit)"
+  else
+    write_service_file "$UNIT_DIR/$UNIT" "$(print_unit)"
+  fi
 }
 
 write_service_file() {
@@ -427,6 +588,12 @@ restart_dock() {
     fi
     run launchctl bootstrap "gui/$uid" "$AGENT_DIR/$AGENT"
     say "Aria is installed. Press Option + Space to set it up."
+  elif [ "$HEADLESS" = 1 ]; then
+    run systemctl --user daemon-reload
+    run systemctl --user enable --now "$SERVE_UNIT"
+    if [ "$1" = 1 ] && soft_restart; then return; fi
+    if [ "$1" = 1 ]; then run systemctl --user restart "$SERVE_UNIT"; fi
+    say "Aria is installed and running as $SERVE_UNIT. From your computer: aria connect <user>@<this server>"
   else
     run systemctl --user daemon-reload
     run systemctl --user enable --now "$UNIT"
@@ -442,6 +609,7 @@ restart_dock() {
 # Omarchy shell; a failure only warns, since the dock works without it.
 install_bar_widget() {
   [ "$PLATFORM" = Darwin ] && return
+  [ "$HEADLESS" = 1 ] && return
   if [ "$DRY_RUN" = 1 ]; then
     say "would: $BIN_DIR/aria bar install (Aria's face in the Omarchy bar, when the Omarchy shell is there)"
     return
@@ -454,13 +622,15 @@ do_install() {
   # Refuse a bad --local before anything else, so a mistake changes nothing.
   if [ -n "$LOCAL" ] && [ "$DRY_RUN" != 1 ] && [ ! -x "$LOCAL" ]; then die "$LOCAL is not an executable file"; fi
   check_session
-  check_node
+  if [ "$HEADLESS" = 1 ]; then ensure_server_node; else check_node; fi
   read_pi_version # before anything is installed: a version we cannot read must not leave a half install
-  install_packages
+  if [ "$HEADLESS" = 1 ]; then install_headless_packages; else install_packages; fi
   was_active=0
   if [ "$DRY_RUN" != 1 ]; then
     if [ "$PLATFORM" = Darwin ]; then
       launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 && was_active=1
+    elif [ "$HEADLESS" = 1 ]; then
+      systemctl --user is-active --quiet "$SERVE_UNIT" 2>/dev/null && was_active=1
     else
       systemctl --user is-active --quiet "$UNIT" 2>/dev/null && was_active=1
     fi
@@ -476,6 +646,7 @@ do_install() {
   install_binary
   install_bar_widget
   write_unit
+  if [ "$HEADLESS" = 1 ]; then enable_linger; fi
   restart_dock "$was_active"
 }
 
@@ -520,6 +691,10 @@ do_uninstall() {
   if [ "$PLATFORM" = Darwin ]; then
     run launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
     run rm -f "$AGENT_DIR/$AGENT" "$BIN_DIR/aria"
+  elif [ "$HEADLESS" = 1 ]; then
+    run systemctl --user disable --now "$SERVE_UNIT" || true
+    run rm -f "$UNIT_DIR/$SERVE_UNIT" "$BIN_DIR/aria"
+    run systemctl --user daemon-reload
   else
     run systemctl --user disable --now "$UNIT" || true
     if [ "$DRY_RUN" = 1 ] || [ -x "$BIN_DIR/aria" ]; then run "$BIN_DIR/aria" bar remove || true; fi
@@ -537,6 +712,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --restart-now) RESTART_NOW=1 ;;
+    --headless) HEADLESS=1 ;; # give it before --restart-dock, the hook that runs the moment it is read
     --local)
       [ $# -ge 2 ] || die "--local needs the path of a binary"
       LOCAL=$2
@@ -548,6 +724,10 @@ while [ $# -gt 0 ]; do
     --print-pi-version) MODE=print-pi-version ;;
     --link-node) MODE=link-node ;;
     --install-engram) MODE=install-engram ;; # test hook
+    --install-node) MODE=install-node ;; # test hooks for the server's steps
+    --install-packages) MODE=install-packages ;;
+    --enable-linger) MODE=enable-linger ;;
+    --print-node-version) MODE=print-node-version ;;
     --install-agent-browser) MODE=install-agent-browser ;; # test hook
     --restart-dock) # test hook: the last step of an install; $2 is 1 when a dock was running, $3 when the service file changed
       [ $# -ge 3 ] || die "--restart-dock needs two values"
@@ -574,5 +754,9 @@ case "$MODE" in
   print-pi-version) read_pi_version; printf '%s\n' "$PI_VERSION" ;;
   link-node) link_node ;;
   install-engram) install_engram ;;
+  install-node) install_private_node ;;
+  install-packages) install_headless_packages ;;
+  enable-linger) enable_linger ;;
+  print-node-version) read_node_version; printf '%s\n' "$NODE_VERSION" ;;
   install-agent-browser) install_agent_browser ;;
 esac
