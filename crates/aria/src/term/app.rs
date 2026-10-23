@@ -123,6 +123,10 @@ pub struct App {
     after_abort: Option<String>,
     /// Calls whose whole output is shown.
     expanded: std::collections::HashSet<String>,
+    /// What each open session is doing, and since when (ms).
+    statuses: HashMap<String, (String, i64)>,
+    /// The time now (ms), from `clock`.
+    now_ms: u64,
     /// The `… N more lines` rows on screen, with their call.
     more_rows: Vec<(u16, String)>,
 }
@@ -154,6 +158,8 @@ impl App {
             after_abort: None,
             expanded: Default::default(),
             more_rows: Vec::new(),
+            statuses: HashMap::new(),
+            now_ms: 0,
         };
         let load = app.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
         (app, vec![load])
@@ -173,6 +179,7 @@ impl App {
 
     /// The time now (ms since the epoch): a run that just started is timed from it, one that ended stops being timed.
     pub fn clock(&mut self, now_ms: u64) {
+        self.now_ms = now_ms;
         if self.session.running {
             self.started.get_or_insert(now_ms);
         } else {
@@ -236,17 +243,61 @@ impl App {
     // ---- the list ------------------------------------------------------------------------------------------------
 
     /// The list's rows: each session's title (or "untitled") and folder, then the new one.
-    pub fn list_rows(&self) -> Vec<(String, String)> {
-        let untitled = t(&self.config.lang, "term.untitled", &json!({}));
-        let mut rows: Vec<(String, String)> = self
-            .sessions
-            .iter()
+    /// The session the client is attached to.
+    pub fn attached_session(&self) -> Option<&str> {
+        self.attached.as_deref()
+    }
+
+    /// The sessions as the list shows them: the one whose status changed last first.
+    fn ordered(&self) -> Vec<&SessionEntry> {
+        let mut sessions: Vec<&SessionEntry> = self.sessions.iter().collect();
+        sessions.sort_by_key(|s| std::cmp::Reverse(self.statuses.get(&s.id).map_or(0, |(_, at)| *at)));
+        sessions
+    }
+
+    /// How long ago `at` (ms) was: `just now`, `3 min ago`, `2 h ago`, `3 d ago`.
+    fn ago(&self, at: i64) -> String {
+        let seconds = (self.now_ms as i64 - at).max(0) / 1000;
+        let (key, n) = match seconds {
+            s if s < 60 => ("term.ago.now", 0),
+            s if s < 3_600 => ("term.ago.minutes", s / 60),
+            s if s < 86_400 => ("term.ago.hours", s / 3_600),
+            s => ("term.ago.days", s / 86_400),
+        };
+        t(&self.config.lang, key, &json!({ "n": n }))
+    }
+
+    /// The list's rows: title (or "untitled"), folder, what it is doing and how long ago; the new one last.
+    pub fn list_rows(&self) -> Vec<(String, String, String, String)> {
+        let lang = &self.config.lang;
+        let untitled = t(lang, "term.untitled", &json!({}));
+        let mut rows: Vec<(String, String, String, String)> = self
+            .ordered()
+            .into_iter()
             .map(|s| {
                 let title = if s.title.trim().is_empty() { untitled.clone() } else { s.title.clone() };
-                (title, s.workdir.as_deref().map(folder_name).unwrap_or_default())
+                let folder = s.workdir.as_deref().map(folder_name).unwrap_or_default();
+                let (state, ago) = match self.statuses.get(&s.id) {
+                    Some((status, at)) => {
+                        let key = match status.as_str() {
+                            "working" => "term.working",
+                            "waiting" => "term.waiting",
+                            "done" => "term.done",
+                            _ => "",
+                        };
+                        (if key.is_empty() { String::new() } else { t(lang, key, &json!({})) }, self.ago(*at))
+                    }
+                    None => (String::new(), String::new()),
+                };
+                (title, folder, state, ago)
             })
             .collect();
-        rows.push((t(&self.config.lang, "term.new", &json!({"folder": self.config.cwd})), String::new()));
+        rows.push((
+            t(lang, "term.new", &json!({"folder": self.config.cwd})),
+            String::new(),
+            String::new(),
+            String::new(),
+        ));
         rows
     }
 
@@ -255,11 +306,8 @@ impl App {
     }
 
     fn open_selected(&mut self) -> Vec<Effect> {
-        match self.sessions.get(self.selected) {
-            Some(entry) => {
-                let id = entry.id.clone();
-                self.attach(id)
-            }
+        match self.ordered().get(self.selected).map(|s| s.id.clone()) {
+            Some(id) => self.attach(id),
             None => {
                 let workdir = Some(self.config.cwd.clone());
                 vec![self.request(Pending::SessionNew, |id| PageMessage::SessionNew { id, workdir })]
@@ -663,6 +711,12 @@ impl App {
                 }
                 _ => Vec::new(),
             },
+            DockMessage::Session { message, .. } if matches!(*message, DockMessage::SessionStatus { .. }) => {
+                if let DockMessage::SessionStatus { session, status, at } = *message {
+                    self.statuses.insert(session, (status, at));
+                }
+                Vec::new()
+            }
             DockMessage::Session { session, message } if self.attached.as_deref() == Some(session.as_str()) => {
                 self.on_session(*message)
             }
@@ -1105,6 +1159,27 @@ mod tests {
         assert!(app.expanded().contains("c1"));
         app.update(Input::Click { row: 7 });
         assert!(!app.expanded().contains("c1"), "a second click folds it again");
+    }
+
+    #[test]
+    fn the_list_says_what_each_session_does_newest_first() {
+        let mut app = listed();
+        app.clock(10_000_000);
+        let status = |session: &str, status: &str, at: i64| {
+            Input::Dock(DockMessage::Session {
+                session: session.into(),
+                message: Box::new(DockMessage::SessionStatus { session: session.into(), status: status.into(), at }),
+            })
+        };
+        app.update(status("aa", "done", 10_000_000 - 3_600_000));
+        app.update(status("bb", "working", 10_000_000 - 180_000));
+        let rows = app.list_rows();
+        assert_eq!(rows[0].0, "untitled");
+        assert_eq!((rows[0].2.as_str(), rows[0].3.as_str()), ("working", "3 min ago"));
+        assert_eq!((rows[1].0.as_str(), rows[1].2.as_str(), rows[1].3.as_str()), ("Coupons", "done", "1 h ago"));
+        assert!(rows[2].0.starts_with("+ new in"));
+        key(&mut app, Key::Enter);
+        assert_eq!(app.attached_session(), Some("bb"), "Enter opens the row shown first");
     }
 
     #[test]

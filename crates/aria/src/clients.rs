@@ -257,6 +257,8 @@ impl Hub {
         let numbers: Vec<u64> = {
             let clients = self.clients.0.lock().unwrap();
             match value["type"].as_str() {
+                // What a session is doing is for every client's list, attached or not.
+                Some("session") if value["message"]["type"] == "sessionStatus" => clients.keys().copied().collect(),
                 Some("session") => {
                     let session = value["session"].as_str();
                     clients.iter().filter(|(_, c)| c.session.as_deref() == session).map(|(n, _)| *n).collect()
@@ -468,6 +470,20 @@ mod tests {
         assert!(f.chat.try_recv().is_err(), "none of them reached the chat");
         a.send(json!({"type": "session", "session": "aa", "message": {"type": "chatAbort"}}));
         assert!(f.chat.recv_timeout(Duration::from_secs(5)).is_ok());
+    }
+
+    #[test]
+    fn a_session_status_reaches_every_client() {
+        let f = fixture();
+        let mut elsewhere = connect(&f);
+        elsewhere.send(json!({"type": "attach", "session": "bb"}));
+        wait_until("attached", || f.hub.watchers().sees("bb"));
+        let status = DockMessage::Session {
+            session: "aa".into(),
+            message: Box::new(DockMessage::SessionStatus { session: "aa".into(), status: "working".into(), at: 1 }),
+        };
+        assert!(f.hub.route(&status));
+        assert_eq!(elsewhere.next()["message"]["status"], "working");
     }
 
     #[test]

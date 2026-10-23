@@ -237,6 +237,10 @@ struct Inner {
     workdir: Option<PathBuf>,
     /// When the current Pi last said anything (an event, a reply, a UI request): the turn watchdog's clock.
     last_activity: Option<Instant>,
+    /// What the session is doing for the terminal's list, since when (ms), and whether a run ended that nobody saw.
+    status: &'static str,
+    status_at: i64,
+    unseen_done: bool,
     /// The tool executions under way (by `toolCallId`, nested ones too): while any is open the watchdog waits, since a
     /// long build or test is silent and has its own timeouts. The value is the tool's name (what the face shows).
     tools: HashMap<String, String>,
@@ -499,7 +503,10 @@ impl Chat {
     /// `reserved` is the id a `ChatSend` was noted under (`reserve_prompt`); one is taken here when it has none.
     fn dispatch(&self, message: PageMessage, reserved: Option<String>) {
         match message {
-            PageMessage::ChatLoad { fresh } => self.load(fresh),
+            PageMessage::ChatLoad { fresh } => {
+                self.looked_at();
+                self.load(fresh)
+            }
             PageMessage::ChatSend { text, behavior, attachments } => {
                 let id = reserved.unwrap_or_else(|| reserve_prompt(&mut self.inner.lock().unwrap(), &text));
                 self.send_prompt(id, &text, behavior.as_deref(), &attachments)
@@ -1409,6 +1416,7 @@ impl Chat {
                                 inner.outcome = None;
                                 inner.compacting = false;
                             }
+                            self.update_status();
                             self.release_soon();
                         }
                         Some("compaction_start") => self.inner.lock().unwrap().compacting = true,
@@ -1486,6 +1494,9 @@ impl Chat {
                                 let restart = std::mem::take(&mut inner.restart_pending);
                                 (inner.dialogs.keys().cloned().collect::<Vec<_>>(), restart)
                             };
+                            let unseen = !self.seen();
+                            self.inner.lock().unwrap().unseen_done = unseen;
+                            self.update_status();
                             for id in open {
                                 self.close_dialog(&id);
                             }
@@ -1554,7 +1565,7 @@ impl Chat {
 
     pub fn dock_visibility_changed(&self) {
         if self.seen() {
-            return;
+            return self.looked_at();
         }
         let waiting: Vec<String> = {
             let mut inner = self.inner.lock().unwrap();
@@ -1566,6 +1577,50 @@ impl Chat {
         for body in waiting {
             self.ctx.notifier.send(&self.session, NOTIFICATION_TITLE, &body);
         }
+    }
+
+    /// What the session is doing: `waiting` (a dialog), `working` (a run), `done` (a run nobody saw end), `idle`.
+    fn current_status(inner: &Inner) -> &'static str {
+        if !inner.dialogs.is_empty() {
+            "waiting"
+        } else if inner.running {
+            "working"
+        } else if inner.unseen_done {
+            "done"
+        } else {
+            "idle"
+        }
+    }
+
+    /// Says the session's status when it changed.
+    fn update_status(&self) {
+        let changed = {
+            let mut inner = self.inner.lock().unwrap();
+            let now = Self::current_status(&inner);
+            (now != inner.status || inner.status_at == 0).then(|| {
+                inner.status = now;
+                inner.status_at = now_ms();
+                (now, inner.status_at)
+            })
+        };
+        if let Some((status, at)) = changed {
+            self.emit(DockMessage::SessionStatus { session: self.session.clone(), status: status.into(), at });
+        }
+    }
+
+    /// Says the session's status as it is (a client just asked for the list).
+    pub fn say_status(&self) {
+        let (status, at) = {
+            let inner = self.inner.lock().unwrap();
+            (Self::current_status(&inner), inner.status_at)
+        };
+        self.emit(DockMessage::SessionStatus { session: self.session.clone(), status: status.into(), at });
+    }
+
+    /// Someone looks at the session: a run that ended unseen is seen now.
+    fn looked_at(&self) {
+        self.inner.lock().unwrap().unseen_done = false;
+        self.update_status();
     }
 
     fn open_dialog(&self, id: String, method: String, raw: Value) {
@@ -1580,6 +1635,7 @@ impl Chat {
         if hidden {
             self.ctx.notifier.send(&self.session, NOTIFICATION_TITLE, &dialog_body(&raw));
         }
+        self.update_status();
         self.report_face();
         if let Some(timeout) = raw["timeout"].as_u64() {
             // Pi resolves the dialog by itself when its timeout runs out; the page and the notification follow.
@@ -2307,6 +2363,11 @@ impl Sessions {
             PageMessage::SessionsLoad { id } => {
                 let list = sessions::load(&self.ctx.paths);
                 (self.emit)(DockMessage::Sessions { id, sessions: list.sessions, active: list.active });
+                // The terminal's list says what each open session is doing.
+                let chats: Vec<Chat> = self.chats.lock().unwrap().values().cloned().collect();
+                for chat in chats {
+                    chat.say_status();
+                }
             }
             PageMessage::SessionsSave { sessions: entries, active } => {
                 let _ = self.ctx.paths.ensure_root();
@@ -2968,6 +3029,36 @@ mod tests {
         wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
         h.chat.test_send_raw("think-high");
         wait_for(&h, "the new level", |m| matches!(m, DockMessage::ChatState { thinking: Some(t), .. } if t == "high"));
+    }
+
+    fn status_of(m: &DockMessage) -> Option<String> {
+        match m {
+            DockMessage::SessionStatus { status, .. } => Some(status.clone()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_session_says_what_it_is_doing() {
+        let h = harness();
+        h.visible.store(false, Ordering::SeqCst);
+        send(&h, "x");
+        wait_for(&h, "working", |m| status_of(m).as_deref() == Some("working"));
+        wait_for(&h, "done, nobody looked", |m| status_of(m).as_deref() == Some("done"));
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
+        wait_for(&h, "idle once looked at", |m| status_of(m).as_deref() == Some("idle"));
+        h.chat.test_send_raw("ask");
+        wait_for(&h, "waiting for an answer", |m| status_of(m).as_deref() == Some("waiting"));
+    }
+
+    #[test]
+    fn statuses_follow_the_session_list() {
+        let s = sessions_harness();
+        s.sessions
+            .handle(in_session("aa", PageMessage::ChatSend { text: "x".into(), behavior: None, attachments: vec![] }));
+        wait_session(&s, "ready", "aa", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        s.sessions.handle(PageMessage::SessionsLoad { id: 4 });
+        wait_session(&s, "aa's status after the list", "aa", |m| matches!(m, DockMessage::SessionStatus { .. }));
     }
 
     #[test]

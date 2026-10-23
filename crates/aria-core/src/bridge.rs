@@ -339,6 +339,10 @@ pub enum DockMessage {
         id: Option<u64>,
         session: SessionEntry,
     },
+    /// What a session is doing (`working`, `waiting`, `done`, `idle`) since `at` (ms): for the terminal's list. The page
+    /// ignores it.
+    #[serde(rename = "sessionStatus")]
+    SessionStatus { session: String, status: String, at: i64 },
     /// A tab closed (from the page or a terminal): every client drops it.
     #[serde(rename = "sessionRemoved")]
     SessionRemoved { session: String },

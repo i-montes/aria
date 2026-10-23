@@ -425,25 +425,38 @@ fn editor_lines(v: &SessionView, width: usize) -> Vec<Line<'static>> {
 }
 
 /// The start screen: the open sessions (title, folder) and the new one in the current folder last; `note` under them.
-pub fn draw_list(frame: &mut Frame, rows: &[(String, String)], selected: usize, note: Option<&str>, p: &Palette) {
+pub fn draw_list(
+    frame: &mut Frame,
+    rows: &[(String, String, String, String)],
+    selected: usize,
+    note: Option<&str>,
+    p: &Palette,
+) {
     let area = frame.area();
     if area.width < 4 || area.height < 2 {
         return;
     }
     let inner = Rect { x: area.x + 2, y: area.y + 1, width: area.width - 4, height: area.height - 1 };
-    let title_width = rows.iter().map(|(title, _)| title.width()).max().unwrap_or(0).min(usize::from(inner.width) / 2);
+    let title_width = rows.iter().map(|row| row.0.width()).max().unwrap_or(0).min(usize::from(inner.width) / 2);
+    let folder_width = rows.iter().map(|row| row.1.width()).max().unwrap_or(0).min(24);
+    let state_width = rows.iter().map(|row| row.2.width()).max().unwrap_or(0);
     let mut lines: Vec<Line<'static>> = rows
         .iter()
         .enumerate()
-        .map(|(i, (title, folder))| {
+        .map(|(i, (title, folder, state, ago))| {
             let on = i == selected;
             let style = Style::default().fg(if on { p.accent } else { p.text });
             let cut: String = title.chars().take(title_width).collect();
             let pad = title_width.saturating_sub(cut.width());
+            let folder: String = folder.chars().take(folder_width).collect();
+            let folder_pad = folder_width.saturating_sub(folder.width());
+            let state_pad = state_width.saturating_sub(state.width());
             Line::from(vec![
                 Span::styled(if on { "› " } else { "  " }, style),
                 Span::styled(format!("{cut}{}", " ".repeat(pad)), style),
-                Span::styled(format!("    {folder}"), Style::default().fg(p.grey)),
+                Span::styled(format!("    {folder}{}", " ".repeat(folder_pad)), Style::default().fg(p.grey)),
+                Span::styled(format!("    {state}{}", " ".repeat(state_pad)), Style::default().fg(p.text)),
+                Span::styled(format!("    {ago}"), Style::default().fg(p.faint)),
             ])
         })
         .collect();
