@@ -50,6 +50,12 @@ export function pauses(file: string = pauseFile()): Record<string, number> {
   }
 }
 
+/** While classifiers are set aside, until when (ms) the first of them is; null when none is. */
+export function offUntil(file: string = pauseFile(), now: number = Date.now()): number | null {
+  const waiting = Object.values(pauses(file)).filter((until) => until > now)
+  return waiting.length ? Math.min(...waiting) : null
+}
+
 function save(file: string, kept: Record<string, number>): void {
   try {
     mkdirSync(dirname(file), { recursive: true })

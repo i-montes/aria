@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { chain, classifyWithJev, failureWait, FREE_JEV, PAID_JEV, pauses } from './jev.ts'
+import { chain, classifyWithJev, failureWait, FREE_JEV, offUntil, PAID_JEV, pauses } from './jev.ts'
 
 const QUOTA = {
   stopReason: 'error',
@@ -100,6 +100,14 @@ describe('Jev, model by model', () => {
     expect(result).toBeNull()
     expect(notes.length).toBe(1)
     expect(notes[0]).toContain('no classifier is left')
+  })
+
+  test('while nothing can answer, routing is off until the first one comes back', async () => {
+    const f = file()
+    await classifyWithJev(registry([FREE_JEV, PAID_JEV], { [key(FREE_JEV)]: QUOTA, [key(PAID_JEV)]: FUNDS }), {}, {}, { file: f, now: () => 0 })
+    expect(offUntil(f, 0)).toBe(3600 * 1000)
+    expect(offUntil(f, 3600 * 1000)).toBe(16342 * 1000, 'the paid one is back: only the free one still waits')
+    expect(offUntil(f, 16342 * 1000)).toBeNull()
   })
 
   test('no pause file, or a broken one, is no pause', () => {

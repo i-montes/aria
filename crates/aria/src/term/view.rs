@@ -538,6 +538,16 @@ fn footer(v: &SessionView, width: u16) -> Line<'static> {
         }
     }
     let mut right_side: Vec<Span<'static>> = Vec::new();
+    // No classifier can route messages (their quota or funds are spent): until the first one comes back.
+    if let Some(until) = s
+        .statuses
+        .get("aria-jev-off")
+        .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
+        .and_then(|v| v["until"].as_i64())
+    {
+        right_side
+            .push(Span::styled(format!("jev off {}    ", left(until / 1000 - v.now)), Style::default().fg(p.amber)));
+    }
     // The project's checks after the last edits (the verify extension).
     if let Some(verify) = s.statuses.get("aria-verify").and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
     {
@@ -1130,6 +1140,21 @@ mod tests {
         s.statuses.insert("aria-verify".into(), r#"{"ok":false}"#.into());
         let b = render(&view(&s, true), 140, 30);
         assert_eq!(colour_of(&b, "tests ✗"), Palette::truecolor().coral);
+    }
+
+    #[test]
+    fn the_footer_says_while_routing_is_off() {
+        let mut s = worked();
+        let mut v = view(&s, true);
+        v.now = 1_000;
+        let screen = text(&render(&v, 140, 30));
+        assert!(!screen.contains("jev off"), "{screen}");
+        s.statuses.insert("aria-jev-off".into(), r#"{"until":3700000}"#.into());
+        let mut v = view(&s, true);
+        v.now = 1_000;
+        let b = render(&v, 140, 30);
+        assert!(text(&b).lines().last().unwrap().contains("jev off 0h45"), "{}", text(&b));
+        assert_eq!(colour_of(&b, "jev off"), Palette::truecolor().amber);
     }
 
     #[test]

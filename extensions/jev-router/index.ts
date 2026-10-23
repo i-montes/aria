@@ -70,7 +70,7 @@ import { ariaConfig, hasAriaConfig } from '../lib/config.ts'
 import { styleNote } from './style.ts'
 import { EFFORT_FILE, effortFor, RANK, saveEffort } from './effort.ts'
 import { agentDir } from '../lib/agent-dir.ts'
-import { classifyWithJev } from '../lib/jev.ts'
+import { classifyWithJev, offUntil } from '../lib/jev.ts'
 
 const CLASSIFY_TIMEOUT_MS = 3000
 
@@ -234,6 +234,9 @@ export default function (pi: ExtensionAPI) {
         // no session yet
       }
       const result = await ask(ctx, classifierRequest(text, previous))
+      // No classifier answered and some are set aside: the footer says routing is off, and until when.
+      const off = result === null ? offUntil() : null
+      if (ctx.mode === 'rpc') ctx.ui?.setStatus?.('aria-jev-off', off ? JSON.stringify({ until: off }) : undefined)
       const hints = parseHints(result)
       if (!hints) return
       current = hints
