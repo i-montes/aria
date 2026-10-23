@@ -103,6 +103,30 @@ Lifetimes:
 
 The page gets every session's jobs as one `jobs` message, at most every 250 ms, and when a session loads. It shows the active session's as pills above the composer and all of them in the background list (Alt+A), with a job's output, its URL and a way to stop it.
 
+## The terminal
+
+`aria` in a terminal is a client of the dock's sessions (docs/superpowers/specs/2026-10-23-terminal-design.md): the
+service (`aria dock`, what the systemd unit and the LaunchAgent run; plain `aria` with no terminal still runs it) owns
+every session, and leaving the terminal stops nothing.
+
+- **`clients.rs`** — `clients.sock` beside the control socket (folder `700`, socket `600`). A client speaks the page's
+  messages, one JSON object per line: what `handlers::is_chat` accepts goes to the chat's worker, `secretSave` to the
+  handlers, anything else is answered `error { code: "not-for-clients" }`. Client-only lines: `attach { session }`,
+  `detach`, `focus { focused }`. `Hub::route` delivers each dock message: a reply to a page request (a numeric id) to
+  the page only; a client's request ids are moved to `2^40 + client × 10^6 + id` going in and back coming out, so its
+  reply reaches it alone (a `sessionAdded` it asked for reaches everyone, without its id); a `session` message to the
+  page and the clients attached to that session; the rest to everyone. A client whose queue (1024 lines) is full is
+  dropped. A focused client attached to a session counts as seeing it (`ChatCtx.watchers`), so it raises no
+  notification.
+- **A session's folder** — `sessions.json` entries may carry `workdir`: a session opened from a terminal works where it
+  was opened; a settings change does not move it, a page save keeps it, and a folder gone since then falls back to the
+  projects folder with the notice `chat.folderMissing`.
+- **`term/`** — the client, drawn with ratatui: `app.rs` (a pure state machine: inputs in, effects out), `state.rs` (the
+  conversation, a port of `ui/chat/state.js`), `view.rs` and `markdown.rs` (the canvas), `editor.rs`, `picker.rs`,
+  `dialog.rs` (Pi's dialogs in the editor's place), `link.rs` (the socket), `git.rs` (the footer's branch), `texts.rs`
+  (the dock's own texts first, then the client's), `screen.rs` (raw mode, the alternate screen, the mouse, focus and
+  pasted text, always given back). `tools/term/live-check.sh` drives it against a real dock in a scratch home.
+
 ## The messages
 
 One JSON object per message with a `type`, defined in `crates/aria-core/src/bridge.rs`. Requests that expect an answer carry an `id` that the answer repeats.
@@ -116,6 +140,7 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 | `openUrl` | open an `https://` link in the browser |
 | `installClaudeBridge`, `enginesRestart` | install the Claude provider; restart every Pi after a credential changed |
 | `sessionsLoad`, `sessionsSave`, `sessionClose`, `chatShown` | the tabs; is the chat on screen (not the settings) |
+| `sessionNew` | a terminal opens a tab, in its `workdir`; answered `sessionAdded` (or `error`: `too-many-sessions`, `session-failed`) |
 | `session` (wrapping `chatSend`, `chatAbort`, `chatLoad`, `chatEarlier`, `chatClearQueue`, `uiAnswer`, `listCommands`, `listModels`, `setModel`, `listFiles`) | everything about one tab's conversation. `chatEarlier { cursor? }` asks for the 40 earlier messages before `cursor` (none: the newest earlier page), read from the tab's segment files without Pi; it is answered with a `chatEvent` `{ type: 'earlier', messages, cursor, more }` (`cursor` `{ segment, index }` points at the page's first message; `more` says whether anything is before it). `chatSend` may carry `attachments: [{ name, mime, data }]` (base64; at most 10, 20 MB each, 50 MB together): the dock saves them under `~/.aria/attachments/<session>/<yyyy-mm-dd>/<n>-<safe name>` and adds a line per file to the message, `[attached: <name> (<mime>, <size>) at <path>]`, or `[attached image: <name> at <path>]` with the image itself in Pi's `images` when the session's model can see images. A save that fails, or a message with files when Pi cannot start, comes back as `command_failed` with the page's own text, so the page gives the text and the files back. `chatLoad` carries `fresh: true` from a page that just loaded (once per tab): a Pi that was already running sends that page its conversation again |
 | `jobStop`, `jobDismiss` | stop a background job; take a failed one off the strip (no answer: the next `jobs` shows it) |
 | `jobOutput` | a job's last lines (80 unless `lines` says otherwise) |
@@ -130,6 +155,7 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 | `mcpFound` | the answer to `mcpScan`: per server its `id`, `name`, `importAs` (the name Pi accepts), `source` (`claude-code`, `claude-desktop`, `cursor`, `vscode`), `kind` (`stdio`, `http`, `sse`), `target` (the command's name or the URL's host), `secrets` (env and header names only, and `input:<id>` for a VS Code prompt), `warnings` (what may not work the same in Aria, shown in the row as "check it after importing": `expands:<NAME>` for a variable the other app fills in a command, argument, folder or URL where Pi does not, `default:<NAME>` for Claude Code's `${NAME:-default}`, `unsupported:<what>` for a `${what}` Aria cannot fill in such as `workspaceFolder`, `tilde-arg` for an argument starting with `~`, which Pi reads as the home folder, `envFile` for VS Code's env file, not imported), `importable` and `disabled`. Servers already in Aria's `mcp.json`, and `engram`, are left out |
 | `problem` | something prevents Aria from working (for example `hyprland-classic-config`) |
 | `sessions` | the saved tabs |
+| `sessionAdded`, `sessionRemoved`, `sessionsChanged` | a tab the dock opened (a terminal's, or the one replacing the last tab closed: there is always one), a tab closed anywhere, the page saved the tabs |
 | `session` (wrapping `chatState`, `chatEvent`, `chatDialog`, `chatDialogClosed`, `chatEngine`, `chatQuota`, and the replies `commands`, `models`, `files`, `saved`, `error`) | what one tab's Pi says |
 | `jobs` | every session's background jobs, dismissed ones included (not wrapped in a session) |
 | `jobOutput` | the answer to `jobOutput`: the lines (none for a subagent, which keeps no output) |

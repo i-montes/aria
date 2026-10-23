@@ -60,6 +60,8 @@ Run it again to update. An update does not cut a run: the running dock restarts 
 
 | Command | What it does |
 |---|---|
+| `aria` (in a terminal) | Aria in the terminal: the dock's open sessions, and a new one in the folder you are in. It is a window onto the dock's sessions, not a session of its own: Ctrl+C or Ctrl+D leave and the work goes on (`aria` again finds it), Esc stops the running turn, `/exit` closes the session (in the dock too). `@` picks a file, `!command` runs a command in the session, `/model` changes the model, `/verbose` or Ctrl+O switches between everything and one line per turn, `/sessions` goes back to the list. Starts the dock first if it is not running |
+| `aria dock` | The dock itself: what the login service runs |
 | `aria toggle` / `aria show` | Opens or closes the dock (the shortcut does the same) / only opens it; starts it first if it is not running |
 | `aria start` / `aria quit` | Starts the dock under its login service / stops it (its background work and engines first). In the dock, Cmd+Q asks first and quits on a second press |
 | `aria bar install` / `remove` | Puts Aria's face in the Omarchy bar, next to the weather, or takes it out (the installer runs both; nothing happens without the Omarchy shell) |
@@ -102,6 +104,8 @@ sh install/install.sh --local target/release/aria
 | `~/.config/omarchy/plugins/aria.face/` | Aria's face in the Omarchy bar (a Quickshell widget the binary carries, from `install/omarchy/`); `shell.json` gets its place, with a `shell.json.bak.<epoch>` backup first |
 | `~/Library/LaunchAgents/com.aria.dock.plist` | Starts the dock at login on macOS; output in `~/.aria/logs/aria.log` |
 | `~/.aria/run/control.sock` | The socket `aria toggle` talks to on macOS (on Omarchy it is `$XDG_RUNTIME_DIR/aria/control.sock`) |
+| `~/.aria/run/clients.sock` | The socket `aria` in a terminal talks to on macOS (on Omarchy `$XDG_RUNTIME_DIR/aria/clients.sock`), mode `600` |
+| `~/.aria/term.json` | What the terminal remembers (that it already said how to select text with the mouse) |
 
 The repository only holds code; your data never lives in it.
 

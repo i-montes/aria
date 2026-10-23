@@ -287,3 +287,19 @@ A tab continues in a new Pi session file after each compaction (see the
 - The working folder row and the settings button (owner's decisions).
 - The header has no model button or meter (owner's decision; the design has one beside the name): the model is the chip under the input; the quota chip beside the name and each tab's hover open the same quota card, with the model and the context.
 - Buttons and cards use solid fills; only the border takes the accent (owner's taste).
+
+## The terminal, milestone 2
+
+`aria` in a terminal (milestone 1) attaches to the dock's sessions. Next, from the spec
+(docs/superpowers/specs/2026-10-23-terminal-design.md):
+
+- The session list says what each session is doing (working, waiting for you, done) and how long ago: the dock has to
+  send a status per session to clients that are not attached to it.
+- Tasks: the `tasks` extension and its `tasks_update` tool, the strip above the editor (a key and a click fold it).
+- Checkpoints: a shadow repository per session, the changes of each instruction (`+added −removed`, git or not), and
+  undo with Esc Esc or `/undo`.
+- `/context` drawn as Claude Code draws it.
+- Verification after editing (the `verify` extension) and its result in the footer.
+- The method by load inside `jev-router`, never shown.
+- One desktop notification when a turn ends or needs an answer and neither the terminal nor the dock shows it.
+
