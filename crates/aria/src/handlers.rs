@@ -95,6 +95,7 @@ impl Ctx {
 }
 
 /// Messages that wait on the network or the browser: run them off the GTK thread.
+#[cfg(any(test, feature = "gui"))]
 pub fn is_blocking(message: &PageMessage) -> bool {
     matches!(
         message,
@@ -113,6 +114,7 @@ pub fn is_blocking(message: &PageMessage) -> bool {
 }
 
 /// Messages for the chat (`chat::Chat`), which has its own worker.
+#[cfg(any(test, feature = "gui"))]
 pub fn is_chat(message: &PageMessage) -> bool {
     matches!(
         message,

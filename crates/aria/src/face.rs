@@ -161,6 +161,7 @@ pub fn face_path() -> PathBuf {
 }
 
 /// The dock started: the face is written now (idle), and from here it falls asleep on its own when nothing happens.
+#[cfg(feature = "gui")]
 pub fn start() {
     refresh();
 }
@@ -191,6 +192,7 @@ pub fn forget(session: &str) {
 }
 
 /// The person opened the dock: failures have been seen, and Aria is awake.
+#[cfg(feature = "gui")]
 pub fn seen() {
     let mut state = state().lock().unwrap_or_else(|e| e.into_inner());
     for activity in state.sessions.values_mut() {

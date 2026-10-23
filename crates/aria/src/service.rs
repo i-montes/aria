@@ -46,7 +46,9 @@ pub struct Tick {
 }
 
 /// How a page's message gets handled; cloned into the window's message callback, which outlives any borrow of the
-/// [`Service`].
+/// [`Service`]. A service with no window has no page: only a build with one (and the tests that stand in for it) has
+/// the inlet.
+#[cfg(any(test, feature = "gui"))]
 #[derive(Clone)]
 pub struct PageInlet {
     ctx: Arc<handlers::Ctx>,
@@ -54,6 +56,7 @@ pub struct PageInlet {
     replies: mpsc::Sender<DockMessage>,
 }
 
+#[cfg(any(test, feature = "gui"))]
 impl PageInlet {
     /// Chat messages go to the chat's worker thread; the rest are handled here, on a thread of their own when they
     /// block.
@@ -77,6 +80,7 @@ impl PageInlet {
 pub struct Service {
     /// There was no settings file when the service started: the page shows its welcome.
     pub first_run: bool,
+    #[cfg(any(test, feature = "gui"))]
     inlet: PageInlet,
     hub: clients::Hub,
     jobs: Jobs,
@@ -205,6 +209,7 @@ impl Service {
 
         Service {
             first_run,
+            #[cfg(any(test, feature = "gui"))]
             inlet: PageInlet { ctx, chat: chat_sender, replies: reply_sender },
             hub,
             jobs,
@@ -221,13 +226,9 @@ impl Service {
         }
     }
 
-    /// What the window's message callback does with a page message.
-    #[cfg_attr(not(test), allow(dead_code))] // the window calls it through its own `PageInlet`
-    pub fn handle_page_message(&self, message: PageMessage) {
-        self.inlet.handle(message);
-    }
-
-    /// The same, for a callback that must own what it calls.
+    /// What the window's message callback does with a page message: it owns the inlet, which outlives any borrow of the
+    /// service.
+    #[cfg(any(test, feature = "gui"))]
     pub fn page_inlet(&self) -> PageInlet {
         self.inlet.clone()
     }
@@ -456,7 +457,7 @@ mod tests {
     fn a_page_message_reaches_the_chat_and_its_reply_comes_back_on_the_tick() {
         let dir = tempfile::tempdir().unwrap();
         let mut service = scratch_service(dir.path());
-        service.handle_page_message(PageMessage::SessionsLoad { id: 7 });
+        service.page_inlet().handle(PageMessage::SessionsLoad { id: 7 });
         let start = Instant::now();
         loop {
             assert!(start.elapsed() < Duration::from_secs(5), "the chat never answered");

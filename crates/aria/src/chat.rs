@@ -111,11 +111,11 @@ impl Notifier for CountingNotifier {
 
 /// Omarchy's notifications: critical urgency and no expiry, so it stays until it is dismissed or
 /// clicked; the click runs `aria show`, which opens the dock.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "gui"))]
 pub struct OmarchyNotifier;
 
 /// The arguments for `omarchy-notification-send`.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "gui"))]
 pub fn notify_args(exe: &Path, title: &str, body: &str) -> Vec<String> {
     ["--app-name", "aria", "-u", "critical", "-t", "0", title, body, "--exec", &exe.display().to_string(), "show"]
         .iter()
@@ -123,6 +123,7 @@ pub fn notify_args(exe: &Path, title: &str, body: &str) -> Vec<String> {
         .collect()
 }
 
+#[cfg(feature = "gui")]
 fn detached(program: &str, args: &[String]) {
     let _ = std::process::Command::new(program)
         .args(args)
@@ -133,7 +134,7 @@ fn detached(program: &str, args: &[String]) {
         .map(|mut child| std::thread::spawn(move || child.wait()));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "gui"))]
 impl Notifier for OmarchyNotifier {
     fn send(&self, _key: &str, title: &str, body: &str) {
         if let Ok(exe) = std::env::current_exe() {
@@ -150,8 +151,17 @@ impl Notifier for OmarchyNotifier {
     }
 }
 
-/// The notifier the binary uses: Omarchy's on Linux, macOS's on Mac.
-#[cfg(target_os = "linux")]
+/// No notification at all: a service with no desktop (`aria serve`) has nobody to show one to.
+pub struct NullNotifier;
+
+impl Notifier for NullNotifier {
+    fn send(&self, _key: &str, _title: &str, _body: &str) {}
+
+    fn dismiss(&self, _key: &str) {}
+}
+
+/// The notifier the dock uses: Omarchy's on Linux, macOS's on Mac (a service with no window uses [`NullNotifier`]).
+#[cfg(all(target_os = "linux", feature = "gui"))]
 pub use OmarchyNotifier as PlatformNotifier;
 
 /// macOS notifications, through `osascript` for now. A notification from a program without an app
@@ -2381,10 +2391,12 @@ pub struct Sessions {
     /// when the tab is free, so a pause, a change or a delete meanwhile counts).
     pending: Arc<Mutex<Vec<(String, i64)>>>,
     /// The dock's one dictation, made the first time a tab dictates (its thread and its model only then).
+    #[cfg(feature = "gui")]
     dictation: Arc<Mutex<Option<crate::dictation::Dictation>>>,
 }
 
 /// What a dictation event says to the page.
+#[cfg(feature = "gui")]
 fn dictation_message(kind: crate::dictation::EventKind) -> DockMessage {
     use crate::dictation::{EventKind, State};
     let (state, seconds, progress, size, error) = match kind {
@@ -2473,6 +2485,7 @@ impl Sessions {
     /// `ctx.notifier` is wrapped so that one session's answer does not remove another's notification.
     /// A tab's dictation message. The language is Aria's (`settings.assistant.language`); only the tab that dictates
     /// can stop or cancel.
+    #[cfg(feature = "gui")]
     fn dictate(&self, session: &str, message: PageMessage) {
         let mut slot = self.dictation.lock().unwrap();
         if slot.is_none() {
@@ -2496,6 +2509,25 @@ impl Sessions {
         }
     }
 
+    /// A service with no window has no microphone and no Whisper: starting or downloading answers the page's "no
+    /// microphone" error (`dictationState`), the rest has nothing to stop.
+    #[cfg(not(feature = "gui"))]
+    fn dictate(&self, session: &str, message: PageMessage) {
+        if matches!(message, PageMessage::DictationStart | PageMessage::DictationDownload) {
+            (self.emit)(DockMessage::Session {
+                session: session.to_string(),
+                message: Box::new(DockMessage::DictationState {
+                    state: "error".into(),
+                    seconds: None,
+                    progress: None,
+                    size: None,
+                    error: Some("no-microphone".into()),
+                }),
+            });
+        }
+    }
+
+    #[cfg(feature = "gui")]
     fn dictation_events(emit: Emit) -> Box<dyn Fn(crate::dictation::Event) + Send> {
         Box::new(move |event| {
             emit(DockMessage::Session { session: event.owner, message: Box::new(dictation_message(event.kind)) })
@@ -2503,7 +2535,7 @@ impl Sessions {
     }
 
     /// Tests: a dictation of their own (made with the same events as the dock's).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "gui"))]
     fn use_dictation(
         &self,
         make: impl FnOnce(Box<dyn Fn(crate::dictation::Event) + Send>) -> crate::dictation::Dictation,
@@ -2557,6 +2589,7 @@ impl Sessions {
                 u64::from(aria_core::settings::Models::default().turn_timeout_minutes) * 60,
             ))),
             pending: Arc::default(),
+            #[cfg(feature = "gui")]
             dictation: Arc::default(),
         };
         // A deleted task takes its tab with it; a changed one gives its tab's Pi the new grants when its run settles.
@@ -2756,6 +2789,7 @@ impl Sessions {
             PageMessage::SessionClose { session } => {
                 self.closed.lock().unwrap().insert(session.clone());
                 // A tab that goes while it dictates: the recording is dropped, nothing is written anywhere.
+                #[cfg(feature = "gui")]
                 if let Some(dictation) = self.dictation.lock().unwrap().as_ref() {
                     if dictation.owner().as_deref() == Some(session.as_str()) {
                         dictation.cancel();
@@ -4269,6 +4303,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "gui")]
     #[test]
     fn dictation_answers_the_tab_that_asked() {
         let s = sessions_harness();
@@ -4280,6 +4315,7 @@ mod tests {
         assert_eq!(text, DockMessage::DictationText { text: "hola Aria".into() });
     }
 
+    #[cfg(feature = "gui")]
     #[test]
     fn one_dictation_at_a_time() {
         let s = sessions_harness();
@@ -4290,6 +4326,7 @@ mod tests {
         wait_session(&s, "busy", "s2", |m| dictation_state(m) == Some(("error", Some("busy"))));
     }
 
+    #[cfg(feature = "gui")]
     #[test]
     fn a_closed_tab_cancels_its_dictation() {
         let s = sessions_harness();
@@ -4300,6 +4337,25 @@ mod tests {
         wait_session(&s, "idle", "s1", |m| dictation_state(m).is_some_and(|(st, _)| st == "idle"));
         std::thread::sleep(Duration::from_millis(200));
         assert!(!s.messages.try_iter().any(|m| matches!(m, DockMessage::Session { message, .. } if matches!(*message, DockMessage::DictationText { .. }))));
+    }
+
+    #[cfg(not(feature = "gui"))]
+    #[test]
+    fn headless_dictation_answers_unavailable() {
+        // A service with no window has no microphone: the tab that asks hears the page's "no microphone" error, and
+        // nothing starts (no thread, no model, no download).
+        let s = sessions_harness();
+        for message in [PageMessage::DictationStart, PageMessage::DictationDownload] {
+            s.sessions.handle(in_session("s1", message));
+            wait_session(&s, "no microphone", "s1", |m| dictation_state(m) == Some(("error", Some("no-microphone"))));
+        }
+        s.sessions.handle(in_session("s1", PageMessage::DictationStop));
+        s.sessions.handle(in_session("s1", PageMessage::DictationCancel));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!s
+            .messages
+            .try_iter()
+            .any(|m| matches!(m, DockMessage::Session { message, .. } if dictation_state(&message).is_some())));
     }
 
     fn settled(m: &DockMessage) -> bool {
@@ -6469,7 +6525,7 @@ mod tests {
         assert_eq!(list.active.as_deref(), Some("bb"));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "gui"))]
     #[test]
     fn the_notification_stays_until_dismissed_and_a_click_shows_the_dock() {
         let args = notify_args(std::path::Path::new("/opt/aria"), "Aria needs an answer", "Allow?");

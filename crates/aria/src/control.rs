@@ -84,6 +84,23 @@ pub fn bind_single_instance(path: &Path) -> Result<UnixListener, ControlError> {
     UnixListener::bind(path).map_err(|e| ControlError::Io(e.to_string()))
 }
 
+/// Takes the commands that arrive on the control socket, on a thread of its own: each line goes to `commands`, for the
+/// host's loop to handle. The installer and `aria quit` wait for an answer, so those two are answered `ok` at once (an
+/// older dock without it ignores the line).
+pub fn answer_commands(listener: UnixListener, commands: std::sync::mpsc::Sender<String>) {
+    std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader};
+        for stream in listener.incoming().map_while(Result::ok) {
+            if let Some(Ok(line)) = BufReader::new(&stream).lines().next() {
+                if line == "update-ready" || line == "quit" {
+                    let _ = (&stream).write_all(b"ok\n");
+                }
+                let _ = commands.send(line);
+            }
+        }
+    });
+}
+
 pub fn send(path: &Path, command: &str) -> std::io::Result<()> {
     let mut stream = UnixStream::connect(path)?;
     stream.write_all(format!("{command}\n").as_bytes())
@@ -126,7 +143,7 @@ pub fn reexec() -> std::io::Error {
 
 /// The processes whose parent is `pid`, read from `proc` (`/proc`): each `<pid>/stat` names its parent as the second
 /// field after the command, which sits in parentheses and may itself hold spaces or parentheses.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "gui"))]
 pub fn children_of(pid: u32, proc: &Path) -> Vec<u32> {
     let Ok(entries) = std::fs::read_dir(proc) else { return Vec::new() };
     entries
@@ -144,13 +161,13 @@ pub fn children_of(pid: u32, proc: &Path) -> Vec<u32> {
 /// waits for them: the WebKit processes of the old page end with it and would stay as zombies. Called once at start,
 /// before anything is spawned, so every child is one of those; a thread reaps each as it ends (or gives up after
 /// `patience`).
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "gui"))]
 pub fn reap_inherited(patience: Duration) {
     reap(children_of(std::process::id(), Path::new("/proc")), patience);
 }
 
 /// Reaps each of `pids` (children of this process nobody else waits for) as it ends, on a thread of its own.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "gui"))]
 fn reap(pids: Vec<u32>, patience: Duration) {
     if pids.is_empty() {
         return;
@@ -265,7 +282,7 @@ mod tests {
         assert_eq!(runtime_dir_from(Some("".into()), 1001, users), PathBuf::from("/run/user/1001"), "empty is unset");
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "gui"))]
     #[test]
     fn the_children_of_a_process_are_read_from_proc_even_with_odd_command_names() {
         let proc = tempfile::tempdir().unwrap();
@@ -284,7 +301,7 @@ mod tests {
         assert_eq!(children, vec![11, 12]);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "gui"))]
     #[test]
     fn a_child_nobody_waits_for_is_reaped_once_it_ends() {
         // A child this test forgets stands for one the old binary started.

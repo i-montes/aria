@@ -4,11 +4,30 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# The window: the dock (GTK and WebKitGTK on Linux, AppKit on Mac), the hotkey and dictation. A build without it
+# (`--no-default-features`, Linux only) is `aria serve`, the service for a computer with no desktop, and links none of
+# their libraries.
+default = ["gui"]
+gui = [
+    "dep:whisper-rs",
+    "dep:cpal",
+    "dep:sha2",
+    "dep:aria-hyprland",
+    "dep:gtk",
+    "dep:gdk",
+    "dep:glib",
+    "dep:gio",
+    "dep:gtk-layer-shell",
+    "dep:webkit2gtk",
+    "dep:javascriptcore-rs",
+]
+
 [dependencies]
 # Dictation: Whisper (whisper.cpp, built in; needs cmake to build) and the microphone.
-whisper-rs = "0.16"
-cpal = "0.16"
-sha2 = "0.10"
+whisper-rs = { version = "0.16", optional = true }
+cpal = { version = "0.16", optional = true }
+sha2 = { version = "0.10", optional = true }
 ureq = { version = "2", default-features = false, features = ["tls"] }
 aria-core = { path = "../aria-core" }
 aria-engine = { path = "../aria-engine" }
@@ -24,18 +43,18 @@ pulldown-cmark = { version = "0.12", default-features = false }
 unicode-width = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-aria-hyprland = { path = "../aria-hyprland" }
-whisper-rs = { version = "0.16", features = ["vulkan"] }
-gtk = "0.18"
-gdk = "0.18"
-glib = "0.18"
-gio = "0.18"
-gtk-layer-shell = { version = "0.8", features = ["v0_6"] }
-webkit2gtk = { version = "2.0", features = ["v2_40"] }
-javascriptcore-rs = "1.1"
+aria-hyprland = { path = "../aria-hyprland", optional = true }
+whisper-rs = { version = "0.16", features = ["vulkan"], optional = true }
+gtk = { version = "0.18", optional = true }
+gdk = { version = "0.18", optional = true }
+glib = { version = "0.18", optional = true }
+gio = { version = "0.18", optional = true }
+gtk-layer-shell = { version = "0.8", features = ["v0_6"], optional = true }
+webkit2gtk = { version = "2.0", features = ["v2_40"], optional = true }
+javascriptcore-rs = { version = "1.1", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = { version = "0.16", features = ["metal"] }
+whisper-rs = { version = "0.16", features = ["metal"], optional = true }
 aria-mac = { path = "../aria-mac" }
 objc2 = "0.6"
 objc2-foundation = "0.3"

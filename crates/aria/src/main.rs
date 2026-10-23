@@ -3,6 +3,9 @@
 //! is not running. `aria update-ready` (run by the installer after it replaced the files) asks the running dock to
 //! restart into the new binary as soon as it is hidden and no session has a run going; it fails when no dock answers,
 //! and the installer then restarts the service itself.
+//! `aria serve` is the same service with no window at all (a build without the `gui` feature has nothing else): for a
+//! computer with no desktop, which terminals reach over ssh (`aria connect`). It answers `aria quit` and
+//! `aria update-ready` as the dock does; a dock and a serve on one computer exclude each other.
 //! `aria bar install|remove` puts Aria's face in the Omarchy bar or takes it out (the installer runs it).
 //! `aria client-stdio` is the bridge `ssh <host> aria client-stdio` runs: the client's lines on stdin and stdout, the
 //! machine's clients socket on the other side.
@@ -14,7 +17,9 @@ mod checkpoints;
 mod clients;
 mod connect;
 mod control;
+#[cfg(feature = "gui")]
 mod dictation;
+#[cfg(feature = "gui")]
 mod dock;
 mod face;
 mod face_motion;
@@ -25,26 +30,41 @@ mod keyring_cli;
 mod lines;
 mod omarchy_bar;
 mod schedule_store;
+mod serve;
 mod service;
 mod stdio_bridge;
 mod term;
 mod trace;
+#[cfg(feature = "gui")]
 mod ui;
+#[cfg(feature = "gui")]
 mod visibility;
 mod watch;
 mod worktree;
 
+// A Mac has no build without a window: its dock is the only thing the Mac code is written for.
+#[cfg(all(target_os = "macos", not(feature = "gui")))]
+compile_error!("the `gui` feature is required on macOS: only Linux has a build without a window (`aria serve`)");
+
+#[cfg(feature = "gui")]
 use aria_core::bridge::DockMessage;
+#[cfg(feature = "gui")]
 use aria_core::paths::AriaPaths;
+#[cfg(feature = "gui")]
 use aria_core::shortcut::{default_shortcut, InUse, Platform as ShortcutPlatform};
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "gui", target_os = "linux"))]
 use aria_hyprland::Registration;
+#[cfg(feature = "gui")]
 use chat::PlatformNotifier;
+#[cfg(feature = "gui")]
 use dock::Dock;
+#[cfg(feature = "gui")]
 use service::Service;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "gui")]
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
+#[cfg(feature = "gui")]
 use visibility::Event;
 
 /// What this run of `aria` is.
@@ -53,7 +73,10 @@ enum Mode {
     /// The terminal client (`aria` in a terminal).
     Client,
     /// The service: the dock and every session (`aria dock`, or plain `aria` with no terminal, as an old unit runs it).
+    /// A build without a window runs it as `Serve`.
     Dock,
+    /// The service with no window (`aria serve`).
+    Serve,
     /// One of the small commands (`toggle`, `quit`, `secret`…).
     Command,
 }
@@ -62,6 +85,7 @@ fn mode(arg: Option<&str>, terminal: bool) -> Mode {
     match arg {
         None if terminal => Mode::Client,
         None | Some("dock") => Mode::Dock,
+        Some("serve") => Mode::Serve,
         Some(_) => Mode::Command,
     }
 }
@@ -72,6 +96,7 @@ fn main() {
     match mode(arg.as_deref(), std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
         Mode::Client => std::process::exit(term::run()),
         Mode::Dock => return run_dock(),
+        Mode::Serve => std::process::exit(serve::run()),
         Mode::Command => {}
     }
     match arg.as_deref() {
@@ -119,13 +144,21 @@ fn main() {
         Some("bar") => std::process::exit(omarchy_bar::bar_command(std::env::args().nth(2).as_deref())),
         Some("--version" | "-V" | "version") => println!("aria {}", env!("CARGO_PKG_VERSION")),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [dock|toggle|show|start|quit|keyring|secret|bar|update-ready|connect|client-stdio|--version]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [dock|serve|toggle|show|start|quit|keyring|secret|bar|update-ready|connect|client-stdio|--version]");
             std::process::exit(2);
         }
         None => unreachable!("plain aria is the client or the dock"),
     }
 }
 
+/// A build without a window has no dock to run: `aria dock` (what a terminal's `aria` and `aria toggle` start when
+/// nothing answers, and what an old unit runs) is the service with no window, so they all keep working.
+#[cfg(not(feature = "gui"))]
+fn run_dock() {
+    std::process::exit(serve::run());
+}
+
+#[cfg(feature = "gui")]
 fn run_dock() {
     let listener = match control::bind_single_instance(&control::control_socket_path()) {
         Ok(listener) => listener,
@@ -171,19 +204,7 @@ fn run_dock() {
     // Commands arrive on a socket thread and are handled on the UI thread. The hotkey sends the same
     // "toggle" line, so there is one path from both.
     let (sender, receiver) = mpsc::channel::<String>();
-    let listener_sender = sender.clone();
-    std::thread::spawn(move || {
-        use std::io::{BufRead, BufReader, Write};
-        for stream in listener.incoming().map_while(Result::ok) {
-            if let Some(Ok(line)) = BufReader::new(&stream).lines().next() {
-                // The installer and `aria quit` wait for this answer: an older dock without it ignores the line.
-                if line == "update-ready" || line == "quit" {
-                    let _ = (&stream).write_all(b"ok\n");
-                }
-                let _ = listener_sender.send(line);
-            }
-        }
-    });
+    control::answer_commands(listener, sender.clone());
 
     // The hotkey. On Linux it is registered as soon as Hyprland can take it (it may not be up when a
     // service starts), and again after every config reload and every change of the `shortcut` setting (a taken one
@@ -313,11 +334,13 @@ fn run_dock() {
 }
 
 /// The `shortcut` setting; an unreadable settings file means the default, as an empty setting does.
+#[cfg(feature = "gui")]
 fn shortcut_setting(paths: &AriaPaths) -> String {
     aria_core::settings::load(paths).ok().flatten().map(|s| s.shortcut).unwrap_or_default()
 }
 
 /// The log's line once the shortcut is registered: `aria: ready, press SUPER + SHIFT + A (SUPER + A taken)`.
+#[cfg(feature = "gui")]
 fn ready_line(in_use: &InUse) -> String {
     let taken: Vec<String> = in_use.taken.iter().map(|s| s.label()).collect();
     if taken.is_empty() {
@@ -446,6 +469,12 @@ mod tests {
         assert_eq!(mode(Some("dock"), true), Mode::Dock);
         assert_eq!(mode(Some("dock"), false), Mode::Dock);
         assert_eq!(mode(Some("toggle"), true), Mode::Command);
+    }
+
+    #[test]
+    fn serve_is_the_service_without_a_window() {
+        assert_eq!(mode(Some("serve"), true), Mode::Serve);
+        assert_eq!(mode(Some("serve"), false), Mode::Serve, "a unit runs it with no terminal");
     }
     use super::*;
 }

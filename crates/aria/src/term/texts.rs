@@ -167,13 +167,23 @@ const OWN: &[(&str, &str, &str)] = &[
     ("term.permission.keys", "y once · a always · n no", "y una vez · a siempre · n no"),
 ];
 
+/// A file of the page's texts (`ui/i18n/`): the dock's own copy of the page when the build has a window, else just these.
+fn page_texts(file: &str) -> Option<&'static include_dir::File<'static>> {
+    #[cfg(feature = "gui")]
+    return crate::dock::UI.get_file(format!("i18n/{file}"));
+    #[cfg(not(feature = "gui"))]
+    {
+        static TEXTS: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../ui/i18n");
+        TEXTS.get_file(file)
+    }
+}
+
 fn dock_texts(lang: &str) -> &'static Map<String, Value> {
     static EN: OnceLock<Map<String, Value>> = OnceLock::new();
     static ES: OnceLock<Map<String, Value>> = OnceLock::new();
-    let (slot, file) = if lang == "es" { (&ES, "i18n/es.json") } else { (&EN, "i18n/en.json") };
+    let (slot, file) = if lang == "es" { (&ES, "es.json") } else { (&EN, "en.json") };
     slot.get_or_init(|| {
-        crate::dock::UI
-            .get_file(file)
+        page_texts(file)
             .and_then(|f| f.contents_utf8())
             .and_then(|text| serde_json::from_str::<Map<String, Value>>(text).ok())
             .unwrap_or_default()
