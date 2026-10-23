@@ -1945,6 +1945,23 @@ pub struct Sessions {
     /// Scheduled runs waiting for their tab to be free: the task's id and the time it was due (the task is read again
     /// when the tab is free, so a pause, a change or a delete meanwhile counts).
     pending: Arc<Mutex<Vec<(String, i64)>>>,
+    /// The dock's one dictation, made the first time a tab dictates (its thread and its model only then).
+    dictation: Arc<Mutex<Option<crate::dictation::Dictation>>>,
+}
+
+/// What a dictation event says to the page.
+fn dictation_message(kind: crate::dictation::EventKind) -> DockMessage {
+    use crate::dictation::{EventKind, State};
+    let (state, seconds, progress, size, error) = match kind {
+        EventKind::Text(text) => return DockMessage::DictationText { text },
+        EventKind::State(State::Idle) => ("idle", None, None, None, None),
+        EventKind::State(State::Transcribing) => ("transcribing", None, None, None, None),
+        EventKind::State(State::Recording { seconds }) => ("recording", Some(seconds), None, None, None),
+        EventKind::State(State::NeedsModel { size }) => ("needsModel", None, None, Some(size), None),
+        EventKind::State(State::Downloading { progress }) => ("downloading", None, Some(progress), None, None),
+        EventKind::State(State::Error(error)) => ("error", None, None, None, Some(error.to_string())),
+    };
+    DockMessage::DictationState { state: state.into(), seconds, progress, size, error }
 }
 
 /// Watches `settings.json` by content: a change from the settings screen, from `/effort` or `/autocompact` in Pi, or
@@ -2015,6 +2032,46 @@ impl Sessions {
     }
 
     /// `ctx.notifier` is wrapped so that one session's answer does not remove another's notification.
+    /// A tab's dictation message. The language is Aria's (`settings.assistant.language`); only the tab that dictates
+    /// can stop or cancel.
+    fn dictate(&self, session: &str, message: PageMessage) {
+        let mut slot = self.dictation.lock().unwrap();
+        if slot.is_none() {
+            let emit = self.emit.clone();
+            *slot = Some(crate::dictation::for_dock(&self.ctx.paths, Self::dictation_events(emit)));
+        }
+        let dictation = slot.as_ref().unwrap();
+        let language = settings::load(&self.ctx.paths)
+            .ok()
+            .flatten()
+            .map(|s| s.assistant.language)
+            .filter(|l| l == "es")
+            .unwrap_or_else(|| "en".into());
+        let owns = dictation.owner().as_deref() == Some(session);
+        match message {
+            PageMessage::DictationStart => dictation.start(session, &language),
+            PageMessage::DictationDownload => dictation.download(session, &language),
+            PageMessage::DictationStop if owns => dictation.stop(),
+            PageMessage::DictationCancel if owns => dictation.cancel(),
+            _ => {}
+        }
+    }
+
+    fn dictation_events(emit: Emit) -> Box<dyn Fn(crate::dictation::Event) + Send> {
+        Box::new(move |event| {
+            emit(DockMessage::Session { session: event.owner, message: Box::new(dictation_message(event.kind)) })
+        })
+    }
+
+    /// Tests: a dictation of their own (made with the same events as the dock's).
+    #[cfg(test)]
+    fn use_dictation(
+        &self,
+        make: impl FnOnce(Box<dyn Fn(crate::dictation::Event) + Send>) -> crate::dictation::Dictation,
+    ) {
+        *self.dictation.lock().unwrap() = Some(make(Self::dictation_events(self.emit.clone())));
+    }
+
     pub fn new(ctx: ChatCtx, emit: Emit) -> Sessions {
         let notifier: Arc<dyn Notifier> = Arc::new(CountingNotifier::new(ctx.notifier.clone()));
         let ctx = Arc::new(ChatCtx { notifier, ..ctx });
@@ -2027,6 +2084,7 @@ impl Sessions {
                 u64::from(aria_core::settings::Models::default().turn_timeout_minutes) * 60,
             ))),
             pending: Arc::default(),
+            dictation: Arc::default(),
         };
         // A deleted task takes its tab with it; a changed one gives its tab's Pi the new grants when its run settles.
         let closer = sessions.clone();
@@ -2149,6 +2207,15 @@ impl Sessions {
                 if matches!(*message, PageMessage::Session { .. }) {
                     return;
                 }
+                if matches!(
+                    *message,
+                    PageMessage::DictationStart
+                        | PageMessage::DictationStop
+                        | PageMessage::DictationCancel
+                        | PageMessage::DictationDownload
+                ) {
+                    return self.dictate(&session, *message);
+                }
                 if let Some(chat) = self.chat(&session) {
                     let first_look = matches!(*message, PageMessage::ChatLoad { .. });
                     chat.handle(*message);
@@ -2192,6 +2259,12 @@ impl Sessions {
             }
             PageMessage::SessionClose { session } => {
                 self.closed.lock().unwrap().insert(session.clone());
+                // A tab that goes while it dictates: the recording is dropped, nothing is written anywhere.
+                if let Some(dictation) = self.dictation.lock().unwrap().as_ref() {
+                    if dictation.owner().as_deref() == Some(session.as_str()) {
+                        dictation.cancel();
+                    }
+                }
                 let chat = self.chats.lock().unwrap().remove(&session);
                 if let Some(chat) = chat {
                     chat.close_for_good();
@@ -3197,6 +3270,46 @@ mod tests {
                 Err(_) => panic!("timed out waiting for {what} in session {session}"),
             }
         }
+    }
+
+    fn dictation_state(m: &DockMessage) -> Option<(&str, Option<&str>)> {
+        match m {
+            DockMessage::DictationState { state, error, .. } => Some((state.as_str(), error.as_deref())),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn dictation_answers_the_tab_that_asked() {
+        let s = sessions_harness();
+        s.sessions.use_dictation(|on| crate::dictation::worker::fake("hola Aria", on));
+        s.sessions.handle(in_session("s1", PageMessage::DictationStart));
+        wait_session(&s, "recording", "s1", |m| dictation_state(m).is_some_and(|(st, _)| st == "recording"));
+        s.sessions.handle(in_session("s1", PageMessage::DictationStop));
+        let text = wait_session(&s, "the text", "s1", |m| matches!(m, DockMessage::DictationText { .. }));
+        assert_eq!(text, DockMessage::DictationText { text: "hola Aria".into() });
+    }
+
+    #[test]
+    fn one_dictation_at_a_time() {
+        let s = sessions_harness();
+        s.sessions.use_dictation(|on| crate::dictation::worker::fake("hola", on));
+        s.sessions.handle(in_session("s1", PageMessage::DictationStart));
+        wait_session(&s, "recording", "s1", |m| dictation_state(m).is_some_and(|(st, _)| st == "recording"));
+        s.sessions.handle(in_session("s2", PageMessage::DictationStart));
+        wait_session(&s, "busy", "s2", |m| dictation_state(m) == Some(("error", Some("busy"))));
+    }
+
+    #[test]
+    fn a_closed_tab_cancels_its_dictation() {
+        let s = sessions_harness();
+        s.sessions.use_dictation(|on| crate::dictation::worker::fake("hola", on));
+        s.sessions.handle(in_session("s1", PageMessage::DictationStart));
+        wait_session(&s, "recording", "s1", |m| dictation_state(m).is_some_and(|(st, _)| st == "recording"));
+        s.sessions.handle(PageMessage::SessionClose { session: "s1".into() });
+        wait_session(&s, "idle", "s1", |m| dictation_state(m).is_some_and(|(st, _)| st == "idle"));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!s.messages.try_iter().any(|m| matches!(m, DockMessage::Session { message, .. } if matches!(*message, DockMessage::DictationText { .. }))));
     }
 
     fn settled(m: &DockMessage) -> bool {

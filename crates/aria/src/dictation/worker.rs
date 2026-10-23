@@ -79,9 +79,12 @@ pub struct Dictation {
 }
 
 /// What the dictation is made of (the real ones in `dictation::for_dock`, stand-ins in tests).
+/// Downloads the model, telling the share done.
+pub type Download = Box<dyn FnMut(&mut dyn FnMut(f64)) -> Result<(), crate::dictation::model::ModelError> + Send>;
+
 pub struct Parts {
     pub model_ready: Box<dyn Fn() -> bool + Send>,
-    pub download: Box<dyn FnMut(&mut dyn FnMut(f64)) -> Result<(), crate::dictation::model::ModelError> + Send>,
+    pub download: Download,
     pub recorder: Box<dyn FnMut() -> Box<dyn Recorder> + Send>,
     pub transcriber: Box<dyn FnOnce() -> Box<dyn Transcriber> + Send>,
     pub on: Box<dyn Fn(Event) + Send>,
@@ -309,6 +312,50 @@ impl Worker {
             }
         }
     }
+}
+
+/// A dictation that is ready, records a second of tone and says `says` (for other modules' tests).
+#[cfg(test)]
+pub fn fake(says: &'static str, on: Box<dyn Fn(Event) + Send>) -> Dictation {
+    struct Mic(Option<Instant>);
+    impl Recorder for Mic {
+        fn start(&mut self) -> Result<(), DictationError> {
+            self.0 = Some(Instant::now());
+            Ok(())
+        }
+        fn seconds(&self) -> f64 {
+            self.0.map_or(0.0, |s| s.elapsed().as_secs_f64())
+        }
+        fn finish(&mut self) -> Vec<f32> {
+            vec![0.1; 16_000]
+        }
+    }
+    struct Says(&'static str, bool);
+    impl Transcriber for Says {
+        fn loaded(&self) -> bool {
+            self.1
+        }
+        fn load(&mut self) -> Result<(), DictationError> {
+            self.1 = true;
+            Ok(())
+        }
+        fn transcribe(&mut self, _: &[f32], _: &str) -> Result<String, DictationError> {
+            Ok(self.0.into())
+        }
+        fn unload(&mut self) {
+            self.1 = false;
+        }
+    }
+    Dictation::new(
+        Parts {
+            model_ready: Box::new(|| true),
+            download: Box::new(|_| Ok(())),
+            recorder: Box::new(|| Box::new(Mic(None))),
+            transcriber: Box::new(move || Box::new(Says(says, false))),
+            on,
+        },
+        Limits::default(),
+    )
 }
 
 #[cfg(test)]

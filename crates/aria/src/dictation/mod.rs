@@ -8,7 +8,7 @@ pub mod recorder;
 pub mod whisper;
 pub mod worker;
 
-pub use worker::{Dictation, DictationError, Event, EventKind, Recorder, State, Transcriber};
+pub use worker::{Dictation, Event, EventKind, State};
 
 /// The dock's dictation: the model in `<aria home>/models/`, the default microphone, Whisper; `on` hears every event.
 pub fn for_dock(paths: &aria_core::paths::AriaPaths, on: Box<dyn Fn(Event) + Send>) -> Dictation {

@@ -146,6 +146,16 @@ pub enum PageMessage {
     /// `/debug true|false` in a tab (wrapped in `session`): trace its turns, or stop and drop the trace.
     #[serde(rename = "traceSet")]
     TraceSet { on: bool },
+    /// Dictation, for the tab it is wrapped in (`session`): start recording, stop and transcribe, cancel, or download
+    /// the voice model the first time (the owner agreed).
+    #[serde(rename = "dictationStart")]
+    DictationStart,
+    #[serde(rename = "dictationStop")]
+    DictationStop,
+    #[serde(rename = "dictationCancel")]
+    DictationCancel,
+    #[serde(rename = "dictationDownload")]
+    DictationDownload,
     /// The active tab's trace panel is shown: the dock's surface widens to the left (or narrows back).
     #[serde(rename = "wide")]
     Wide { on: bool },
@@ -235,6 +245,24 @@ pub enum DockMessage {
     SettingsChanged,
     #[serde(rename = "chatAgents")]
     ChatAgents { agents: Value },
+    /// Where the tab's dictation is (wrapped in `session`): `idle`, `recording` (`seconds`), `transcribing`, `needsModel`
+    /// (`size` in bytes), `downloading` (`progress` 0..1) or `error` (`error`: `no-microphone`, `microphone-denied`,
+    /// `busy`, `download-failed`, `model-broken`, `failed`).
+    #[serde(rename = "dictationState")]
+    DictationState {
+        state: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seconds: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        progress: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        size: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// What was said, when a dictation ends (empty when nothing was).
+    #[serde(rename = "dictationText")]
+    DictationText { text: String },
     /// A traced tab's current turn as a tree (crates/aria/src/trace.rs), or `null` before its first turn and when
     /// tracing stops. At most four times a second, and once when the turn settles.
     #[serde(rename = "chatTrace")]
@@ -361,6 +389,29 @@ mod tests {
         assert_eq!(page(r#"{"type":"wide","on":false}"#), PageMessage::Wide { on: false });
         let value = serde_json::to_value(DockMessage::ChatTrace { trace: Value::Null }).unwrap();
         assert_eq!(value, json!({"type": "chatTrace", "trace": null}));
+    }
+
+    #[test]
+    fn dictation_messages_have_their_names() {
+        assert_eq!(page(r#"{"type":"dictationStart"}"#), PageMessage::DictationStart);
+        assert_eq!(page(r#"{"type":"dictationStop"}"#), PageMessage::DictationStop);
+        assert_eq!(page(r#"{"type":"dictationCancel"}"#), PageMessage::DictationCancel);
+        assert_eq!(page(r#"{"type":"dictationDownload"}"#), PageMessage::DictationDownload);
+        let value = |m: DockMessage| serde_json::to_value(m).unwrap();
+        assert_eq!(
+            value(DockMessage::DictationState {
+                state: "recording".into(),
+                seconds: Some(3),
+                progress: None,
+                size: None,
+                error: None
+            }),
+            json!({"type": "dictationState", "state": "recording", "seconds": 3})
+        );
+        assert_eq!(
+            value(DockMessage::DictationText { text: "hola".into() }),
+            json!({"type": "dictationText", "text": "hola"})
+        );
     }
 
     #[test]

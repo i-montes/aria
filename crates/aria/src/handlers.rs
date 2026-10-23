@@ -193,7 +193,11 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         | PageMessage::JobStop { .. }
         | PageMessage::JobOutput { .. }
         | PageMessage::JobDismiss { .. }
-        | PageMessage::TraceSet { .. } => {}
+        | PageMessage::TraceSet { .. }
+        | PageMessage::DictationStart
+        | PageMessage::DictationStop
+        | PageMessage::DictationCancel
+        | PageMessage::DictationDownload => {}
         // The docks size their surface for the trace panel (dock/mac.rs, dock/gtk.rs); nothing else to do.
         PageMessage::Wide { .. } => {}
     }
