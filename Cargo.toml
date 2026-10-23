@@ -3,6 +3,6 @@ resolver = "2"
 members = ["crates/aria-core", "crates/aria-hyprland", "crates/aria-mac", "crates/aria-engine", "crates/aria"]
 
 [workspace.package]
-version = "0.16.0"
+version = "0.17.0"
 edition = "2021"
 license = "MIT"

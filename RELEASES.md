@@ -5,6 +5,30 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.17.0 — 2026-10-23
+
+### New
+
+- Rewind, as Claude Code draws it
+- focused work starts from its outcome and its check
+- a notification when a turn ends where nobody looks
+- /context and checks after editing
+- tasks above the editor
+- the changes of each instruction, and undo
+- checkpoints of a session's folder
+- what each session is doing reaches the terminal
+
+### Fixed
+
+- no system folder keeps checkpoints, nor one with too many files
+- Esc Esc and /undo say why there is nothing to undo
+- a notification per session that never touches another's; undo says when it could not
+- undo finds its place first, holds the tab, and checkpoints go with their session
+- undo deletes only what the turn made; checkpoints ignore the person's git setup
+- checks never hold the session, and the model cannot name them
+- only what a terminal needs, an old dock said at once, reconnecting
+- pasting, Ctrl+L, full outputs, clearer words
+
 ## 0.16.0 — 2026-10-23
 
 ### New
