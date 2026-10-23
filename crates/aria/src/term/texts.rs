@@ -42,11 +42,6 @@ const OWN: &[(&str, &str, &str)] = &[
     ),
     ("term.cannotStart", "Aria's dock could not start: {error}", "El dock de Aria no pudo iniciar: {error}"),
     ("term.tooMany", "There are already 8 sessions: close one first.", "Ya hay 8 sesiones: cierra una primero."),
-    (
-        "term.selectHint",
-        "Hold Shift to select text with the mouse.",
-        "Mantén Shift para seleccionar texto con el ratón.",
-    ),
     ("term.more", "… {n} more lines", "… {n} líneas más"),
     ("term.summary.reads", "{n} reads", "{n} lecturas"),
     ("term.summary.read", "1 read", "1 lectura"),

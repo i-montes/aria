@@ -5,10 +5,9 @@
 use crate::term::app::{App, Config, Effect, Input, Press, Screen};
 use crate::term::git::{self, GitStatus};
 use crate::term::link::Link;
+use crate::term::select::{copy, Selection};
 use crate::term::theme::Palette;
-use crate::term::view::{
-    bottom_height, cursor_position, draw_list, draw_session, max_scroll as max_scroll_of, SessionView,
-};
+use crate::term::view::{bottom_height, cursor_position, draw_list, draw_session, should_draw, SessionView};
 use crate::term::Key;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
@@ -20,7 +19,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScree
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Position;
 use ratatui::Terminal;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -88,7 +87,6 @@ fn inputs(event: Event) -> Vec<Input> {
             })
             .collect(),
         Event::Mouse(mouse) => match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => vec![Input::Click { row: mouse.row }],
             MouseEventKind::ScrollUp => vec![Input::Scroll(3)],
             MouseEventKind::ScrollDown => vec![Input::Scroll(-3)],
             _ => Vec::new(),
@@ -121,12 +119,7 @@ fn watch_git(folder: Arc<Mutex<String>>) -> Arc<Mutex<Option<GitStatus>>> {
 }
 
 /// Runs until the app quits; the note to print after the terminal is back.
-pub fn run(
-    link: Link,
-    config: Config,
-    paths: &aria_core::paths::AriaPaths,
-    hint_file: &PathBuf,
-) -> std::io::Result<Option<String>> {
+pub fn run(link: Link, config: Config, paths: &aria_core::paths::AriaPaths) -> std::io::Result<Option<String>> {
     let palette = Palette::detect();
     let events = link.events();
     let (mut app, first) = App::new(config);
@@ -156,6 +149,13 @@ pub fn run(
     let mut quit = false;
     let mut max_scroll = 0;
     let mut overlay_top = 0;
+    // A frame is drawn only when something changed (a key, the mouse, the dock, the size, git) or the spinner is due.
+    let mut changed = true;
+    let mut last_draw = std::time::Instant::now();
+    let mut last_git: Option<GitStatus> = None;
+    // The mouse's selection, and the last frame (what a selection copies).
+    let mut selection: Option<Selection> = None;
+    let mut last_frame: Option<ratatui::buffer::Buffer> = None;
     while !quit {
         app.clamp_scroll(max_scroll);
         app.set_overlay_top(overlay_top);
@@ -163,49 +163,105 @@ pub fn run(
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
         app.clock(now_ms);
         *folder.lock().unwrap() = app.session().workdir.clone();
-        terminal.draw(|frame| match app.screen() {
-            Screen::List => draw_list(frame, &app.list_rows(), app.selected(), app.note().as_deref(), &palette),
-            Screen::Session => {
-                let area = frame.area();
-                let width = area.width.saturating_sub(4);
-                let panel = app.panel_lines(&palette, width);
-                let has_panel = panel.is_some();
-                let workdir = app.session().workdir.clone();
-                let view = SessionView {
-                    session: app.session(),
-                    verbose: app.verbose(),
-                    input: app.editor.text(),
-                    panel,
-                    git: git_status.lock().unwrap().clone(),
-                    folder: workdir.trim_end_matches('/').rsplit('/').next().unwrap_or_default().to_string(),
-                    compact_at: app.compact_at(),
-                    lang: app.lang().to_string(),
-                    palette,
-                    now: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.as_secs() as i64),
-                    scroll: app.scroll(),
-                    working_ms: app.working_ms(now_ms),
-                    tick: now_ms,
-                    overlay: app.overlay_lines(&palette),
-                };
-                let floating = view.overlay.as_ref().map_or(0, Vec::len) as u16;
-                overlay_top = area.height.saturating_sub(bottom_height(&view, area.width, area.height) + floating);
-                max_scroll = max_scroll_of(&view, area.width, area.height);
-                draw_session(frame, &view);
-                if !has_panel && area.height > 3 {
-                    let (x, y) = cursor_position(app.editor.text(), app.editor.cursor(), area.width, area.height);
-                    frame.set_cursor_position(Position { x, y });
+        let git = git_status.lock().unwrap().clone();
+        if git != last_git {
+            last_git = git.clone();
+            changed = true;
+        }
+        let since = last_draw.elapsed().as_millis() as u64;
+        if should_draw(changed, app.session().running && app.screen() == Screen::Session, since) {
+            changed = false;
+            last_draw = std::time::Instant::now();
+            let completed = terminal.draw(|frame| {
+                match app.screen() {
+                    Screen::List => draw_list(frame, &app.list_rows(), app.selected(), app.note().as_deref(), &palette),
+                    Screen::Session => {
+                        let area = frame.area();
+                        let width = area.width.saturating_sub(4);
+                        let panel = app.panel_lines(&palette, width);
+                        let has_panel = panel.is_some();
+                        let workdir = app.session().workdir.clone();
+                        let view = SessionView {
+                            session: app.session(),
+                            verbose: app.verbose(),
+                            input: app.editor.text(),
+                            panel,
+                            git: git.clone(),
+                            folder: workdir.trim_end_matches('/').rsplit('/').next().unwrap_or_default().to_string(),
+                            compact_at: app.compact_at(),
+                            lang: app.lang().to_string(),
+                            palette,
+                            now: (now_ms / 1000) as i64,
+                            scroll: app.scroll(),
+                            working_ms: app.working_ms(now_ms),
+                            tick: now_ms,
+                            overlay: app.overlay_lines(&palette),
+                        };
+                        let floating = view.overlay.as_ref().map_or(0, Vec::len) as u16;
+                        overlay_top =
+                            area.height.saturating_sub(bottom_height(&view, area.width, area.height) + floating);
+                        max_scroll = draw_session(frame, &view);
+                        if !has_panel && area.height > 3 {
+                            let (x, y) =
+                                cursor_position(app.editor.text(), app.editor.cursor(), area.width, area.height);
+                            frame.set_cursor_position(Position { x, y });
+                        }
+                    }
                 }
-            }
-        })?;
+                if let Some(selection) = selection.filter(|s| !s.is_click()) {
+                    selection.paint(frame.buffer_mut());
+                }
+            })?;
+            last_frame = Some(completed.buffer.clone());
+        }
         let mut effects = Vec::new();
         if event::poll(Duration::from_millis(40))? {
-            for input in inputs(event::read()?) {
-                effects.extend(app.update(input));
+            let event = event::read()?;
+            changed = true;
+            let mut handled = false;
+            if let Event::Mouse(mouse) = &event {
+                match mouse.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        selection = Some(Selection::new(mouse.column, mouse.row));
+                        handled = true;
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        if let Some(selection) = selection.as_mut() {
+                            selection.extend(mouse.column, mouse.row);
+                        }
+                        handled = true;
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        match selection {
+                            // A press without a drag is a click.
+                            Some(s) if s.is_click() => {
+                                selection = None;
+                                effects.extend(app.update(Input::Click { row: mouse.row }));
+                            }
+                            // What was selected goes to the clipboard at once; it stays shown until the next key.
+                            Some(s) => {
+                                if let Some(frame) = &last_frame {
+                                    copy(&s.text(frame));
+                                }
+                            }
+                            None => {}
+                        }
+                        handled = true;
+                    }
+                    _ => {}
+                }
+            }
+            if !handled {
+                if matches!(event, Event::Key(_)) {
+                    selection = None;
+                }
+                for input in inputs(event) {
+                    effects.extend(app.update(input));
+                }
             }
         }
         while let Ok(message) = events.try_recv() {
+            changed = true;
             effects.extend(app.update(Input::Dock(message)));
         }
         for effect in effects {
@@ -215,9 +271,6 @@ pub fn run(
                 Effect::Detach => link.detach(),
                 Effect::Focus(focused) => link.focus(focused),
                 Effect::SaveVerbose(on) => save_verbose(paths, on),
-                Effect::SaveHint => {
-                    let _ = std::fs::write(hint_file, "{\"selectHint\":true}\n");
-                }
                 Effect::Quit => quit = true,
             }
         }

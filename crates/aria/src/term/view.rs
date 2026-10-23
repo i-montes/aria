@@ -421,11 +421,17 @@ pub fn bottom_height(v: &SessionView, width: u16, height: u16) -> u16 {
 }
 
 /// How far the conversation can scroll up in a `width` × `height` screen (its lines above the ones shown).
+#[cfg(test)]
 pub fn max_scroll(v: &SessionView, width: u16, height: u16) -> usize {
     let pad = if width > 20 { 2 } else { 0 };
     let lines = conversation(v, width.saturating_sub(2 * pad)).len();
-    let panel = v.panel.as_ref().map_or(1, Vec::len);
-    lines.saturating_sub(usize::from(height).saturating_sub(4 + panel))
+    let room = height.saturating_sub(bottom_height(v, width, height));
+    lines.saturating_sub(usize::from(room.saturating_sub(1)))
+}
+
+/// Whether to draw a frame now: something changed, or a turn runs and the spinner is due (every 80 ms).
+pub fn should_draw(changed: bool, running: bool, since_last_ms: u64) -> bool {
+    changed || (running && since_last_ms >= 80)
 }
 
 /// Where the terminal's cursor goes for the editor's `cursor` (a byte index into `text`): its line, counted from the
@@ -441,10 +447,11 @@ pub fn cursor_position(text: &str, cursor: usize, width: u16, height: u16) -> (u
     (x, height.saturating_sub(3 + below))
 }
 
-pub fn draw_session(frame: &mut Frame, v: &SessionView) {
+/// Draws the session; returns how far the conversation can scroll up (its lines above the ones it shows).
+pub fn draw_session(frame: &mut Frame, v: &SessionView) -> usize {
     let area = frame.area();
     if area.width == 0 || area.height == 0 {
-        return;
+        return 0;
     }
     let pad = if area.width > 20 { 2 } else { 0 };
     let inner = Rect { x: area.x + pad, width: area.width - 2 * pad, ..area };
@@ -474,10 +481,11 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) {
     frame.render_widget(Paragraph::new(bottom.into_iter().skip(skip).collect::<Vec<_>>()), bottom_area);
     let room = area.height - bottom_height;
     if room == 0 {
-        return;
+        return 0;
     }
     let lines = conversation(v, inner.width);
-    let skip = lines.len().saturating_sub(usize::from(room.saturating_sub(1))).saturating_sub(v.scroll);
+    let above = lines.len().saturating_sub(usize::from(room.saturating_sub(1)));
+    let skip = above.saturating_sub(v.scroll);
     let top = Rect { y: area.y + 1.min(room), height: room.saturating_sub(1).max(1), ..inner };
     let shown: Vec<Line<'static>> = lines.into_iter().skip(skip).collect();
     frame.render_widget(Paragraph::new(shown).style(Style::default().add_modifier(Modifier::empty())), top);
@@ -486,6 +494,7 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) {
         frame.render_widget(ratatui::widgets::Clear, overlay);
         frame.render_widget(Paragraph::new(lines.clone()).style(Style::default().bg(v.palette.ground)), overlay);
     }
+    above
 }
 
 #[cfg(test)]
@@ -571,7 +580,11 @@ mod tests {
 
     fn render(v: &SessionView, w: u16, h: u16) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-        terminal.draw(|frame| draw_session(frame, v)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_session(frame, v);
+            })
+            .unwrap();
         terminal.backend().buffer().clone()
     }
 
@@ -736,6 +749,28 @@ mod tests {
             "{screen}"
         );
         assert!(rows[editor_top - 2].contains("en cola"), "{screen}");
+    }
+
+    #[test]
+    fn drawing_says_how_far_it_can_scroll() {
+        let mut s = Session::default();
+        for n in 0..60 {
+            s.add_user(&format!("message {n}"));
+        }
+        let v = view(&s, true);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        let mut drawn = 0;
+        terminal.draw(|frame| drawn = draw_session(frame, &v)).unwrap();
+        assert_eq!(drawn, max_scroll(&v, 80, 20));
+        assert!(drawn > 100);
+    }
+
+    #[test]
+    fn a_frame_is_drawn_only_when_something_changed_or_the_spinner_turns() {
+        assert!(should_draw(true, false, 0));
+        assert!(!should_draw(false, false, 5_000), "idle: nothing to draw");
+        assert!(!should_draw(false, true, 40), "the spinner turns every 80 ms");
+        assert!(should_draw(false, true, 80));
     }
 
     #[test]

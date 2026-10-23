@@ -89,7 +89,33 @@ impl Writer<'_> {
     }
 }
 
+thread_local! {
+    /// Answers already turned into lines, by (text, width, palette): a frame redraws them all, and only the one being
+    /// written changes.
+    static DRAWN: std::cell::RefCell<std::collections::HashMap<(u64, u16, String), Vec<Line<'static>>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 pub fn lines(text: &str, width: u16, palette: &Palette) -> Vec<Line<'static>> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    let key = (hasher.finish(), width, format!("{:?}", palette.text));
+    if let Some(lines) = DRAWN.with(|drawn| drawn.borrow().get(&key).cloned()) {
+        return lines;
+    }
+    let lines = render(text, width, palette);
+    DRAWN.with(|drawn| {
+        let mut drawn = drawn.borrow_mut();
+        if drawn.len() > 512 {
+            drawn.clear();
+        }
+        drawn.insert(key, lines.clone());
+    });
+    lines
+}
+
+fn render(text: &str, width: u16, palette: &Palette) -> Vec<Line<'static>> {
     let mut w = Writer {
         width: usize::from(width.max(1)),
         palette,

@@ -105,7 +105,6 @@ sh install/install.sh --local target/release/aria
 | `~/Library/LaunchAgents/com.aria.dock.plist` | Starts the dock at login on macOS; output in `~/.aria/logs/aria.log` |
 | `~/.aria/run/control.sock` | The socket `aria toggle` talks to on macOS (on Omarchy it is `$XDG_RUNTIME_DIR/aria/control.sock`) |
 | `~/.aria/run/clients.sock` | The socket `aria` in a terminal talks to on macOS (on Omarchy `$XDG_RUNTIME_DIR/aria/clients.sock`), mode `600` |
-| `~/.aria/term.json` | What the terminal remembers (that it already said how to select text with the mouse) |
 
 The repository only holds code; your data never lives in it.
 

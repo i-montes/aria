@@ -8,6 +8,7 @@ pub mod link;
 pub mod markdown;
 pub mod picker;
 mod screen;
+pub mod select;
 pub mod state;
 pub mod texts;
 pub mod theme;
@@ -50,8 +51,6 @@ pub fn run() -> i32 {
             return 1;
         }
     };
-    let hint_file = paths.root.join("term.json");
-    let hint_seen = std::fs::read_to_string(&hint_file).is_ok_and(|text| text.contains("\"selectHint\":true"));
     let config = app::Config {
         cwd: std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default(),
         lang,
@@ -59,9 +58,8 @@ pub fn run() -> i32 {
         connected: aria_core::auth::AuthStore::for_paths(&paths).summary(),
         allow_pay_per_use: settings.models.allow_pay_per_use,
         compact_at: settings.compaction.percent,
-        hint_seen,
     };
-    match screen::run(link, config, &paths, &hint_file) {
+    match screen::run(link, config, &paths) {
         Ok(note) => {
             if let Some(note) = note {
                 println!("{note}");

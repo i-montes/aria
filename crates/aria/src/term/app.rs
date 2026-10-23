@@ -20,8 +20,6 @@ pub struct Config {
     pub connected: Vec<String>,
     pub allow_pay_per_use: bool,
     pub compact_at: u8,
-    /// The hint about selecting text with the mouse was shown once already.
-    pub hint_seen: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -54,8 +52,6 @@ pub enum Effect {
     Detach,
     Focus(bool),
     SaveVerbose(bool),
-    /// The mouse hint was shown: remember it.
-    SaveHint,
     Quit,
 }
 
@@ -534,18 +530,6 @@ impl App {
 
     fn click(&mut self, row: u16) -> Vec<Effect> {
         let mut effects = Vec::new();
-        if !self.config.hint_seen {
-            self.config.hint_seen = true;
-            let hint = t(&self.config.lang, "term.selectHint", &json!({}));
-            if self.screen == Screen::Session {
-                self.session
-                    .entries
-                    .push(crate::term::state::Entry::Note { text: crate::term::state::Text::Raw(hint) });
-            } else {
-                self.note = Some(hint);
-            }
-            effects.push(Effect::SaveHint);
-        }
         match self.screen {
             Screen::List => {
                 // The list starts on the second row.
@@ -748,7 +732,6 @@ mod tests {
             connected: vec![],
             allow_pay_per_use: false,
             compact_at: 40,
-            hint_seen: true,
         }
     }
 
