@@ -8,10 +8,10 @@
 //   `start_plan` tool).
 // There is no execute mode any more: approving the plan, or /execute, launches phase B in the
 // background and the chat stays routed.
-import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { agentDir, projectsDir } from '../lib/agent-dir.ts'
+import { gitRoot } from '../lib/git-root.ts'
 import { type AriaConfig, ariaConfig, DEFAULTS, type Model } from '../lib/config.ts'
 
 export type Mode = 'normal' | 'plan'
@@ -45,18 +45,6 @@ export const REVIEW_SKILL = join(agentDir(), 'git', 'github.com', 'DietrichGeber
 
 const PROJECTS = projectsDir()
 const TMP_DIRS = [...new Set(['/tmp', tmpdir()])]
-
-/** The git repo containing `path` (walking up from it or its first existing parent), or null. */
-export function gitRoot(path: string): string | null {
-  let dir = path
-  for (let i = 0; i < 64; i++) {
-    if (existsSync(join(dir, '.git'))) return dir
-    const up = dirname(dir)
-    if (up === dir) return null
-    dir = up
-  }
-  return null
-}
 
 /** The repo a plan belongs to (the build and its review work there, whatever folder Pi runs in), or the plan's folder. */
 export const planRoot = (plan: string): string => gitRoot(dirname(plan)) ?? dirname(plan)

@@ -4,7 +4,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { normalizeTasks, type Task as ListedTask } from '../tasks/tasks.ts'
-import { gitRoot } from './modes.ts'
+import { gitRoot } from '../lib/git-root.ts'
 
 export type Task = { title: string; status: 'todo' | 'active' | 'done' }
 export type Phase = { number: number; name: string; tasks: Task[] }
