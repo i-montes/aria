@@ -204,6 +204,11 @@ describe('Jev follows the stored keys, not the main provider', () => {
     expect(finish(on, 'full', [TS]).router).toEqual({ enabled: true, backend: 'typesafe' })
     expect(finish(on, 'full', [GO]).router).toEqual({ enabled: true, backend: 'opencode' })
     expect(finish(on, 'full', []).router.enabled).toBe(false)
+    // Removing the last Jev key turns Jev's review off with the router; any key keeps what was on.
+    expect(on.sandbox.jevReview).toBe(true)
+    expect(finish(on, 'full', []).sandbox.jevReview).toBe(false)
+    expect(finish(on, 'full', [TS]).sandbox.jevReview).toBe(true)
+    expect(finish(on, 'full', [GO]).sandbox.jevReview).toBe(true)
   })
 
   test('TypeSafe is a provider for Jev only: never main, no models', () => {

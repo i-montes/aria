@@ -198,11 +198,13 @@ export function canContinue(step, settings, ui) {
 }
 
 /** The settings to save when the setup is done. Without a mode, the saved one stays (editing). The router's backend
- * follows the stored keys (`connected`, see `jevBackend`); with no Jev at all it is off, whatever an earlier version saved. */
+ * follows the stored keys (`connected`, see `jevBackend`); with no Jev at all the router and Jev's sandbox review are off,
+ * whatever an earlier version saved. */
 export function finish(settings, mode, connected = []) {
   const next = clone(settings)
   const backend = jevBackend(next, connected)
   next.router = { enabled: next.router.enabled && !!backend, backend: backend ?? next.router.backend }
+  if (!backend) next.sandbox.jevReview = false // no Jev to review with
   next.setup = { completed: true, mode: mode ?? settings.setup.mode ?? 'full' }
   return next
 }
