@@ -43,6 +43,16 @@ pub struct SessionView<'a> {
     pub tick: u64,
     /// Suggestions (`/`, `@`, `/model`) floating over the conversation, right above the editor.
     pub overlay: Option<Vec<Line<'static>>>,
+    /// Calls whose whole output is shown (a click on their `… N more lines`).
+    pub expanded: std::collections::HashSet<String>,
+}
+
+/// What a frame drew that the input needs: how far the conversation can scroll up, and the screen rows of the
+/// `… N more lines` rows with their call.
+#[derive(Debug, Default, PartialEq)]
+pub struct Drawn {
+    pub above: usize,
+    pub more: Vec<(u16, String)>,
 }
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -147,11 +157,12 @@ fn mark(call: &Call, p: &Palette) -> Span<'static> {
     }
 }
 
-fn call_lines(call: &Call, v: &SessionView, width: usize) -> Vec<Line<'static>> {
+/// A call's lines, and which of them (if any) is its `… N more lines` row.
+fn call_lines(call: &Call, v: &SessionView, width: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let p = &v.palette;
     let grey = Style::default().fg(p.grey);
     if call.think {
-        return wrap(&call.output, width, vec![Span::raw("  ")], "  ", grey);
+        return (wrap(&call.output, width, vec![Span::raw("  ")], "  ", grey), None);
     }
     let mut head = vec![
         Span::raw("  "),
@@ -167,19 +178,23 @@ fn call_lines(call: &Call, v: &SessionView, width: usize) -> Vec<Line<'static>> 
         head.push(Span::styled(format!(" −{}", call.removed), Style::default().fg(p.coral)));
     }
     let mut out = vec![Line::from(head)];
+    let mut more_at = None;
     let output = call.output.trim_end();
     if !output.is_empty() {
         let all: Vec<&str> = output.lines().collect();
-        for line in all.iter().take(OUTPUT_LINES) {
+        // A click on the `… N more lines` row shows the rest (`expanded`), and another folds it again.
+        let shown = if v.expanded.contains(&call.id) { all.len() } else { OUTPUT_LINES };
+        for line in all.iter().take(shown) {
             let cut: String = line.chars().take(width.saturating_sub(11)).collect();
             out.push(Line::from(vec![Span::raw(" ".repeat(11)), Span::styled(cut, grey)]));
         }
-        if all.len() > OUTPUT_LINES {
-            let more = t(&v.lang, "term.more", &json!({"n": all.len() - OUTPUT_LINES}));
+        if all.len() > shown {
+            let more = t(&v.lang, "term.more", &json!({"n": all.len() - shown}));
+            more_at = Some(out.len());
             out.push(Line::from(vec![Span::raw(" ".repeat(11)), Span::styled(more, Style::default().fg(p.faint))]));
         }
     }
-    out
+    (out, more_at)
 }
 
 /// A step's title, as the dock's accordion says it: what the tool does ("Leer archivo", "Escribir 3 líneas"), or a
@@ -241,12 +256,20 @@ fn step_line(call: &Call, v: &SessionView, width: usize) -> Line<'static> {
 }
 
 /// The conversation as lines, a blank line between entries.
+#[cfg(test)]
 pub fn conversation(v: &SessionView, width: u16) -> Vec<Line<'static>> {
+    conversation_marked(v, width).0
+}
+
+/// The conversation's lines, with the `… N more lines` rows (their line index and call id).
+fn conversation_marked(v: &SessionView, width: u16) -> (Vec<Line<'static>>, Vec<(usize, String)>) {
     let width = usize::from(width.max(1));
     let p = &v.palette;
     let mut out: Vec<Line<'static>> = Vec::new();
+    let mut marks: Vec<(usize, String)> = Vec::new();
     let entries = &v.session.entries;
     for entry in entries {
+        let mut entry_marks: Vec<(usize, String)> = Vec::new();
         let lines: Vec<Line<'static>> = match entry {
             Entry::User { text } => wrap(
                 text,
@@ -267,7 +290,17 @@ pub fn conversation(v: &SessionView, width: u16) -> Vec<Line<'static>> {
                 }
                 lines
             }
-            Entry::Tools { calls } if v.verbose => calls.iter().flat_map(|call| call_lines(call, v, width)).collect(),
+            Entry::Tools { calls } if v.verbose => {
+                let mut lines = Vec::new();
+                for call in calls {
+                    let (call_lines, more_at) = call_lines(call, v, width);
+                    if let Some(at) = more_at {
+                        entry_marks.push((lines.len() + at, call.id.clone()));
+                    }
+                    lines.extend(call_lines);
+                }
+                lines
+            }
             Entry::Tools { calls } => calls.iter().filter(|c| !c.think).map(|call| step_line(call, v, width)).collect(),
             Entry::Notice { tone, text } => {
                 let colour = match tone {
@@ -290,9 +323,10 @@ pub fn conversation(v: &SessionView, width: u16) -> Vec<Line<'static>> {
         if !out.is_empty() {
             out.push(Line::default());
         }
+        marks.extend(entry_marks.into_iter().map(|(at, id)| (out.len() + at, id)));
         out.extend(lines);
     }
-    out
+    (out, marks)
 }
 
 /// Seconds since the epoch of `YYYY-MM-DDTHH:MM:SSZ` (or with a fraction or an offset of Z only).
@@ -467,11 +501,11 @@ pub fn cursor_position(text: &str, cursor: usize, width: u16, height: u16) -> (u
     (x, height.saturating_sub(3 + below))
 }
 
-/// Draws the session; returns how far the conversation can scroll up (its lines above the ones it shows).
-pub fn draw_session(frame: &mut Frame, v: &SessionView) -> usize {
+/// Draws the session; returns how far the conversation can scroll up and where its `… N more lines` rows are.
+pub fn draw_session(frame: &mut Frame, v: &SessionView) -> Drawn {
     let area = frame.area();
     if area.width == 0 || area.height == 0 {
-        return 0;
+        return Drawn::default();
     }
     let pad = if area.width > 20 { 2 } else { 0 };
     let inner = Rect { x: area.x + pad, width: area.width - 2 * pad, ..area };
@@ -501,11 +535,11 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) -> usize {
     frame.render_widget(Paragraph::new(bottom.into_iter().skip(skip).collect::<Vec<_>>()), bottom_area);
     let room = area.height - bottom_height;
     if room == 0 {
-        return 0;
+        return Drawn::default();
     }
     // A row of air above and below the conversation: it never touches the working line or the editor.
     let shown_rows = conversation_rows(room);
-    let lines = conversation(v, inner.width);
+    let (lines, marks) = conversation_marked(v, inner.width);
     let above = lines.len().saturating_sub(usize::from(shown_rows));
     let skip = above.saturating_sub(v.scroll);
     let top = Rect { y: area.y + 1.min(room), height: shown_rows.max(1), ..inner };
@@ -516,7 +550,12 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) -> usize {
         frame.render_widget(ratatui::widgets::Clear, overlay);
         frame.render_widget(Paragraph::new(lines.clone()).style(Style::default().bg(v.palette.ground)), overlay);
     }
-    above
+    let more = marks
+        .into_iter()
+        .filter(|(at, _)| *at >= skip && *at < skip + usize::from(shown_rows))
+        .map(|(at, id)| (top.y + (at - skip) as u16, id))
+        .collect();
+    Drawn { above, more }
 }
 
 #[cfg(test)]
@@ -597,6 +636,7 @@ mod tests {
             working_ms: None,
             tick: 0,
             overlay: None,
+            expanded: Default::default(),
         }
     }
 
@@ -792,10 +832,10 @@ mod tests {
         }
         let v = view(&s, true);
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        let mut drawn = 0;
+        let mut drawn = Drawn::default();
         terminal.draw(|frame| drawn = draw_session(frame, &v)).unwrap();
-        assert_eq!(drawn, max_scroll(&v, 80, 20));
-        assert!(drawn > 100);
+        assert_eq!(drawn.above, max_scroll(&v, 80, 20));
+        assert!(drawn.above > 100);
     }
 
     #[test]
@@ -824,6 +864,31 @@ mod tests {
         let rule = rows.iter().position(|l| l.trim_start().starts_with("──")).unwrap();
         assert_eq!(rows[rule - 1].trim(), "", "a blank row before the editor: {idle}");
         assert!(rows[rule - 2].contains("Listo."), "{idle}");
+    }
+
+    #[test]
+    fn a_long_output_says_how_much_more_and_where() {
+        let mut s = Session::default();
+        let output: String = (0..20).map(|n| format!("line {n}\n")).collect();
+        for line in [
+            event(
+                json!({"type": "tool_execution_start", "toolCallId": "c1", "toolName": "bash", "args": {"command": "seq 20"}}),
+            ),
+            event(json!({"type": "tool_execution_end", "toolCallId": "c1", "toolName": "bash", "isError": false,
+                "result": {"content": [{"type": "text", "text": output}]}})),
+        ] {
+            s.apply(&serde_json::from_value::<DockMessage>(line).unwrap());
+        }
+        let mut v = view(&s, true);
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        let mut drawn = Drawn::default();
+        terminal.draw(|frame| drawn = draw_session(frame, &v)).unwrap();
+        let screen = text(terminal.backend().buffer());
+        let row = screen.lines().position(|l| l.contains("8") && l.contains("…")).expect("the more row");
+        assert_eq!(drawn.more, vec![(row as u16, "c1".to_string())]);
+        assert!(!screen.contains("line 19"));
+        v.expanded.insert("c1".into());
+        assert!(text(&render(&v, 80, 40)).contains("line 19"));
     }
 
     #[test]

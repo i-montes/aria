@@ -39,6 +39,8 @@ pub enum Input {
     Resize {
         height: u16,
     },
+    /// Text pasted into the terminal.
+    Paste(String),
     /// The mouse wheel: lines up (negative: down).
     Scroll(i32),
     Focus(bool),
@@ -52,6 +54,8 @@ pub enum Effect {
     Detach,
     Focus(bool),
     SaveVerbose(bool),
+    /// Clear the terminal and draw everything again (Ctrl+L).
+    Redraw,
     Quit,
 }
 
@@ -111,6 +115,10 @@ pub struct App {
     overlay_top: u16,
     /// A message Ctrl+Enter sends once the turn it stopped settles.
     after_abort: Option<String>,
+    /// Calls whose whole output is shown.
+    expanded: std::collections::HashSet<String>,
+    /// The `… N more lines` rows on screen, with their call.
+    more_rows: Vec<(u16, String)>,
 }
 
 fn folder_name(path: &str) -> String {
@@ -138,6 +146,8 @@ impl App {
             started: None,
             overlay_top: 0,
             after_abort: None,
+            expanded: Default::default(),
+            more_rows: Vec::new(),
         };
         let load = app.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
         (app, vec![load])
@@ -289,6 +299,15 @@ impl App {
                 Vec::new()
             }
             Input::Focus(focused) => vec![Effect::Focus(focused)],
+            Input::Paste(text) => {
+                let text = text.replace("\r\n", "\n").replace('\r', "\n");
+                let mut effects = Vec::new();
+                for c in text.chars() {
+                    let key = if c == '\n' { Key::Enter } else { Key::Char(c) };
+                    effects.extend(self.update(Input::Key(Press { key, ctrl: false, alt: c == '\n' })));
+                }
+                effects
+            }
             Input::Scroll(lines) => {
                 self.scroll_by(lines);
                 Vec::new()
@@ -313,6 +332,7 @@ impl App {
         if press.ctrl {
             return match press.key {
                 Key::Char('o') => self.set_verbose(!self.config.verbose),
+                Key::Char('l') => vec![Effect::Redraw],
                 Key::Enter if self.dialog.is_none() => self.interrupt(),
                 _ => Vec::new(),
             };
@@ -523,6 +543,15 @@ impl App {
         self.picker.as_ref().map(|(_, picker)| picker.lines(palette))
     }
 
+    pub fn expanded(&self) -> &std::collections::HashSet<String> {
+        &self.expanded
+    }
+
+    /// Where the screen drew the `… N more lines` rows.
+    pub fn set_more_rows(&mut self, rows: Vec<(u16, String)>) {
+        self.more_rows = rows;
+    }
+
     /// The row the suggestions start at, as the screen drew them.
     pub fn set_overlay_top(&mut self, row: u16) {
         self.overlay_top = row;
@@ -537,6 +566,13 @@ impl App {
                 if at <= self.sessions.len() {
                     self.selected = at;
                     effects.extend(self.open_selected());
+                }
+            }
+            Screen::Session if self.more_rows.iter().any(|(r, _)| *r == row) => {
+                if let Some((_, id)) = self.more_rows.iter().find(|(r, _)| *r == row).cloned() {
+                    if !self.expanded.remove(&id) {
+                        self.expanded.insert(id);
+                    }
                 }
             }
             Screen::Session => {
@@ -863,7 +899,7 @@ mod tests {
         assert_eq!(app.screen(), Screen::List);
         assert!(effects.contains(&Effect::Detach));
         assert!(effects.iter().any(|e| matches!(e, Effect::Send(PageMessage::SessionsLoad { .. }))));
-        assert_eq!(app.note().as_deref(), Some("This session was closed in the dock."));
+        assert_eq!(app.note().as_deref(), Some("This session was closed."));
     }
 
     #[test]
@@ -1027,6 +1063,29 @@ mod tests {
         typed(&mut other, "verb");
         key(&mut other, Key::Tab);
         assert_eq!(other.editor.text(), "/verbose ");
+    }
+
+    #[test]
+    fn pasted_line_breaks_are_newlines() {
+        let mut app = attached();
+        app.update(Input::Paste("a\r\nb\rc".into()));
+        assert_eq!(app.editor.text(), "a\nb\nc");
+    }
+
+    #[test]
+    fn ctrl_l_redraws() {
+        let mut app = attached();
+        assert_eq!(ctrl(&mut app, 'l'), vec![Effect::Redraw]);
+    }
+
+    #[test]
+    fn a_click_on_more_lines_shows_the_whole_output() {
+        let mut app = attached();
+        app.set_more_rows(vec![(7, "c1".into())]);
+        app.update(Input::Click { row: 7 });
+        assert!(app.expanded().contains("c1"));
+        app.update(Input::Click { row: 7 });
+        assert!(!app.expanded().contains("c1"), "a second click folds it again");
     }
 
     #[test]

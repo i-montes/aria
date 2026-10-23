@@ -23,6 +23,13 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// A thread of the client panicked: the loop ends (the hook already gave the terminal back).
+pub static PANICKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn should_quit() -> bool {
+    PANICKED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 fn restore() {
     // Harmless where it was never pushed.
     let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
@@ -79,13 +86,7 @@ fn inputs(event: Event) -> Vec<Input> {
                 vec![Input::Key(Press { key: k, ctrl, alt })]
             })
             .unwrap_or_default(),
-        Event::Paste(text) => text
-            .chars()
-            .map(|c| {
-                let key = if c == '\n' { Key::Enter } else { Key::Char(c) };
-                Input::Key(Press { key, ctrl: false, alt: c == '\n' })
-            })
-            .collect(),
+        Event::Paste(text) => vec![Input::Paste(text)],
         Event::Mouse(mouse) => match mouse.kind {
             MouseEventKind::ScrollUp => vec![Input::Scroll(3)],
             MouseEventKind::ScrollDown => vec![Input::Scroll(-3)],
@@ -130,6 +131,7 @@ pub fn run(link: Link, config: Config, paths: &aria_core::paths::AriaPaths) -> s
     }
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        PANICKED.store(true, std::sync::atomic::Ordering::SeqCst);
         restore();
         previous(info);
     }));
@@ -148,6 +150,7 @@ pub fn run(link: Link, config: Config, paths: &aria_core::paths::AriaPaths) -> s
     let git_status = watch_git(folder.clone());
     let mut quit = false;
     let mut max_scroll = 0;
+    let mut more_rows: Vec<(u16, String)> = Vec::new();
     let mut overlay_top = 0;
     // A frame is drawn only when something changed (a key, the mouse, the dock, the size, git) or the spinner is due.
     let mut changed = true;
@@ -157,7 +160,11 @@ pub fn run(link: Link, config: Config, paths: &aria_core::paths::AriaPaths) -> s
     let mut selection: Option<Selection> = None;
     let mut last_frame: Option<ratatui::buffer::Buffer> = None;
     while !quit {
+        if should_quit() {
+            return Err(std::io::Error::other("a part of aria stopped (its message is above)"));
+        }
         app.clamp_scroll(max_scroll);
+        app.set_more_rows(std::mem::take(&mut more_rows));
         app.set_overlay_top(overlay_top);
         let now_ms =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
@@ -196,11 +203,14 @@ pub fn run(link: Link, config: Config, paths: &aria_core::paths::AriaPaths) -> s
                             working_ms: app.working_ms(now_ms),
                             tick: now_ms,
                             overlay: app.overlay_lines(&palette),
+                            expanded: app.expanded().clone(),
                         };
                         let floating = view.overlay.as_ref().map_or(0, Vec::len) as u16;
                         overlay_top =
                             area.height.saturating_sub(bottom_height(&view, area.width, area.height) + floating);
-                        max_scroll = draw_session(frame, &view);
+                        let drawn = draw_session(frame, &view);
+                        max_scroll = drawn.above;
+                        more_rows = drawn.more;
                         if !has_panel && area.height > 3 {
                             let (x, y) =
                                 cursor_position(app.editor.text(), app.editor.cursor(), area.width, area.height);
@@ -271,6 +281,10 @@ pub fn run(link: Link, config: Config, paths: &aria_core::paths::AriaPaths) -> s
                 Effect::Detach => link.detach(),
                 Effect::Focus(focused) => link.focus(focused),
                 Effect::SaveVerbose(on) => save_verbose(paths, on),
+                Effect::Redraw => {
+                    terminal.clear()?;
+                    changed = true;
+                }
                 Effect::Quit => quit = true,
             }
         }
@@ -282,6 +296,14 @@ pub fn run(link: Link, config: Config, paths: &aria_core::paths::AriaPaths) -> s
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn a_panicked_thread_ends_the_loop() {
+        assert!(!should_quit());
+        PANICKED.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(should_quit());
+        PANICKED.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
 
     #[test]
     fn the_terminal_is_given_back_on_an_error_exit() {

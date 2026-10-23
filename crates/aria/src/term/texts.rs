@@ -44,7 +44,7 @@ const OWN: &[(&str, &str, &str)] = &[
     ("term.ago.minutes", "{n} min ago", "hace {n} min"),
     ("term.ago.hours", "{n} h ago", "hace {n} h"),
     ("term.ago.days", "{n} d ago", "hace {n} d"),
-    ("term.closedElsewhere", "This session was closed in the dock.", "Esta sesión se cerró en el dock."),
+    ("term.closedElsewhere", "This session was closed.", "Esta sesión se cerró."),
     (
         "term.gone",
         "Aria's dock stopped. Run `aria` again to start it.",

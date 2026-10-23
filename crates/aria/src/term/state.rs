@@ -400,6 +400,10 @@ impl Session {
             }
             "command_failed" => {
                 if let Some(text) = event["text"].as_str() {
+                    // Never reached Pi: its echo will not come, and the same text sent later from elsewhere shows.
+                    if let Some(at) = self.own.iter().position(|own| own == text) {
+                        self.own.remove(at);
+                    }
                     if let Some(at) = self.queue.iter().position(|q| q == text) {
                         self.queue.remove(at);
                     } else if let Some(at) =
@@ -745,6 +749,18 @@ mod tests {
         assert_eq!(phase_for("tavily_search"), "searching the web");
         assert_eq!(phase_for("bash"), "running command");
         assert_eq!(phase_for("edit"), "writing files");
+    }
+
+    #[test]
+    fn a_refused_message_leaves_the_own_list() {
+        let mut s = Session::default();
+        s.add_user("x");
+        feed(&mut s, &[event(json!({"type": "command_failed", "command": "prompt", "error": "busy", "text": "x"}))]);
+        feed(&mut s, &[event(json!({"type": "message_start", "message": {"role": "user", "content": "x"}}))]);
+        assert!(
+            s.entries.iter().any(|e| matches!(e, Entry::User { text } if text == "x")),
+            "sent again from elsewhere, it shows"
+        );
     }
 
     #[test]
