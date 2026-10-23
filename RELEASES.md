@@ -5,6 +5,19 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.18.0 — 2026-10-23
+
+### New
+
+- notices come back when a session is opened again
+- the footer says while Jev cannot route
+- Jev steps aside model by model
+- the paid Jev answers while the free one's quota is spent
+
+### Fixed
+
+- Aria's notices carry a mark and a colour of their own
+
 ## 0.17.1 — 2026-10-23
 
 ### Fixed
