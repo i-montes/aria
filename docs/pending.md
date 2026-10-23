@@ -18,8 +18,6 @@ The permission and write cards (sandbox, with its four choices), the quota card 
 | What the design shows | What is missing |
 |---|---|
 | Task dock above the composer and the inline task log | the goals/tasks engine (fork of `pi-goal-x`) feeding `chat.setTasks(tasks, kind)` |
-| Document cards (spec, plan) with approval status | the planning flow publishing documents (`renderDocument` contract) |
-| Phases card | the planning flow's phases (`renderPhases` contract) |
 
 ## Needs an Engram feed (phase 2, part 2c)
 
@@ -35,8 +33,6 @@ entry) and a change applies when each session's run settles. Left:
 - A release must publish `pi-version`, `pi-packages`, `engram-version` and `agent-browser-version` next to the
   binary: the `curl | sh` install reads them from there. `tools/release.sh` tags a version and writes its notes
   (`RELEASES.md`), but nothing is published yet: no binaries, no hosted `install.sh`.
-- The TypeSafe router backend is not built: without OpenCode Go (whose account includes Jev) the router is off, and
-  the setup and the settings say so instead of offering it.
 - Pi packages come only from a local folder (`integrations.packages.path`); npm, git, a gallery and trusting
   third-party packages are not built, and the setup no longer offers them (`thirdPartyTrusted` is kept in the file).
 - A settings change restarts the running Pis only when it touches what Pi reads at start (persona, experts, its

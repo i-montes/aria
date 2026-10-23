@@ -6,7 +6,7 @@ every time a session starts; an extension the owner edited there is kept (see `c
 
 | Extension | What it does |
 |---|---|
-| `jev-router` | Jev classifies each message (route, memory, web, Notion, read-only, sizable) and adds a hidden hint and the answer-style rule; reasoning effort follows the route (`/effort`); `/plan` and `/execute`, and for sizable work the offer to plan it first (`plan=offer`, the `start_plan` tool) |
+| `jev-router` | Jev classifies each message (route, memory, web, Notion, read-only, sizable) and adds a hidden hint and the answer-style rule; reasoning effort follows the route (`/effort`); `/plan` starts slice's phase A (one round of questions, then the plan in `docs/plans/`) and, for sizable work, the offer to plan it first (`plan=offer`, the `start_plan` tool) does the same; `plan_ready` shows the plan and asks for approval, and approving it launches phase B, a committing background subagent; `/execute` builds the next open phase of an approved plan (it resumes one); after each slice job the router adds a `[slice]` hint with the next step (review, a question to ask, the manual checks) |
 | `sandbox` | every bash command runs in bwrap: writes only in the project, `/tmp` and caches; asks before leaving it, with Jev's review; also `background_run` (a never-ending command for Aria's dock), on the same route as bash |
 | `quota-fallback` | when the OpenCode Go quota is almost spent, asks to switch to the free model (countdown) |
 | `autocompact` | compacts the context at a set percent (`/autocompact`) |
@@ -14,7 +14,7 @@ every time a session starts; an extension the owner edited there is kept (see `c
 | `subagent-mode` | subagents (`pi --mode json` children) get a lean prompt (`SUBAGENT.md`) |
 | `subagent-watch` | children stream what they do to a socket so it can be watched (and traced: `child.ts` sends times, call ids and usage for `/debug`) |
 | `clock` | Aria's own: each user message gets a hidden `[now]` line with the local date, time, weekday and time zone |
-| `background` | Aria's own: under Aria's dock (`ARIA_JOBS_SOCK`), the tools `background_agent`, `background_list`, `background_output`, `background_stop` (and `background_run` with `PI_SANDBOX=0`); a hidden `[background]` line while something runs; an `aria-background` message when a job ends |
+| `background` | Aria's own: under Aria's dock (`ARIA_JOBS_SOCK`), the tools `background_agent`, `background_list`, `background_output`, `background_stop` (and `background_run` with `PI_SANDBOX=0`); a hidden `[background]` line while something runs; an `aria-background` message when a job ends; `background_agent` takes `commits` (a slice phase's subagent commits locally in the folder, never in a worktree) |
 | `connectors` | Aria's own: every MCP tool call that writes asks first on the chat's permission card (`kind: "connector"`), by the access level of its connector in Aria's settings (`aria.json` `connectors`: Read only refuses writes, Ask asks, Allow runs them); reads run, codemode's nested calls are gated the same, `engram` never is; "don't ask again" lasts the session |
 | `install` | Aria's own: the `install` tool puts in a skill, an MCP server or a Pi package the user asked for, after the user confirms it on the permission card; the `install-from-link` skill (`agent-files/skills/`) tells the model how to read a link |
 | `schedule` | Aria's own: under Aria's dock (`ARIA_JOBS_SOCK`), the tools `schedule_create`, `schedule_list`, `schedule_update`, `schedule_delete` for tasks the dock runs by itself at a time of day, each in its own tab; the model states the schedule and the permissions and waits for a yes before creating one |
@@ -49,9 +49,16 @@ Tests: `bun test extensions`.
     included); `isAriaOwn` checks a tool's path, as written and with links followed. It is only active under Aria
     (both `PI_CODING_AGENT_DIR` and `ARIA_PROJECTS_DIR` set).
   - `quota-fallback/ask.ts` (new): `quotaQuestion` builds the quota card in RPC, the old text in the terminal.
-  - `jev-router/modes.ts`: `/plan` asks the brainstorming questions in batches of up to 4 independent ones, not one
-    per call (the owner asked for it), and then goes straight to writing-plans: no spec to write or review (the owner
-    asked for it, 2026-10-22).
+  - `jev-router/modes.ts`, `slice.ts`, `approve.ts`: `/plan` is phase A of the `slice` skill (`agent-files/skills/slice/`),
+    not Superpowers' brainstorming and writing-plans: one round of up to 4 questions, then a plan of phases and tasks in
+    `docs/plans/<date>-<slug>.md`, committed. Plan mode writes only `docs/plans/`, the repo root's `.gitignore`, `.git`
+    and `/tmp`. `plan_ready` shows the plan (the chat draws it as a card) and asks to approve or change it; approved, plan
+    mode ends and the build starts when the model's answer does. There is no execute mode any more: the build is a
+    background job and the chat stays routed. Leaving plan mode (`/plan off`) cancels an approved build that has not
+    started. The skill is hidden from the model's own choice (`disable-model-invocation`): only `/plan` and the router's
+    offer reach it.
+  - `jev-router/route.ts`, `sandbox/review.ts`: the classifier is `opencode/jev-1.13-free` or, with `router.backend`
+    `typesafe`, TypeSafe's `typesafe/jev-latest` (`classifierFor`); without Aria's config it stays OpenCode's.
   - `jev-router/route.ts`, `index.ts`: focused work that changes things gets `methodNote`: for code in a project with tests, the outcome and its test first, seen failing, then passing; anything else is done and checked once (never naming a method).
   - `jev-router/route.ts`, `index.ts`: Jev also asks whether the work is sizable; sizable work that changes things gets
     `plan=offer`, the assistant offers once to plan it first and, accepted, starts plan mode with `start_plan`.

@@ -27,7 +27,8 @@ Check kinds:
 | 4 | Claude Code, for the Claude provider | test | `install/install.test.sh::the installer links Claude Code into ~/.aria/bin` | pass 2026-10-19 |
 | 4 | No Claude Code, no Claude provider | test | `crates/aria/src/handlers.rs::without_claude_code_nothing_is_downloaded` | pass 2026-10-19 |
 | 5 | Pi packages pinned from the repo | test | `crates/aria-core/src/agent.rs::the_required_packages_come_from_the_repo_file_and_are_pinned` | pass 2026-10-19 |
-| 5 | superpowers filtered to its two skills | test | `crates/aria-core/src/agent.rs::prepare_gives_the_superpowers_package_the_owners_filter` | pass 2026-10-19 |
+| 5 | superpowers filtered to `systematic-debugging` | test | `crates/aria-core/src/agent.rs::prepare_gives_the_superpowers_package_the_owners_filter` | pass 2026-10-23 |
+| 5 | `ponytail`, pinned, with its two skills | test | `crates/aria-core/src/agent.rs::prepare_gives_the_ponytail_package_its_two_skills` | pass 2026-10-23 |
 | 5 | `pi-claude-agent-sdk` (0.9.2), the `claude-bridge` provider | test | `crates/aria-core/src/agent.rs::the_install_command_runs_the_pinned_pi_in_aria_s_agent_dir_with_the_shims_first` | pass 2026-10-19 |
 | 5 | The local `meeting` package | out-of-scope | The owner's local package, left out of phase 2. | out of scope |
 | 6 | OpenPencil | out-of-scope | The owner's integration, left out of phase 2. | out of scope |
@@ -59,8 +60,8 @@ Check kinds:
 | 18 | Expert assignment | eval | `extensions/jev-router/eval.ts` | 93/94 2026-10-19 (one borderline expert case, see pending) |
 | 19 | Auto effort follows the route; free models at their top | test | `extensions/jev-router/effort.test.ts::a free model runs at its top level` | pass 2026-10-19 |
 | 19 | A level picked by hand stays until `/effort auto` | test | `extensions/jev-router/effort.test.ts::a level fixes it in the settings; auto goes back` | pass 2026-10-19 |
-| 20 | `/plan` writes only `docs/superpowers` of repos under the projects folder | test | `extensions/jev-router/modes.test.ts::source code is refused` | pass 2026-10-19 |
-| 20 | `/execute` requires a plan, not a spec | test | `extensions/jev-router/modes.test.ts::a spec is refused` | pass 2026-10-19 |
+| 20 | `/plan` writes only `docs/plans`, `.gitignore` and `.git` of repos under the projects folder | test | `extensions/jev-router/modes.test.ts::source code is refused` | pass 2026-10-23 |
+| 20 | `/execute` requires a plan with phases | test | `extensions/jev-router/slice.test.ts::a file without phases is refused` | pass 2026-10-23 |
 | 21 | The experts' tools: two writers, three read-only | test | `crates/aria-core/src/persona.rs::a_read_only_expert_gets_the_read_only_tools_line_and_a_writer_loses_it` | pass 2026-10-19 |
 | 21 | The owner's experts, word for word | test | `crates/aria-core/src/agent.rs::writes_the_owners_persona_and_experts` | pass 2026-10-19 |
 | 22 | No turn limit by default | test | `extensions/subagent-mode/limit.test.ts::no limit by default` | pass 2026-10-19 |

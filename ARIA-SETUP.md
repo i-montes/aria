@@ -10,7 +10,8 @@ Snapshot of the Pi setup behind Aria, as of 2026-10-18. Everything lives in `~/.
 4. **Claude Code** (2.1.299 today): required by the Claude Max provider.
 5. **Pi packages** (installed from `settings.json`):
    - `pi-parallel-agents`;
-   - `superpowers` from git, filtered: no extensions, only the `systematic-debugging` and `verification-before-completion` skills;
+   - `superpowers` from git, filtered: no extensions, only the `systematic-debugging` skill;
+   - `ponytail` from git, pinned to a commit: its Pi extension (`/ponytail lite|full|ultra`, `full` by default) and two skills, `ponytail` and `ponytail-review`;
    - the local repo `~/Projects/meeting`;
    - `pi-claude-agent-sdk` (v0.9.2), the `claude-bridge` provider.
 6. **OpenPencil** (optional): `op`, `openpencil-desktop`, `pi-acp` registered in OpenPencil, and the skill via `op install --target codex`.
@@ -40,9 +41,10 @@ Snapshot of the Pi setup behind Aria, as of 2026-10-18. Everything lives in `~/.
     - blocks writes outside `/tmp` in read-only turns;
     - assigns experts and blocks `pkill`, `killall`, `fuser -k`.
 19. **Effort:** in auto the route decides, and free models run at their top level. A level picked by hand (`/thinking`, `shift+tab` or `/effort <level>`) stays until `/effort auto`.
-20. **Superpowers modes:**
-    - `/plan` only writes to `docs/superpowers` of repos under `~/Projects` and turns itself off;
-    - `/execute` requires a plan, not a spec.
+20. **Slice modes:**
+    - `/plan` (or accepting the router's offer for sizable work) is phase A of the `slice` skill: one round of questions, then a plan in `docs/plans/` that you approve (`plan_ready`); it only writes to `docs/plans/`, `.gitignore`, `.git` and `/tmp` of repos under `~/Projects`, and turns itself off when the plan is approved;
+    - approving the plan builds its first phase in a background subagent that commits in the folder, test first, and never pushes; `/execute` builds the next open phase of an approved plan;
+    - the model never picks `slice` on its own: it is reached only through `/plan` or the offer.
 21. **Generic experts:** `frontend` and `backend` write; `security`, `reviewer` and `researcher` are read-only.
 22. **Subagents:**
     - use `SUBAGENT.md`, read memory without writing it, end with `## Learnings`;
