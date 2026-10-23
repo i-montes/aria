@@ -137,8 +137,10 @@ every session, and leaving the terminal stops nothing.
   the session's folder as its work tree, the project's `.git` untouched, files over 5 MB and what the project ignores
   left out, 50 listed). One is taken before a turn's first message (`chatSend` without behavior, or a queued message when
   Pi takes it); when the turn settles, `chatEvent { type: "changes", files, added, removed }`. `chatCheckpoints` lists
-  them; `chatUndo` restores the folder, forks Pi before that message (`get_fork_messages`, `fork`) and tells the
-  conversation again (`session_reset`, then the history; the new session id becomes the tab's segment). None are kept
+  the person's messages (Pi's `get_fork_messages`), each with the checkpoint before it and what its turn changed;
+  `chatUndo` puts back the folder, the conversation or both: the folder to the checkpoint, Pi forked before that
+  message (`fork`), and the conversation told again (`session_reset`, then the history; the new session id becomes the
+  tab's segment). The terminal draws it as Rewind (Esc Esc, `/undo`) in the editor's place. None are kept
   for the projects folder itself, the home folder, a system folder (`/`, one holding the home folder, a mount point,
   anything under `/etc`, `/usr`, `/var`…) or a folder with more than 20,000 files; `checkpoints` then carries `off`
   (`projects`, `folder`, `system`, `big`) and the terminal says why.
@@ -161,7 +163,7 @@ One JSON object per message with a `type`, defined in `crates/aria-core/src/brid
 | `openUrl` | open an `https://` link in the browser |
 | `installClaudeBridge`, `enginesRestart` | install the Claude provider; restart every Pi after a credential changed |
 | `sessionsLoad`, `sessionsSave`, `sessionClose`, `chatShown` | the tabs; is the chat on screen (not the settings) |
-| `session` (also wrapping `chatCheckpoints`, `chatUndo`) | the checkpoints of a session, and going back to one (answered `checkpoints`, `saved` or `error`: `busy`, `failed`) |
+| `session` (also wrapping `chatCheckpoints`, `chatUndo`) | the messages a session can go back to, and going back to before one: code, conversation or both (answered `checkpoints`, `saved` or `error`: `busy`, `failed`) |
 | `sessionNew` | a terminal opens a tab, in its `workdir`; answered `sessionAdded` (or `error`: `too-many-sessions`, `session-failed`) |
 | `session` (wrapping `chatSend`, `chatAbort`, `chatLoad`, `chatEarlier`, `chatClearQueue`, `uiAnswer`, `listCommands`, `listModels`, `setModel`, `listFiles`) | everything about one tab's conversation. `chatEarlier { cursor? }` asks for the 40 earlier messages before `cursor` (none: the newest earlier page), read from the tab's segment files without Pi; it is answered with a `chatEvent` `{ type: 'earlier', messages, cursor, more }` (`cursor` `{ segment, index }` points at the page's first message; `more` says whether anything is before it). `chatSend` may carry `attachments: [{ name, mime, data }]` (base64; at most 10, 20 MB each, 50 MB together): the dock saves them under `~/.aria/attachments/<session>/<yyyy-mm-dd>/<n>-<safe name>` and adds a line per file to the message, `[attached: <name> (<mime>, <size>) at <path>]`, or `[attached image: <name> at <path>]` with the image itself in Pi's `images` when the session's model can see images. A save that fails, or a message with files when Pi cannot start, comes back as `command_failed` with the page's own text, so the page gives the text and the files back. `chatLoad` carries `fresh: true` from a page that just loaded (once per tab): a Pi that was already running sends that page its conversation again |
 | `jobStop`, `jobDismiss` | stop a background job; take a failed one off the strip (no answer: the next `jobs` shows it) |

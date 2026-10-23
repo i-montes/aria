@@ -89,8 +89,12 @@ pub struct Checkpoint {
     pub text: String,
     /// When (ms).
     pub at: i64,
-    /// Files that instruction changed (once its run settled).
+    /// Files that instruction changed (once its run settled), and its lines added and removed.
     pub files: u32,
+    #[serde(default)]
+    pub added: u32,
+    #[serde(default)]
+    pub removed: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -280,7 +284,8 @@ impl Checkpoints {
     pub fn take(&self, text: &str) -> io::Result<Checkpoint> {
         // When it starts, not when it ends: what is born after this moment is the turn's.
         let at = now_ms();
-        let checkpoint = Checkpoint { id: self.snapshot()?, text: text.to_string(), at, files: 0 };
+        let checkpoint =
+            Checkpoint { id: self.snapshot()?, text: text.to_string(), at, files: 0, added: 0, removed: 0 };
         let mut list = self.read_index();
         list.push(checkpoint.clone());
         self.write_index(&list)?;
@@ -303,11 +308,11 @@ impl Checkpoints {
         Ok(changes)
     }
 
-    /// Remembers how many files the instruction after `checkpoint` changed (the undo list shows it).
-    pub fn set_files(&self, checkpoint: &Checkpoint, files: u32) -> io::Result<()> {
+    /// Remembers what the instruction after `checkpoint` changed (the rewind list shows it).
+    pub fn set_changes(&self, checkpoint: &Checkpoint, changes: Changes) -> io::Result<()> {
         let mut list = self.read_index();
         if let Some(entry) = list.iter_mut().find(|c| c.id == checkpoint.id) {
-            entry.files = files;
+            (entry.files, entry.added, entry.removed) = (changes.files, changes.added, changes.removed);
         }
         self.write_index(&list)
     }

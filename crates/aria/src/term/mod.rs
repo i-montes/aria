@@ -7,6 +7,7 @@ pub mod git;
 pub mod link;
 pub mod markdown;
 pub mod picker;
+pub mod rewind;
 mod screen;
 pub mod select;
 pub mod state;

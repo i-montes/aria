@@ -4,6 +4,7 @@
 use crate::term::dialog::{saved_answer, Answer, DialogBox};
 use crate::term::editor::{bang, Editor, Trigger};
 use crate::term::picker::{models_for_picker, Item, Outcome, Picker};
+use crate::term::rewind::{self, Rewind};
 use crate::term::state::Session;
 use crate::term::texts::t;
 use crate::term::Key;
@@ -76,8 +77,6 @@ enum PickerKind {
     Files,
     Commands,
     Models,
-    /// The checkpoints to go back to.
-    Undo,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -92,7 +91,7 @@ enum Pending {
     Checkpoints,
     /// `/context`'s `get_session_stats`.
     Context,
-    /// An undo, with the text that goes back to the editor once it is done.
+    /// An undo, with the text that goes back to the editor once it is done (empty when the conversation stays).
     Undo(String),
 }
 
@@ -140,8 +139,8 @@ pub struct App {
     strip_rows: Option<(u16, u16)>,
     /// When Esc was last pressed while idle (ms), for Esc Esc.
     last_esc: Option<u64>,
-    /// The undo list's messages, by checkpoint.
-    undo_texts: HashMap<String, String>,
+    /// Rewind (Esc Esc, `/undo`), while it is open.
+    rewind: Option<Rewind>,
     /// What each open session is doing, and since when (ms).
     statuses: HashMap<String, (String, i64)>,
     /// The time now (ms), from `clock`.
@@ -182,7 +181,7 @@ impl App {
             tasks_folded: false,
             context: None,
             strip_rows: None,
-            undo_texts: HashMap::new(),
+            rewind: None,
             now_ms: 0,
         };
         let load = app.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
@@ -434,6 +433,10 @@ impl App {
                 _ => Vec::new(),
             };
         }
+        if let Some(open) = self.rewind.as_mut() {
+            let outcome = open.key(press.key);
+            return self.rewound(outcome);
+        }
         if self.context.is_some() {
             if press.key == Key::Esc {
                 self.context = None;
@@ -564,14 +567,35 @@ impl App {
                     PickerKind::Models => {
                         vec![self.session_request(Pending::Models, |id| PageMessage::SetModel { id, model: value })]
                     }
-                    PickerKind::Undo => {
-                        let text = self.undo_texts.get(&value).cloned().unwrap_or_default();
-                        vec![self
-                            .session_request(Pending::Undo(text), |id| PageMessage::ChatUndo { id, checkpoint: value })]
-                    }
                 }
             }
         }
+    }
+
+    fn rewound(&mut self, outcome: rewind::Outcome) -> Vec<Effect> {
+        match outcome {
+            rewind::Outcome::None => Vec::new(),
+            rewind::Outcome::Close => {
+                self.rewind = None;
+                Vec::new()
+            }
+            rewind::Outcome::Undo { entry, checkpoint, files, conversation, text } => {
+                self.rewind = None;
+                let back = if conversation { text } else { String::new() };
+                vec![self.session_request(Pending::Undo(back), |id| PageMessage::ChatUndo {
+                    id,
+                    entry,
+                    checkpoint,
+                    files,
+                    conversation,
+                })]
+            }
+        }
+    }
+
+    /// The most rows a panel in the editor's place takes: two thirds of the screen.
+    fn panel_rows(&self) -> usize {
+        usize::from(self.height * 2 / 3).max(8)
     }
 
     fn set_verbose(&mut self, on: bool) -> Vec<Effect> {
@@ -660,6 +684,9 @@ impl App {
         palette: &crate::term::theme::Palette,
         width: u16,
     ) -> Option<Vec<ratatui::text::Line<'static>>> {
+        if let Some(open) = &self.rewind {
+            return Some(open.lines(&self.config.lang, palette, width, self.panel_rows()));
+        }
         if let Some((used, window)) = self.context {
             let parts = self
                 .session
@@ -736,8 +763,14 @@ impl App {
                 if let Some(lines) = self.panel_lines(&palette, 80) {
                     let top = self.panel_top(lines.len());
                     if row >= top {
-                        let answer = self.dialog.as_mut().and_then(|dialog| dialog.click(usize::from(row - top)));
-                        effects.extend(self.answered(answer));
+                        let rows = self.panel_rows();
+                        if let Some(open) = self.rewind.as_mut() {
+                            let outcome = open.click(usize::from(row - top), rows);
+                            effects.extend(self.rewound(outcome));
+                        } else {
+                            let answer = self.dialog.as_mut().and_then(|dialog| dialog.click(usize::from(row - top)));
+                            effects.extend(self.answered(answer));
+                        }
                     }
                 } else if let Some(lines) = self.overlay_lines(&palette) {
                     let top = self.overlay_top;
@@ -873,46 +906,14 @@ impl App {
             }
             DockMessage::Checkpoints { id, list, off } if self.pending.get(&id) == Some(&Pending::Checkpoints) => {
                 self.pending.remove(&id);
-                self.undo_texts.clear();
-                let lang = self.config.lang.clone();
-                let items: Vec<Item> = list
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .take(10)
-                    .filter_map(|c| {
-                        let id = c["id"].as_str()?.to_string();
-                        let text = c["text"].as_str().unwrap_or_default().to_string();
-                        let files = c["files"].as_u64().unwrap_or(0);
-                        let mut detail = self.ago(c["at"].as_i64().unwrap_or(0));
-                        if files > 0 {
-                            detail.push_str(&format!(" · {}", t(&lang, "term.files", &json!({ "n": files }))));
-                        }
-                        self.undo_texts.insert(id.clone(), text.clone());
-                        let label: String = text.lines().next().unwrap_or_default().chars().take(60).collect();
-                        Some(Item { label, detail, value: id, group: None })
-                    })
-                    .collect();
-                if !items.is_empty() {
-                    self.picker = Some((PickerKind::Undo, Picker::new(items)));
-                } else {
-                    // Say why there is nothing to pick, never nothing at all.
-                    let key = match off.as_deref() {
-                        Some("projects") => "term.undo.projects",
-                        Some("system") => "term.undo.system",
-                        Some("big") => "term.undo.big",
-                        Some(_) => "term.undo.folder",
-                        None => "term.undo.nothing",
-                    };
-                    self.session.entries.push(crate::term::state::Entry::Notice {
-                        tone: crate::term::state::Tone::Info,
-                        text: crate::term::state::Text::Key { key: key.into(), vars: json!({}) },
-                    });
-                }
+                self.picker = None;
+                self.rewind = Some(Rewind::new(&list, off));
             }
             DockMessage::Saved { id } if matches!(self.pending.get(&id), Some(Pending::Undo(_))) => {
                 if let Some(Pending::Undo(text)) = self.pending.remove(&id) {
-                    self.editor.set(&text);
+                    if !text.is_empty() {
+                        self.editor.set(&text);
+                    }
                 }
             }
             DockMessage::Error { id, code } if matches!(self.pending.get(&id), Some(Pending::Undo(_))) => {
@@ -1360,13 +1361,17 @@ mod tests {
         let PageMessage::ChatCheckpoints { id } = **message else { panic!("{message:?}") };
         app.update(in_session(DockMessage::Checkpoints {
             id,
-            list: json!([{"id": "c9", "text": "fix the coupon", "at": 10_000_000 - 120_000, "files": 3}]),
+            list: json!([{"entry": "e1", "text": "fix the coupon", "checkpoint": "c9", "files": 3, "added": 4, "removed": 0}]),
             off: None,
         }));
+        key(&mut app, Key::Up);
+        key(&mut app, Key::Enter);
         let effects = key(&mut app, Key::Enter);
         let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
-        let PageMessage::ChatUndo { id, ref checkpoint } = **message else { panic!("{message:?}") };
-        assert_eq!(checkpoint, "c9");
+        let PageMessage::ChatUndo { id, ref entry, ref checkpoint, files, conversation } = **message else {
+            panic!("{message:?}")
+        };
+        assert_eq!((entry.as_str(), checkpoint.as_deref(), files, conversation), ("e1", Some("c9"), true, true));
         app.update(in_session(DockMessage::Saved { id }));
         assert_eq!(app.editor.text(), "fix the coupon");
     }
@@ -1413,33 +1418,20 @@ mod tests {
         assert!(app.panel_lines(&palette, 80).is_none(), "Esc closes it");
     }
 
-    /// The notice an Esc Esc answered by `list` and `off` leaves, as its text key.
-    fn undo_notice(list: serde_json::Value, off: Option<&str>) -> Option<String> {
+    #[test]
+    fn esc_esc_opens_rewind_in_the_editors_place_and_leaves_the_chat_alone() {
         let mut app = attached();
         key(&mut app, Key::Esc);
         let effects = key(&mut app, Key::Esc);
         let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
         let PageMessage::ChatCheckpoints { id } = **message else { panic!("{message:?}") };
-        app.update(in_session(DockMessage::Checkpoints { id, list, off: off.map(String::from) }));
-        match app.session().entries.last() {
-            Some(crate::term::state::Entry::Notice { text: crate::term::state::Text::Key { key, .. }, .. }) => {
-                Some(key.clone())
-            }
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn esc_esc_with_nothing_to_undo_says_so() {
-        assert_eq!(undo_notice(json!([]), None).as_deref(), Some("term.undo.nothing"));
-    }
-
-    #[test]
-    fn esc_esc_in_a_folder_without_checkpoints_says_why() {
-        assert_eq!(undo_notice(json!([]), Some("projects")).as_deref(), Some("term.undo.projects"));
-        assert_eq!(undo_notice(json!([]), Some("folder")).as_deref(), Some("term.undo.folder"));
-        assert_eq!(undo_notice(json!([]), Some("system")).as_deref(), Some("term.undo.system"));
-        assert_eq!(undo_notice(json!([]), Some("big")).as_deref(), Some("term.undo.big"));
+        let before = app.session().entries.len();
+        app.update(in_session(DockMessage::Checkpoints { id, list: json!([]), off: Some("projects".into()) }));
+        assert_eq!(app.session().entries.len(), before, "nothing is written in the chat");
+        let palette = crate::term::theme::Palette::truecolor();
+        assert!(app.panel_lines(&palette, 80).is_some());
+        key(&mut app, Key::Esc);
+        assert!(app.panel_lines(&palette, 80).is_none(), "Esc closes it");
     }
 
     #[test]
@@ -1451,9 +1443,11 @@ mod tests {
         let PageMessage::ChatCheckpoints { id } = **message else { panic!("{message:?}") };
         app.update(in_session(DockMessage::Checkpoints {
             id,
-            list: json!([{"id": "c9", "text": "x", "at": 0, "files": 1}]),
+            list: json!([{"entry": "e1", "text": "x", "checkpoint": "c9", "files": 1, "added": 1, "removed": 0}]),
             off: None,
         }));
+        key(&mut app, Key::Up);
+        key(&mut app, Key::Enter);
         let effects = key(&mut app, Key::Enter);
         let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
         let PageMessage::ChatUndo { id, .. } = **message else { panic!("{message:?}") };

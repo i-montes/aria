@@ -60,6 +60,16 @@ fn kilo(n: u64) -> String {
 
 /// `/context`: a grid of 100 cells (one per 1 % of the window) coloured by what fills them, then one row per part with
 /// its tokens and share, the free space and the compaction reserve. `parts` is the context extension's measure.
+/// `3 files changed  +40 −12`: what an instruction changed (the conversation's line, the rewind list).
+pub fn changes_spans(lang: &str, p: &Palette, files: u64, added: u64, removed: u64) -> Vec<Span<'static>> {
+    let key = if files == 1 { "term.changes.one" } else { "term.changes.many" };
+    vec![
+        Span::styled(t(lang, key, &json!({ "n": files })), Style::default().fg(p.grey)),
+        Span::styled(format!("  +{added}"), Style::default().fg(p.green)),
+        Span::styled(format!(" −{removed}"), Style::default().fg(p.coral)),
+    ]
+}
+
 pub fn context_lines(
     parts: &serde_json::Value,
     used: u64,
@@ -449,12 +459,9 @@ fn conversation_marked(v: &SessionView, width: u16) -> (Vec<Line<'static>>, Vec<
                 vec![Line::from(Span::styled(format!("  ── {} ──", say(&v.lang, text)), Style::default().fg(p.faint)))]
             }
             Entry::Changes { files, added, removed } => {
-                let key = if *files == 1 { "term.changes.one" } else { "term.changes.many" };
-                vec![Line::from(vec![
-                    Span::styled(format!("  {}", t(&v.lang, key, &json!({ "n": files }))), Style::default().fg(p.grey)),
-                    Span::styled(format!("  +{added}"), Style::default().fg(p.green)),
-                    Span::styled(format!(" −{removed}"), Style::default().fg(p.coral)),
-                ])]
+                let mut spans = vec![Span::raw("  ")];
+                spans.extend(changes_spans(&v.lang, p, u64::from(*files), u64::from(*added), u64::from(*removed)));
+                vec![Line::from(spans)]
             }
         };
         if lines.is_empty() {

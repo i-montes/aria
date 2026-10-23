@@ -329,19 +329,49 @@ impl Drop for RotationEnd {
     }
 }
 
-/// The entry to fork from for a message the person wrote: Pi's text of it may carry the dock's attachment lines; with
-/// the same text more than once, `newer_same` later checkpoints share it, so it is that many before the latest.
-fn fork_entry(messages: &Value, text: &str, newer_same: usize) -> Option<String> {
+/// What an undo puts back.
+struct Rewind {
+    /// The message's entry in Pi's session.
+    entry: String,
+    /// The checkpoint taken before it, if any.
+    checkpoint: Option<String>,
+    /// Put the folder back to that checkpoint.
+    files: bool,
+    /// Fork the conversation before the message.
+    conversation: bool,
+}
+
+/// The rewind list: the person's messages in the conversation (Pi's `get_fork_messages`), oldest first, each with the
+/// checkpoint taken before it and what its turn changed. Pi's text may carry the dock's attachment lines; the same text
+/// more than once pairs newest with newest. `kept` is newest first, as the checkpoints list them.
+fn rewind_entries(messages: &Value, kept: &[crate::checkpoints::Checkpoint]) -> Value {
     let mine = |pi_text: &str| -> String {
         pi_text.lines().filter(|l| !l.starts_with("[attached")).collect::<Vec<_>>().join("\n").trim().to_string()
     };
-    messages
-        .as_array()?
-        .iter()
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut list: Vec<Value> = messages
+        .as_array()
+        .into_iter()
+        .flatten()
         .rev()
-        .filter(|m| m["text"].as_str().is_some_and(|t| mine(t) == text.trim()))
-        .nth(newer_same)
-        .and_then(|m| m["entryId"].as_str().map(str::to_string))
+        .filter_map(|m| {
+            let entry = m["entryId"].as_str()?;
+            let text = mine(m["text"].as_str()?);
+            let rank = seen.entry(text.clone()).or_default();
+            let checkpoint = kept.iter().filter(|c| c.text.trim() == text).nth(*rank);
+            *rank += 1;
+            Some(json!({
+                "entry": entry,
+                "text": text,
+                "checkpoint": checkpoint.map(|c| c.id.clone()),
+                "files": checkpoint.map_or(0, |c| c.files),
+                "added": checkpoint.map_or(0, |c| c.added),
+                "removed": checkpoint.map_or(0, |c| c.removed),
+            }))
+        })
+        .collect();
+    list.reverse();
+    Value::Array(list)
 }
 
 /// What must wait for a rotation to end: everything that reaches Pi's session or restarts it.
@@ -584,15 +614,10 @@ impl Chat {
             PageMessage::ListCommands { id } => self.list(id, "get_commands", "commands"),
             PageMessage::ListModels { id } => self.list(id, "get_available_models", "models"),
             PageMessage::PiCommand { id, command, args } => self.pi_command(id, command, args),
-            PageMessage::ChatCheckpoints { id } => {
-                let _one = self.checkpoint_lock.lock().unwrap_or_else(|e| e.into_inner());
-                let (list, off) = match self.checkpoints() {
-                    Ok(c) => (c.list(), None),
-                    Err(why) => (Vec::new(), Some(why.to_string())),
-                };
-                self.emit(DockMessage::Checkpoints { id, list: json!(list), off });
+            PageMessage::ChatCheckpoints { id } => self.rewind_list(id),
+            PageMessage::ChatUndo { id, entry, checkpoint, files, conversation } => {
+                self.undo(id, Rewind { entry, checkpoint, files, conversation })
             }
-            PageMessage::ChatUndo { id, checkpoint } => self.undo(id, checkpoint),
             PageMessage::ChatBash { id, command } => {
                 self.pi_request(id, "bash", json!({ "command": command }), BASH_TIMEOUT)
             }
@@ -928,7 +953,7 @@ impl Chat {
             let Ok(checkpoints) = chat.checkpoints() else { return };
             if let Ok(changes) = checkpoints.changes_since(&checkpoint) {
                 if changes.files > 0 {
-                    let _ = checkpoints.set_files(&checkpoint, changes.files);
+                    let _ = checkpoints.set_changes(&checkpoint, changes);
                     chat.emit(DockMessage::ChatEvent {
                         event: json!({"type": "changes", "files": changes.files, "added": changes.added, "removed": changes.removed}),
                     });
@@ -937,10 +962,33 @@ impl Chat {
         });
     }
 
-    /// Back to before `checkpoint`'s message: the conversation's place is found first, then the folder is put back and
-    /// Pi forks there (the tab records the new session and the conversation is told again). Only on a quiet tab; what
-    /// arrives meanwhile waits, as during a rotation.
-    fn undo(&self, id: u64, checkpoint: String) {
+    /// The messages the conversation can go back to, with their checkpoints (none where the folder keeps none: `off`
+    /// says why). Off the caller's thread: Pi may have to start.
+    fn rewind_list(&self, id: u64) {
+        let chat = self.clone();
+        std::thread::spawn(move || {
+            let (kept, off) = {
+                let _one = chat.checkpoint_lock.lock().unwrap_or_else(|e| e.into_inner());
+                match chat.checkpoints() {
+                    Ok(c) => (c.list(), None),
+                    Err(why) => (Vec::new(), Some(why.to_string())),
+                }
+            };
+            let messages = chat
+                .ensure_engine()
+                .ok()
+                .and_then(|engine| engine.request("get_fork_messages", json!({}), REQUEST_TIMEOUT).ok())
+                .filter(|r| r.success)
+                .map(|r| r.data["messages"].clone())
+                .unwrap_or_else(|| json!([]));
+            chat.emit(DockMessage::Checkpoints { id, list: rewind_entries(&messages, &kept), off });
+        });
+    }
+
+    /// Back to before a message: its files (to the checkpoint taken before it), its conversation (Pi forks at its
+    /// entry; the tab records the new session and the conversation is told again), or both. The conversation's place is
+    /// found before any file moves. Only on a quiet tab; what arrives meanwhile waits, as during a rotation.
+    fn undo(&self, id: u64, rewind: Rewind) {
         {
             let mut inner = self.inner.lock().unwrap();
             if !quiet(&inner) {
@@ -957,34 +1005,45 @@ impl Chat {
                 crate::note(&format!("tab {}: undo failed: {why}", chat.session));
                 chat.emit(DockMessage::Error { id, code: "failed".into() });
             };
-            let Ok(checkpoints) = chat.checkpoints() else { return failed(&chat, "no checkpoints") };
-            let list = checkpoints.list();
-            let Some(at) = list.iter().position(|c| c.id == checkpoint) else {
-                return failed(&chat, "unknown checkpoint");
-            };
-            let target = list[at].clone();
-            let newer_same = list[..at].iter().filter(|c| c.text.trim() == target.text.trim()).count();
             let engine = match chat.ensure_engine() {
                 Ok(engine) => engine,
                 Err(code) => return failed(&chat, code),
             };
-            let entry = engine
-                .request("get_fork_messages", json!({}), REQUEST_TIMEOUT)
-                .ok()
-                .filter(|r| r.success)
-                .and_then(|r| fork_entry(&r.data["messages"], &target.text, newer_same));
-            // Nothing moves unless the conversation can go back too.
-            let Some(entry) = entry else { return failed(&chat, "the message is not in the conversation") };
-            if let Err(error) = checkpoints.restore(&target) {
-                return failed(&chat, &error.to_string());
+            let checkpoints = chat.checkpoints().ok();
+            let target = rewind.checkpoint.as_ref().and_then(|wanted| {
+                checkpoints.as_ref().and_then(|c| c.list().into_iter().find(|kept| &kept.id == wanted))
+            });
+            if rewind.files && target.is_none() {
+                return failed(&chat, "unknown checkpoint");
             }
-            match engine.request("fork", json!({ "entryId": entry }), REQUEST_TIMEOUT) {
-                Ok(response) if response.success => {}
-                _ => return failed(&chat, "Pi did not fork"),
+            if rewind.conversation {
+                // Nothing moves unless the conversation can go back too.
+                let there = engine
+                    .request("get_fork_messages", json!({}), REQUEST_TIMEOUT)
+                    .ok()
+                    .filter(|r| r.success)
+                    .and_then(|r| r.data["messages"].as_array().cloned())
+                    .is_some_and(|messages| messages.iter().any(|m| m["entryId"] == json!(rewind.entry)));
+                if !there {
+                    return failed(&chat, "the message is not in the conversation");
+                }
             }
-            let _ = checkpoints.forget_from(&target);
-            chat.emit(DockMessage::ChatEvent { event: json!({"type": "session_reset"}) });
-            chat.announce(&engine);
+            if let (true, Some(c), Some(target)) = (rewind.files, &checkpoints, &target) {
+                if let Err(error) = c.restore(target) {
+                    return failed(&chat, &error.to_string());
+                }
+            }
+            if rewind.conversation {
+                match engine.request("fork", json!({ "entryId": rewind.entry }), REQUEST_TIMEOUT) {
+                    Ok(response) if response.success => {}
+                    _ => return failed(&chat, "Pi did not fork"),
+                }
+                if let (Some(c), Some(target)) = (&checkpoints, &target) {
+                    let _ = c.forget_from(target);
+                }
+                chat.emit(DockMessage::ChatEvent { event: json!({"type": "session_reset"}) });
+                chat.announce(&engine);
+            }
             chat.emit(DockMessage::Saved { id });
         });
     }
@@ -3377,18 +3436,94 @@ mod tests {
         with_own_folder(&h, &own);
         send(&h, "WRITE");
         wait_for(&h, "the changes", |m| event_of(m, "changes"));
-        h.chat.handle(PageMessage::ChatCheckpoints { id: 3 });
-        let list = match wait_for(&h, "the list", |m| matches!(m, DockMessage::Checkpoints { id: 3, .. })) {
-            DockMessage::Checkpoints { list, .. } => list,
-            _ => unreachable!(),
-        };
+        let list = rewind_list(&h, 3);
         assert_eq!(list[0]["text"], json!("WRITE"));
-        assert_eq!(list[0]["files"], json!(1));
-        let checkpoint = list[0]["id"].as_str().unwrap().to_string();
-        h.chat.handle(PageMessage::ChatUndo { id: 4, checkpoint });
+        assert_eq!(list[0]["entry"], json!("e1"));
+        assert_eq!((list[0]["files"].clone(), list[0]["added"].clone()), (json!(1), json!(2)));
+        let checkpoint = list[0]["checkpoint"].as_str().map(str::to_string);
+        assert!(checkpoint.is_some(), "{list}");
+        h.chat.handle(PageMessage::ChatUndo { id: 4, entry: "e1".into(), checkpoint, files: true, conversation: true });
         wait_for(&h, "the fork", |m| event_of(m, "fork_seen"));
         wait_for(&h, "saved", |m| matches!(m, DockMessage::Saved { id: 4 }));
         assert!(!own.join("made.txt").exists(), "the file the turn made is gone");
+    }
+
+    /// The rewind list `id` answers with.
+    fn rewind_list(h: &Harness, id: u64) -> Value {
+        h.chat.handle(PageMessage::ChatCheckpoints { id });
+        match wait_for(h, "the list", |m| matches!(m, DockMessage::Checkpoints { id: i, .. } if *i == id)) {
+            DockMessage::Checkpoints { list, .. } => list,
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn the_conversation_alone_goes_back_and_files_stay() {
+        let h = harness();
+        let own = h._dir.path().join("checkout-widget");
+        std::fs::create_dir_all(&own).unwrap();
+        with_own_folder(&h, &own);
+        send(&h, "WRITE");
+        wait_for(&h, "the changes", |m| event_of(m, "changes"));
+        let checkpoint = rewind_list(&h, 3)[0]["checkpoint"].as_str().map(str::to_string);
+        h.chat.handle(PageMessage::ChatUndo {
+            id: 4,
+            entry: "e1".into(),
+            checkpoint,
+            files: false,
+            conversation: true,
+        });
+        wait_for(&h, "the fork", |m| event_of(m, "fork_seen"));
+        wait_for(&h, "saved", |m| matches!(m, DockMessage::Saved { id: 4 }));
+        assert!(own.join("made.txt").exists(), "the files stay as they are");
+    }
+
+    #[test]
+    fn the_code_alone_goes_back_and_the_conversation_stays() {
+        let h = harness();
+        let own = h._dir.path().join("checkout-widget");
+        std::fs::create_dir_all(&own).unwrap();
+        with_own_folder(&h, &own);
+        send(&h, "WRITE");
+        wait_for(&h, "the changes", |m| event_of(m, "changes"));
+        let checkpoint = rewind_list(&h, 3)[0]["checkpoint"].as_str().map(str::to_string);
+        h.chat.handle(PageMessage::ChatUndo {
+            id: 4,
+            entry: "e1".into(),
+            checkpoint,
+            files: true,
+            conversation: false,
+        });
+        wait_for(&h, "saved", |m| matches!(m, DockMessage::Saved { id: 4 }));
+        assert!(!own.join("made.txt").exists(), "the file the turn made is gone");
+        assert!(!rewind_list(&h, 5).as_array().unwrap().is_empty(), "the conversation keeps its messages");
+    }
+
+    #[test]
+    fn the_rewind_list_pairs_messages_with_their_checkpoints() {
+        let messages = json!([
+            {"entryId": "e1", "text": "yes"},
+            {"entryId": "e2", "text": "look at this\n[attached image: a.png at /home/ana/.aria/attachments/a.png]"},
+            {"entryId": "e3", "text": "yes"},
+        ]);
+        let kept = |id: &str, text: &str, files: u32| crate::checkpoints::Checkpoint {
+            id: id.into(),
+            text: text.into(),
+            at: 0,
+            files,
+            added: files * 2,
+            removed: 0,
+        };
+        // Newest first, as the checkpoints list them; the first "yes" has none (sent before checkpoints were kept).
+        let list = rewind_entries(&messages, &[kept("c3", "yes", 1), kept("c2", "look at this", 0)]);
+        assert_eq!(
+            list,
+            json!([
+                {"entry": "e1", "text": "yes", "checkpoint": null, "files": 0, "added": 0, "removed": 0},
+                {"entry": "e2", "text": "look at this", "checkpoint": "c2", "files": 0, "added": 0, "removed": 0},
+                {"entry": "e3", "text": "yes", "checkpoint": "c3", "files": 1, "added": 2, "removed": 0},
+            ])
+        );
     }
 
     #[test]
@@ -3400,33 +3535,12 @@ mod tests {
         h.chat.handle(PageMessage::ChatCheckpoints { id: 6 });
         match wait_for(&h, "the list", |m| matches!(m, DockMessage::Checkpoints { id: 6, .. })) {
             DockMessage::Checkpoints { list, off, .. } => {
-                assert_eq!(list, json!([]));
+                assert_eq!(list[0]["checkpoint"], json!(null), "the conversation can still go back: {list}");
                 assert_eq!(off.as_deref(), Some("projects"), "the client says why there is nothing to undo");
             }
             _ => unreachable!(),
         }
         assert!(!h.paths.root.join("checkpoints").join("s1").exists());
-    }
-
-    #[test]
-    fn the_message_to_fork_from_is_found_whatever_pi_added_to_it() {
-        let messages = json!([
-            {"entryId": "e1", "text": "yes"},
-            {"entryId": "e2", "text": "look at this\n[attached image: a.png at /home/ana/.aria/attachments/a.png]"},
-            {"entryId": "e3", "text": "yes"},
-        ]);
-        assert_eq!(
-            fork_entry(&messages, "look at this", 0).as_deref(),
-            Some("e2"),
-            "attachment lines are Pi's, not the person's"
-        );
-        assert_eq!(fork_entry(&messages, "yes", 0).as_deref(), Some("e3"), "the latest of the same text");
-        assert_eq!(
-            fork_entry(&messages, "yes", 1).as_deref(),
-            Some("e1"),
-            "one newer checkpoint with the same text: the one before"
-        );
-        assert_eq!(fork_entry(&messages, "never said", 0), None);
     }
 
     #[test]
@@ -3438,13 +3552,15 @@ mod tests {
         send(&h, "OTHER");
         wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
         std::fs::write(own.join("mine.txt"), "made by the person").unwrap();
-        h.chat.handle(PageMessage::ChatCheckpoints { id: 3 });
-        let list = match wait_for(&h, "the list", |m| matches!(m, DockMessage::Checkpoints { id: 3, .. })) {
-            DockMessage::Checkpoints { list, .. } => list,
-            _ => unreachable!(),
+        let checkpoint = h.chat.checkpoints().ok().unwrap().list()[0].id.clone();
+        let undo = PageMessage::ChatUndo {
+            id: 4,
+            entry: "e9".into(),
+            checkpoint: Some(checkpoint),
+            files: true,
+            conversation: true,
         };
-        let checkpoint = list[0]["id"].as_str().unwrap().to_string();
-        h.chat.handle(PageMessage::ChatUndo { id: 4, checkpoint });
+        h.chat.handle(undo);
         wait_for(&h, "failed", |m| matches!(m, DockMessage::Error { id: 4, code } if code == "failed"));
         assert!(own.join("mine.txt").exists(), "files are only restored once the conversation can go back too");
     }
@@ -3454,7 +3570,13 @@ mod tests {
         let h = harness();
         ready(&h);
         h.chat.inner.lock().unwrap().pending_prompts.insert("p1".into(), "x".into());
-        h.chat.handle(PageMessage::ChatUndo { id: 7, checkpoint: "x".into() });
+        h.chat.handle(PageMessage::ChatUndo {
+            id: 7,
+            entry: "x".into(),
+            checkpoint: None,
+            files: false,
+            conversation: true,
+        });
         wait_for(&h, "busy", |m| matches!(m, DockMessage::Error { id: 7, code } if code == "busy"));
     }
 
@@ -3463,7 +3585,13 @@ mod tests {
         let h = harness();
         ready(&h);
         h.chat.inner.lock().unwrap().running = true;
-        h.chat.handle(PageMessage::ChatUndo { id: 5, checkpoint: "x".into() });
+        h.chat.handle(PageMessage::ChatUndo {
+            id: 5,
+            entry: "x".into(),
+            checkpoint: None,
+            files: false,
+            conversation: true,
+        });
         wait_for(&h, "busy", |m| matches!(m, DockMessage::Error { id: 5, code } if code == "busy"));
     }
 
