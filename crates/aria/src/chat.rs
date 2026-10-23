@@ -65,6 +65,8 @@ static SESSIONS_FILE: Mutex<()> = Mutex::new(());
 pub trait Notifier: Send + Sync {
     fn send(&self, key: &str, title: &str, body: &str);
     fn dismiss(&self, key: &str);
+    /// Takes away the notification with this title (a session's "it finished"), where the system can.
+    fn dismiss_titled(&self, _title: &str) {}
 }
 
 /// Wraps a notifier for several sessions: the real notification is removed only when no session has one left.
@@ -93,6 +95,10 @@ impl Notifier for CountingNotifier {
         if last {
             self.inner.dismiss(key);
         }
+    }
+
+    fn dismiss_titled(&self, title: &str) {
+        self.inner.dismiss_titled(title);
     }
 }
 
@@ -130,6 +136,10 @@ impl Notifier for OmarchyNotifier {
 
     fn dismiss(&self, _key: &str) {
         detached("omarchy-notification-dismiss", &[NOTIFICATION_TITLE.to_string()]);
+    }
+
+    fn dismiss_titled(&self, title: &str) {
+        detached("omarchy-notification-dismiss", &[title.to_string()]);
     }
 }
 
@@ -241,6 +251,8 @@ struct Inner {
     status: &'static str,
     status_at: i64,
     unseen_done: bool,
+    /// The title of the "it finished" notification raised for this session, while it stands.
+    settled_notice: Option<String>,
     /// The checkpoint taken before the running turn's first message: its changes are said when it settles.
     run_checkpoint: Option<crate::checkpoints::Checkpoint>,
     /// The tool executions under way (by `toolCallId`, nested ones too): while any is open the watchdog waits, since a
@@ -1594,7 +1606,8 @@ impl Chat {
                             inner.last_failed = raw["message"]["stopReason"] == "error";
                         }
                         Some("agent_settled") => {
-                            if std::mem::take(&mut self.inner.lock().unwrap().scheduled_run) {
+                            let scheduled_run = std::mem::take(&mut self.inner.lock().unwrap().scheduled_run);
+                            if scheduled_run {
                                 self.finish_scheduled(None, raw["aborted"] == true);
                             }
                             // Pi drops a run's dialogs silently when the run is aborted: they go here too.
@@ -1617,6 +1630,9 @@ impl Chat {
                             self.inner.lock().unwrap().unseen_done = unseen;
                             self.update_status();
                             self.tell_changes();
+                            if unseen && !scheduled_run && raw["aborted"] != true {
+                                self.notify_settled();
+                            }
                             for id in open {
                                 self.close_dialog(&id);
                             }
@@ -1737,10 +1753,46 @@ impl Chat {
         self.emit(DockMessage::SessionStatus { session: self.session.clone(), status: status.into(), at });
     }
 
-    /// Someone looks at the session: a run that ended unseen is seen now.
+    /// Someone looks at the session: a run that ended unseen is seen now, and its notification goes.
     fn looked_at(&self) {
-        self.inner.lock().unwrap().unseen_done = false;
+        let told = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.unseen_done = false;
+            inner.settled_notice.take()
+        };
+        if let Some(title) = told {
+            self.ctx.notifier.dismiss_titled(&title);
+        }
         self.update_status();
+    }
+
+    /// A turn ended where nobody looks: one notification for the session (its previous one goes first), with the
+    /// answer's first line, or why it did not finish.
+    fn notify_settled(&self) {
+        let title = sessions::load(&self.ctx.paths)
+            .sessions
+            .into_iter()
+            .find(|entry| entry.id == self.session)
+            .map(|entry| entry.title)
+            .filter(|title| !title.trim().is_empty())
+            .map_or_else(|| "Aria".to_string(), |title| format!("Aria · {title}"));
+        let (answer, failed, previous) = {
+            let mut inner = self.inner.lock().unwrap();
+            (inner.last_answer.clone(), inner.last_failed, inner.settled_notice.replace(title.clone()))
+        };
+        let first: String =
+            answer.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default().chars().take(140).collect();
+        let body = match (failed, first.is_empty()) {
+            (true, _) => {
+                format!("It did not finish: {}", if first.is_empty() { "the provider failed" } else { &first })
+            }
+            (false, true) => "Done".to_string(),
+            (false, false) => first,
+        };
+        if let Some(previous) = previous {
+            self.ctx.notifier.dismiss_titled(&previous);
+        }
+        self.ctx.notifier.send(&self.session, &title, &body);
     }
 
     fn open_dialog(&self, id: String, method: String, raw: Value) {
@@ -2726,11 +2778,19 @@ mod tests {
         fn dismiss(&self, _key: &str) {
             self.log.lock().unwrap().push("dismiss".into());
         }
+        fn dismiss_titled(&self, title: &str) {
+            self.log.lock().unwrap().push(format!("dismiss:{title}"));
+        }
     }
 
     impl TestNotifier {
         fn log(&self) -> Vec<String> {
             self.log.lock().unwrap().clone()
+        }
+
+        /// The dialogs' notifications only (not the "it finished" ones of runs that ended unseen).
+        fn dialog_log(&self) -> Vec<String> {
+            self.log().into_iter().filter(|l| !l.starts_with("send:Aria:") && !l.starts_with("dismiss:Aria")).collect()
         }
     }
 
@@ -3245,6 +3305,51 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_that_ends_unseen_notifies_once() {
+        let h = harness();
+        with_own_folder(&h, h._dir.path());
+        let mut list = aria_core::sessions::load(&h.paths);
+        list.sessions[0].title = "Coupons".into();
+        aria_core::sessions::save(&h.paths, &list).unwrap();
+        h.visible.store(false, Ordering::SeqCst);
+        send(&h, "TASKS");
+        wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
+        let wanted = "send:Aria · Coupons:Here are 3 tasks for today".to_string();
+        for _ in 0..50 {
+            if h.notifier.log().contains(&wanted) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(h.notifier.log().iter().filter(|l| l.starts_with("send:")).collect::<Vec<_>>(), vec![&wanted]);
+        h.chat.handle(PageMessage::ChatLoad { fresh: false });
+        assert!(h.notifier.log().contains(&"dismiss:Aria · Coupons".to_string()), "looking at it takes it away");
+    }
+
+    #[test]
+    fn a_seen_turn_does_not_notify() {
+        let h = harness();
+        send(&h, "TASKS");
+        wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(h.notifier.log().iter().all(|l| !l.starts_with("send:")), "{:?}", h.notifier.log());
+    }
+
+    #[test]
+    fn each_session_keeps_one_notification() {
+        let h = harness();
+        h.visible.store(false, Ordering::SeqCst);
+        send(&h, "TASKS");
+        wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
+        send(&h, "TASKS");
+        wait_for(&h, "settled again", |m| event_of(m, "agent_settled"));
+        std::thread::sleep(Duration::from_millis(100));
+        let log = h.notifier.log();
+        let second = log.iter().rposition(|l| l.starts_with("send:")).unwrap();
+        assert_eq!(log[second - 1], "dismiss:Aria", "the first goes before the second comes: {log:?}");
+    }
+
+    #[test]
     fn dialog_while_hidden_notifies_once_and_answer_dismisses() {
         let h = harness();
         send(&h, "x");
@@ -3256,7 +3361,7 @@ mod tests {
         h.chat.test_send_raw("ask");
         let dialog = wait_for(&h, "the dialog", |m| matches!(m, DockMessage::ChatDialog { .. }));
         assert!(matches!(dialog, DockMessage::ChatDialog { ref id, hidden: true, .. } if id == "u1"));
-        assert_eq!(h.notifier.log(), vec!["send:Aria needs an answer:Allow?"]);
+        assert_eq!(h.notifier.dialog_log(), vec!["send:Aria needs an answer:Allow?"]);
         h.chat.handle(PageMessage::UiAnswer {
             id: "u1".into(),
             value: Some("Allow".into()),
@@ -3265,7 +3370,7 @@ mod tests {
         });
         wait_for(&h, "closed", |m| matches!(m, DockMessage::ChatDialogClosed { id } if id == "u1"));
         wait_for(&h, "the answer reaching Pi", |m| event_of(m, "answered"));
-        assert_eq!(h.notifier.log(), vec!["send:Aria needs an answer:Allow?", "dismiss"]);
+        assert_eq!(h.notifier.dialog_log(), vec!["send:Aria needs an answer:Allow?", "dismiss"]);
     }
 
     #[test]
@@ -3821,23 +3926,23 @@ mod tests {
         wait_session(&s, "aa's dialog", "aa", |m| matches!(m, DockMessage::ChatDialog { .. }));
         s.sessions.test_send_raw("bb", "ask");
         wait_session(&s, "bb's dialog", "bb", |m| matches!(m, DockMessage::ChatDialog { .. }));
-        assert_eq!(s.h.notifier.log().len(), 2);
+        assert_eq!(s.h.notifier.dialog_log().len(), 2);
         s.sessions.handle(in_session(
             "aa",
             PageMessage::UiAnswer { id: "u1".into(), value: Some("Allow".into()), confirmed: None, cancelled: None },
         ));
         wait_session(&s, "aa's dialog closing", "aa", |m| matches!(m, DockMessage::ChatDialogClosed { .. }));
         assert!(
-            !s.h.notifier.log().contains(&"dismiss".to_string()),
+            !s.h.notifier.dialog_log().contains(&"dismiss".to_string()),
             "bb still waits for an answer: {:?}",
-            s.h.notifier.log()
+            s.h.notifier.dialog_log()
         );
         s.sessions.handle(in_session(
             "bb",
             PageMessage::UiAnswer { id: "u1".into(), value: Some("Allow".into()), confirmed: None, cancelled: None },
         ));
         wait_session(&s, "bb's dialog closing", "bb", |m| matches!(m, DockMessage::ChatDialogClosed { .. }));
-        assert_eq!(s.h.notifier.log().last().map(String::as_str), Some("dismiss"));
+        assert_eq!(s.h.notifier.dialog_log().last().map(String::as_str), Some("dismiss"));
     }
 
     #[test]
