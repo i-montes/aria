@@ -25,7 +25,7 @@ printf '#!/bin/sh\n' > "$real/bin/engram" && chmod +x "$real/bin/engram"
 hash_real() { find "$real" -type f | sort | xargs sha256sum | sha256sum; }
 before=$(hash_real)
 
-out=$(ARIA_REAL_HOME="$real" sh "$script" sh -c 'echo "home=$ARIA_HOME"; stat -c %a "$ARIA_HOME/auth.json"; "$ARIA_PI"; ls "$ARIA_HOME/bin"' 2>&1)
+out=$(ARIA_REAL_HOME="$real" sh "$script" sh -c 'echo "home=$ARIA_HOME"; { stat -c %a "$ARIA_HOME/auth.json" 2>/dev/null || stat -f %Lp "$ARIA_HOME/auth.json"; }; "$ARIA_PI"; ls "$ARIA_HOME/bin"' 2>&1)
 home=$(printf '%s\n' "$out" | sed -n 's/^home=//p')
 if [ -n "$home" ] && [ "$home" != "$real" ]; then pass "the command runs in a scratch home"; else fail "no scratch home: $out"; fi
 printf '%s\n' "$out" | grep -qx 600 && pass "the copied auth.json is private" || fail "auth.json is not 600: $out"
