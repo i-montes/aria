@@ -5,6 +5,37 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.16.0 — 2026-10-23
+
+### New
+
+- the brief view lists each step, as the dock's accordion
+- select with the mouse and it is copied; a frame only when something changed
+- the queue over the editor, and Ctrl+Enter interrupts
+- suggestions float above the editor
+- the working line, as the dock's
+- aria in a terminal, attached to the dock's sessions
+- the editor, pickers and dialogs
+- the session view
+- the conversation as data
+- the client's link to the dock
+- display.verbose, on by default
+- the service is `aria dock`; plain `aria` in a terminal is the client
+- the dock serves its sessions to terminal clients
+- the dock can open and close tabs, and never leaves none
+- a session can work in its own folder
+- the model picker lists only connected providers, newest model first
+
+### Fixed
+
+- the effort shown follows Pi's thinking level
+- a message a terminal sends shows up in the dock
+- the page gets its replies again, whatever its ids
+- a tab a terminal closes never leaves the dock without an active one
+- scroll the conversation, a cursor where the editor's is, the terminal given back on errors
+- a dock the terminal starts outlives that terminal
+- only a terminal can run a !command, never the dock's page
+
 ## 0.15.0 — 2026-10-22
 
 ### New
