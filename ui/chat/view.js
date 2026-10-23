@@ -506,7 +506,12 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
     }
     const next = document.createElement('div')
     next.innerHTML = renderComposer(props, {}, t)
-    for (const selector of ['.p-composer-actions', '.p-composer-hints']) {
+    // The buttons change in place: one replaced between a press and its release (the dictation's seconds redraw them
+    // every second) would lose the click.
+    const oldActions = el.querySelector('.p-composer-actions')
+    const freshActions = next.querySelector('.p-composer-actions')
+    if (oldActions && freshActions) morphHtml(oldActions, freshActions.innerHTML)
+    for (const selector of ['.p-composer-hints']) {
       const old = el.querySelector(selector)
       const fresh = next.querySelector(selector)
       if (old && fresh) old.replaceWith(fresh)
