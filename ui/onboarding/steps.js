@@ -64,7 +64,17 @@ export const PROVIDERS = [
   },
 ]
 
+/** Providers that only give Jev (the router's classifier): never the main provider, no chat models. */
+export const JEV_PROVIDERS = [{ id: 'typesafe', label: 'TypeSafe', auth: 'key' }]
+
 export const providerModule = (id) => PROVIDERS.find((p) => p.id === id) ?? null
+
+/** Which Jev the router uses: OpenCode Go's (free) when Go is the main provider or its key is stored, else TypeSafe's
+ * when its key is stored, else none. `connected` is what the dock found on disk. */
+export function jevBackend(settings, connected = []) {
+  if (providerModule(settings.provider.id)?.jevIncluded || connected.includes('opencode-go:api_key')) return 'opencode'
+  return connected.includes('typesafe:api_key') ? 'typesafe' : null
+}
 
 const clone = (value) => structuredClone(value)
 
@@ -98,31 +108,26 @@ export function defaultSettings(language = 'en') {
 }
 
 /** Points the settings at a provider: its models and quota, and the router, effort and Jev-review
- * defaults that make sense with it. Returns a new object. */
-export function applyProvider(settings, id) {
+ * defaults that make sense with it. The router follows the stored keys (`connected`, see `jevBackend`); effort follows
+ * the provider's own default. Returns a new object. */
+export function applyProvider(settings, id, connected = []) {
   const module = providerModule(id)
   if (!module) return settings
   const next = clone(settings)
   next.provider = { id: module.id, quota: module.quota ? clone(module.quota) : null }
   next.models.daily = module.daily
   next.models.planning = module.planning
-  if (module.jevIncluded) {
-    next.router = { enabled: true, backend: 'opencode' }
-    next.effort = { ...next.effort, mode: 'auto', fixedLevel: null }
-    next.sandbox.jevReview = true
-  } else {
-    next.router = { enabled: false, backend: 'typesafe' }
-    next.effort = { ...next.effort, mode: 'fixed', fixedLevel: 'medium' }
-    next.sandbox.jevReview = false
-  }
+  const backend = jevBackend(next, connected)
+  next.router = { enabled: !!backend, backend: backend ?? 'typesafe' }
+  next.sandbox.jevReview = !!backend
+  next.effort = module.jevIncluded ? { ...next.effort, mode: 'auto', fixedLevel: null } : { ...next.effort, mode: 'fixed', fixedLevel: 'medium' }
   return next
 }
 
 /** Turns the router on or off. Without it there is no route to read, so auto effort goes away. */
-export function setRouter(settings, on) {
+export function setRouter(settings, on, connected = []) {
   const next = clone(settings)
-  const module = providerModule(next.provider.id)
-  next.router = { enabled: on, backend: module?.jevIncluded ? 'opencode' : 'typesafe' }
+  next.router = { enabled: on, backend: jevBackend(next, connected) ?? 'typesafe' }
   next.sandbox.jevReview = on
   if (!on && next.effort.mode === 'auto') next.effort = { ...next.effort, mode: 'fixed', fixedLevel: 'medium' }
   if (on && next.effort.mode === 'fixed' && next.effort.fixedLevel === 'medium') next.effort = { ...next.effort, mode: 'auto', fixedLevel: null }
@@ -165,7 +170,12 @@ export function previousStep(ids, current) {
 }
 
 /** The credential `auth.json` must hold for each provider (named `provider:type`, as the dock reports it). */
-const CREDENTIAL = { 'opencode-go': 'opencode-go:api_key', 'anthropic-api': 'anthropic:api_key', 'anthropic-oauth': 'anthropic:oauth' }
+const CREDENTIAL = {
+  'opencode-go': 'opencode-go:api_key',
+  'anthropic-api': 'anthropic:api_key',
+  'anthropic-oauth': 'anthropic:oauth',
+  typesafe: 'typesafe:api_key',
+}
 
 /** Is the chosen provider's credential really there? `connected` is what the dock found on disk. */
 export const credentialFor = (providerId) => CREDENTIAL[providerId]
@@ -178,7 +188,7 @@ export const rivals = (providerId) => {
   return PROVIDERS.filter((p) => p.id !== providerId && entry(p.id) === entry(providerId)).map((p) => p.id)
 }
 
-/** `ui` is what the page knows beyond the settings: `signedIn`, `keyChecking`, `typesafeSaved`, `servicesConnected`. */
+/** `ui` is what the page knows beyond the settings: `signedIn`, `keyChecking`, `servicesConnected`. */
 export function canContinue(step, settings, ui) {
   // The main provider has to be connected; a credential that is being checked does not count yet.
   if (step === 'provider') return settings.provider.id !== null && ui.signedIn === true && ui.keyChecking !== true
@@ -187,11 +197,12 @@ export function canContinue(step, settings, ui) {
   return true
 }
 
-/** The settings to save when the setup is done. Without a mode, the saved one stays (editing). Without Jev in the
- * provider the router is off (its TypeSafe backend is not built), whatever an earlier version saved. */
-export function finish(settings, mode) {
+/** The settings to save when the setup is done. Without a mode, the saved one stays (editing). The router's backend
+ * follows the stored keys (`connected`, see `jevBackend`); with no Jev at all it is off, whatever an earlier version saved. */
+export function finish(settings, mode, connected = []) {
   const next = clone(settings)
-  if (!providerModule(next.provider.id)?.jevIncluded && next.router.enabled) next.router = { ...next.router, enabled: false }
+  const backend = jevBackend(next, connected)
+  next.router = { enabled: next.router.enabled && !!backend, backend: backend ?? next.router.backend }
   next.setup = { completed: true, mode: mode ?? settings.setup.mode ?? 'full' }
   return next
 }

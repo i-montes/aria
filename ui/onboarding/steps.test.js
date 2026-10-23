@@ -2,8 +2,8 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import {
-  applyProvider, canContinue, defaultSettings, finish, isSignedIn, languageChoice, nextStep, previousStep,
-  rivals, setLanguageChoice, setRouter, skip, stepIds,
+  applyProvider, canContinue, credentialFor, defaultSettings, finish, isSignedIn, JEV_PROVIDERS, jevBackend, languageChoice,
+  nextStep, previousStep, PROVIDERS, rivals, setLanguageChoice, setRouter, skip, stepIds,
 } from './steps.js'
 
 const golden = (name) => JSON.parse(readFileSync(new URL(`../../crates/aria-core/tests/golden/${name}.json`, import.meta.url), 'utf8'))
@@ -72,18 +72,14 @@ describe('what gets saved', () => {
     expect(s.models.daily).toBe('claude-bridge/claude-sonnet-5-5')
   })
 
-  test('a router with a TypeSafe key', () => {
-    const base = applyProvider(defaultSettings('en'), 'anthropic-api')
-    expect(base.router.enabled).toBe(false)
-    const on = setRouter(base, true)
-    expect(on.router).toEqual({ enabled: true, backend: 'typesafe' })
-    expect(on.sandbox.jevReview).toBe(true)
-    expect(on.effort.mode).toBe('auto')
+  test('turning the router off and on again under OpenCode Go', () => {
     const off = setRouter(applyProvider(defaultSettings('en'), 'opencode-go'), false)
     expect(off.router.enabled).toBe(false)
     expect(off.sandbox.jevReview).toBe(false)
     expect(off.effort).toMatchObject({ mode: 'fixed', fixedLevel: 'medium' })
-    expect(setRouter(off, true).router).toEqual({ enabled: true, backend: 'opencode' })
+    const on = setRouter(off, true)
+    expect(on.router).toEqual({ enabled: true, backend: 'opencode' })
+    expect(on.effort.mode).toBe('auto')
   })
 
   test('skipping records skipped and changes nothing else', () => {
@@ -123,7 +119,7 @@ describe('when Continue is allowed', () => {
   })
   test('the router never blocks, and without Jev in the provider it is saved off', () => {
     const api = setRouter(applyProvider(defaultSettings('en'), 'anthropic-api'), true)
-    expect(canContinue('router', api, { typesafeSaved: false })).toBe(true)
+    expect(canContinue('router', api, {})).toBe(true)
     expect(finish(api).router.enabled).toBe(false)
     expect(finish(opencode).router.enabled).toBe(true)
   })
@@ -170,5 +166,50 @@ describe('the integrations step', () => {
   test('every chosen service counts', () => {
     expect(canContinue('integrations', withServices('notion', 'tavily'), { servicesConnected: ['notion'] })).toBe(false)
     expect(canContinue('integrations', withServices('notion', 'tavily'), { servicesConnected: ['notion', 'tavily'] })).toBe(true)
+  })
+})
+
+describe('Jev follows the stored keys, not the main provider', () => {
+  const GO = 'opencode-go:api_key'
+  const TS = 'typesafe:api_key'
+
+  test('Jev comes from OpenCode Go first, then TypeSafe, else none', () => {
+    const s = defaultSettings('en')
+    expect(jevBackend(applyProvider(s, 'opencode-go'), [])).toBe('opencode')
+    expect(jevBackend(applyProvider(s, 'anthropic-oauth'), [GO])).toBe('opencode')
+    expect(jevBackend(applyProvider(s, 'anthropic-oauth'), [TS])).toBe('typesafe')
+    expect(jevBackend(applyProvider(s, 'anthropic-oauth'), [GO, TS])).toBe('opencode')
+    expect(jevBackend(applyProvider(s, 'anthropic-oauth'), [])).toBeNull()
+  })
+
+  test('Claude as the main provider keeps the router and the review on with either key', () => {
+    for (const [keys, backend] of [[[GO], 'opencode'], [[TS], 'typesafe']]) {
+      const s = applyProvider(defaultSettings('en'), 'anthropic-oauth', keys)
+      expect(s.router).toEqual({ enabled: true, backend })
+      expect(s.sandbox.jevReview).toBe(true)
+      expect(s.effort.mode).toBe('fixed') // the main provider's own default
+    }
+  })
+
+  test('without a Jev key Claude leaves the router off, as before', () => {
+    const s = applyProvider(defaultSettings('en'), 'anthropic-oauth')
+    expect(s.router.enabled).toBe(false)
+    expect(s.sandbox.jevReview).toBe(false)
+  })
+
+  test('setRouter and finish follow the stored keys', () => {
+    const claude = applyProvider(defaultSettings('en'), 'anthropic-oauth')
+    expect(setRouter(claude, true, [TS]).router).toEqual({ enabled: true, backend: 'typesafe' })
+    const on = applyProvider(defaultSettings('en'), 'anthropic-oauth', [TS])
+    expect(finish(on, 'full', [TS]).router).toEqual({ enabled: true, backend: 'typesafe' })
+    expect(finish(on, 'full', [GO]).router).toEqual({ enabled: true, backend: 'opencode' })
+    expect(finish(on, 'full', []).router.enabled).toBe(false)
+  })
+
+  test('TypeSafe is a provider for Jev only: never main, no models', () => {
+    expect(JEV_PROVIDERS.map((p) => p.id)).toEqual(['typesafe'])
+    expect(PROVIDERS.some((p) => p.id === 'typesafe')).toBe(false)
+    expect(credentialFor('typesafe')).toBe(TS)
+    expect(stepIds('full', 'typesafe')).not.toContain('quota')
   })
 })

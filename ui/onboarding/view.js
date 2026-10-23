@@ -6,8 +6,8 @@ import { anyModifierHeld, defaultShortcut, display, fromKeyEvent, keyName, label
 import { renderPanelHead } from '../chat/parts/panelhead.js'
 import { orderedModels, renderModelPicker } from '../chat/parts/models.js'
 import {
-  applyProvider, canContinue, credentialFor, defaultSettings, finish, isSignedIn, languageChoice, nextStep,
-  previousStep, PROVIDERS, providerModule, rivals, setLanguageChoice, setRouter, skip, stepIds,
+  applyProvider, canContinue, credentialFor, defaultSettings, finish, isSignedIn, JEV_PROVIDERS, jevBackend, languageChoice,
+  nextStep, previousStep, PROVIDERS, providerModule, rivals, setLanguageChoice, setRouter, skip, stepIds,
 } from './steps.js'
 
 const SERVICES = ['notion', 'tavily']
@@ -84,7 +84,6 @@ export function createOnboarding(env) {
   function freshUi() {
     return {
       signedIn: false,
-      typesafeSaved: false,
       reveal: {},
       // The Shortcut row: listening for keys, why the last press (or the typed one) did not count, and the typed text.
       shortcut: { recording: false, note: null, draft: '' },
@@ -107,7 +106,6 @@ export function createOnboarding(env) {
   const uiFlags = () => ({
     signedIn: state.ui.signedIn,
     keyChecking: state.ui.check.status === 'checking',
-    typesafeSaved: state.ui.typesafeSaved,
     servicesConnected: SERVICES.filter((id) => state.connected.has(`mcp:${id}`)),
   })
 
@@ -147,7 +145,6 @@ export function createOnboarding(env) {
       state.view = 'welcome'
     }
     state.ui.signedIn = isSignedIn(state.settings, connected)
-    state.ui.typesafeSaved = state.connected.has('typesafe:api_key')
     lastView = '' // a (re)opened setup starts at the top, not where the previous one was scrolled
     render()
   }
@@ -244,16 +241,19 @@ export function createOnboarding(env) {
   // ---- steps ----------------------------------------------------------------------------------
 
   /** Every provider, each with its state: connected or not, the main one (its models, quota and Jev are the
-   * settings'), and the links to connect it, make it the main one or remove it. Several can be connected at once. */
+   * settings'), and the links to connect it, make it the main one or remove it. Several can be connected at once.
+   * After them, the providers that only give Jev (TypeSafe): the same row, never the main one. */
   function providerStep() {
     const main = state.settings.provider.id
     let html = PROVIDERS.map((p) => providerRow(p, main)).join('')
+    html += c.section(t('ob.provider.jevOnly')) + JEV_PROVIDERS.map((p) => providerRow(p, null)).join('')
     if (main && !state.connected.has(credentialFor(main))) html += c.info('amber', '', t('ob.provider.mainMissing', { provider: providerModule(main).label }))
     return html + c.info('lavender', t('ob.signin.stored.title'), t('ob.signin.stored.desc'))
   }
 
   function providerRow(p, main) {
     const ui = state.ui
+    const jevOnly = JEV_PROVIDERS.includes(p)
     const connected = state.connected.has(credentialFor(p.id))
     const isMain = p.id === main
     const open = ui.target === p.id
@@ -271,7 +271,7 @@ export function createOnboarding(env) {
     const actions = []
     if (!connected || rejected || open) actions.push({ action: 'provider-connect', text: t(open ? 'ob.provider.close' : connected ? 'ob.provider.replace' : 'ob.provider.connect') })
     if (connected && !isMain && !open) {
-      actions.push({ action: 'pick', text: t('ob.provider.makeMain') })
+      if (!jevOnly) actions.push({ action: 'pick', text: t('ob.provider.makeMain') })
       actions.push({ action: 'provider-remove', text: t(ui.remove.confirm === p.id ? 'ob.provider.removeConfirm' : 'ob.provider.remove') })
     }
     return c.providerRow({
@@ -292,6 +292,9 @@ export function createOnboarding(env) {
   function connectForm(p) {
     const replaced = rivals(p.id).filter((id) => state.connected.has(credentialFor(id)))
     let html = replaced.map((id) => c.info('amber', '', t('ob.provider.replaces', { provider: providerModule(id).label }))).join('')
+    if (JEV_PROVIDERS.includes(p)) {
+      return html + keyBlock({ field: 'typesafeKey', label: t('ob.signin.keyLabel', { provider: p.label }), status: state.ui.typesafe, draft: state.ui.drafts.typesafeKey, description: t('ob.provider.typesafe.keyDesc') })
+    }
     if (p.auth === 'key') return html + keyBlock({ field: 'key', label: t('ob.signin.keyLabel', { provider: p.label }), status: state.ui.key, draft: state.ui.drafts.key })
     const o = state.ui.oauth
     const stateText =
@@ -356,21 +359,19 @@ export function createOnboarding(env) {
 
   function routerStep() {
     const s = state.settings
-    const included = module().jevIncluded
-    // Jev through TypeSafe, for providers that do not include it, is not built yet: without OpenCode Go there is no
-    // router to turn on (the provider's defaults leave it off).
-    if (!included) return c.bullets([t('ob.router.b1'), t('ob.router.b2'), t('ob.router.b3'), t('ob.router.b4')]) + c.info('amber', t('ob.router.unavailable.title'), t('ob.router.unavailable.desc'))
+    const bullets = c.bullets([t('ob.router.b1'), t('ob.router.b2'), t('ob.router.b3'), t('ob.router.b4')])
+    // Jev comes from the stored keys, not from the main provider: OpenCode Go's, else TypeSafe's. With neither there
+    // is no router to turn on.
+    const backend = jevBackend(s, [...state.connected])
+    if (!backend) return bullets + c.info('amber', t('ob.router.unavailable.title'), t('ob.router.unavailable.desc'))
     let html =
-      c.bullets([t('ob.router.b1'), t('ob.router.b2'), t('ob.router.b3'), t('ob.router.b4')]) +
+      bullets +
       c.choice('router', t('ob.router.question'), [
-        { value: 'yes', label: t('ob.router.yes'), description: included ? t('ob.router.yes.included') : t('ob.router.yes.needsKey') },
+        { value: 'yes', label: t('ob.router.yes'), description: t(backend === 'opencode' ? 'ob.router.yes.included' : 'ob.router.yes.typesafe') },
         { value: 'no', label: t('ob.router.no'), description: t('ob.router.no.desc') },
       ], s.router.enabled ? 'yes' : 'no')
-    if (s.router.enabled && included) html += c.info('green', t('ob.router.included.title'), t('ob.router.included.desc'))
-    if (s.router.enabled && !included) {
-      html += keyBlock({ field: 'typesafeKey', label: t('ob.router.keyLabel'), status: state.ui.typesafe, draft: state.ui.drafts.typesafeKey, description: t('ob.router.keyDesc') })
-    }
-    if (!s.router.enabled) html += c.info('amber', t('ob.router.off.title'), t('ob.router.off.desc'))
+    if (s.router.enabled) html += c.info('green', '', t(`ob.router.via.${backend}`))
+    else html += c.info('amber', t('ob.router.off.title'), t('ob.router.off.desc'))
     return html
   }
 
@@ -847,7 +848,7 @@ export function createOnboarding(env) {
         ? t('ob.val.quota', { a: q.switchAt, b: q.planSwitchAt, ask: q.askFirst ? t('ob.val.quotaAsk', { n: q.countdownMinutes }) : t('ob.val.quotaNoAsk') })
         : t('ob.val.quotaNone'),
       assistant: t('ob.val.assistant', { name: assistantName(), language, style: t(`ob.style.${s.assistant.style}`) }) + (s.assistant.userName.trim() ? t('ob.val.callsYou', { user: s.assistant.userName.trim() }) : ''),
-      router: s.router.enabled && m?.jevIncluded ? t('ob.val.routerOn') : t('ob.val.off'),
+      router: s.router.enabled && jevBackend(s, [...state.connected]) ? t('ob.val.routerOn') : t('ob.val.off'),
       models: t('ob.val.models', { daily: modelLabel(s.models.daily), planning: modelLabel(s.models.planning), effort: t(`ob.level.${s.models.planningEffort}`) }),
       effort: s.effort.mode === 'auto' ? t('ob.val.effortAuto') : t(`ob.level.${s.effort.fixedLevel}`),
       compaction: t('ob.val.compaction', { n: s.compaction.percent }),
@@ -995,7 +996,7 @@ export function createOnboarding(env) {
 
   async function saveSettings() {
     if (!isDirty() || blockedSections().length || state.saving) return
-    const settings = finish(state.settings)
+    const settings = finish(state.settings, undefined, [...state.connected])
     state.saving = true
     state.error = null
     render()
@@ -1058,7 +1059,7 @@ export function createOnboarding(env) {
     state.saving = true
     state.error = null
     render()
-    const reply = await request({ type: 'saveSettings', settings: finish(state.settings, state.mode) })
+    const reply = await request({ type: 'saveSettings', settings: finish(state.settings, state.mode, [...state.connected]) })
     state.saving = false
     if (reply.type === 'saved') {
       state.view = 'done'
@@ -1102,7 +1103,7 @@ export function createOnboarding(env) {
       state.settings = setLanguageChoice(state.settings, value, languageChoice(state.settings.assistant.language) === 'other' ? state.settings.assistant.language : '')
       if (value !== 'other') env.setLanguage(value)
     } else if (name === 'router') {
-      state.settings = setRouter(state.settings, value === 'yes')
+      state.settings = setRouter(state.settings, value === 'yes', [...state.connected])
     } else if (name === 'access') {
       // The server's name is everything after the first colon; only the three levels are ever written.
       if (!ACCESS_LEVELS.includes(value)) return
@@ -1214,13 +1215,12 @@ export function createOnboarding(env) {
    * main provider and is dropped. An API key is signed in only after it is checked (checkKey); an OAuth credential
    * cannot be checked from here, so being on disk is enough. */
   function makeMain(id, signedIn) {
-    state.settings = applyProvider(state.settings, id)
+    state.settings = applyProvider(state.settings, id, [...state.connected])
     const keep = state.ui.drafts
     state.ui = {
       ...freshUi(),
       drafts: { ...keep, key: '' },
       signedIn: signedIn ?? (providerModule(id)?.auth === 'oauth' ? isSignedIn(state.settings, [...state.connected]) : false),
-      typesafeSaved: state.connected.has('typesafe:api_key'),
     }
   }
 
@@ -1231,7 +1231,9 @@ export function createOnboarding(env) {
     ui.target = ui.target === id ? null : id
     ui.key = { status: 'idle', error: null }
     ui.oauth = { status: 'idle', error: null, url: null, token: ui.oauth.token + 1 }
+    ui.typesafe = { status: 'idle', error: null }
     ui.drafts.key = ''
+    ui.drafts.typesafeKey = ''
     ui.remove = { confirm: null, busy: null, error: null }
     render()
   }
@@ -1247,6 +1249,14 @@ export function createOnboarding(env) {
     state.ui.signedIn = true
     state.ui.check = { status: 'idle', error: null, requested: true }
     return true
+  }
+
+  /** A Jev key was just stored: the router follows it. One that is on takes the backend the keys now give (OpenCode Go
+   * still wins); one that was off for lack of any Jev turns on; one the owner turned off stays off. */
+  function pointRouterAtKeys(hadJev) {
+    const keys = [...state.connected]
+    if (state.settings.router.enabled) update((next) => (next.router.backend = jevBackend(next, keys) ?? next.router.backend))
+    else if (!hadJev) state.settings = setRouter(state.settings, true, keys)
   }
 
   /** Remove asks twice; the second click asks the dock to delete the provider's credential. Never the main one. */
@@ -1284,7 +1294,11 @@ export function createOnboarding(env) {
     const reply = await request({ type: 'saveKey', provider, key: draft })
     const ok = reply.type === 'keyResult' && reply.ok
     // It IS stored, whatever the page shows now.
-    if (ok && field === 'typesafeKey') state.connected.add('typesafe:api_key')
+    if (ok && field === 'typesafeKey') {
+      const hadJev = jevBackend(state.settings, [...state.connected]) !== null
+      state.connected.add(credentialFor('typesafe'))
+      pointRouterAtKeys(hadJev)
+    }
     if (ok && field === 'key' && (state.ui !== ui || ui.key !== status)) {
       state.connected.add(credentialFor(target))
       for (const other of rivals(target)) state.connected.delete(credentialFor(other))
@@ -1301,7 +1315,7 @@ export function createOnboarding(env) {
         if (isMain && !state.editing && here() === at) next()
         return
       }
-      ui.typesafeSaved = true
+      ui.target = null
       ui.drafts[field] = ''
       render()
       return
@@ -1687,7 +1701,6 @@ export function createOnboarding(env) {
     signedIn: state.ui.signedIn,
     canContinue: canContinue(state.step, state.settings, uiFlags()),
     connected: [...state.connected].sort(),
-    typesafeSaved: state.ui.typesafeSaved,
     oauth: state.ui.oauth.status,
     key: state.ui.key.status,
     check: state.ui.check.status,

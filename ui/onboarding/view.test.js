@@ -163,7 +163,7 @@ describe('several providers at once', () => {
   test('every provider is listed with its own state, and the main one is marked', () => {
     const h = editing(['opencode-go:api_key', 'anthropic:api_key'])
     const html = h.root.innerHTML
-    expect(html.match(/class="provider/g)).toHaveLength(3)
+    expect(html.match(/class="provider/g)).toHaveLength(4) // the three main providers and TypeSafe, for Jev
     expect(html).toContain('<div class="provider main" data-provider="opencode-go">')
     expect(html).toContain('ob.provider.main')
     expect(html).toMatch(/data-action="pick" data-field="provider" data-value="anthropic-api"/)
@@ -263,6 +263,115 @@ describe('several providers at once', () => {
     const h = editing(['opencode-go:api_key', 'anthropic:api_key'])
     expect(h.root.innerHTML).not.toContain('data-field="key"')
     expect(rowOf(h, 'anthropic-api')).toContain('ob.provider.connected')
+  })
+})
+
+describe('TypeSafe, a provider for Jev only', () => {
+  const claude = (connected = []) => ({ ...applyProvider(defaultSettings('en'), 'anthropic-oauth', connected), setup: { completed: true, mode: 'full' } })
+  const editing = (settings, connected, section = 'provider') => {
+    const h = harness()
+    h.ob.start(settings, connected)
+    h.click('settings-open', undefined, section)
+    return h
+  }
+  const action = (name, provider) => new RegExp(`data-action="${name}" data-field="provider" data-value="${provider}"`)
+  const saveTypesafe = async (h, key = 'ts-key') => {
+    connect(h, 'typesafe')
+    h.type('typesafeKey', key)
+    h.click('save-typesafeKey')
+    expect(h.lastRequest().message).toMatchObject({ type: 'saveKey', provider: 'typesafe', key })
+    h.lastRequest().resolve(keyOk)
+    await flush()
+  }
+
+  test('it is listed after the main providers and can be connected, but never made main', () => {
+    const html = editing(completed, ['opencode-go:api_key']).root.innerHTML
+    expect(html).toContain('ob.provider.jevOnly')
+    expect(html.indexOf('data-provider="typesafe"')).toBeGreaterThan(html.indexOf('data-provider="anthropic-oauth"'))
+    expect(html).toContain('ob.provider.typesafe.desc')
+    expect(html).toMatch(action('provider-connect', 'typesafe'))
+    expect(html).not.toMatch(action('pick', 'typesafe'))
+  })
+
+  test('once stored it can be removed, never made main, and carries no quota or Jev badge', () => {
+    const html = editing(completed, ['opencode-go:api_key', 'typesafe:api_key']).root.innerHTML
+    expect(html).toMatch(action('provider-remove', 'typesafe'))
+    expect(html).not.toMatch(action('pick', 'typesafe'))
+    expect(html).not.toMatch(action('provider-connect', 'typesafe'))
+    expect(html).toContain('ob.provider.connected')
+  })
+
+  test('removing it asks twice, then deletes its credential only', async () => {
+    const h = editing(completed, ['opencode-go:api_key', 'typesafe:api_key'])
+    h.click('provider-remove', 'provider', 'typesafe')
+    h.click('provider-remove', 'provider', 'typesafe')
+    expect(h.lastRequest().message).toEqual({ type: 'credentialDelete', provider: 'typesafe' })
+    h.lastRequest().resolve({ type: 'saved' })
+    await flush()
+    expect(h.ob.snapshot().connected).toEqual(['opencode-go:api_key'])
+  })
+
+  test('connecting it saves the key as typesafe and keeps the main provider', async () => {
+    const h = editing(claude(), ['anthropic:oauth'])
+    h.lastRequest()?.resolve(keyOk)
+    await saveTypesafe(h)
+    expect(h.ob.snapshot()).toMatchObject({ section: 'provider', target: null, connected: ['anthropic:oauth', 'typesafe:api_key'] })
+    expect(h.root.innerHTML).not.toContain('data-field="typesafeKey"')
+  })
+
+  test('connecting it turns on the router that was off for lack of a Jev', async () => {
+    const h = editing(claude(), ['anthropic:oauth'])
+    await saveTypesafe(h)
+    h.click('settings-home')
+    h.click('settings-open', undefined, 'router')
+    expect(h.root.innerHTML).toContain('ob.router.via.typesafe')
+    expect(h.root.innerHTML).not.toContain('ob.router.unavailable.title')
+  })
+
+  test('connecting it never turns on a router the owner turned off', async () => {
+    const off = { ...claude(['opencode-go:api_key']), router: { enabled: false, backend: 'opencode' } }
+    const h = editing(off, ['anthropic:oauth', 'opencode-go:api_key'])
+    await saveTypesafe(h)
+    h.click('settings-home')
+    h.click('settings-open', undefined, 'router')
+    expect(h.root.innerHTML).toContain('ob.router.off.title')
+  })
+
+  test('the router step with only a TypeSafe key offers the choice, says which Jev, and has no key field', () => {
+    const on = claude(['typesafe:api_key'])
+    const html = editing(on, ['anthropic:oauth', 'typesafe:api_key'], 'router').root.innerHTML
+    expect(html).toContain('data-field="router"')
+    expect(html).toContain('ob.router.via.typesafe')
+    expect(html).not.toContain('ob.router.unavailable.title')
+    expect(html).not.toContain('data-field="typesafeKey"')
+  })
+
+  test('the router step names OpenCode Go when its key is stored, even under Claude', () => {
+    const on = claude(['opencode-go:api_key'])
+    const html = editing(on, ['anthropic:oauth', 'opencode-go:api_key'], 'router').root.innerHTML
+    expect(html).toContain('ob.router.via.opencode')
+  })
+
+  test('the router step with no Jev key points to the providers step', () => {
+    const html = editing(claude(), ['anthropic:oauth'], 'router').root.innerHTML
+    expect(html).toContain('ob.router.unavailable.title')
+    expect(html).not.toContain('data-field="router"')
+    expect(html).not.toContain('data-field="typesafeKey"')
+  })
+
+  test('the saved settings follow the stored keys: Jev through TypeSafe is kept, and off without a key', async () => {
+    const saved = async (connected) => {
+      const h = editing(claude(['typesafe:api_key']), connected)
+      h.lastRequest().resolve(keyOk) // the main provider's stored credential, checked when the step opens
+      await flush()
+      h.click('toggle', 'memory') // any change, to bring up the save bar
+      h.click('settings-save')
+      const message = h.lastRequest().message
+      expect(message.type).toBe('saveSettings')
+      return message.settings.router
+    }
+    expect(await saved(['anthropic:oauth', 'typesafe:api_key'])).toEqual({ enabled: true, backend: 'typesafe' })
+    expect(await saved(['anthropic:oauth'])).toMatchObject({ enabled: false })
   })
 })
 

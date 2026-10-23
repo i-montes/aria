@@ -377,6 +377,14 @@ fn save_key(id: u64, provider: &str, key: &str, ctx: &Ctx) -> DockMessage {
 /// Removes one provider's credential. Two providers can share an entry (the Anthropic key and the Claude sign-in are
 /// both `anthropic`): only a credential of this provider's own kind is removed, so the other one's stays.
 fn delete_credential(id: u64, provider: &str, ctx: &Ctx) -> DockMessage {
+    // TypeSafe only gives Jev: it is no main provider, so it has no module, only its own `auth.json` entry.
+    if provider == "typesafe" {
+        return match AuthStore::for_paths(&ctx.paths).remove("typesafe") {
+            Ok(()) => DockMessage::Saved { id },
+            Err(aria_core::auth::AuthError::Vault(_)) => DockMessage::Error { id, code: "keyring-failed".into() },
+            Err(_) => DockMessage::Error { id, code: "auth-file-broken".into() },
+        };
+    }
     let Some(module) = providers::provider(provider) else {
         return DockMessage::Error { id, code: "unknown-provider".into() };
     };
@@ -618,6 +626,19 @@ mod tests {
             vec![DockMessage::Saved { id: 1 }]
         );
         assert_eq!(store.summary(), vec!["anthropic:api_key".to_string()]);
+    }
+
+    #[test]
+    fn removing_typesafe_drops_its_own_entry_and_works_while_it_is_not_the_main_provider() {
+        let h = harness(KeyCheck::Valid);
+        let store = auth(&h);
+        store.set("typesafe", &Credential::ApiKey { key: "t".into() }).unwrap();
+        store.set("opencode-go", &Credential::ApiKey { key: "go".into() }).unwrap();
+        assert_eq!(
+            run(&h, PageMessage::CredentialDelete { id: 1, provider: "typesafe".into() }),
+            vec![DockMessage::Saved { id: 1 }]
+        );
+        assert_eq!(store.summary(), vec!["opencode-go:api_key".to_string()]);
     }
 
     #[test]
