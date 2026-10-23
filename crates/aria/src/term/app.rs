@@ -242,7 +242,6 @@ impl App {
 
     // ---- the list ------------------------------------------------------------------------------------------------
 
-    /// The list's rows: each session's title (or "untitled") and folder, then the new one.
     /// The session the client is attached to.
     #[cfg(test)]
     pub fn attached_session(&self) -> Option<&str> {
