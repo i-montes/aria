@@ -2,8 +2,9 @@
 //! `clients.sock` beside the control socket and speaks the page's own messages, one JSON object per line both ways; the
 //! dock's replies and events fan out to the page and to the clients attached to each session.
 //!
-//! - Ids: a reply to the page's request (a numeric id) goes to the page only. A client's request ids are moved out of the page's range going in (`CLIENT_BASE` + its number × `CLIENT_SPAN`
-//!   + its id) and back coming out, so a reply reaches only the one that asked.
+//! - Ids: a client's request gets an id of the hub's going in (from `CLIENT_BASE`, remembered with the client and its own
+//!   id) and its own back coming out, so the reply reaches only the one that asked; any other reply (a numeric id) is the
+//!   page's and goes to the page only, whatever its id (the page counts from `Date.now() * 1000`).
 //! - A client that does not read is dropped once its queue (`QUEUE` lines) is full: the dock never waits for one.
 //! - Client-only lines: `attach { session }`, `detach`, `focus { focused }`. A session is seen while a client attached
 //!   to it has the focus (a client that never said counts as focused).
@@ -19,8 +20,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 
-const CLIENT_BASE: u64 = 1 << 40;
-const CLIENT_SPAN: u64 = 1_000_000;
+/// Where the ids the hub gives clients' requests start: far above the page's.
+const CLIENT_BASE: u64 = 1 << 62;
 const QUEUE: usize = 1024;
 
 /// `clients.sock`, beside the control socket.
@@ -72,6 +73,9 @@ pub struct Hub {
     handlers: Arc<dyn Fn(PageMessage) + Send + Sync>,
     clients: Watchers,
     next: Arc<AtomicU64>,
+    /// The ids given to clients' requests: (the client, its own id). A reply whose id is not here is the page's.
+    asked: Arc<Mutex<HashMap<u64, (u64, u64)>>>,
+    next_ask: Arc<AtomicU64>,
 }
 
 /// The numeric request id of a message (at its top, or inside a `session` wrapper), as a mutable slot.
@@ -88,6 +92,8 @@ impl Hub {
             handlers,
             clients: Watchers::default(),
             next: Arc::new(AtomicU64::new(1)),
+            asked: Arc::default(),
+            next_ask: Arc::new(AtomicU64::new(CLIENT_BASE)),
         }
     }
 
@@ -164,7 +170,9 @@ impl Hub {
         }
         let own = id_slot(&mut value).and_then(|slot| {
             let id = slot.as_u64()?;
-            *slot = json!(CLIENT_BASE + number * CLIENT_SPAN + id);
+            let ours = self.next_ask.fetch_add(1, Ordering::SeqCst);
+            self.asked.lock().unwrap().insert(ours, (number, id));
+            *slot = json!(ours);
             Some(id)
         });
         // A client's `!command`: its own message, which the page can never send.
@@ -202,9 +210,9 @@ impl Hub {
         let Ok(mut value) = serde_json::to_value(message) else { return true };
         if let Some(slot) = id_slot(&mut value) {
             let id = slot.as_u64().unwrap_or(0);
-            if id >= CLIENT_BASE {
-                let number = (id - CLIENT_BASE) / CLIENT_SPAN;
-                *slot = json!((id - CLIENT_BASE) % CLIENT_SPAN);
+            let asked = self.asked.lock().unwrap().remove(&id);
+            if let Some((number, own)) = asked {
+                *slot = json!(own);
                 self.send_to(number, &value);
                 // A tab a client opened is everyone's: the page and the other clients get it, without the asker's id.
                 if value["type"] == "sessionAdded" {
@@ -323,6 +331,31 @@ mod tests {
         let _again = bind(&path).expect("a file nobody listens on is replaced");
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+    }
+
+    #[test]
+    fn the_page_gets_its_replies_whatever_its_ids() {
+        // The page numbers its requests from Date.now() * 1000: huge, and never a client's.
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(json!({"type": "attach", "session": "aa"}));
+        wait_until("attached", || f.hub.watchers().sees("aa"));
+        let page_id = 1_792_760_400_000_000;
+        assert!(f.hub.route(&DockMessage::Settings {
+            id: page_id,
+            settings: None,
+            exists: false,
+            problem: None,
+            connected: vec![],
+            servers: vec![]
+        }));
+        let reply = DockMessage::Session {
+            session: "aa".into(),
+            message: Box::new(DockMessage::Models { id: page_id + 1, models: json!([]) }),
+        };
+        assert!(f.hub.route(&reply));
+        assert!(f.hub.route(&DockMessage::SessionsChanged));
+        assert_eq!(a.next()["type"], "sessionsChanged", "the page's replies never reached the client");
     }
 
     #[test]
