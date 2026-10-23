@@ -382,8 +382,9 @@ export function createOnboarding(env) {
     html += c.segments('language', t('ob.assistant.language'), ['es', 'en', 'pt', 'other'].map((v) => ({ value: v, label: t(`ob.assistant.language.${v}`) })), choice)
     if (choice === 'other') html += c.textField('languageOther', t('ob.assistant.languageOther'), a.language, { placeholder: t('ob.assistant.languageOther.placeholder'), indent: true })
     html += c.choice('style', t('ob.assistant.style'), STYLES.map((v) => ({ value: v, label: t(`ob.style.${v}`), description: i18nHas(`ob.style.${v}.desc`) ? t(`ob.style.${v}.desc`) : '' })), a.style)
-    // The shortcut is a setting, not a setup question: the dock works with its default from the first run.
-    return state.view === 'settings' ? html + shortcutRow() : html
+    // The shortcut and what a conversation shows are settings, not setup questions: their defaults work from the start.
+    if (state.view !== 'settings') return html
+    return html + shortcutRow() + c.toggle('verbose', t('ob.display.verbose'), t('ob.display.verbose.desc'), state.settings.display?.verbose !== false)
   }
 
   /** The Shortcut row: the chosen one (or the default, while the setting is empty or unreadable), recorded by
@@ -1138,6 +1139,7 @@ export function createOnboarding(env) {
       else if (name === 'payPerUse') s.models.allowPayPerUse = !s.models.allowPayPerUse
       else if (name === 'maxOnFree') s.effort.maxOnFree = !s.effort.maxOnFree
       else if (name === 'memory') s.memory.enabled = !s.memory.enabled
+      else if (name === 'verbose') s.display = { ...(s.display ?? {}), verbose: s.display?.verbose === false }
       else if (name === 'askToLeave') s.sandbox.askToLeave = !s.sandbox.askToLeave
       else if (name === 'jevReview') s.sandbox.jevReview = !s.sandbox.jevReview
       else if (name === 'commit') s.git.commitWithoutAsking = !s.git.commitWithoutAsking

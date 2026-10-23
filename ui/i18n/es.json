@@ -18,6 +18,8 @@
   "problem.hyprland-error": "Aria no pudo comunicarse con Hyprland.",
   "problem.hotkey-unavailable": "Aria no pudo registrar su atajo ni ninguna de las alternativas (Option + Espacio, Control + Option + Espacio, Command + Option + Espacio). Probablemente otros programas las estén usando: elige otro en Ajustes → Asistente.",
   "problem.hotkey-handler-failed": "Aria no pudo configurar su atajo en este Mac: el sistema rechazó su manejador de teclas. Lo vuelve a intentar cada 10 segundos; mientras tanto, ejecuta aria toggle para abrirla.",
+  "ob.display.verbose": "Mostrar todo",
+  "ob.display.verbose.desc": "El razonamiento y la salida de cada herramienta; apagado, una línea por turno. Por ahora en la terminal (Ctrl+O lo alterna).",
   "ob.step": "Paso {n} de {total}",
   "ob.back": "Atrás",
   "ob.continue": "Continuar",

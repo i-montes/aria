@@ -38,6 +38,21 @@ pub struct Settings {
     /// The dock's shortcut, `MOD + MOD + KEY` (see `shortcut`); `""` is the platform's default.
     pub shortcut: String,
     pub credentials: Credentials,
+    pub display: Display,
+}
+
+/// How much a conversation shows: with `verbose` (the default) the thinking and every tool's output; without it, one
+/// line per turn. The terminal reads it (`/verbose`, Ctrl+O); the dock does not yet.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Display {
+    pub verbose: bool,
+}
+
+impl Default for Display {
+    fn default() -> Self {
+        Display { verbose: true }
+    }
 }
 
 /// Where keys live: in the system keyring (Keychain, Secret Service), or in plain files in `~/.aria` when `keyring` is
@@ -296,6 +311,7 @@ impl Default for Settings {
             subagents: Subagents::default(),
             shortcut: String::new(),
             credentials: Credentials::default(),
+            display: Display::default(),
         }
     }
 }
@@ -366,7 +382,8 @@ mod tests {
                 "autoSkills": ["systematic-debugging", "verification-before-completion"]
             },
             "shortcut": "",
-            "credentials": { "keyring": true }
+            "credentials": { "keyring": true },
+            "display": { "verbose": true }
         })
     }
 
@@ -386,6 +403,15 @@ mod tests {
         let golden: serde_json::Value =
             serde_json::from_str(include_str!("../tests/golden/settings-defaults-en.json")).unwrap();
         assert_eq!(serde_json::to_value(Settings::defaults("en")).unwrap(), golden);
+    }
+
+    #[test]
+    fn old_settings_files_get_verbose_on() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(settings.display.verbose);
+        assert!(Settings::defaults("en").display.verbose);
+        let quiet: Settings = serde_json::from_str(r#"{"display":{"verbose":false}}"#).unwrap();
+        assert_eq!(serde_json::to_value(&quiet).unwrap()["display"], serde_json::json!({"verbose": false}));
     }
 
     #[test]

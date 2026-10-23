@@ -701,6 +701,15 @@ describe('the settings screen', () => {
     expect(h.pending).toHaveLength(0)
   })
 
+  test('the verbose toggle saves display.verbose', () => {
+    const h = settingsHarness()
+    h.click('settings-open', undefined, 'assistant')
+    expect(h.root.innerHTML).toContain('data-field="verbose"')
+    h.click('toggle', 'verbose')
+    h.click('settings-save')
+    expect(h.lastRequest().message.settings.display).toEqual({ verbose: false })
+  })
+
   test('leaving with changes asks first; leaving without them goes back to the chat', async () => {
     const h = settingsHarness()
     h.click('settings-exit')

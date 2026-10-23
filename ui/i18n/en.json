@@ -18,6 +18,8 @@
   "problem.hyprland-error": "Aria could not talk to Hyprland.",
   "problem.hotkey-unavailable": "Aria could not register its shortcut or any of the fallbacks (Option + Space, Control + Option + Space, Command + Option + Space). Other apps are probably using them: choose another one in Settings → Assistant.",
   "problem.hotkey-handler-failed": "Aria could not set up its shortcut on this Mac: the system refused its key handler. It tries again every 10 seconds; meanwhile run aria toggle to open it.",
+  "ob.display.verbose": "Show everything",
+  "ob.display.verbose.desc": "The thinking and every tool's output; off, one line per turn. In the terminal for now (Ctrl+O switches it).",
   "ob.step": "Step {n} of {total}",
   "ob.back": "Back",
   "ob.continue": "Continue",

@@ -11,6 +11,9 @@
   "credentials": {
     "keyring": true
   },
+  "display": {
+    "verbose": true
+  },
   "effort": {
     "fixedLevel": "medium",
     "maxOnFree": true,

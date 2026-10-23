@@ -93,6 +93,7 @@ export function defaultSettings(language = 'en') {
     },
     shortcut: '',
     credentials: { keyring: true },
+    display: { verbose: true },
   }
 }
 
