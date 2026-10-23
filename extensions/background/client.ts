@@ -3,7 +3,7 @@
 // `id`, hands pushed events to its listeners, and reconnects every second while the dock is away. The socket and its
 // timers are unref'd, so the client never keeps Pi's process alive. `startProcess` is the shared start of a
 // background process (`background_run`, here with `PI_SANDBOX=0` and in the sandbox extension otherwise).
-import { createConnection, type Socket } from 'node:net'
+import { Socket } from 'node:net'
 
 export const DOCK_REFUSAL = "Background work needs Aria's dock."
 const RECONNECT_MS = 1000
@@ -32,9 +32,12 @@ export class JobsClient {
 
   private connect() {
     if (this.closed) return
-    let socket: Socket
+    // The error listener goes on before connecting: Bun reports a missing socket while connecting, and with no listener
+    // yet that error would be thrown (Node reports it later, either way it is only a reason to retry).
+    const socket = new Socket()
+    socket.on('error', () => {})
     try {
-      socket = createConnection({ path: this.path })
+      socket.connect({ path: this.path })
     } catch {
       this.scheduleReconnect()
       return
@@ -55,7 +58,6 @@ export class JobsClient {
       }
     })
     socket.on('data', (chunk: string) => this.read(chunk))
-    socket.on('error', () => {})
     socket.on('close', () => {
       if (this.socket !== socket) return
       this.socket = null
