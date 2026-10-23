@@ -1,10 +1,7 @@
 //! What sets a hub up (docs/superpowers/specs/2026-10-23-hub-and-machines-design.md, "First setup without a page"):
 //! the bundle of settings and credentials the owner's computer sends, and the import that writes it on the hub.
 //!
-//! The pieces are small and pure; the ssh orchestration lives with `aria hub init`.
-
-// `aria hub init` is the caller of the export and of the ssh checks; until it lands only `hub-import` is wired up.
-#![allow(dead_code)]
+//! The pieces are small and pure; `aria hub init` (below) orchestrates them over ssh.
 
 use crate::keyring_cli::secret_value;
 use aria_core::json_file::{merge_preserving, read_json, write_bytes_atomic};
@@ -14,9 +11,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cell::OnceCell;
 use std::collections::BTreeMap;
-use std::io::BufRead;
+use std::io::{self, BufRead, Read, Write};
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitStatus, Output, Stdio};
 
 /// The only files a bundle carries, in the order they are written.
 pub const BUNDLE_FILES: [&str; 4] = ["settings.json", "auth.json", "mcp.json", "mcp-auth.json"];
@@ -272,6 +270,694 @@ pub fn private_address(ip: IpAddr) -> bool {
             Some(v4) => private_address(IpAddr::V4(v4)),
             None => ip.is_loopback() || ip.segments()[0] & 0xfe00 == 0xfc00 || ip.segments()[0] & 0xffc0 == 0xfe80,
         },
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// `aria hub init`: the owner's computer sets a server up as a hub over ssh. The probes before the plan only read; every
+// write waits for a yes. Every remote command is one argument to ssh after the host.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const USAGE: &str =
+    "usage: aria hub init <user@host> [--binary <path>] [--projects <dir>] [--client-key <pubkey file>] [--yes]";
+
+/// What `aria hub init` uploads from the checkout: the installer, the service unit and the pins the installer reads
+/// (`install/install.sh` reads `../<pin>`, so the tree keeps its shape under `~/.aria/hub-src`).
+const UPLOAD_FILES: [&str; 7] = [
+    "install/install.sh",
+    "install/aria-serve.service",
+    "pi-version",
+    "pi-packages",
+    "engram-version",
+    "agent-browser-version",
+    "node-version",
+];
+
+/// Where the upload lands on the hub (the remote shell expands the `~`) and what the installer is run with.
+const HUB_SRC: &str = "~/.aria/hub-src";
+const REMOTE_UPLOAD: &str = "umask 077 && mkdir -p ~/.aria/hub-src && tar -xf - -C ~/.aria/hub-src";
+const REMOTE_INSTALL: &str = "sh ~/.aria/hub-src/install/install.sh --headless --local ~/.aria/hub-src/aria";
+const REMOTE_IMPORT: &str = "~/.local/bin/aria hub-import";
+const REMOTE_RESTART: &str = "systemctl --user restart aria-serve.service";
+const REMOTE_VERSION: &str = "~/.local/bin/aria --version";
+const REMOTE_BWRAP: &str = "bwrap --unshare-user --ro-bind / / true";
+const REMOTE_SSHD_CONFIG: &str = "cat /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config 2>/dev/null";
+
+/// Reads one validated key line from stdin and adds it to `authorized_keys` as the restricted line, once (a key already
+/// there, whatever its options or comment, is the same key: the blob is compared). Nothing is interpolated: the key
+/// arrives on stdin and the home is the remote shell's own `$HOME`. Plain POSIX, with no single quote in it.
+const REMOTE_ALLOW_KEY: &str = concat!(
+    r#"umask 077; mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh" && touch "$HOME/.ssh/authorized_keys" "#,
+    r#"&& chmod 600 "$HOME/.ssh/authorized_keys" && IFS= read -r key "#,
+    r#"&& blob=$(printf "%s\n" "$key" | cut -d" " -f2) "#,
+    r#"&& if grep -Fq " $blob" "$HOME/.ssh/authorized_keys"; then echo "already allowed"; "#,
+    r#"else printf "restrict,command=\"%s/.local/bin/aria client-stdio\" %s\n" "$HOME" "$key" "#,
+    r#">> "$HOME/.ssh/authorized_keys" && echo "allowed"; fi"#,
+);
+
+/// The key types a bare public key line starts with.
+const KEY_TYPES: [&str; 7] = [
+    "ssh-ed25519",
+    "ssh-rsa",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "sk-ssh-ed25519@openssh.com",
+    "sk-ecdsa-sha2-nistp256@openssh.com",
+];
+
+/// The arguments as typed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawInit {
+    pub host: String,
+    pub binary: Option<PathBuf>,
+    pub projects: Option<String>,
+    pub client_key: Option<PathBuf>,
+    pub yes: bool,
+}
+
+/// The arguments once the binary is found and the key is read and checked.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InitArgs {
+    pub host: String,
+    pub binary: PathBuf,
+    pub projects: Option<String>,
+    /// The bare public key line, validated.
+    pub client_key: Option<String>,
+    pub yes: bool,
+}
+
+/// What the read-only probes learned about the hub.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Probe {
+    /// `uname -m`: `aarch64` or `x86_64`.
+    pub arch: String,
+    pub os: String,
+    pub home: String,
+    /// The host name `ssh -G` resolved (what the owner's ssh configuration calls it).
+    pub ssh_host: String,
+    /// The port the owner's ssh connects to, which is the one sshd listens on.
+    pub sshd_port: u16,
+    pub listeners: Vec<Listener>,
+    pub has_xz: bool,
+    pub has_bwrap: bool,
+    pub has_npm: bool,
+    pub has_tailscale: bool,
+    pub node_version: Option<String>,
+}
+
+/// Something that stops `aria hub init`, with the exit status it ends with.
+struct Failure(i32, String);
+
+fn usage_error(message: impl Into<String>) -> Failure {
+    Failure(2, message.into())
+}
+
+fn failed(message: impl Into<String>) -> Failure {
+    Failure(1, message.into())
+}
+
+/// `aria hub <command>`: only `init` for now. `args` are what follows `hub`.
+pub fn hub_command(args: &[String]) -> i32 {
+    match args.first().map(String::as_str) {
+        Some("init") => match parse_init_args(&args[1..]) {
+            Ok(raw) => init(raw),
+            Err(why) => {
+                eprintln!("aria hub init: {why}\n{USAGE}");
+                2
+            }
+        },
+        _ => {
+            eprintln!("{USAGE}");
+            2
+        }
+    }
+}
+
+pub fn parse_init_args(args: &[String]) -> Result<RawInit, String> {
+    let mut raw = RawInit { host: String::new(), binary: None, projects: None, client_key: None, yes: false };
+    let mut host = None;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        let mut value = |name: &str| rest.next().cloned().ok_or_else(|| format!("{name} needs a value"));
+        match arg.as_str() {
+            "--yes" | "-y" => raw.yes = true,
+            "--binary" => raw.binary = Some(PathBuf::from(value("--binary")?)),
+            "--projects" => raw.projects = Some(value("--projects")?),
+            "--client-key" => raw.client_key = Some(PathBuf::from(value("--client-key")?)),
+            // Anything else is the host, even one that looks like an option: the host check refuses that one the way
+            // `aria connect` does.
+            _ if host.is_none() => host = Some(arg.clone()),
+            _ if arg.starts_with('-') => return Err(format!("unknown option {arg}")),
+            _ => return Err("only one host".into()),
+        }
+    }
+    raw.host = host.ok_or("a host is needed")?;
+    Ok(raw)
+}
+
+/// The machine of an ELF binary's header (`e_machine`): `aarch64` or `x86_64`, and None for anything else, a file
+/// that is no ELF, or one too short to hold the field.
+pub fn elf_arch(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() < 20 || &bytes[..4] != b"\x7fELF" {
+        return None;
+    }
+    let machine = match bytes[5] {
+        1 => u16::from_le_bytes([bytes[18], bytes[19]]),
+        2 => u16::from_be_bytes([bytes[18], bytes[19]]),
+        _ => return None,
+    };
+    match machine {
+        0xB7 => Some("aarch64"),
+        0x3E => Some("x86_64"),
+        _ => None,
+    }
+}
+
+/// The key line of a `--client-key` file, checked: exactly one line that is a bare public key (a key type, the base64
+/// blob, an optional comment). A line with options of its own, a second line or a quote would let the file say what the
+/// restriction does not, so each is refused before anything is sent.
+pub fn validate_client_key(text: &str) -> Result<String, String> {
+    let line = text.strip_suffix('\n').map_or(text, |line| line.strip_suffix('\r').unwrap_or(line));
+    if line.trim().is_empty() {
+        return Err("there is no key in it".into());
+    }
+    if line.chars().any(char::is_control) {
+        return Err("it must be one line with no control characters".into());
+    }
+    if line.contains('"') {
+        return Err("a key line holds no quote".into());
+    }
+    let (kind, rest) = line.split_once(' ').unwrap_or((line, ""));
+    if !KEY_TYPES.contains(&kind) {
+        return Err(format!(
+            "it must be a bare public key (it starts with a key type such as ssh-ed25519), not {kind:?}"
+        ));
+    }
+    let blob = rest.split(' ').next().unwrap_or("");
+    if blob.is_empty() || !blob.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=')) {
+        return Err("the key is missing or is not base64".into());
+    }
+    Ok(line.to_string())
+}
+
+/// The line `authorized_keys` gets: the key may only run Aria's bridge, with no terminal, forwarding or agent.
+pub fn authorized_line(hub_home: &str, key: &str) -> String {
+    format!("restrict,command=\"{}/.local/bin/aria client-stdio\" {key}", hub_home.trim_end_matches('/'))
+}
+
+/// True when a Node version (`v22.19.0`) is 22.19 or newer, which runs Pi.
+pub fn node_is_current(version: &str) -> bool {
+    let mut parts = version.trim().trim_start_matches('v').split('.');
+    let number = |part: Option<&str>| part.and_then(|part| part.parse::<u32>().ok());
+    match (number(parts.next()), number(parts.next())) {
+        (Some(major), Some(minor)) => (major, minor) >= (22, 19),
+        _ => false,
+    }
+}
+
+/// The installer needs `xz` to unpack the private Node it falls back to, which it does when the hub's Node is missing,
+/// has no npm or is older than 22.19.
+pub fn needs_xz(probe: &Probe) -> bool {
+    let node_current = probe.has_npm && probe.node_version.as_deref().is_some_and(node_is_current);
+    !probe.has_xz && !node_current
+}
+
+/// A tar (ustar) of the given files `(path, content, mode)`, each with owner 0 and time 0. Paths are at most 100 bytes.
+pub fn tar_archive(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
+    fn octal(field: &mut [u8], value: u64) {
+        let width = field.len() - 1;
+        field[..width].copy_from_slice(format!("{value:0width$o}").as_bytes());
+    }
+    let mut out = Vec::new();
+    for (name, data, mode) in entries {
+        debug_assert!(name.len() <= 100, "{name}");
+        let mut header = [0u8; 512];
+        let name = &name.as_bytes()[..name.len().min(100)];
+        header[..name.len()].copy_from_slice(name);
+        octal(&mut header[100..108], u64::from(*mode));
+        octal(&mut header[108..116], 0);
+        octal(&mut header[116..124], 0);
+        octal(&mut header[124..136], data.len() as u64);
+        octal(&mut header[136..148], 0);
+        header[148..156].fill(b' ');
+        header[156] = b'0';
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+        let sum: u32 = header.iter().map(|byte| u32::from(*byte)).sum();
+        header[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+        out.extend_from_slice(&header);
+        out.extend_from_slice(data);
+        out.resize(out.len().next_multiple_of(512), 0);
+    }
+    out.extend_from_slice(&[0u8; 1024]);
+    out
+}
+
+/// The program names `command -v` printed a path for.
+pub fn parse_found(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| Path::new(line.trim()).file_name().map(|name| name.to_string_lossy().into_owned()))
+        .collect()
+}
+
+/// The port and the host name of `ssh -G <host>` (the options ssh would connect with).
+pub fn parse_ssh_g(output: &str) -> (Option<u16>, Option<String>) {
+    let mut port = None;
+    let mut hostname = None;
+    for line in output.lines() {
+        match line.split_once(' ') {
+            Some(("port", value)) if port.is_none() => port = value.trim().parse().ok(),
+            Some(("hostname", value)) if hostname.is_none() => hostname = Some(value.trim().to_string()),
+            _ => {}
+        }
+    }
+    (port, hostname)
+}
+
+/// Whether sshd's configuration turns password logins on (`Some(true)`) or off, by its first `PasswordAuthentication`
+/// (the first one counts). None when it does not say or says something else.
+pub fn password_auth(config: &str) -> Option<bool> {
+    for line in config.lines() {
+        let mut words = line.split_whitespace();
+        if words.next().is_some_and(|word| word.eq_ignore_ascii_case("PasswordAuthentication")) {
+            return match words.next().map(str::to_ascii_lowercase).as_deref() {
+                Some("yes") => Some(true),
+                Some("no") => Some(false),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+/// Only an explicit yes counts.
+pub fn answer_is_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// What `aria hub init` is about to do, as the lines printed before anything runs.
+pub fn plan(probe: &Probe, args: &InitArgs) -> Vec<String> {
+    let projects = args.projects.clone().unwrap_or_else(|| format!("{}/Projects", probe.home.trim_end_matches('/')));
+    let mut lines = vec![
+        format!("Hub: {} ({}): {}, {}, home {}", args.host, probe.ssh_host, probe.os, probe.arch, probe.home),
+        "Aria will do this, in order, once you say yes:".to_string(),
+        format!(
+            "1. Upload the Aria tree (installer, service unit, version pins) and the binary {} to {HUB_SRC} on the hub",
+            args.binary.display()
+        ),
+        format!(
+            "2. Run the installer there: {REMOTE_INSTALL} (it installs bubblewrap and iproute2 with the hub's package \
+             manager or tells you the command, a private Node under ~/.aria/node, the aria-serve.service user unit and \
+             linger)"
+        ),
+        format!(
+            "3. Send your settings and credentials (settings.json, auth.json, mcp.json and mcp-auth.json, the ones \
+             you have) as one line on the stdin of {REMOTE_IMPORT}; the hub's sandbox projects folder will be {projects}"
+        ),
+        format!("4. Restart the service: {REMOTE_RESTART}"),
+        format!("5. Check the installed version: {REMOTE_VERSION}"),
+    ];
+    if let Some(key) = &args.client_key {
+        lines.push(format!(
+            "6. Allow your key, restricted to Aria's bridge, once: add {} to ~/.ssh/authorized_keys",
+            authorized_line(&probe.home, key)
+        ));
+    }
+    lines.push(
+        "Then, read-only: try the sandbox on the hub and look at whether its ssh port can be reached from beyond \
+         its private networks."
+            .to_string(),
+    );
+    if needs_xz(probe) {
+        lines.push(
+            "Blocked: the installer needs xz to unpack its own Node (this hub has none, and its Node is missing or older \
+             than 22.19). Run this on the hub, then run init again:"
+                .to_string(),
+        );
+        lines.push("    sudo apt-get install -y xz-utils".to_string());
+    }
+    lines
+}
+
+// ---- ssh ------------------------------------------------------------------------------------------------------------
+
+/// `ssh -T <host> <command>` with the program `connect` uses (ARIA_SSH or ssh); `command` is a single argument.
+fn ssh_for(host: &str, command: &str) -> io::Result<Command> {
+    crate::connect::check_host(host).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "not a host"))?;
+    let mut ssh = Command::new(crate::connect::ssh_program());
+    ssh.args(["-T", "-o", "ConnectTimeout=20"]).arg(host).arg(command);
+    Ok(ssh)
+}
+
+/// Runs `command` on `host` with `stdin` (none when None), keeping its output.
+pub fn remote(host: &str, command: &str, stdin: Option<&[u8]>) -> io::Result<Output> {
+    let mut ssh = ssh_for(host, command)?;
+    ssh.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = ssh.spawn()?;
+    std::thread::scope(|scope| {
+        if let (Some(bytes), Some(mut pipe)) = (stdin, child.stdin.take()) {
+            // A write that fails (ssh ended early) shows in the exit status.
+            scope.spawn(move || {
+                let _ = pipe.write_all(bytes);
+            });
+        }
+        child.wait_with_output()
+    })
+}
+
+/// Runs `command` on `host` with its output going straight to this terminal (the installer's progress).
+fn remote_shown(host: &str, command: &str) -> io::Result<ExitStatus> {
+    ssh_for(host, command)?.stdin(Stdio::null()).status()
+}
+
+fn first_line(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("").to_string()
+}
+
+fn describe(status: ExitStatus) -> String {
+    match status.code() {
+        Some(255) => "exit status 255, ssh could not reach or log in to the hub".to_string(),
+        Some(code) => format!("exit status {code}"),
+        None => "ended by a signal".to_string(),
+    }
+}
+
+fn describe_error(error: &io::Error) -> String {
+    match error.kind() {
+        io::ErrorKind::NotFound => "ssh is not installed (or ARIA_SSH names a program that is not there)".to_string(),
+        _ => error.to_string(),
+    }
+}
+
+/// A read-only question: the answer's text, whatever the exit status unless ssh itself failed.
+fn probe_text(host: &str, command: &str) -> Result<String, Failure> {
+    let output = remote(host, command, None).map_err(|error| failed(describe_error(&error)))?;
+    if output.status.code() == Some(255) {
+        return Err(failed(format!("ssh could not reach or log in to {host}: {}", first_line(&output.stderr))));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// What `ssh -G <host>` gives (the owner's ssh configuration, nothing is connected).
+fn ssh_config(host: &str) -> Result<(u16, String), Failure> {
+    crate::connect::check_host(host).map_err(|_| usage_error(format!("{host}: not a host")))?;
+    let output = Command::new(crate::connect::ssh_program())
+        .arg("-G")
+        .arg(host)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| failed(describe_error(&error)))?;
+    if !output.status.success() {
+        return Err(failed(format!("ssh -G {host}: {}", first_line(&output.stderr))));
+    }
+    let (port, hostname) = parse_ssh_g(&String::from_utf8_lossy(&output.stdout));
+    Ok((port.unwrap_or(22), hostname.unwrap_or_else(|| host.to_string())))
+}
+
+// ---- the run --------------------------------------------------------------------------------------------------------
+
+/// The checkout the installer and the pins are in: the current directory's, else the running binary's.
+fn find_repo(starts: &[PathBuf]) -> Option<PathBuf> {
+    starts
+        .iter()
+        .flat_map(|start| start.ancestors())
+        .find(|dir| dir.join("install/install.sh").is_file() && dir.join("node-version").is_file())
+        .map(Path::to_path_buf)
+}
+
+fn read_binary_arch(path: &Path) -> Result<&'static str, Failure> {
+    let mut header = [0u8; 64];
+    let read = std::fs::File::open(path)
+        .and_then(|mut file| file.read(&mut header))
+        .map_err(|error| failed(format!("{}: {error}", path.display())))?;
+    elf_arch(&header[..read])
+        .ok_or_else(|| failed(format!("{} is not a Linux binary for aarch64 or x86_64", path.display())))
+}
+
+fn triple_of(arch: &str) -> String {
+    format!("{arch}-unknown-linux-gnu")
+}
+
+/// `aria hub init`: the exit status of the run.
+fn init(raw: RawInit) -> i32 {
+    match run_init(raw) {
+        Ok(code) => code,
+        Err(Failure(code, message)) => {
+            eprintln!("aria hub init: {message}");
+            code
+        }
+    }
+}
+
+fn run_init(raw: RawInit) -> Result<i32, Failure> {
+    crate::connect::check_host(&raw.host).map_err(|_| usage_error(format!("{}: not a host", raw.host)))?;
+    let client_key = match &raw.client_key {
+        Some(path) => {
+            let text =
+                std::fs::read_to_string(path).map_err(|error| usage_error(format!("{}: {error}", path.display())))?;
+            Some(validate_client_key(&text).map_err(|why| usage_error(format!("{}: {why}", path.display())))?)
+        }
+        None => None,
+    };
+    let mut starts: Vec<PathBuf> = std::env::current_dir().into_iter().collect();
+    starts.extend(std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)));
+    let repo = find_repo(&starts).ok_or_else(|| {
+        failed("the Aria checkout (install/install.sh and the version pins) is not here: run this from it")
+    })?;
+    let binary = match raw.binary {
+        Some(binary) => binary,
+        None => {
+            let built = repo.join("target").join(triple_of("aarch64")).join("release/aria");
+            if !built.is_file() {
+                return Err(failed(format!(
+                    "there is no binary to install ({} is not built): run `sh tools/build-headless.sh`, or pass --binary <path>",
+                    built.display()
+                )));
+            }
+            built
+        }
+    };
+    let binary_arch = read_binary_arch(&binary)?;
+    let args = InitArgs { host: raw.host, binary, projects: raw.projects, client_key, yes: raw.yes };
+    let host = args.host.as_str();
+
+    // Read-only probes: nothing on the hub changes until a yes.
+    let (sshd_port, ssh_host) = ssh_config(host)?;
+    let arch = probe_text(host, "uname -m")?;
+    if arch != "aarch64" && arch != "x86_64" {
+        return Err(failed(format!("the hub is {arch:?}: only aarch64 and x86_64 are supported")));
+    }
+    if arch != binary_arch {
+        return Err(failed(format!(
+            "{} is built for {binary_arch} but the hub is {arch}: build one for it with `sh tools/build-headless.sh {}` \
+             and pass it with --binary",
+            args.binary.display(),
+            triple_of(&arch)
+        )));
+    }
+    let os = probe_text(host, ". /etc/os-release; echo $PRETTY_NAME")?;
+    let home = probe_text(host, "echo $HOME")?;
+    if !home.starts_with('/') || home.chars().any(|c| c.is_control() || c.is_whitespace() || c == '"') {
+        return Err(failed(format!("the hub's home directory ({home:?}) is not a plain absolute path")));
+    }
+    let listeners = parse_listeners(&probe_text(host, "ss -ltnH -n")?);
+    let found = parse_found(&probe_text(host, "command -v xz bwrap node npm tailscale")?);
+    let has = |name: &str| found.iter().any(|found| found == name);
+    let node_version = if has("node") {
+        Some(probe_text(host, "node --version")?).filter(|version| !version.is_empty())
+    } else {
+        None
+    };
+    let probe = Probe {
+        arch,
+        os: if os.is_empty() { "unknown OS".to_string() } else { os },
+        home,
+        ssh_host,
+        sshd_port,
+        listeners,
+        has_xz: has("xz"),
+        has_bwrap: has("bwrap"),
+        has_npm: has("npm"),
+        has_tailscale: has("tailscale"),
+        node_version,
+    };
+
+    let bundle = export_bundle(&AriaPaths::from_env(), &probe.home, args.projects.as_deref())
+        .map_err(|why| failed(format!("cannot build the settings to send: {why}")))?;
+    for warning in &bundle.warnings {
+        println!("note: {warning}");
+    }
+    if !bundle.warnings.is_empty() {
+        println!("      (a computer that never had a keyring has nothing there to send; otherwise unlock it and run init again)");
+    }
+    let mut line = serde_json::to_string(&bundle).map_err(|error| failed(error.to_string()))?;
+    line.push('\n');
+    if line.len() as u64 > MAX_BUNDLE_BYTES {
+        return Err(failed("the settings to send are too large"));
+    }
+
+    for text in plan(&probe, &args) {
+        println!("{text}");
+    }
+    if needs_xz(&probe) {
+        eprintln!("aria hub init: the installer would stop on this hub (see above); nothing was changed");
+        return Ok(1);
+    }
+    if !confirmed(args.yes) {
+        println!("nothing was changed");
+        return Ok(0);
+    }
+    write_steps(&args, &probe, &repo, &line)
+}
+
+/// A yes: `--yes`, or an answer at a terminal. Without a terminal and without `--yes` it is no.
+fn confirmed(yes: bool) -> bool {
+    use std::io::IsTerminal;
+    if yes {
+        return true;
+    }
+    if !std::io::stdin().is_terminal() {
+        return false;
+    }
+    print!("Go ahead? [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer).is_ok() && answer_is_yes(&answer)
+}
+
+/// The writes, in order. A failing step 1 to 5 stops the run; the key (6) and the checks (7) report and go on.
+fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -> Result<i32, Failure> {
+    let host = args.host.as_str();
+    let total = if args.client_key.is_some() { 6 } else { 5 };
+    let stopped = |step: usize, what: &str, detail: String| failed(format!("step {step} ({what}) failed: {detail}"));
+
+    println!("step 1 of {total}: uploading to {HUB_SRC}");
+    let mut files: Vec<(String, Vec<u8>, u32)> = Vec::new();
+    for name in UPLOAD_FILES {
+        let content = std::fs::read(repo.join(name)).map_err(|error| failed(format!("{name}: {error}")))?;
+        files.push((name.to_string(), content, if name.ends_with(".sh") { 0o755 } else { 0o644 }));
+    }
+    let binary = std::fs::read(&args.binary).map_err(|error| failed(format!("{}: {error}", args.binary.display())))?;
+    files.push(("aria".to_string(), binary, 0o755));
+    let entries: Vec<(&str, &[u8], u32)> =
+        files.iter().map(|(name, content, mode)| (name.as_str(), content.as_slice(), *mode)).collect();
+    let output = remote(host, REMOTE_UPLOAD, Some(&tar_archive(&entries)))
+        .map_err(|error| stopped(1, "upload", describe_error(&error)))?;
+    if !output.status.success() {
+        return Err(stopped(1, "upload", format!("{} {}", describe(output.status), first_line(&output.stderr))));
+    }
+
+    println!("step 2 of {total}: running the installer on the hub");
+    let status = remote_shown(host, REMOTE_INSTALL).map_err(|error| stopped(2, "installer", describe_error(&error)))?;
+    if !status.success() {
+        return Err(stopped(2, "installer", describe(status)));
+    }
+
+    println!("step 3 of {total}: sending settings and credentials");
+    let output = remote(host, REMOTE_IMPORT, Some(bundle_line.as_bytes()))
+        .map_err(|error| stopped(3, "import", describe_error(&error)))?;
+    if !output.status.success() {
+        // What hub-import says on stderr can quote a value of the bundle: it is never shown.
+        return Err(stopped(3, "import", format!("the hub refused the bundle ({})", describe(output.status))));
+    }
+    let written: Vec<&str> = std::str::from_utf8(&output.stdout).unwrap_or("").lines().collect();
+    println!("      the hub wrote {}", written.join(", "));
+
+    println!("step 4 of {total}: restarting the service");
+    let output = remote(host, REMOTE_RESTART, None).map_err(|error| stopped(4, "restart", describe_error(&error)))?;
+    if !output.status.success() {
+        return Err(stopped(4, "restart", format!("{} {}", describe(output.status), first_line(&output.stderr))));
+    }
+
+    println!("step 5 of {total}: checking the version");
+    let output = remote(host, REMOTE_VERSION, None).map_err(|error| stopped(5, "version", describe_error(&error)))?;
+    if !output.status.success() {
+        return Err(stopped(5, "version", format!("{} {}", describe(output.status), first_line(&output.stderr))));
+    }
+    println!("      the hub runs {}", first_line(&output.stdout));
+
+    let mut code = 0;
+    if let Some(key) = &args.client_key {
+        println!("step 6 of {total}: allowing your key, restricted to Aria's bridge");
+        let sent = format!("{key}\n");
+        match remote(host, REMOTE_ALLOW_KEY, Some(sent.as_bytes())) {
+            Ok(output) if output.status.success() => println!("      {}", first_line(&output.stdout)),
+            Ok(output) => {
+                eprintln!(
+                    "aria hub init: step 6 (key) failed: {} {}",
+                    describe(output.status),
+                    first_line(&output.stderr)
+                );
+                code = 1;
+            }
+            Err(error) => {
+                eprintln!("aria hub init: step 6 (key) failed: {}", describe_error(&error));
+                code = 1;
+            }
+        }
+    }
+
+    check_sandbox(host);
+    check_public_ssh(host, probe, args.client_key.is_some());
+    if code == 0 {
+        println!("The hub is ready. Connect from this computer with: aria connect {host}");
+    }
+    Ok(code)
+}
+
+/// Tries the sandbox on the hub (read-only). A failure is said, and the fix is only printed, never run.
+fn check_sandbox(host: &str) {
+    let problem = match remote(host, REMOTE_BWRAP, None) {
+        Ok(output) if output.status.success() => return,
+        Ok(output) => {
+            let said = first_line(&output.stderr);
+            if said.is_empty() {
+                describe(output.status)
+            } else {
+                said
+            }
+        }
+        Err(error) => describe_error(&error),
+    };
+    println!("warning: the sandbox cannot start on the hub ({problem}).");
+    println!("  Until it works, Aria asks you before every command it wants to run there.");
+    println!("  On Ubuntu 24.04 this is usually AppArmor restricting unprivileged user namespaces. An administrator can fix it:");
+    println!("      sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0");
+    println!(
+        "  (write kernel.apparmor_restrict_unprivileged_userns=0 in a file under /etc/sysctl.d/ to keep it after a"
+    );
+    println!(
+        "  reboot), or give bwrap its own AppArmor profile that allows user namespaces. Aria did not run any of this."
+    );
+}
+
+/// Says once when sshd can be reached from beyond the hub's private networks. Nothing is changed.
+fn check_public_ssh(host: &str, probe: &Probe, has_key: bool) {
+    if !public_ssh(&probe.listeners, probe.sshd_port) {
+        return;
+    }
+    println!(
+        "warning: sshd on {} listens on port {} on a public address, and that port stays open until you close it \
+         yourself (Aria never edits sshd_config, the firewall or Tailscale).",
+        probe.ssh_host, probe.sshd_port
+    );
+    if has_key {
+        println!("  Meanwhile the restricted client key (it can only run `aria client-stdio`) and key-only login are the protection.");
+    } else {
+        println!("  Meanwhile the protection is key-only login; add a restricted client key with --client-key.");
+    }
+    // Best effort, and only what a user can read: no sudo.
+    let config = remote(host, REMOTE_SSHD_CONFIG, None)
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default();
+    match password_auth(&config) {
+        Some(false) => println!("  sshd_config: password logins look off."),
+        Some(true) => println!("  sshd_config: password logins look on; set PasswordAuthentication no."),
+        None => {}
     }
 }
 
@@ -723,5 +1409,312 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
         ] {
             assert!(!private_address(ip(public)), "{public}");
         }
+    }
+
+    fn probe() -> Probe {
+        Probe {
+            arch: "aarch64".into(),
+            os: "Ubuntu 24.04.2 LTS".into(),
+            home: "/home/ana".into(),
+            ssh_host: "hub.example".into(),
+            sshd_port: 2222,
+            listeners: parse_listeners(SS),
+            has_xz: true,
+            has_bwrap: false,
+            has_npm: true,
+            has_tailscale: true,
+            node_version: Some("v18.19.1".into()),
+        }
+    }
+
+    fn init_args() -> InitArgs {
+        InitArgs {
+            host: "ana@hub.example".into(),
+            binary: PathBuf::from("/src/aria/target/aarch64-unknown-linux-gnu/release/aria"),
+            projects: None,
+            client_key: None,
+            yes: false,
+        }
+    }
+
+    const KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl ana@laptop";
+
+    fn elf_header(class: u8, data: u8, machine: [u8; 2]) -> Vec<u8> {
+        let mut bytes = vec![0u8; 64];
+        bytes[..4].copy_from_slice(b"\x7fELF");
+        bytes[4] = class;
+        bytes[5] = data;
+        bytes[18..20].copy_from_slice(&machine);
+        bytes
+    }
+
+    #[test]
+    fn elf_arch_reads_the_machine_of_the_header() {
+        assert_eq!(elf_arch(&elf_header(2, 1, [0xB7, 0x00])), Some("aarch64"));
+        assert_eq!(elf_arch(&elf_header(2, 1, [0x3E, 0x00])), Some("x86_64"));
+        assert_eq!(elf_arch(&elf_header(2, 2, [0x00, 0xB7])), Some("aarch64"), "big endian");
+        assert_eq!(elf_arch(&elf_header(1, 1, [0x28, 0x00])), None, "32-bit ARM is neither");
+        assert_eq!(elf_arch(&elf_header(2, 1, [0xF3, 0x00])), None, "RISC-V is neither");
+    }
+
+    #[test]
+    fn elf_arch_refuses_what_is_not_a_full_elf_header() {
+        assert_eq!(elf_arch(&[]), None);
+        assert_eq!(elf_arch(b"\x7fELF"), None, "too short");
+        assert_eq!(elf_arch(&elf_header(2, 1, [0xB7, 0x00])[..19]), None, "one byte short of the machine");
+        let mut not_elf = elf_header(2, 1, [0xB7, 0x00]);
+        not_elf[0] = b'#';
+        assert_eq!(elf_arch(&not_elf), None);
+        assert_eq!(
+            elf_arch(&[0xCF, 0xFA, 0xED, 0xFE, 0x0C, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            None,
+            "Mach-O"
+        );
+        assert_eq!(elf_arch(&elf_header(2, 7, [0xB7, 0x00])), None, "no such byte order");
+    }
+
+    #[test]
+    fn a_bare_public_key_is_accepted_with_or_without_a_comment() {
+        assert_eq!(validate_client_key(&format!("{KEY}\n")).unwrap(), KEY);
+        assert_eq!(validate_client_key(KEY).unwrap(), KEY);
+        assert_eq!(validate_client_key(&format!("{KEY}\r\n")).unwrap(), KEY);
+        let bare = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC+/=";
+        assert_eq!(validate_client_key(bare).unwrap(), bare);
+        for kind in [
+            "ssh-ed25519",
+            "ssh-rsa",
+            "ecdsa-sha2-nistp256",
+            "ecdsa-sha2-nistp384",
+            "ecdsa-sha2-nistp521",
+            "sk-ssh-ed25519@openssh.com",
+            "sk-ecdsa-sha2-nistp256@openssh.com",
+        ] {
+            assert!(validate_client_key(&format!("{kind} AAAAC3Nza comment words\n")).is_ok(), "{kind}");
+        }
+    }
+
+    #[test]
+    fn a_key_line_with_options_or_injection_is_refused() {
+        for bad in [
+            format!("command=\"sh\" {KEY}"),
+            format!("no-pty {KEY}"),
+            format!("restrict {KEY}"),
+            format!("from=\"1.2.3.4\" {KEY}"),
+            format!("{KEY}\n{KEY}"),
+            format!("{KEY}\n\n{KEY}\n"),
+            format!("{KEY}\n# more\n"),
+            format!("{KEY}\" ,command=\"x"),
+            format!("{KEY}\rcommand=\"x\" {KEY}"),
+            "ssh-ed25519 AAAA\"".to_string(),
+            "ssh-ed25519 AA AA\0".to_string(),
+            "ssh-ed25519 AAAA\x01".to_string(),
+            "ssh-ed25519".to_string(),
+            "ssh-ed25519 ".to_string(),
+            "ssh-ed25519 not*base64".to_string(),
+            "ssh-dss AAAA".to_string(),
+            "-----BEGIN OPENSSH PRIVATE KEY-----".to_string(),
+            String::new(),
+            "\n".to_string(),
+            "   ".to_string(),
+        ] {
+            assert!(validate_client_key(&bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_authorized_keys_line_restricts_the_key_to_the_bridge() {
+        assert_eq!(
+            authorized_line("/home/ana", KEY),
+            format!("restrict,command=\"/home/ana/.local/bin/aria client-stdio\" {KEY}")
+        );
+        assert!(authorized_line("/home/ana/", KEY)
+            .starts_with("restrict,command=\"/home/ana/.local/bin/aria client-stdio\" "));
+    }
+
+    #[test]
+    fn the_plan_numbers_the_steps_and_names_each_command() {
+        let lines = plan(&probe(), &init_args());
+        let text = lines.join("\n");
+        let numbered: Vec<&String> =
+            lines.iter().filter(|line| line.chars().next().is_some_and(|c| c.is_ascii_digit())).collect();
+        assert_eq!(numbered.len(), 5, "{text}");
+        for (index, line) in numbered.iter().enumerate() {
+            assert!(line.starts_with(&format!("{}. ", index + 1)), "{line}");
+        }
+        assert!(numbered[0].contains("~/.aria/hub-src") && numbered[0].contains("release/aria"), "{text}");
+        assert!(
+            numbered[1].contains("sh ~/.aria/hub-src/install/install.sh --headless --local ~/.aria/hub-src/aria"),
+            "{text}"
+        );
+        assert!(numbered[2].contains("aria hub-import"), "{text}");
+        assert!(numbered[3].contains("systemctl --user restart aria-serve.service"), "{text}");
+        assert!(numbered[4].contains("aria --version"), "{text}");
+        assert!(
+            text.contains("Ubuntu 24.04.2 LTS") && text.contains("aarch64") && text.contains("hub.example"),
+            "{text}"
+        );
+        assert!(!text.contains("client-stdio") && !text.contains("authorized_keys"), "no key, no key step: {text}");
+        assert!(!text.contains("xz-utils"), "{text}");
+    }
+
+    #[test]
+    fn the_plan_has_a_step_for_the_client_key_only_when_there_is_one() {
+        let mut args = init_args();
+        args.client_key = Some(KEY.to_string());
+        let lines = plan(&probe(), &args);
+        let text = lines.join("\n");
+        let numbered: Vec<&String> =
+            lines.iter().filter(|line| line.chars().next().is_some_and(|c| c.is_ascii_digit())).collect();
+        assert_eq!(numbered.len(), 6, "{text}");
+        assert!(
+            numbered[5].contains("authorized_keys")
+                && numbered[5].contains("restrict,command=\"/home/ana/.local/bin/aria client-stdio\""),
+            "{text}"
+        );
+        assert!(numbered[5].contains("ana@laptop"), "{text}");
+    }
+
+    #[test]
+    fn the_plan_says_when_the_installer_would_need_xz() {
+        let mut host = probe();
+        host.has_xz = false;
+        assert!(needs_xz(&host), "Node 18 is too old, so the installer unpacks its own");
+        assert!(plan(&host, &init_args()).join("\n").contains("sudo apt-get install -y xz-utils"));
+        host.node_version = Some("v22.19.0".into());
+        assert!(!needs_xz(&host));
+        assert!(!plan(&host, &init_args()).join("\n").contains("xz-utils"));
+        host.has_npm = false;
+        assert!(needs_xz(&host), "Node without npm is not enough");
+        host.has_npm = true;
+        host.node_version = None;
+        assert!(needs_xz(&host), "no Node at all");
+        host.has_xz = true;
+        assert!(!needs_xz(&host));
+    }
+
+    #[test]
+    fn a_node_version_is_current_from_22_19() {
+        for current in ["v22.19.0", "v22.23.2", "22.19.1", "v23.0.0", "v24.1.0", "v100.0.0"] {
+            assert!(node_is_current(current), "{current}");
+        }
+        for old in ["v18.19.1", "v22.18.9", "v20.99.0", "", "node", "v22", "v22.x.1"] {
+            assert!(!node_is_current(old), "{old}");
+        }
+    }
+
+    #[test]
+    fn the_tar_holds_each_file_with_its_mode_and_nothing_else() {
+        let entries: [(&str, &[u8], u32); 3] = [
+            ("install/install.sh", b"#!/bin/sh\n", 0o755),
+            ("pi-version", b"1.2.3\n", 0o644),
+            ("aria", &[7u8; 1000], 0o755),
+        ];
+        let archive = tar_archive(&entries);
+        assert_eq!(archive.len() % 512, 0);
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = std::process::Command::new("tar")
+            .args(["-xf", "-", "-C"])
+            .arg(dir.path())
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("tar");
+        std::io::Write::write_all(child.stdin.as_mut().unwrap(), &archive).unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(std::fs::read(dir.path().join("install/install.sh")).unwrap(), b"#!/bin/sh\n");
+        assert_eq!(std::fs::read(dir.path().join("pi-version")).unwrap(), b"1.2.3\n");
+        assert_eq!(std::fs::read(dir.path().join("aria")).unwrap(), vec![7u8; 1000]);
+        assert_eq!(mode(&dir.path().join("aria")), 0o755);
+        assert_eq!(mode(&dir.path().join("pi-version")), 0o644);
+        assert_eq!(files_in(dir.path()), ["aria", "install", "pi-version"]);
+    }
+
+    #[test]
+    fn the_command_v_probe_is_read_by_the_names_it_found() {
+        let found = parse_found("/usr/bin/xz\n/usr/local/bin/node\n\n/usr/sbin/tailscale\n");
+        assert_eq!(found, ["xz", "node", "tailscale"]);
+        assert!(parse_found("").is_empty());
+    }
+
+    #[test]
+    fn ssh_g_gives_the_port_and_the_hostname() {
+        assert_eq!(
+            parse_ssh_g("user ana\nhostname hub.example\nport 2222\nidentityfile x\n"),
+            (Some(2222), Some("hub.example".into()))
+        );
+        assert_eq!(parse_ssh_g("port 22\n"), (Some(22), None));
+        assert_eq!(parse_ssh_g("port notaport\nport 99999\n"), (None, None));
+        assert_eq!(parse_ssh_g(""), (None, None));
+    }
+
+    #[test]
+    fn sshd_config_says_whether_passwords_are_off_the_first_word_winning() {
+        assert_eq!(password_auth("Port 2222\nPasswordAuthentication no\n"), Some(false));
+        assert_eq!(password_auth("  passwordauthentication   yes # why\n"), Some(true));
+        assert_eq!(
+            password_auth("PasswordAuthentication no\nPasswordAuthentication yes\n"),
+            Some(false),
+            "the first one wins"
+        );
+        assert_eq!(password_auth("#PasswordAuthentication yes\nPort 22\n"), None, "commented out");
+        assert_eq!(password_auth(""), None);
+        assert_eq!(password_auth("PasswordAuthentication maybe\n"), None);
+    }
+
+    #[test]
+    fn only_a_yes_is_a_yes() {
+        for yes in ["y", "Y", "yes", "YES", " yes \n", "y\r\n"] {
+            assert!(answer_is_yes(yes), "{yes:?}");
+        }
+        for no in ["", "n", "no", "\n", "yep", "ye", "sure", "yes please", "1"] {
+            assert!(!answer_is_yes(no), "{no:?}");
+        }
+    }
+
+    #[test]
+    fn init_arguments_are_a_host_and_four_options() {
+        let args = |list: &[&str]| parse_init_args(&list.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let all = args(&[
+            "ana@hub.example",
+            "--binary",
+            "/b/aria",
+            "--projects",
+            "/srv/work",
+            "--client-key",
+            "/k.pub",
+            "--yes",
+        ])
+        .unwrap();
+        assert_eq!(all.host, "ana@hub.example");
+        assert_eq!(all.binary, Some(PathBuf::from("/b/aria")));
+        assert_eq!(all.projects.as_deref(), Some("/srv/work"));
+        assert_eq!(all.client_key, Some(PathBuf::from("/k.pub")));
+        assert!(all.yes);
+        let few = args(&["--yes", "hub.example"]).unwrap();
+        assert!(few.yes && few.binary.is_none() && few.projects.is_none() && few.client_key.is_none());
+        assert!(args(&[]).is_err(), "a host is needed");
+        assert!(args(&["a", "b"]).is_err(), "one host");
+        assert!(args(&["a", "--binary"]).is_err(), "an option needs its value");
+        assert!(args(&["a", "--nope"]).is_err());
+        assert_eq!(
+            args(&["-oProxyCommand=x"]).unwrap().host,
+            "-oProxyCommand=x",
+            "the host check refuses it later, as connect does"
+        );
+    }
+
+    #[test]
+    fn the_checkout_is_found_from_a_folder_inside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("aria");
+        std::fs::create_dir_all(repo.join("install")).unwrap();
+        std::fs::create_dir_all(repo.join("target/debug")).unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        assert_eq!(find_repo(&[repo.join("target/debug")]), None, "no installer yet");
+        std::fs::write(repo.join("install/install.sh"), "").unwrap();
+        assert_eq!(find_repo(&[repo.join("target/debug")]), None, "the pins are part of it");
+        std::fs::write(repo.join("node-version"), "").unwrap();
+        assert_eq!(find_repo(&[repo.join("target/debug")]), Some(repo.clone()));
+        assert_eq!(find_repo(&[elsewhere, repo.clone()]), Some(repo), "the first start that is not in one is skipped");
     }
 }

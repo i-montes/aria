@@ -12,6 +12,9 @@
 //! `aria hub-import` is what the owner's computer runs on a hub (`ssh <host> aria hub-import`): it reads one line from
 //! stdin, a bundle of settings and credentials, writes its files into `~/.aria` (mode 600, the old ones kept as
 //! `.bak`) and prints the names it wrote.
+//! `aria hub init <user@host>` (English only: an admin command) sets a server up as a hub over ssh: it probes the host,
+//! prints a plan, and only after a yes uploads the tree and the binary, runs the installer, sends the bundle to
+//! `hub-import`, restarts the service and, with `--client-key`, allows a restricted key.
 //! `aria --version` prints the version.
 
 mod attachments;
@@ -140,6 +143,10 @@ fn main() {
         },
         Some("client-stdio") => std::process::exit(stdio_bridge::command()),
         Some("hub-import") => std::process::exit(hub_import()),
+        Some("hub") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            std::process::exit(hub_admin::hub_command(&args));
+        }
         Some("start") => start_service(),
         Some("secret") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -149,7 +156,7 @@ fn main() {
         Some("bar") => std::process::exit(omarchy_bar::bar_command(std::env::args().nth(2).as_deref())),
         Some("--version" | "-V" | "version") => println!("aria {}", env!("CARGO_PKG_VERSION")),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [dock|serve|toggle|show|start|quit|keyring|secret|bar|update-ready|connect|client-stdio|hub-import|--version]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [dock|serve|toggle|show|start|quit|keyring|secret|bar|update-ready|connect|client-stdio|hub-import|hub|--version]");
             std::process::exit(2);
         }
         None => unreachable!("plain aria is the client or the dock"),

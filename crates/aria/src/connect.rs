@@ -30,11 +30,17 @@ fn ssh_program_from(env: Option<OsString>) -> OsString {
     env.filter(|program| !program.is_empty()).unwrap_or_else(|| "ssh".into())
 }
 
-/// The command that runs `aria client-stdio` on `host` through `ssh`.
-fn command_for(ssh: OsString, host: &str) -> Result<Command, ConnectError> {
+/// A host that starts with `-` would be an option of ssh (`-oProxyCommand=...`): every ssh the program runs checks it first.
+pub(crate) fn check_host(host: &str) -> Result<(), ConnectError> {
     if host.starts_with('-') {
         return Err(ConnectError::OptionLikeHost);
     }
+    Ok(())
+}
+
+/// The command that runs `aria client-stdio` on `host` through `ssh`.
+fn command_for(ssh: OsString, host: &str) -> Result<Command, ConnectError> {
+    check_host(host)?;
     let mut command = Command::new(ssh);
     command
         .args(["-T", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"])
