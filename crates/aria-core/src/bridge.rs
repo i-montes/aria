@@ -350,9 +350,15 @@ pub enum DockMessage {
     /// ignores it.
     #[serde(rename = "sessionStatus")]
     SessionStatus { session: String, status: String, at: i64 },
-    /// A session's checkpoints, newest first: `[{ id, text, at, files }]`.
+    /// A session's checkpoints, newest first: `[{ id, text, at, files }]`. `off` says why a session keeps none:
+    /// `projects` (it works in the projects folder itself) or `folder` (the home folder, or one that is gone).
     #[serde(rename = "checkpoints")]
-    Checkpoints { id: u64, list: Value },
+    Checkpoints {
+        id: u64,
+        list: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        off: Option<String>,
+    },
     /// A tab closed (from the page or a terminal): every client drops it.
     #[serde(rename = "sessionRemoved")]
     SessionRemoved { session: String },

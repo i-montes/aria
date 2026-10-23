@@ -586,8 +586,12 @@ impl Chat {
             PageMessage::PiCommand { id, command, args } => self.pi_command(id, command, args),
             PageMessage::ChatCheckpoints { id } => {
                 let _one = self.checkpoint_lock.lock().unwrap_or_else(|e| e.into_inner());
-                let list = self.checkpoints().map(|c| c.list()).unwrap_or_default();
-                self.emit(DockMessage::Checkpoints { id, list: json!(list) });
+                let (list, off) = match self.checkpoints() {
+                    Some(c) => (c.list(), None),
+                    None if self.in_projects_folder() => (Vec::new(), Some("projects".to_string())),
+                    None => (Vec::new(), Some("folder".to_string())),
+                };
+                self.emit(DockMessage::Checkpoints { id, list: json!(list), off });
             }
             PageMessage::ChatUndo { id, checkpoint } => self.undo(id, checkpoint),
             PageMessage::ChatBash { id, command } => {
@@ -880,23 +884,25 @@ impl Chat {
     /// The checkpoints of this session's folder (the one its Pi works in). None for the projects folder itself: it
     /// holds the projects, each with its own `.git` a checkpoint cannot see into, so keeping it would be heavy and useless.
     fn checkpoints(&self) -> Option<crate::checkpoints::Checkpoints> {
-        let projects = agent::workdir(self.settings().as_ref());
-        let folder = self
-            .inner
-            .lock()
-            .unwrap()
-            .workdir
-            .clone()
-            .or_else(|| self.own_folder())
-            .unwrap_or_else(|| projects.clone());
-        let same = |a: &std::path::Path, b: &std::path::Path| match (a.canonicalize(), b.canonicalize()) {
-            (Ok(a), Ok(b)) => a == b,
-            _ => a == b,
-        };
-        if same(&folder, &projects) {
+        if self.in_projects_folder() {
             return None;
         }
-        crate::checkpoints::Checkpoints::open(&self.ctx.paths.root.join("checkpoints"), &self.session, &folder)
+        crate::checkpoints::Checkpoints::open(&self.ctx.paths.root.join("checkpoints"), &self.session, &self.folder())
+    }
+
+    /// The folder this session's Pi works in.
+    fn folder(&self) -> std::path::PathBuf {
+        let workdir = self.inner.lock().unwrap().workdir.clone();
+        workdir.or_else(|| self.own_folder()).unwrap_or_else(|| agent::workdir(self.settings().as_ref()))
+    }
+
+    /// Whether this session works in the projects folder itself.
+    fn in_projects_folder(&self) -> bool {
+        let (folder, projects) = (self.folder(), agent::workdir(self.settings().as_ref()));
+        match (folder.canonicalize(), projects.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => folder == projects,
+        }
     }
 
     /// Keeps the folder before a turn's first message (once per turn).
@@ -3392,7 +3398,10 @@ mod tests {
         wait_for(&h, "settled", |m| event_of(m, "agent_settled"));
         h.chat.handle(PageMessage::ChatCheckpoints { id: 6 });
         match wait_for(&h, "the list", |m| matches!(m, DockMessage::Checkpoints { id: 6, .. })) {
-            DockMessage::Checkpoints { list, .. } => assert_eq!(list, json!([])),
+            DockMessage::Checkpoints { list, off, .. } => {
+                assert_eq!(list, json!([]));
+                assert_eq!(off.as_deref(), Some("projects"), "the client says why there is nothing to undo");
+            }
             _ => unreachable!(),
         }
         assert!(!h.paths.root.join("checkpoints").join("s1").exists());

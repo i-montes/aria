@@ -42,6 +42,17 @@ const OWN: &[(&str, &str, &str)] = &[
         "Ahora no: Aria está trabajando. Deshaz cuando termine.",
     ),
     ("term.undo.failed", "Could not go back there: nothing was changed.", "No se pudo volver ahí: no se cambió nada."),
+    ("term.undo.nothing", "Nothing to undo yet.", "Aún no hay nada que deshacer."),
+    (
+        "term.undo.projects",
+        "Undo is off in the projects folder: open aria inside a project to keep checkpoints.",
+        "Deshacer está apagado en la carpeta de proyectos: abre aria dentro de un proyecto para guardar puntos de control.",
+    ),
+    (
+        "term.undo.folder",
+        "Undo is off in this folder (the home folder, or one that is gone).",
+        "Deshacer está apagado en esta carpeta (la carpeta personal, o una que ya no existe).",
+    ),
     ("term.cmd.context", "what fills the context", "qué llena el contexto"),
     (
         "term.ctx.title",

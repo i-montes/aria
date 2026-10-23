@@ -871,7 +871,7 @@ impl App {
                     self.session.add_bang(&command, &output, exit);
                 }
             }
-            DockMessage::Checkpoints { id, list } if self.pending.get(&id) == Some(&Pending::Checkpoints) => {
+            DockMessage::Checkpoints { id, list, off } if self.pending.get(&id) == Some(&Pending::Checkpoints) => {
                 self.pending.remove(&id);
                 self.undo_texts.clear();
                 let lang = self.config.lang.clone();
@@ -895,6 +895,17 @@ impl App {
                     .collect();
                 if !items.is_empty() {
                     self.picker = Some((PickerKind::Undo, Picker::new(items)));
+                } else {
+                    // Say why there is nothing to pick, never nothing at all.
+                    let key = match off.as_deref() {
+                        Some("projects") => "term.undo.projects",
+                        Some(_) => "term.undo.folder",
+                        None => "term.undo.nothing",
+                    };
+                    self.session.entries.push(crate::term::state::Entry::Notice {
+                        tone: crate::term::state::Tone::Info,
+                        text: crate::term::state::Text::Key { key: key.into(), vars: json!({}) },
+                    });
                 }
             }
             DockMessage::Saved { id } if matches!(self.pending.get(&id), Some(Pending::Undo(_))) => {
@@ -1348,6 +1359,7 @@ mod tests {
         app.update(in_session(DockMessage::Checkpoints {
             id,
             list: json!([{"id": "c9", "text": "fix the coupon", "at": 10_000_000 - 120_000, "files": 3}]),
+            off: None,
         }));
         let effects = key(&mut app, Key::Enter);
         let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
@@ -1399,6 +1411,33 @@ mod tests {
         assert!(app.panel_lines(&palette, 80).is_none(), "Esc closes it");
     }
 
+    /// The notice an Esc Esc answered by `list` and `off` leaves, as its text key.
+    fn undo_notice(list: serde_json::Value, off: Option<&str>) -> Option<String> {
+        let mut app = attached();
+        key(&mut app, Key::Esc);
+        let effects = key(&mut app, Key::Esc);
+        let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
+        let PageMessage::ChatCheckpoints { id } = **message else { panic!("{message:?}") };
+        app.update(in_session(DockMessage::Checkpoints { id, list, off: off.map(String::from) }));
+        match app.session().entries.last() {
+            Some(crate::term::state::Entry::Notice { text: crate::term::state::Text::Key { key, .. }, .. }) => {
+                Some(key.clone())
+            }
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn esc_esc_with_nothing_to_undo_says_so() {
+        assert_eq!(undo_notice(json!([]), None).as_deref(), Some("term.undo.nothing"));
+    }
+
+    #[test]
+    fn esc_esc_in_a_folder_without_checkpoints_says_why() {
+        assert_eq!(undo_notice(json!([]), Some("projects")).as_deref(), Some("term.undo.projects"));
+        assert_eq!(undo_notice(json!([]), Some("folder")).as_deref(), Some("term.undo.folder"));
+    }
+
     #[test]
     fn an_undo_that_could_not_be_done_says_so() {
         let mut app = attached();
@@ -1409,6 +1448,7 @@ mod tests {
         app.update(in_session(DockMessage::Checkpoints {
             id,
             list: json!([{"id": "c9", "text": "x", "at": 0, "files": 1}]),
+            off: None,
         }));
         let effects = key(&mut app, Key::Enter);
         let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
