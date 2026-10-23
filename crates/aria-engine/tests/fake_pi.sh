@@ -74,6 +74,9 @@ while IFS= read -r line; do
       printf '{"type":"agent_settled","aborted":false}\n' ;;
     reject)
       printf '{"type":"response","id":"%s","command":"reject","success":false,"error":"nope"}\n' "$id" ;;
+    think-high)
+      # Pi says the thinking level changed (the router's effort, /effort).
+      printf '{"type":"thinking_level_changed","level":"high"}\n' ;;
     ask)
       printf '{"type":"extension_ui_request","id":"u1","method":"select","title":"Allow?","options":["Allow","Block"]}\n' ;;
     ask_timeout)

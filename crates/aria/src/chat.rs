@@ -1412,6 +1412,13 @@ impl Chat {
                             self.release_soon();
                         }
                         Some("compaction_start") => self.inner.lock().unwrap().compacting = true,
+                        // The router's effort or /effort changed Pi's level: the header and every terminal say so.
+                        Some("thinking_level_changed") => {
+                            if let Some(level) = raw["level"].as_str() {
+                                self.inner.lock().unwrap().thinking = Some(level.to_string());
+                                self.emit(self.state_message(None));
+                            }
+                        }
                         // A compaction (automatic or asked) rotates the tab once it is quiet: now, or when its run
                         // settles.
                         Some("compaction_end") => {
@@ -2952,6 +2959,15 @@ mod tests {
         let dialog = wait_for(&h, "the dialog", |m| matches!(m, DockMessage::ChatDialog { .. }));
         assert!(matches!(dialog, DockMessage::ChatDialog { hidden: false, .. }), "a terminal shows it");
         assert!(h.notifier.log().is_empty(), "no notification while a terminal shows the session");
+    }
+
+    #[test]
+    fn a_new_thinking_level_reaches_the_page() {
+        let h = harness();
+        send(&h, "x");
+        wait_for(&h, "ready", |m| matches!(m, DockMessage::ChatEngine { state } if state == "ready"));
+        h.chat.test_send_raw("think-high");
+        wait_for(&h, "the new level", |m| matches!(m, DockMessage::ChatState { thinking: Some(t), .. } if t == "high"));
     }
 
     #[test]
