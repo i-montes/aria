@@ -3,15 +3,18 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { job as endedJob } from '../background/fake-dock.test.ts'
+import { normalizeTasks } from '../tasks/tasks.ts'
 import {
   buildBrief,
   firstOpenPhase,
   isPlanPath,
   latestPlan,
+  nextOpenPhase,
   nextStepHint,
   outcome,
   parseMarker,
   parsePlan,
+  phaseTasks,
   planCard,
   planProblem,
   reviewBrief,
@@ -84,6 +87,32 @@ describe('parsePlan', () => {
         ],
       },
     ])
+  })
+})
+
+describe('phaseTasks', () => {
+  const plan = parsePlan(PLAN)
+  test("a phase's marks become the task list, tagged with the job", () => {
+    const tasks = phaseTasks(plan, 1, 4)
+    expect(tasks).toEqual([
+      { id: 'p1-t1', title: 'registers a new account (endpoint)', status: 'done', agent: '#4' },
+      { id: 'p1-t2', title: 'refuses a taken email (endpoint)', status: 'active', agent: '#4' },
+      { id: 'p1-t3', title: 'the form shows which field is wrong (manual check)', status: 'todo', agent: '#4' },
+    ])
+    expect(tasks).toEqual(normalizeTasks({ tasks }))
+  })
+  test('another phase, and one the plan does not have', () => {
+    expect(phaseTasks(plan, 2, 5)).toEqual([{ id: 'p2-t1', title: 'creates a task (endpoint)', status: 'todo', agent: '#5' }])
+    expect(phaseTasks(plan, 9, 5)).toEqual([])
+  })
+})
+
+describe('nextOpenPhase', () => {
+  test('the first phase after a number that still has open tasks', () => {
+    const plan = parsePlan(PLAN)
+    expect(nextOpenPhase(plan, 1)?.number).toBe(2)
+    expect(nextOpenPhase(plan, 2)).toBeNull()
+    expect(nextOpenPhase(parsePlan(PLAN.replace('- [ ] creates', '- [x] creates')), 1)).toBeNull()
   })
 })
 

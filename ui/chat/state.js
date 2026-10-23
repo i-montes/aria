@@ -28,6 +28,8 @@ import { parseCardTitle } from './parts/cards.js'
 export function createChat() {
   return {
     workdir: '', running: false, engine: 'idle', model: null, thinking: null, context: null, problem: null,
+    // tasks: the list of the slice phase that builds, as the router publishes it (status `aria-tasks`: { id, title, status, agent }).
+    tasks: [],
     // own: the texts this page showed when it sent them (and scheduled runs): their echo is not shown again. Any other
     // echo is a message sent to this session from elsewhere (a terminal) and is shown.
     messages: [], dialogs: [], queue: [], delivered: [], own: [], phase: 'working', startedAt: null, quota: [], giveBack: null, agents: [], turnFrom: 0,
@@ -387,6 +389,16 @@ function reduceEvent(state, event) {
           return state
         }
         return typeof route?.mode === 'string' && route.mode ? push(state, { kind: 'jev', mode: route.mode, action: typeof route.action === 'string' ? route.action : '' }) : state
+      }
+      // The plan's marks of the phase that builds (jev-router: `{ tasks }`); no text clears them, broken text leaves them.
+      if (request.method === 'setStatus' && request.statusKey === 'aria-tasks') {
+        if (typeof request.statusText !== 'string' || !request.statusText) return { ...state, tasks: [] }
+        try {
+          const tasks = JSON.parse(request.statusText)?.tasks
+          return Array.isArray(tasks) ? { ...state, tasks: tasks.filter((t) => t && typeof t === 'object') } : state
+        } catch {
+          return state
+        }
       }
       return state
     }

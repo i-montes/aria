@@ -2,9 +2,9 @@
 // The chat's HTML is built by pure functions, so it is tested without a browser.
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { createChat } from './state.js'
+import { createChat, reduce } from './state.js'
 import { chatTexts } from './texts.js'
-import { debugArg, insertDictation, hasParallelAgents, insertFile, shiftExpanded, keepRenameField, pickerQuery, renderDialog, renderPath, renderProblem, renderUndo, preloadOrder, shortPath } from './view.js'
+import { debugArg, insertDictation, hasParallelAgents, insertFile, shiftExpanded, keepRenameField, pickerQuery, renderDialog, renderPath, renderProblem, renderTaskDock, renderUndo, preloadOrder, shortPath } from './view.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')}` : key)
 const ev = (event) => ({ type: 'chatEvent', event })
@@ -27,6 +27,33 @@ describe('the working folder', () => {
 
   test('an unknown folder still shows something', () => {
     expect(renderPath(createChat())).toContain('chat.path.unknown')
+  })
+})
+
+describe('the task dock', () => {
+  const tasks = [
+    { id: 'p1-t1', title: 'registers a new <account>', status: 'done', agent: '#4' },
+    { id: 'p1-t2', title: 'refuses a taken email', status: 'active', agent: '#4' },
+  ]
+  const building = reduce(createChat(), ev({ type: 'ui_notice', request: { method: 'setStatus', statusKey: 'aria-tasks', statusText: JSON.stringify({ tasks }) } }))
+
+  test("the active tab's tasks are drawn by the task dock, escaped", () => {
+    const html = renderTaskDock(building, true, t)
+    expect(html).toContain('p-tasks')
+    expect(html).toContain('registers a new &lt;account&gt;')
+    expect(html).toContain('refuses a taken email')
+    expect(html).toContain('chat.tasks.summary.tasks done=1,total=2')
+  })
+
+  test("switching to a tab without tasks shows none, and the first tab's come back", () => {
+    const tabs = new Map([['a', building], ['b', createChat()]])
+    expect(renderTaskDock(tabs.get('b'), true, t)).toBe('')
+    expect(renderTaskDock(tabs.get('a'), true, t)).toContain('refuses a taken email')
+  })
+
+  test('cleared tasks draw nothing; the sandbox shape (label) still draws', () => {
+    expect(renderTaskDock(reduce(building, ev({ type: 'ui_notice', request: { method: 'setStatus', statusKey: 'aria-tasks' } })), true, t)).toBe('')
+    expect(renderTaskDock({ ...createChat(), tasks: [{ id: '1', label: 'Run the tests', status: 'todo' }] }, true, t)).toContain('Run the tests')
   })
 })
 

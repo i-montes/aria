@@ -66,7 +66,8 @@ import {
   shouldClassify,
   SLICE_SKILL,
 } from './modes.ts'
-import { buildBrief, firstOpenPhase, latestPlan, nextStepHint, parseMarker, parsePlan, planProblem } from './slice.ts'
+import { buildBrief, firstOpenPhase, latestPlan, nextOpenPhase, nextStepHint, parseMarker, parsePlan, planProblem } from './slice.ts'
+import { createTaskFeed } from './tasks-feed.ts'
 import { checkKill } from './process-guard.ts'
 import { exhausted, fetchGoUsage } from './usage.ts'
 import { confirmFreeSwitch } from '../quota-fallback/ask.ts'
@@ -127,6 +128,15 @@ export default function (pi: ExtensionAPI) {
   let planModelId: string = planModel().id
   // The plan the owner approved with `plan_ready`: plan mode ends and its build starts when that run settles.
   const build = pendingBuild()
+  // The plan's marks of the phase that builds, published as the status `aria-tasks` (the dock's task dock, the terminal's strip).
+  const taskFeed = createTaskFeed()
+  const showTasks = (ctx: any, tasks: any[] | null) => {
+    try {
+      ctx.ui?.setStatus?.('aria-tasks', tasks ? JSON.stringify({ tasks }) : undefined)
+    } catch {
+      // no UI
+    }
+  }
 
   const routed = (ctx: any) => routedMode(ctx?.mode)
 
@@ -236,11 +246,17 @@ export default function (pi: ExtensionAPI) {
       const job = event.message.details?.job
       const marker = job ? parseMarker(String(job.task ?? '')) : null
       if (!marker) return
+      if (marker.kind === 'build') taskFeed.finish(String(job.id))
       let plan = ''
       try {
         plan = readFileSync(marker.plan, 'utf8')
       } catch {
         // gone: the hint says the phase did not finish
+      }
+      // A review with no phase left after it ends the plan: its list goes away. Otherwise it stays until the next phase's job replaces it.
+      if (marker.kind === 'review' && plan && !nextOpenPhase(parsePlan(plan), marker.phase)) {
+        taskFeed.stop()
+        showTasks(ctx, null)
       }
       const hint = nextStepHint(job, plan, { skill: SLICE_SKILL, review: REVIEW_SKILL, head: () => headOf(marker.plan) })
       return hint ? { message: { customType: 'jev-router', content: hint, display: false, details: { slice: marker } } } : undefined
@@ -413,6 +429,17 @@ export default function (pi: ExtensionAPI) {
     if (!routed(ctx) || event.toolName !== 'ask_user' || event.isError || event.details?.cancelled !== false) return
     if (mode === 'normal' && current?.readOnly) current = { ...current, readOnly: false }
   })
+
+  // A slice phase starts building in the background: its plan file's marks become the task list while the job runs.
+  pi.on('tool_result', (event: any, ctx: any) => {
+    if (event.toolName !== 'background_agent' || event.isError) return
+    const job = event.details?.job
+    const marker = job ? parseMarker(String(job.task ?? '')) : null
+    if (!job || marker?.kind !== 'build') return
+    const plan = isAbsolute(marker.plan) ? marker.plan : resolve(ctx.cwd ?? process.cwd(), marker.plan)
+    taskFeed.start({ id: String(job.id), number: Number(job.number) }, { plan, phase: marker.phase }, (tasks) => showTasks(ctx, tasks))
+  })
+  pi.on('session_shutdown', () => taskFeed.stop())
 
   // In plan mode, a message that is not part of planning ends it before the turn starts, so that
   // turn runs on the user's model with normal routing.

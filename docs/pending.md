@@ -13,12 +13,6 @@ The permission and write cards (sandbox, with its four choices), the quota card 
 - An agent's session view has no composer (the design has one): there is no way to steer a subagent.
 - `/agents` (the terminal overlay) does nothing in the dock; Alt+A is the dock's way.
 
-## Needs the goals engine (phase 3)
-
-| What the design shows | What is missing |
-|---|---|
-| Task dock above the composer and the inline task log | the goals/tasks engine (fork of `pi-goal-x`) feeding `chat.setTasks(tasks, kind)` |
-
 ## Needs an Engram feed (phase 2, part 2c)
 
 | What the design shows | What is missing |

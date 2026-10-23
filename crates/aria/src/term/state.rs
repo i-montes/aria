@@ -92,7 +92,7 @@ pub struct Task {
     pub agent: Option<String>,
 }
 
-/// The tasks in a `tasks_update` result's details.
+/// The tasks in a `tasks_update` result's details (or in the `aria-tasks` status's text).
 fn tasks_of(details: &Value) -> Vec<Task> {
     details["tasks"]
         .as_array()
@@ -133,7 +133,7 @@ pub struct Session {
     pub agents: Value,
     /// What the run is doing (`ui/chat/parts/working.js`'s phases): `working`, `thinking`, `reading files`…
     pub phase: String,
-    /// The model's task list, from its last `tasks_update`.
+    /// The task list: the model's last `tasks_update` or the last `aria-tasks` status (a slice phase's marks), whichever came later.
     pub tasks: Vec<Task>,
     /// What the extensions publish (`aria-context`, `aria-verify`…), by key.
     pub statuses: std::collections::HashMap<String, String>,
@@ -479,6 +479,17 @@ impl Session {
                 let request = &event["request"];
                 if request["method"] == "setStatus" {
                     let key = request["statusKey"].as_str().unwrap_or_default().to_string();
+                    // A slice phase's marks (jev-router) are the task list, like a `tasks_update`: the last one to arrive wins.
+                    if key == "aria-tasks" {
+                        match request["statusText"].as_str() {
+                            Some(text) => {
+                                if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+                                    self.tasks = tasks_of(&parsed);
+                                }
+                            }
+                            None => self.tasks.clear(),
+                        }
+                    }
                     match request["statusText"].as_str() {
                         Some(text) => self.statuses.insert(key, text.to_string()),
                         None => self.statuses.remove(&key),
@@ -892,6 +903,51 @@ mod tests {
             &[event(json!({"type": "ui_notice", "request": {"method": "setStatus", "statusKey": "aria-verify"}}))],
         );
         assert!(s.statuses.get("aria-verify").is_none(), "cleared");
+    }
+
+    #[test]
+    fn a_slice_phases_marks_are_the_task_list_and_the_last_one_to_arrive_wins() {
+        let phase = |status: &str| {
+            json!({"tasks": [{"id": "p1-t1", "title": "registers a new account", "status": "done", "agent": "#4"},
+            {"id": "p1-t2", "title": "refuses a taken email", "status": status, "agent": "#4"}]})
+        };
+        let status = |text: Option<String>| {
+            let mut request = json!({"method": "setStatus", "statusKey": "aria-tasks"});
+            if let Some(text) = text {
+                request["statusText"] = json!(text);
+            }
+            event(json!({"type": "ui_notice", "request": request}))
+        };
+        let update = |list: Value| {
+            event(
+                json!({"type": "tool_execution_end", "toolCallId": "t1", "toolName": "tasks_update", "isError": false,
+            "result": {"content": [], "details": list}}),
+            )
+        };
+        let mut s = Session::default();
+        feed(&mut s, &[status(Some(phase("active").to_string()))]);
+        assert_eq!(s.tasks.len(), 2);
+        assert_eq!((s.tasks[1].status.as_str(), s.tasks[1].agent.as_deref()), ("active", Some("#4")));
+        assert!(
+            !s.entries.iter().any(|e| matches!(e, Entry::Notice { .. })),
+            "the strip shows them, not the conversation"
+        );
+
+        feed(&mut s, &[status(Some("not json".into()))]);
+        assert_eq!(s.tasks.len(), 2, "a broken status leaves them");
+
+        feed(&mut s, &[update(json!({"tasks": [{"id": "x", "title": "Own list", "status": "todo"}]}))]);
+        assert_eq!(
+            s.tasks.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(),
+            ["Own list"],
+            "a later tasks_update wins"
+        );
+
+        feed(&mut s, &[status(Some(phase("done").to_string()))]);
+        assert_eq!(s.tasks[1].status, "done", "a later status wins over the tasks_update");
+
+        feed(&mut s, &[status(None)]);
+        assert!(s.tasks.is_empty(), "no text clears them");
     }
 
     #[test]

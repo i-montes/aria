@@ -557,6 +557,34 @@ describe('the route line from the router (a status)', () => {
   })
 })
 
+describe('the task list of a slice phase (a status)', () => {
+  const status = (statusText) => ev({ type: 'ui_notice', request: { method: 'setStatus', statusKey: 'aria-tasks', ...(statusText === undefined ? {} : { statusText }) } })
+  const tasks = [
+    { id: 'p1-t1', title: 'registers a new account (endpoint)', status: 'done', agent: '#4' },
+    { id: 'p1-t2', title: 'refuses a taken email (endpoint)', status: 'active', agent: '#4' },
+  ]
+
+  test('starts empty', () => expect(createChat().tasks).toEqual([]))
+
+  test('a status sets the session\'s tasks, and the next one replaces them', () => {
+    const state = run(createChat(), status(JSON.stringify({ tasks })))
+    expect(state.tasks).toEqual(tasks)
+    expect(run(state, status(JSON.stringify({ tasks: [tasks[0]] }))).tasks).toEqual([tasks[0]])
+  })
+
+  test('a status without text clears them; broken text leaves them', () => {
+    const state = run(createChat(), status(JSON.stringify({ tasks })))
+    expect(run(state, status(undefined)).tasks).toEqual([])
+    expect(run(state, status('not json')).tasks).toEqual(tasks)
+    expect(run(state, status(JSON.stringify({ nothing: 1 }))).tasks).toEqual(tasks)
+  })
+
+  test('it adds nothing to the thread', () => {
+    const before = addUser(createChat(), 'hi')
+    expect(run(before, status(JSON.stringify({ tasks }))).messages).toEqual(before.messages)
+  })
+})
+
 describe('the subagents of a session', () => {
   const agents = [{ id: 'a1', role: 'security', task: 'Review', status: 'working · 1 tool', kind: 'active', steps: [] }]
 

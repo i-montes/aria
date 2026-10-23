@@ -146,7 +146,7 @@ every session, and leaving the terminal stops nothing.
   (`projects`, `folder`, `system`, `big`) and the terminal says why.
 - **Notifications** — a run that settles where nobody looks raises one notification titled with the session's name;
   the session's next one replaces it (`Notifier::dismiss_titled`), looking at it takes it away.
-- **Extensions** — `tasks` (`tasks_update`, drawn above the terminal's editor), `context` (the status `aria-context`,
+- **Extensions** — `tasks` (`tasks_update`, drawn above the terminal's editor; a slice phase's marks, the status `aria-tasks`, feed the same strip and the dock's task dock), `context` (the status `aria-context`,
   drawn by `/context`), `verify` (the project's checks after edits, the status `aria-verify`), and the router's
   `methodNote` for focused work.
 

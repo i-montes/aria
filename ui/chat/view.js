@@ -47,6 +47,12 @@ export function renderProblem(state, t) {
   return `<div class="problem"><b>${esc(t('chat.problem.title'))}</b>${esc(t(`chat.problem.${state.problem}`))}</div>`
 }
 
+/** The task dock above the composer: the session's tasks (the chat state's `tasks`: `title`, or `label` from the sandbox). */
+export function renderTaskDock(chat, open, t) {
+  const tasks = (chat.tasks ?? []).map((task) => ({ id: task.id, label: task.label ?? task.title, status: task.status }))
+  return tasks.length ? renderTasks({ tasks, kind: 'tasks', show: true }, { open }, t) : ''
+}
+
 /** One extension dialog. Its controls carry `data-chat` actions and the dialog's `data-id`. */
 export function renderDialog(dialog, t) {
   const { id, method, request } = dialog
@@ -214,7 +220,7 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
   let picker = null // { kind, items, query, active, start }
   let dismissed = null // { kind, text }: Esc closed the picker for this text
   let settings = null
-  const data = { tasks: null, tasksKind: 'tasks', memory: [], jobs: [], schedules: [] } // jobs: every session's background jobs (the dock's `jobs`)
+  const data = { memory: [], jobs: [], schedules: [] } // jobs: every session's background jobs (the dock's `jobs`)
   const ui = { connect: null, menuOpen: false, renaming: null, view: 'chat', agent: null, job: null, sessionJob: null, memory: initialMemoryUi(), tasksOpen: true, index: { expanded: false, my: null, off: 0, height: 360, settled: false } }
   let toast = null
   let connectToken = 0 // a connection in progress that was closed or replaced must not act when its reply arrives
@@ -564,7 +570,7 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
 
   function drawTasks() {
     const el = $('chat-tasks')
-    el.innerHTML = data.tasks?.length ? renderTasks({ tasks: data.tasks, kind: data.tasksKind, show: true }, { open: ui.tasksOpen }, t) : ''
+    el.innerHTML = renderTaskDock(current(), ui.tasksOpen, t)
   }
 
   /** The composer is drawn once; later changes (busy, text, model) swap its buttons, rows and hints in place so the
@@ -2109,9 +2115,9 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
       drawComposer()
       if (ui.view !== 'chat') drawViews()
     },
-    setTasks(tasks, kind = 'tasks') {
-      data.tasks = tasks
-      data.tasksKind = kind
+    /** The active tab's task list (the UI sandbox calls this); in the app it comes from the session's `aria-tasks` status. */
+    setTasks(tasks) {
+      chats.set(tabs.active, { ...current(), tasks: Array.isArray(tasks) ? tasks : [] })
       render()
     },
     setMemory(memories) {

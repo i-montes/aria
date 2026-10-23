@@ -3,6 +3,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
+import { normalizeTasks, type Task as ListedTask } from '../tasks/tasks.ts'
 import { gitRoot } from './modes.ts'
 
 export type Task = { title: string; status: 'todo' | 'active' | 'done' }
@@ -100,6 +101,14 @@ export function planCard(plan: Plan, path: string) {
 const isOpen = (p: Phase) => p.tasks.some((t) => t.status !== 'done')
 
 export const firstOpenPhase = (plan: Plan): Phase | null => plan.phases.find(isOpen) ?? null
+/** The first phase after `number` that still has open tasks. */
+export const nextOpenPhase = (plan: Plan, number: number): Phase | null => plan.phases.find((p) => p.number > number && isOpen(p)) ?? null
+
+/** A phase's marks as the task list the dock and the terminal draw (`tasks_update`'s shape), each tagged with job `#job`. */
+export function phaseTasks(plan: Plan, number: number, job: number): ListedTask[] {
+  const tasks = plan.phases.find((p) => p.number === number)?.tasks ?? []
+  return normalizeTasks({ tasks: tasks.map((t, i) => ({ id: `p${number}-t${i + 1}`, title: t.title, status: t.status, agent: `#${job}` })) })
+}
 
 type BriefBase = { plan: string; phase: number; base: string }
 
@@ -161,7 +170,7 @@ export function nextStepHint(job: EndedJob, planText: string, paths: Paths): str
   if (marker.kind === 'review') {
     if (state !== 'done') return `[slice] The review of phase ${marker.phase} did not finish (${state}). Tell the owner and go on to the manual checks.`
     const review = `[slice] The review of phase ${marker.phase} is in the job's result. Tell the owner the must-fix findings in a few lines; if there are any, ask with ask_user: fix them now (a build job with commits true and a brief listing them) or move on. Go through the phase's manual checks with the owner. If a decision applies to the whole project, propose one line for CLAUDE.md or AGENTS.md.`
-    const next = plan.phases.find((p) => p.number > marker.phase && isOpen(p))
+    const next = nextOpenPhase(plan, marker.phase)
     if (!next) return `${review} The plan is done. Offer the next story of the backlog (the owner can plan it with /plan).`
     return `${review} Then launch phase ${next.number}: background_agent with commits true, isolation "folder", title "${next.name}", and this task word for word:\n\n${brief(next.number, next.name, paths.head())}`
   }
