@@ -5,6 +5,18 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.14.0 — 2026-10-22
+
+### New
+
+- passwords, keys and tokens the model asks for and never sees
+- Jev offers to plan sizable work, and /plan goes straight from questions to the plan
+
+### Fixed
+
+- a resumed session gets the tools a newer Aria added
+- Linux builds and runs it: whisper-rs 0.16, Vulkan, one thread per core
+
 ## 0.13.2 — 2026-10-22
 
 ### Fixed
