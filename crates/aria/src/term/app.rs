@@ -899,6 +899,8 @@ impl App {
                     // Say why there is nothing to pick, never nothing at all.
                     let key = match off.as_deref() {
                         Some("projects") => "term.undo.projects",
+                        Some("system") => "term.undo.system",
+                        Some("big") => "term.undo.big",
                         Some(_) => "term.undo.folder",
                         None => "term.undo.nothing",
                     };
@@ -1436,6 +1438,8 @@ mod tests {
     fn esc_esc_in_a_folder_without_checkpoints_says_why() {
         assert_eq!(undo_notice(json!([]), Some("projects")).as_deref(), Some("term.undo.projects"));
         assert_eq!(undo_notice(json!([]), Some("folder")).as_deref(), Some("term.undo.folder"));
+        assert_eq!(undo_notice(json!([]), Some("system")).as_deref(), Some("term.undo.system"));
+        assert_eq!(undo_notice(json!([]), Some("big")).as_deref(), Some("term.undo.big"));
     }
 
     #[test]

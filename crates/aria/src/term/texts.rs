@@ -53,6 +53,16 @@ const OWN: &[(&str, &str, &str)] = &[
         "Undo is off in this folder (the home folder, or one that is gone).",
         "Deshacer está apagado en esta carpeta (la carpeta personal, o una que ya no existe).",
     ),
+    (
+        "term.undo.system",
+        "Undo is off in the system's folders: open aria inside a project to keep checkpoints.",
+        "Deshacer está apagado en las carpetas del sistema: abre aria dentro de un proyecto para guardar puntos de control.",
+    ),
+    (
+        "term.undo.big",
+        "Undo is off here: this folder has more than 20,000 files to keep.",
+        "Deshacer está apagado aquí: esta carpeta tiene más de 20.000 ficheros que guardar.",
+    ),
     ("term.cmd.context", "what fills the context", "qué llena el contexto"),
     (
         "term.ctx.title",

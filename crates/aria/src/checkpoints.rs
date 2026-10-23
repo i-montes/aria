@@ -13,6 +13,73 @@ use std::process::{Command, Output, Stdio};
 const BIG: u64 = 5 * 1024 * 1024;
 /// Checkpoints listed (undo can go back this far).
 const KEPT: usize = 50;
+/// A folder with more files than this is too big to keep: its checkpoints stop for good.
+const MANY: usize = 20_000;
+/// Written in a session's checkpoints once its folder had too many files.
+const TOO_BIG: &str = "too-big";
+/// The system's own folders, and everything in them (both platforms: a path that is not there costs nothing).
+const SYSTEM: &[&str] = &[
+    "/etc",
+    "/usr",
+    "/var",
+    "/opt",
+    "/boot",
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+    "/srv",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/root",
+    "/snap",
+    "/nix",
+    "/System",
+    "/Library",
+    "/Applications",
+    "/private",
+    "/cores",
+];
+/// Folders that only hold mounts or homes: never kept themselves, the folders in them are.
+const MOUNTS: &[&str] = &["/mnt", "/media", "/Volumes", "/Users", "/home"];
+
+/// Why a session keeps no checkpoints.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Off {
+    /// The home folder itself, or a folder that is not there.
+    Folder,
+    /// A folder of the system, one that holds the home folder, or a mount point.
+    System,
+    /// More files than a checkpoint keeps.
+    TooBig,
+}
+
+impl Off {
+    /// The reason as the client reads it.
+    pub fn code(self) -> &'static str {
+        match self {
+            Off::Folder => "folder",
+            Off::System => "system",
+            Off::TooBig => "big",
+        }
+    }
+}
+
+/// Is `folder` (canonical) the system's: the root, one holding `home`, a mount point, or inside a system folder? The
+/// system's scratch folder is the person's to work in.
+fn system_folder(folder: &Path, home: &Path) -> bool {
+    let scratch = [std::env::temp_dir(), PathBuf::from("/tmp")].map(|dir| dir.canonicalize().unwrap_or(dir));
+    if scratch.iter().any(|dir| folder.starts_with(dir) && folder != dir) {
+        return false;
+    }
+    folder.parent().is_none()
+        || home.starts_with(folder) && home != folder
+        || MOUNTS.iter().any(|mount| folder == Path::new(mount))
+        || SYSTEM.iter().any(|root| folder.starts_with(root))
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Checkpoint {
@@ -58,6 +125,8 @@ pub struct Checkpoints {
     folder: PathBuf,
     /// A global git config to read instead of the person's (tests).
     pub(crate) global_config: Option<PathBuf>,
+    /// The most files a checkpoint keeps (MANY; tests lower it).
+    pub(crate) many: usize,
 }
 
 fn now_ms() -> i64 {
@@ -65,24 +134,32 @@ fn now_ms() -> i64 {
 }
 
 impl Checkpoints {
-    /// The checkpoints of `session` working in `folder`; none for a folder that is not there or is the home folder.
-    pub fn open(root: &Path, session: &str, folder: &Path) -> Option<Checkpoints> {
+    /// The checkpoints of `session` working in `folder`; none for the home folder, a folder that is not there, a
+    /// folder of the system, or one found too big.
+    pub fn open(root: &Path, session: &str, folder: &Path) -> Result<Checkpoints, Off> {
         let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
         Checkpoints::open_in(root, session, folder, &home)
     }
 
-    pub fn open_in(root: &Path, session: &str, folder: &Path, home: &Path) -> Option<Checkpoints> {
-        let folder = folder.canonicalize().ok()?;
-        if !folder.is_dir() || home.canonicalize().is_ok_and(|home| home == folder) {
-            return None;
+    pub fn open_in(root: &Path, session: &str, folder: &Path, home: &Path) -> Result<Checkpoints, Off> {
+        let folder = folder.canonicalize().map_err(|_| Off::Folder)?;
+        let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+        if !folder.is_dir() || home == folder {
+            return Err(Off::Folder);
+        }
+        if system_folder(&folder, &home) {
+            return Err(Off::System);
         }
         let git_dir = root.join(session);
-        let made = Checkpoints { git_dir, folder, global_config: None };
-        if !made.git_dir.join("HEAD").exists() {
-            std::fs::create_dir_all(&made.git_dir).ok()?;
-            made.git(&["init", "-q"]).ok()?;
+        if git_dir.join(TOO_BIG).exists() {
+            return Err(Off::TooBig);
         }
-        Some(made)
+        let made = Checkpoints { git_dir, folder, global_config: None, many: MANY };
+        if !made.git_dir.join("HEAD").exists() {
+            std::fs::create_dir_all(&made.git_dir).map_err(|_| Off::Folder)?;
+            made.git(&["init", "-q"]).map_err(|_| Off::Folder)?;
+        }
+        Ok(made)
     }
 
     fn git(&self, args: &[&str]) -> io::Result<Output> {
@@ -118,9 +195,15 @@ impl Checkpoints {
     }
 
     /// Paths (from `-z` output) of files over the size limit, which never enter a checkpoint.
+    /// A folder with more files than a checkpoint keeps is marked, and keeps none from then on.
     fn big_files(&self) -> io::Result<Vec<String>> {
         let out = self.git(&["ls-files", "-z", "--cached", "--others", "--exclude-standard"])?;
-        Ok(String::from_utf8_lossy(&out.stdout)
+        let listed = String::from_utf8_lossy(&out.stdout);
+        if listed.split('\0').filter(|path| !path.is_empty()).count() > self.many {
+            std::fs::write(self.git_dir.join(TOO_BIG), "")?;
+            return Err(io::Error::other(format!("more than {} files", self.many)));
+        }
+        Ok(listed
             .split('\0')
             .filter(|path| !path.is_empty())
             .filter(|path| std::fs::metadata(self.folder.join(path)).is_ok_and(|m| m.len() > BIG))
@@ -289,7 +372,7 @@ mod tests {
     }
 
     fn open(p: &Place) -> Checkpoints {
-        Checkpoints::open_in(&p.root, "s1", &p.folder, Path::new("/home/ana")).unwrap()
+        Checkpoints::open_in(&p.root, "s1", &p.folder, Path::new("/home/ana")).ok().unwrap()
     }
 
     #[test]
@@ -327,7 +410,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let folder = dir.path().join("empty");
         fs::create_dir_all(&folder).unwrap();
-        let c = Checkpoints::open_in(&dir.path().join("cp"), "s1", &folder, Path::new("/home/ana")).unwrap();
+        let c = Checkpoints::open_in(&dir.path().join("cp"), "s1", &folder, Path::new("/home/ana")).ok().unwrap();
         let cp = c.take("start").unwrap();
         fs::write(folder.join("made.txt"), "x").unwrap();
         c.restore(&cp).unwrap();
@@ -373,7 +456,7 @@ mod tests {
         fs::write(folder.join("index.ts"), "a").unwrap();
         fs::write(repo.join(".gitignore"), "node_modules/\n").unwrap();
         std::process::Command::new("git").args(["init", "-q"]).current_dir(&repo).output().unwrap();
-        let c = Checkpoints::open_in(&dir.path().join("cp"), "s1", &folder, Path::new("/home/ana")).unwrap();
+        let c = Checkpoints::open_in(&dir.path().join("cp"), "s1", &folder, Path::new("/home/ana")).ok().unwrap();
         let cp = c.take("x").unwrap();
         fs::write(folder.join("node_modules").join("lib").join("x.js"), "changed dep").unwrap();
         assert_eq!(c.changes_since(&cp).unwrap(), Changes::default(), "node_modules is not the session's to keep");
@@ -432,8 +515,37 @@ mod tests {
     #[test]
     fn no_checkpoints_in_home() {
         let p = place();
-        assert!(Checkpoints::open_in(&p.root, "s1", &p.folder, &p.folder).is_none());
-        assert!(Checkpoints::open_in(&p.root, "s1", &p.folder.join("gone"), Path::new("/home/ana")).is_none());
+        assert!(matches!(Checkpoints::open_in(&p.root, "s1", &p.folder, &p.folder), Err(Off::Folder)));
+        assert!(matches!(
+            Checkpoints::open_in(&p.root, "s1", &p.folder.join("gone"), Path::new("/home/ana")),
+            Err(Off::Folder)
+        ));
+    }
+
+    #[test]
+    fn no_system_folder_gets_checkpoints() {
+        let home = Path::new("/home/ana");
+        for folder in ["/", "/home", "/etc", "/etc/nginx", "/usr/local/src/tool", "/var/www", "/mnt", "/media"] {
+            assert!(system_folder(Path::new(folder), home), "{folder}");
+        }
+        for folder in ["/System/Library", "/Library/Fonts", "/Applications", "/Users", "/Volumes"] {
+            assert!(system_folder(Path::new(folder), Path::new("/Users/ana")), "{folder}");
+        }
+        for folder in ["/home/ana/acme/checkout-widget", "/mnt/data/checkout-widget", "/srv-not/x"] {
+            assert!(!system_folder(Path::new(folder), home), "{folder}");
+        }
+        let scratch = std::env::temp_dir().canonicalize().unwrap().join("checkout-widget");
+        assert!(!system_folder(&scratch, home), "the system's scratch folder is the person's to work in");
+    }
+
+    #[test]
+    fn a_folder_with_too_many_files_stops_keeping_checkpoints() {
+        let p = place();
+        fs::write(p.folder.join("readme.md"), "x\n").unwrap();
+        let mut c = open(&p);
+        c.many = 2;
+        assert!(c.take("first").is_err(), "three files are more than two");
+        assert!(matches!(Checkpoints::open_in(&p.root, "s1", &p.folder, Path::new("/home/ana")), Err(Off::TooBig)));
     }
 
     #[test]

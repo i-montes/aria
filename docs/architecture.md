@@ -138,8 +138,10 @@ every session, and leaving the terminal stops nothing.
   left out, 50 listed). One is taken before a turn's first message (`chatSend` without behavior, or a queued message when
   Pi takes it); when the turn settles, `chatEvent { type: "changes", files, added, removed }`. `chatCheckpoints` lists
   them; `chatUndo` restores the folder, forks Pi before that message (`get_fork_messages`, `fork`) and tells the
-  conversation again (`session_reset`, then the history; the new session id becomes the tab's segment). The projects
-  folder itself gets none.
+  conversation again (`session_reset`, then the history; the new session id becomes the tab's segment). None are kept
+  for the projects folder itself, the home folder, a system folder (`/`, one holding the home folder, a mount point,
+  anything under `/etc`, `/usr`, `/var`…) or a folder with more than 20,000 files; `checkpoints` then carries `off`
+  (`projects`, `folder`, `system`, `big`) and the terminal says why.
 - **Notifications** — a run that settles where nobody looks raises one notification titled with the session's name;
   the session's next one replaces it (`Notifier::dismiss_titled`), looking at it takes it away.
 - **Extensions** — `tasks` (`tasks_update`, drawn above the terminal's editor), `context` (the status `aria-context`,

@@ -587,9 +587,8 @@ impl Chat {
             PageMessage::ChatCheckpoints { id } => {
                 let _one = self.checkpoint_lock.lock().unwrap_or_else(|e| e.into_inner());
                 let (list, off) = match self.checkpoints() {
-                    Some(c) => (c.list(), None),
-                    None if self.in_projects_folder() => (Vec::new(), Some("projects".to_string())),
-                    None => (Vec::new(), Some("folder".to_string())),
+                    Ok(c) => (c.list(), None),
+                    Err(why) => (Vec::new(), Some(why.to_string())),
                 };
                 self.emit(DockMessage::Checkpoints { id, list: json!(list), off });
             }
@@ -881,13 +880,15 @@ impl Chat {
         }
     }
 
-    /// The checkpoints of this session's folder (the one its Pi works in). None for the projects folder itself: it
-    /// holds the projects, each with its own `.git` a checkpoint cannot see into, so keeping it would be heavy and useless.
-    fn checkpoints(&self) -> Option<crate::checkpoints::Checkpoints> {
+    /// The checkpoints of this session's folder (the one its Pi works in), or why it keeps none, as the client reads it.
+    /// None for the projects folder itself: it holds the projects, each with its own `.git` a checkpoint cannot see
+    /// into, so keeping it would be heavy and useless.
+    fn checkpoints(&self) -> Result<crate::checkpoints::Checkpoints, &'static str> {
         if self.in_projects_folder() {
-            return None;
+            return Err("projects");
         }
         crate::checkpoints::Checkpoints::open(&self.ctx.paths.root.join("checkpoints"), &self.session, &self.folder())
+            .map_err(|off| off.code())
     }
 
     /// The folder this session's Pi works in.
@@ -911,7 +912,7 @@ impl Chat {
             return;
         }
         let _one = self.checkpoint_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(checkpoints) = self.checkpoints() else { return };
+        let Ok(checkpoints) = self.checkpoints() else { return };
         match checkpoints.take(text) {
             Ok(checkpoint) => self.inner.lock().unwrap().run_checkpoint = Some(checkpoint),
             Err(error) => crate::note(&format!("tab {}: no checkpoint: {error}", self.session)),
@@ -924,7 +925,7 @@ impl Chat {
         let chat = self.clone();
         std::thread::spawn(move || {
             let _one = chat.checkpoint_lock.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(checkpoints) = chat.checkpoints() else { return };
+            let Ok(checkpoints) = chat.checkpoints() else { return };
             if let Ok(changes) = checkpoints.changes_since(&checkpoint) {
                 if changes.files > 0 {
                     let _ = checkpoints.set_files(&checkpoint, changes.files);
@@ -956,7 +957,7 @@ impl Chat {
                 crate::note(&format!("tab {}: undo failed: {why}", chat.session));
                 chat.emit(DockMessage::Error { id, code: "failed".into() });
             };
-            let Some(checkpoints) = chat.checkpoints() else { return failed(&chat, "no checkpoints") };
+            let Ok(checkpoints) = chat.checkpoints() else { return failed(&chat, "no checkpoints") };
             let list = checkpoints.list();
             let Some(at) = list.iter().position(|c| c.id == checkpoint) else {
                 return failed(&chat, "unknown checkpoint");
