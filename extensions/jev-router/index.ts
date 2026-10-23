@@ -22,9 +22,10 @@
 // Only the main agent is routed (TUI and print modes); `parallel` subagents run in JSON mode and are
 // left alone. Any failure (no classifier, no credential, a slow answer) sends the message unlabelled
 // and leaves the guard off.
+import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
   bashWriteRequest,
@@ -58,10 +59,12 @@ import {
   planMayWrite,
   planPrompt,
   planQuotaThreshold,
+  REVIEW_SKILL,
   routedMode,
   shouldClassify,
+  SLICE_SKILL,
 } from './modes.ts'
-import { isPlanPath, planProblem } from './slice.ts'
+import { isPlanPath, nextStepHint, parseMarker, planProblem } from './slice.ts'
 import { checkKill } from './process-guard.ts'
 import { exhausted, fetchGoUsage } from './usage.ts'
 import { confirmFreeSwitch } from '../quota-fallback/ask.ts'
@@ -96,6 +99,16 @@ function loadExperts(): Expert[] {
       })
   } catch {
     return []
+  }
+}
+
+/** The commit the repository of `path` is at now, or '' when git cannot say. */
+function headOf(path: string): string {
+  try {
+    const dir = dirname(path)
+    return execFileSync('git', ['-C', gitRoot(dir) ?? dir, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    return ''
   }
 }
 
@@ -216,6 +229,20 @@ export default function (pi: ExtensionAPI) {
   // stored in the session and sent to the model after the prompt, but not shown in the TUI, and the
   // user's own message stays as typed. Steering messages join a running turn and keep its hints.
   pi.on('before_agent_start', async (event: any, ctx: any) => {
+    // A slice job ended: say what comes next (ask the owner, review, the next phase). Plain background work is untouched.
+    if (event.messageType === 'custom' && event.message?.customType === 'aria-background') {
+      const job = event.message.details?.job
+      const marker = job ? parseMarker(String(job.task ?? '')) : null
+      if (!marker) return
+      let plan = ''
+      try {
+        plan = readFileSync(marker.plan, 'utf8')
+      } catch {
+        // gone: the hint says the phase did not finish
+      }
+      const hint = nextStepHint(job, plan, { skill: SLICE_SKILL, review: REVIEW_SKILL, head: () => headOf(marker.plan) })
+      return hint ? { message: { customType: 'jev-router', content: hint, display: false, details: { slice: marker } } } : undefined
+    }
     if (!routed(ctx) || event.messageType !== 'user') return
     const text = String(event.prompt ?? '')
     current = null

@@ -2,6 +2,7 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { job as endedJob } from '../background/fake-dock.test.ts'
 import {
   buildBrief,
   firstOpenPhase,
@@ -256,4 +257,10 @@ describe('nextStepHint', () => {
     expect(hint).toContain('manual checks')
   })
   test('a job without a marker: null', () => expect(nextStepHint(job('fix the tests', 'done', 'SLICE DONE'), PLAN, paths)).toBeNull())
+  test('the job the background extension sends carries a marker the hint can read', () => {
+    const sent = endedJob({ kind: 'agent', title: 'Sign up', command: null, task: buildTask, state: 'done', isolation: 'folder', writes: true, result: 'SLICE DONE' })
+    expect(parseMarker(String(sent.task ?? ''))).toEqual({ kind: 'build', plan: widgetPlan, phase: 1, base: 'abc123' })
+    expect(nextStepHint(sent, phase1Done, paths)).not.toBeNull()
+    expect(nextStepHint(endedJob({ kind: 'agent', task: 'fix the tests', state: 'done', result: 'SLICE DONE' }), PLAN, paths)).toBeNull()
+  })
 })
