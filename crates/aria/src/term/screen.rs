@@ -120,9 +120,15 @@ fn watch_git(folder: Arc<Mutex<String>>) -> Arc<Mutex<Option<GitStatus>>> {
 }
 
 /// Runs until the app quits; the note to print after the terminal is back.
-pub fn run(link: Link, config: Config, paths: &aria_core::paths::AriaPaths) -> std::io::Result<Option<String>> {
+pub fn run(
+    link: Link,
+    config: Config,
+    paths: &aria_core::paths::AriaPaths,
+    clients: &Path,
+) -> std::io::Result<Option<String>> {
+    let mut link = link;
     let palette = Palette::detect();
-    let events = link.events();
+    let mut events = link.events();
     let (mut app, first) = App::new(config);
     for effect in first {
         if let Effect::Send(message) = effect {
@@ -281,6 +287,24 @@ pub fn run(link: Link, config: Config, paths: &aria_core::paths::AriaPaths) -> s
                 Effect::Detach => link.detach(),
                 Effect::Focus(focused) => link.focus(focused),
                 Effect::SaveVerbose(on) => save_verbose(paths, on),
+                Effect::Reconnect => {
+                    let back = match Link::connect(clients) {
+                        Ok(new) => {
+                            events = new.events();
+                            link = new;
+                            Input::Reconnected
+                        }
+                        Err(_) => Input::Lost,
+                    };
+                    for effect in app.update(back) {
+                        match effect {
+                            Effect::Send(message) => link.send(&message),
+                            Effect::Attach(session) => link.attach(&session),
+                            Effect::Quit => quit = true,
+                            _ => {}
+                        }
+                    }
+                }
                 Effect::Redraw => {
                     terminal.clear()?;
                     changed = true;

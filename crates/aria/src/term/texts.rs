@@ -36,6 +36,12 @@ const OWN: &[(&str, &str, &str)] = &[
     ("chat.tools.ls", "List folder", "Listar carpeta"),
     ("chat.tools.tool", "Tool", "Herramienta"),
     ("term.untitled", "untitled", "sin título"),
+    ("term.reconnected", "Connected to the dock again.", "Conectado de nuevo al dock."),
+    (
+        "term.oldDock",
+        "Aria's dock is older than this aria: restart it with `aria quit` and `aria`.",
+        "El dock de Aria es más viejo que este aria: reinícialo con `aria quit` y `aria`.",
+    ),
     ("term.new", "+ new in {folder}", "+ nueva en {folder}"),
     ("term.working", "working", "trabajando"),
     ("term.waiting", "waiting for you", "esperando tu respuesta"),

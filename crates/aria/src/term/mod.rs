@@ -37,9 +37,19 @@ pub fn run() -> i32 {
     let lang = if settings.assistant.language == "es" { "es" } else { "en" }.to_string();
     let exe = std::env::current_exe().unwrap_or_else(|_| "aria".into());
     let clients = crate::clients::socket_path();
-    if let Err(error) = crate::control::ensure_running(&exe, &clients) {
-        eprintln!("aria: {}", texts::t(&lang, "term.cannotStart", &serde_json::json!({ "error": error.to_string() })));
-        return 1;
+    match crate::control::ensure_running(&exe, &crate::control::control_socket_path(), &clients) {
+        Ok(()) => {}
+        Err(crate::control::ControlError::OldDock) => {
+            eprintln!("aria: {}", texts::t(&lang, "term.oldDock", &serde_json::json!({})));
+            return 1;
+        }
+        Err(error) => {
+            eprintln!(
+                "aria: {}",
+                texts::t(&lang, "term.cannotStart", &serde_json::json!({ "error": error.to_string() }))
+            );
+            return 1;
+        }
     }
     let link = match link::Link::connect(&clients) {
         Ok(link) => link,
@@ -59,7 +69,7 @@ pub fn run() -> i32 {
         allow_pay_per_use: settings.models.allow_pay_per_use,
         compact_at: settings.compaction.percent,
     };
-    match screen::run(link, config, &paths) {
+    match screen::run(link, config, &paths, &clients) {
         Ok(note) => {
             if let Some(note) = note {
                 println!("{note}");

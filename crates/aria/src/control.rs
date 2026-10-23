@@ -14,6 +14,8 @@ use std::time::Duration;
 #[derive(Debug)]
 pub enum ControlError {
     AlreadyRunning,
+    /// A dock answers on the control socket but has no clients socket: an older version.
+    OldDock,
     Io(String),
 }
 
@@ -21,6 +23,7 @@ impl std::fmt::Display for ControlError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ControlError::AlreadyRunning => write!(f, "the dock is already running"),
+            ControlError::OldDock => write!(f, "the running dock is older than this aria"),
             ControlError::Io(message) => write!(f, "{message}"),
         }
     }
@@ -187,9 +190,13 @@ fn detached(program: &Path, args: &[&str]) -> Command {
 
 /// For a terminal client: the dock is reachable on its clients socket, or it is started (`aria dock`, in a session of
 /// its own, so leaving the terminal leaves it running) and waited for up to 3 s.
-pub fn ensure_running(exe: &Path, clients: &Path) -> Result<(), ControlError> {
+pub fn ensure_running(exe: &Path, control: &Path, clients: &Path) -> Result<(), ControlError> {
     if UnixStream::connect(clients).is_ok() {
         return Ok(());
+    }
+    // A dock is there but cannot take terminals: starting another would only fail after a wait.
+    if UnixStream::connect(control).is_ok() {
+        return Err(ControlError::OldDock);
     }
     detached(exe, &["dock"]).spawn().map_err(|e| ControlError::Io(e.to_string()))?;
     for _ in 0..60 {
@@ -203,6 +210,17 @@ pub fn ensure_running(exe: &Path, clients: &Path) -> Result<(), ControlError> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_old_dock_is_reported_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("control.sock");
+        let _old = UnixListener::bind(&control).unwrap();
+        let start = std::time::Instant::now();
+        let got = ensure_running(Path::new("/bin/false"), &control, &dir.path().join("clients.sock"));
+        assert!(matches!(got, Err(ControlError::OldDock)));
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
 
     #[test]
     fn a_dock_a_terminal_starts_has_its_own_session() {

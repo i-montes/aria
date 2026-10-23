@@ -41,6 +41,10 @@ pub enum Input {
     },
     /// Text pasted into the terminal.
     Paste(String),
+    /// The link to the dock was lost and is back (the dock had dropped this client).
+    Reconnected,
+    /// The link to the dock was lost and the dock does not answer.
+    Lost,
     /// The mouse wheel: lines up (negative: down).
     Scroll(i32),
     Focus(bool),
@@ -56,6 +60,8 @@ pub enum Effect {
     SaveVerbose(bool),
     /// Clear the terminal and draw everything again (Ctrl+L).
     Redraw,
+    /// Connect to the dock again; answer with `Reconnected` or `Lost`.
+    Reconnect,
     Quit,
 }
 
@@ -299,6 +305,21 @@ impl App {
                 Vec::new()
             }
             Input::Focus(focused) => vec![Effect::Focus(focused)],
+            Input::Lost => {
+                self.note = Some(t(&self.config.lang, "term.gone", &json!({})));
+                vec![Effect::Quit]
+            }
+            Input::Reconnected => match self.attached.clone() {
+                Some(session) => {
+                    let effects = self.attach(session);
+                    let said = t(&self.config.lang, "term.reconnected", &json!({}));
+                    self.session
+                        .entries
+                        .push(crate::term::state::Entry::Note { text: crate::term::state::Text::Raw(said) });
+                    effects
+                }
+                None => vec![self.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id })],
+            },
             Input::Paste(text) => {
                 let text = text.replace("\r\n", "\n").replace('\r', "\n");
                 let mut effects = Vec::new();
@@ -601,10 +622,8 @@ impl App {
 
     fn dock(&mut self, message: DockMessage) -> Vec<Effect> {
         match message {
-            DockMessage::Error { id: 0, code } if code == "gone" => {
-                self.note = Some(t(&self.config.lang, "term.gone", &json!({})));
-                vec![Effect::Quit]
-            }
+            // Lost: the dock may only have dropped this client (it read too slowly); try once.
+            DockMessage::Error { id: 0, code } if code == "gone" => vec![Effect::Reconnect],
             DockMessage::Error { id, code } => {
                 if self.pending.remove(&id) == Some(Pending::SessionNew) && code == "too-many-sessions" {
                     self.note = Some(t(&self.config.lang, "term.tooMany", &json!({})));
@@ -1092,7 +1111,25 @@ mod tests {
     fn the_dock_going_away_quits_with_a_note() {
         let mut app = attached();
         let effects = app.update(Input::Dock(DockMessage::Error { id: 0, code: "gone".into() }));
-        assert_eq!(effects, vec![Effect::Quit]);
+        assert_eq!(effects, vec![Effect::Reconnect], "first, try again: the dock may only have dropped this client");
+        assert_eq!(app.update(Input::Lost), vec![Effect::Quit]);
         assert!(app.note().unwrap().contains("dock stopped"));
+    }
+
+    #[test]
+    fn a_dropped_client_reconnects_and_reattaches() {
+        let mut app = attached();
+        app.update(Input::Dock(DockMessage::Error { id: 0, code: "gone".into() }));
+        let effects = app.update(Input::Reconnected);
+        assert_eq!(effects[0], Effect::Attach("aa".into()));
+        assert!(
+            matches!(&effects[1], Effect::Send(PageMessage::Session { message, .. }) if **message == PageMessage::ChatLoad { fresh: true })
+        );
+        assert!(
+            app.session().entries.iter().any(|e| matches!(e, crate::term::state::Entry::Note { .. })),
+            "it says so"
+        );
+        let effects = app.update(Input::Dock(DockMessage::Error { id: 0, code: "gone".into() }));
+        assert_eq!(effects, vec![Effect::Reconnect], "every loss tries once more");
     }
 }

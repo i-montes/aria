@@ -9,7 +9,6 @@
 //! - Client-only lines: `attach { session }`, `detach`, `focus { focused }`. A session is seen while a client attached
 //!   to it has the focus (a client that never said counts as focused).
 
-use crate::handlers;
 use aria_core::bridge::{DockMessage, PageMessage};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -27,6 +26,28 @@ const QUEUE: usize = 1024;
 /// `clients.sock`, beside the control socket.
 pub fn socket_path() -> PathBuf {
     crate::control::control_socket_path().with_file_name("clients.sock")
+}
+
+/// What a terminal may ask the dock: its sessions, and inside one what the client's screen does. Nothing that changes
+/// the dock's own state (what it shows, its tabs' order, its engines, the schedules, dictation).
+fn allowed(message: &PageMessage) -> bool {
+    match message {
+        PageMessage::SessionsLoad { .. } | PageMessage::SessionNew { .. } | PageMessage::SessionClose { .. } => true,
+        PageMessage::Session { message, .. } => matches!(
+            **message,
+            PageMessage::ChatSend { .. }
+                | PageMessage::ChatAbort
+                | PageMessage::ChatLoad { .. }
+                | PageMessage::UiAnswer { .. }
+                | PageMessage::ListCommands { .. }
+                | PageMessage::ListModels { .. }
+                | PageMessage::SetModel { .. }
+                | PageMessage::ListFiles { .. }
+                | PageMessage::PiCommand { .. }
+                | PageMessage::ChatBash { .. }
+        ),
+        _ => false,
+    }
 }
 
 /// Binds the clients socket: its folder `700`, the socket `600`; a file left by a crash is replaced.
@@ -190,7 +211,7 @@ impl Hub {
             other => other,
         });
         match message {
-            Some(message) if handlers::is_chat(&message) => {
+            Some(message) if allowed(&message) => {
                 let _ = self.chat.lock().unwrap().send(message);
             }
             Some(message @ PageMessage::SecretSave { .. }) => (self.handlers)(message),
@@ -425,6 +446,28 @@ mod tests {
             serde_json::from_str::<PageMessage>(r#"{"type":"chatBash","id":1,"command":"id"}"#).is_err(),
             "never from JSON"
         );
+    }
+
+    #[test]
+    fn clients_may_send_only_their_list() {
+        let f = fixture();
+        let mut a = connect(&f);
+        for (n, refused) in [
+            json!({"type": "chatShown", "shown": false}),
+            json!({"type": "sessionsSave", "sessions": [], "active": null}),
+            json!({"type": "enginesRestart"}),
+            json!({"type": "session", "session": "aa", "message": {"type": "dictationStart"}}),
+            json!({"type": "scheduleDelete", "id": 3, "schedule": "s-1"}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            a.send(refused);
+            assert_eq!(a.next()["code"], "not-for-clients", "refused #{n}");
+        }
+        assert!(f.chat.try_recv().is_err(), "none of them reached the chat");
+        a.send(json!({"type": "session", "session": "aa", "message": {"type": "chatAbort"}}));
+        assert!(f.chat.recv_timeout(Duration::from_secs(5)).is_ok());
     }
 
     #[test]
