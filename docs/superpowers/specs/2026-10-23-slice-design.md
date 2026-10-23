@@ -18,6 +18,8 @@ Decided with the owner (2026-10-23):
 - The plan lives in `docs/plans/<date>-<slug>.md`, committed. A repo without `docs/` asks the owner once whether
   `docs/` goes in the repository or in `.gitignore`.
 - With an OpenCode Go key stored, **Jev classifies whatever the chat's model is**, Claude's included: Jev is free.
+- **TypeSafe** (Jev's maker) is a provider in the setup, so a TypeSafe API key is another way to have Jev; it is
+  never a chat model.
 
 ## 1. The two lanes
 
@@ -140,19 +142,29 @@ Every piece exists; this feeds them. One source: the plan file's checkboxes.
 | What the subagent does, step by step | the background pill, Alt+A | already |
 | Every real change | the commits | already |
 
-The task list reuses `tasks_update`'s shape (`{ id, title, status, agent }`, `extensions/tasks/`, branch
-`terminal-m2`): **this work starts after `terminal-m2` reaches main**, and rebases on it. While a slice phase runs in
-the background, the parent Pi watches the plan file and, on each change, publishes the phase's tasks the way
-`tasks_update` does, so the dock and the terminal read one list from one place. The exact channel is the plan's
-first task, read from `terminal-m2` once merged.
+The task list reuses `tasks_update`'s shape (`{ id, title, status, agent }`, `extensions/tasks/`, in main since
+0.17.0). While a slice phase runs in the background, the parent Pi watches the plan file and, on each change,
+publishes the phase's tasks as the extension status `aria-tasks` (JSON), the channel the dock (`ui/chat/state.js`,
+`ui_notice` → `setStatus`, as `aria-jev`) and the terminal (`crates/aria/src/term/state.rs`, as `aria-verify`)
+already read; cleared when the job ends. The terminal shows it in its tasks strip; the dock feeds its task dock
+(`chat.setTasks`), which nothing fed before.
 
-## 5. Jev whatever the model
+## 5. Jev whatever the model, through Go or TypeSafe
 
-Today `apply_provider` turns the router and Jev's sandbox review off for any provider that does not include Jev
-(`crates/aria-core/src/providers.rs`), even when the OpenCode key is stored. Now: **with an OpenCode Go key stored,
-the router and the review stay on** for every provider; without one, they are off as today. Effort keeps each
-provider's default (Claude's is fixed). The web onboarding (`ui/onboarding/steps.js`) shares the providers' golden
-files and changes with them.
+Today `applyProvider` turns the router and Jev's sandbox review off for any main provider that does not include Jev
+(`ui/onboarding/steps.js`; the Rust twin in `crates/aria-core/src/providers.rs`), even when the OpenCode key is
+stored, and Jev through TypeSafe is "not built" (`crates/aria-core/src/agent_config.rs`).
+
+- **TypeSafe is a provider of its own**, listed with the others in the setup's providers step: connect (its API key,
+  checked by the existing probe, kept as `typesafe` in `auth.json` / the keyring), replace, remove. It is never a
+  main provider and has no chat models: no "make main" action, nothing in `/model` or the models step (Pi lists
+  classifier models apart already). The router step no longer asks for its key; it says which Jev is in use.
+- **Jev's backend follows the stored keys**, not the main provider: OpenCode Go (main provider or key stored) →
+  `opencode` (`opencode/jev-1.13-free`, free); otherwise a TypeSafe key → `typesafe` (`typesafe/jev-latest`, Pi's
+  built-in classifier); neither → the router and the review are off. With both, Go wins (free).
+- Aria writes the backend into `aria.json` (`router.backend`), and the extensions pick the classifier from it
+  (`jev-router`, the sandbox's review); without Aria's config (the owner's own Pi) it stays `opencode`.
+- Effort keeps each main provider's default (Claude's is fixed).
 
 ## 6. Out of scope
 
@@ -168,7 +180,10 @@ files and changes with them.
 - `jev-router`: the offer only with `plan=offer`; `start_plan` and `/plan` load slice; the write rule of plan mode
   (`docs/plans/`, the `.gitignore` choice); approval launches phase B; `/execute` resumes the first open phase.
 - The plan's marks → tasks (`[ ]` todo, `[~]` active, `[x]` done), and the cards' props from a plan file.
-- `providers.rs` and the onboarding's golden: Jev on with a Go key under Claude, off without one.
+- The setup (`ui/onboarding`): the backend from the stored keys (Go, TypeSafe, both, none), TypeSafe's row without
+  "make main" and in no model list; `providers.rs`'s golden files unchanged; `agent_config.rs` carries the backend;
+  the extensions pick `opencode/jev-1.13-free` or `typesafe/jev-latest` from it.
+- `aria-tasks` status → the dock's task dock and the terminal's strip.
 - The skill, by a scenario in a scratch repo under `/tmp`: one round of questions, a backlog, one phase, two cycles
   with their commits, one stop on a test that would have to change.
 - `sh tools/check-macos.sh`; the dock's parts are one webview on both platforms.
