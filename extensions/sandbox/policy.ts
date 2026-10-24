@@ -170,13 +170,19 @@ function extraWritable(home: string, exists: (p: string) => boolean): string[] {
   )
 }
 
-/** Paths inside the writable roots that stay read-only: they make the host run code. */
-export function protectedPaths(cwd: string, home = HOME): string[] {
+/** Paths inside the writable roots that stay read-only: they make the host run code. The project's, and the same for
+ * every folder the settings or a scheduled task's grants add: a run granted another repository must not plant a hook
+ * there that later runs as the owner outside the box. Only what exists when the box starts is mounted read-only, as for
+ * the project; repositories nested inside a granted folder are not looked for. */
+export function protectedPaths(cwd: string, home = HOME, exists: (p: string) => boolean = existsSync): string[] {
   const project = projectRoot(cwd, home)
-  const { own, common } = gitDirs(project)
-  const git = [...new Set([own, common].filter((d): d is string => !!d))].flatMap((d) => [join(d, 'config'), join(d, 'hooks')])
-  // The project's .aria holds verify.json, whose commands run after edits: never the model's to write.
-  return [...(project ? [join(project, '.pi'), join(project, '.aria')] : []), ...git, ...TMP_PROTECTED]
+  const roots = [...new Set([...(project ? [project] : []), ...extraWritable(home, exists)])]
+  const git = roots.flatMap((root) => {
+    const { own, common } = gitDirs(root)
+    return [...new Set([own, common].filter((d): d is string => !!d))].flatMap((d) => [join(d, 'config'), join(d, 'hooks')])
+  })
+  // A project's .aria holds verify.json, whose commands run after edits: never the model's to write.
+  return [...new Set([...roots.flatMap((root) => [join(root, '.pi'), join(root, '.aria')]), ...git, ...TMP_PROTECTED])]
 }
 
 export const secretDirs = (home = HOME, runtimeDir = RUNTIME) => [...SECRET_DIRS.map((d) => join(home, d)), runtimeDir]
@@ -231,7 +237,7 @@ export function isWritable(path: string, cwd: string, home = HOME, exists: (p: s
   // Each root also by its real path: on macOS /tmp and /var are links into /private, and the real path of a file there
   // is never under the root as written.
   const roots = writableRoots(cwd, home, exists).flatMap((r) => [r, realish(r)])
-  const locked = protectedPaths(cwd, home).flatMap((l) => [l, realish(l)])
+  const locked = protectedPaths(cwd, home, exists).flatMap((l) => [l, realish(l)])
   return [lexical, real].every((p) => roots.some((r) => inside(p, r)) && !locked.some((l) => inside(p, l)))
 }
 
@@ -311,7 +317,7 @@ export function bwrapArgs(
   const socketDirs = DOCK_SOCKETS.map((name) => env[name]).filter((path): path is string => !!path && path.startsWith('/')).map((path) => dirname(path))
   const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc']
   for (const root of writableRoots(cwd, home, exists)) args.push('--bind', root, root)
-  for (const path of protectedPaths(cwd, home).filter(exists)) args.push('--ro-bind', path, path)
+  for (const path of protectedPaths(cwd, home, exists).filter(exists)) args.push('--ro-bind', path, path)
   // The masks go last: a later bind of a folder that holds a secret (the project's .pi, when a credential links into
   // the project) would bring it back.
   for (const dir of mountPoints([...secretDirs(home, opts.runtimeDir ?? RUNTIME), ...HOST_DIRS, ...socketDirs]).filter(exists)) args.push('--tmpfs', dir)

@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { bwrapArgs, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, shellQuote, subagentProblem, wrapCommand, writableRoots, isAgentCode, isAriaOwn } from './policy.ts'
+import { protectedPaths, bwrapArgs, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, shellQuote, subagentProblem, wrapCommand, writableRoots, isAgentCode, isAriaOwn } from './policy.ts'
 
 // On macOS /home is the automounter's (auto_home): every lookup under it waits for it, seconds each. The policy only
 // reads these paths, so any home that is not there does; a Mac one keeps the tests fast there.
@@ -233,6 +233,36 @@ describe('extra writable folders (settings)', () => {
       if (saved[0] === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved[0]
       if (saved[1] === undefined) delete process.env.ARIA_SETTINGS; else process.env.ARIA_SETTINGS = saved[1]
     }
+  })
+  test('every granted root keeps its own git hooks, git config, .pi and .aria read-only, not only the project\'s', () => {
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wr, realpathSync: rp } = require('node:fs')
+    const repo = rp(mk(join(tmpdir(), 'aria-grant-repo-')))
+    md(join(repo, '.git', 'hooks'), { recursive: true })
+    wr(join(repo, '.git', 'config'), '')
+    md(join(repo, '.pi'))
+    md(join(repo, '.aria'))
+    // A worktree-style grant: `.git` is a file naming the real git dir.
+    const tree = rp(mk(join(tmpdir(), 'aria-grant-tree-')))
+    const gitdir = join(repo, '.git', 'worktrees', 'tree')
+    md(gitdir, { recursive: true })
+    wr(join(gitdir, 'commondir'), '../..')
+    wr(join(tree, '.git'), `gitdir: ${gitdir}\n`)
+    withExtra([repo, tree], () => {
+      const protectedSet = protectedPaths(`${home}/Projects/app`, home)
+      for (const path of [join(repo, '.git/hooks'), join(repo, '.git/config'), join(repo, '.pi'), join(repo, '.aria'), join(gitdir, 'hooks'), join(gitdir, 'config'), join(tree, '.pi'), join(tree, '.aria')]) {
+        expect(protectedSet).toContain(path)
+      }
+      // The same set is what the tools refuse and what bwrap mounts read-only.
+      expect(isWritable(join(repo, 'src/new.ts'), `${home}/Projects/app`, home)).toBe(true)
+      expect(isWritable(join(repo, '.git/hooks/pre-commit'), `${home}/Projects/app`, home)).toBe(false)
+      expect(isWritable(join(repo, '.git/config'), `${home}/Projects/app`, home)).toBe(false)
+      const args = bwrapArgs(`${home}/Projects/app`, { home, runtimeDir: '/nonexistent', env: {} })
+      for (const path of [join(repo, '.git/hooks'), join(repo, '.git/config'), join(repo, '.pi'), join(repo, '.aria')]) {
+        const at = args.findIndex((arg, i) => arg === path && args[i - 1] === path && args[i - 2] === '--ro-bind')
+        expect(at).toBeGreaterThan(-1)
+        expect(args.indexOf('--bind', 0)).toBeGreaterThan(-1)
+      }
+    })
   })
   test('without it nothing changes', () =>
     withExtra([], () => expect(isWritable('/srv/shared/notes.md', `${home}/Projects/app`, home, all)).toBe(false)))

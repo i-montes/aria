@@ -233,7 +233,9 @@ The sandbox:
   so commands also lose the `$ARIA_SECRET_<NAME>` variables and the closing of Aria's own files against write and edit.
 - The sandbox keeps a repository's `.git/config` and `hooks` read-only, but the rest of `.git` stays writable, and git
   follows a `commondir` file in any git dir: a boxed command can point a repository at a config of its own, which the
-  person's own git then reads. Repositories nested under a folder that is not one are not protected at all. The dock's own
+  person's own git then reads. Repositories nested under a folder that is not one are not protected at all, and that includes a repository inside a
+  folder granted by `sandbox.extraWritable` or a scheduled task (only the granted folder's own `.git/config`, `.git/hooks`,
+  `.pi` and `.aria` are read-only, and only when they exist as the box starts). The dock's own
   git commands neutralize hooks, fsmonitor and filter drivers, but a boxed background process that swaps `commondir`
   between the dock's read of the filter drivers and its `git add -A` could slip one in. To do: protect `commondir` and
   `gitdir` in `extensions/sandbox/policy.ts`, and give the dock's git an empty attributes source.
