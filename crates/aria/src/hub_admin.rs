@@ -696,6 +696,7 @@ pub fn files_to_send(probe: &Probe, args: &InitArgs) -> Vec<&'static str> {
 }
 
 /// What `aria hub init` is about to do, as the lines printed before anything runs.
+#[cfg(test)]
 pub fn plan(probe: &Probe, args: &InitArgs) -> Vec<String> {
     plan_sending(probe, args, &files_to_send(probe, args))
 }
