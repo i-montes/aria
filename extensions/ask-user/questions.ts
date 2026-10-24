@@ -44,7 +44,7 @@ export function normalize(params: { questions?: unknown }): Question[] {
     for (const o of Array.isArray(q?.options) ? (q.options as any[]) : []) {
       const label = String(o?.label ?? '').trim()
       const key = label.toLowerCase()
-      if (!label || seen.has(key) || /^(otra|otro|other)\b/i.test(label)) continue
+      if (!label || seen.has(key) || /^(otra|otro|outra|autre|andere|other)\b/i.test(label)) continue
       seen.add(key)
       const option: Option = { label, ...(o?.description ? { description: String(o.description).trim() } : {}) }
       if (o?.recommended === true && !recommended) recommended = option
@@ -52,7 +52,7 @@ export function normalize(params: { questions?: unknown }): Question[] {
     }
     if (recommended) options.unshift({ ...recommended, label: recommended.label + RECOMMENDED_SUFFIX })
     if (options.length < MIN_OPTIONS) throw new Error(`Question ${i + 1} needs at least ${MIN_OPTIONS} distinct options.`)
-    const header = String(q?.header ?? '').trim().slice(0, 12) || `P${i + 1}`
+    const header = String(q?.header ?? '').trim().slice(0, 12) || `${i + 1}`
     return { id: `q${i + 1}`, header, question, options: options.slice(0, MAX_OPTIONS) }
   })
 }

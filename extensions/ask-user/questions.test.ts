@@ -13,6 +13,15 @@ describe('normalize', () => {
     const [n] = normalize({ questions: [q([{ label: 'a' }, { label: 'b' }, { label: 'Otra opción' }])] })
     expect(n.options.map((o) => o.label)).toEqual(['a', 'b'])
   })
+  test('an Other the model added is dropped in the languages it is likely to write', () => {
+    for (const other of ['Otra opción', 'Otro', 'Outra opção', 'Autre', 'Andere', 'Other (specify)']) {
+      const [n] = normalize({ questions: [q([{ label: 'a' }, { label: 'b' }, { label: other }])] })
+      expect(n.options.map((o) => o.label)).toEqual(['a', 'b'])
+    }
+    // a real choice that merely starts like one of those words is kept
+    const [n] = normalize({ questions: [q([{ label: 'a' }, { label: 'Andersen' }, { label: 'Autres' }])] })
+    expect(n.options.map((o) => o.label)).toEqual(['a', 'Andersen', 'Autres'])
+  })
   test('duplicates and blanks are dropped', () => {
     const [n] = normalize({ questions: [q([{ label: 'A' }, { label: 'a ' }, { label: ' ' }, { label: 'b' }])] })
     expect(n.options.map((o) => o.label)).toEqual(['A', 'b'])
@@ -25,7 +34,7 @@ describe('normalize', () => {
   })
   test('long headers are cut and missing ones numbered', () => {
     const n = normalize({ questions: [q([{ label: 'a' }, { label: 'b' }], { header: 'Una cabecera larguísima' }), q([{ label: 'a' }, { label: 'b' }], { header: '' })] })
-    expect(n.map((x) => x.header)).toEqual(['Una cabecera', 'P2'])
+    expect(n.map((x) => x.header)).toEqual(['Una cabecera', '2'])
   })
 })
 
