@@ -841,3 +841,24 @@ fn the_plan_says_the_browser_is_left_out_of_a_server() {
     let out = text(&world.init(&["ana@hub.example", "--binary", "bin/aria-aarch64"], &[]).stdout);
     assert!(out.contains("--with-browser") && out.contains("agent-browser"), "{out}");
 }
+
+#[test]
+fn the_plan_says_when_the_binary_was_built() {
+    let world = World::new();
+    let file = std::fs::File::options().write(true).open(world.path("repo/bin/aria-aarch64")).unwrap();
+    file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)).unwrap();
+    let output = world.init(&["ana@hub.example", "--binary", "bin/aria-aarch64"], &[]);
+    let out = text(&output.stdout);
+    assert!(output.status.success(), "{out}{}", text(&output.stderr));
+    assert!(out.contains("bin/aria-aarch64 (built 2023-11-14 22:13 UTC)"), "{out}");
+    // the built binary of the default path is shown the same way, and an old one is not refused
+    let built = world.path("repo/target/aarch64-unknown-linux-gnu/release");
+    std::fs::create_dir_all(&built).unwrap();
+    std::fs::write(built.join("aria"), elf(0xB7)).unwrap();
+    let default = std::fs::File::options().write(true).open(built.join("aria")).unwrap();
+    default.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000)).unwrap();
+    let output = world.init(&["ana@hub.example"], &[]);
+    let out = text(&output.stdout);
+    assert!(output.status.success(), "{out}{}", text(&output.stderr));
+    assert!(out.contains("release/aria (built 2001-09-09 01:46 UTC)"), "{out}");
+}

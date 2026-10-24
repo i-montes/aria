@@ -79,8 +79,20 @@ checked by `tools/hub/accept.sh` (no display, no provider). Left:
 - **A lost connection blocks the terminal**: reconnecting over ssh waits up to 60 s for the hub's hello with the screen
   frozen, and the note it shows when the connection is lost is the local dock's ("Aria's dock stopped. Run `aria` again to start
   it."), not one that names the hub or says to run `aria connect` again.
-- Review minors that were judged worth doing later are not copied here: they are in the commit history of the
-  `feat/hub` branch (the review ledgers name each by task).
+- **Smaller things worth doing**, from the review of the hub's first milestone:
+  - `aria client-stdio`: replies still in flight are lost when the client's stdin reaches EOF.
+  - `aria serve`'s loop wakes about 62 times a second when idle (it should sleep until something happens).
+  - The installer moves the private Node into place non-atomically, and its release artifact names only know x86_64
+    (`aria-x86_64-linux`): releases need an arm64 name.
+  - `~/.aria/hub-src` (what `hub init` uploads) is never cleaned up; `hub_admin.rs` is large (`hub_init` can be its own
+    module); one `hub init` opens about twelve ssh connections (no `ControlMaster`).
+  - A schedule's `replace()` can overwrite a live "awaiting" mark, and the dock approves any `enabled: true` it is sent:
+    a guard on the dock's side would be better than the terminal's refetch before a resume.
+  - Esc in `/signin` leaves the dock's sign-in alive until its timeout.
+  - `tools/hub/accept.sh` keeps the owner's environment, and a failed check hides the ones after it.
+  - `hub init` sends the whole `settings.json` with only `sandbox.projectsDir` rewritten: other path-like keys
+    (`integrations.packages.path`, `sandbox.extraWritable`) stay as the laptop has them, so they point at paths that do not
+    exist on the hub. The settings split belongs to M2.
 
 ## The Claude provider
 

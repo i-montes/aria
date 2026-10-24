@@ -117,8 +117,9 @@ every session, and leaving the terminal stops nothing.
   is answered `error { code: "protocol-mismatch" }` and the connection closed; `remote: true` marks a client that came
   in from another machine, which `secretSave` and a `!command` answer `not-for-remote`, and a later `hello` cannot lift
   the mark), `attach { session }`, `detach`, `focus { focused }`. `Hub::route` delivers each dock message: a reply to a page request (a numeric id) to
-  the page only; a client's request ids are moved to `2^40 + client × 10^6 + id` going in and back coming out, so its
-  reply reaches it alone (a `sessionAdded` it asked for reaches everyone, without its id); a `session` message to the
+  the page only; a client's request ids are replaced going in by the hub's own, which count up from `CLIENT_BASE`
+  (`1 << 62`, far above the page's, which count from `Date.now() * 1000`) and are remembered with the client and its own
+  id, and the client's own comes back out, so its reply reaches it alone (a `sessionAdded` it asked for reaches everyone, without its id); a `session` message to the
   page and the clients attached to that session; the rest to everyone. A client whose queue (1024 lines) is full is
   dropped. A focused client attached to a session counts as seeing it (`ChatCtx.watchers`), so it raises no
   notification.
@@ -206,7 +207,8 @@ A hub is Aria's service on a computer with no desktop (a server), reached from o
   computer). A host that starts with `-` is refused. Exit codes: 1 when the hub or ssh cannot be reached, 2 not a host,
   3 another protocol. Closing the client, or losing the connection, stops nothing on the hub.
 - **`hub init` and `hub-import`** — `aria hub init <user@host> [--binary <path>] [--projects <dir>] [--client-key <pubkey
-  file>] [--settings] [--credentials] [--allow-no-sandbox] [--yes]` (`hub_admin.rs`, English only, run on the owner's computer) probes the host over ssh and prints its plan; only
+  file>] [--settings] [--credentials] [--allow-no-sandbox] [--yes]` (`hub_admin.rs`, English only, run on the owner's computer) probes the host over ssh and prints its plan (with the binary's path and when it was built: a stale cross-build is easy
+  to ship; it is shown, never refused); only
   after a yes it uploads the tree and the binary, runs `install/install.sh --headless` there (the user unit
   `install/aria-serve.service`, `loginctl enable-linger`), sends the settings and credentials as one bundle to
   `aria hub-import` on the hub (mode `600` files, the first copy each replaces kept as `.bak` and never overwritten; keys
@@ -232,6 +234,10 @@ A hub is Aria's service on a computer with no desktop (a server), reached from o
   `sudo loginctl enable-linger <user>` (never run). `install.sh --headless` leaves agent-browser and its Chrome out (a
   large download, not for every arm64 server) unless `--with-browser` is given, and the unit restarts after 5 seconds
   (`RestartSec=5`).
+- **Signing in over connect** — a sign-in started from a client (`startOauth`, `startMcpOauth`) binds its loopback
+  listener briefly on `127.0.0.1` of the hub, and the person pastes the address the browser could not reach. A remote
+  client can start one, and starting one cancels a pending sign-in of the same service (a stolen client key can do that
+  too).
 - **From a terminal** — `/schedules` lists the scheduled tasks and pauses, resumes and deletes them (creating one stays
   the `schedule` extension's tool); `/signin anthropic|notion` shows the sign-in's address and takes the address of the
   failed redirect pasted back (`oauthCode`), because the browser that opens the page is not on the hub.

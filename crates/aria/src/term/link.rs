@@ -126,10 +126,18 @@ impl Link {
         // The reply is waited for here, with a timeout; a pipe has none, so the reading is a thread's.
         std::thread::spawn(move || {
             let mut lines = BufReader::new(reader).lines();
-            let answer = match lines.next() {
-                Some(line) => line,
-                None => {
-                    Err(io::Error::new(io::ErrorKind::UnexpectedEof, "the connection closed before the hub answered"))
+            // The account's shell may print a banner or a motd before `aria client-stdio` starts: a line that is not
+            // JSON is not the hub's, and is skipped (the timeout still bounds the wait).
+            let answer = loop {
+                match lines.next() {
+                    Some(Ok(line)) if serde_json::from_str::<Value>(&line).is_err() => continue,
+                    Some(line) => break line,
+                    None => {
+                        break Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "the connection closed before the hub answered",
+                        ))
+                    }
                 }
             };
             let opened = answer.is_ok();
@@ -274,8 +282,12 @@ mod tests {
     /// `Link::over` on a pair of sockets whose other end reads the client's first line, then says `replies`. What the
     /// client's first line was, and the dock's end (kept open) come back with the result.
     fn open_with(replies: &[Value], remote: bool) -> (io::Result<Link>, Value, UnixStream) {
+        open_lines(replies.iter().map(Value::to_string).collect(), remote)
+    }
+
+    /// The same with the dock's lines as they are on the wire (a banner is not JSON).
+    fn open_lines(replies: Vec<String>, remote: bool) -> (io::Result<Link>, Value, UnixStream) {
         let (ours, theirs) = UnixStream::pair().unwrap();
-        let replies = replies.to_vec();
         let dock = std::thread::spawn(move || {
             let mut reader = BufReader::new(theirs.try_clone().unwrap());
             let mut line = String::new();
@@ -309,6 +321,27 @@ mod tests {
         let events = link.events();
         writeln!(dock, "{}", json!({"type": "sessionsChanged"})).unwrap();
         assert_eq!(events.recv_timeout(Duration::from_secs(5)).unwrap(), DockMessage::SessionsChanged);
+    }
+
+    #[test]
+    fn text_before_the_hello_is_skipped_not_taken_for_an_old_hub() {
+        // The hub account's shell may print a banner or a motd before `aria client-stdio` starts.
+        let banner = vec![
+            "Welcome to the hub".to_string(),
+            "".to_string(),
+            "Last login: Fri Oct 23 09:00:00 2026 from 192.0.2.1".to_string(),
+            hello_reply().to_string(),
+            json!({"type": "sessionsChanged"}).to_string(),
+        ];
+        let (link, _, _dock) = open_lines(banner, true);
+        let link = link.expect("the banner is skipped");
+        assert_eq!(link.events().recv_timeout(Duration::from_secs(5)).unwrap(), DockMessage::SessionsChanged);
+        // a banner and then nothing is still a hub that never answers, and a banner then a refusal is that refusal
+        let (link, _, _dock) = open_lines(
+            vec!["Welcome".to_string(), json!({"type": "error", "id": 0, "code": "protocol-mismatch"}).to_string()],
+            true,
+        );
+        assert_eq!(link.err().unwrap().to_string(), "protocol-mismatch");
     }
 
     #[test]

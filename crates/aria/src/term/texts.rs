@@ -213,6 +213,7 @@ const OWN: &[(&str, &str, &str)] = &[
     ),
     ("term.cannotStart", "Aria's dock could not start: {error}", "El dock de Aria no pudo iniciar: {error}"),
     ("term.tooMany", "There are already 8 sessions: close one first.", "Ya hay 8 sesiones: cierra una primero."),
+    ("term.notForRemote", "not available on a connected hub", "no disponible en un hub conectado"),
     ("term.more", "… {n} more lines", "… {n} líneas más"),
     (
         "term.input",

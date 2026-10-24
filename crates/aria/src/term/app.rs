@@ -927,6 +927,10 @@ impl App {
             DockMessage::Error { id: 0, code } if code == "gone" => vec![Effect::Reconnect],
             DockMessage::Error { id, code } => {
                 match self.pending.remove(&id) {
+                    // A connected hub refused what was asked (a `!command`, a session it does not have): say so.
+                    Some(_) if code == "not-for-remote" || code == "unknown-session" => {
+                        self.say(crate::term::state::Tone::Warn, "term.notForRemote", json!({}));
+                    }
                     Some(Pending::SessionNew) if code == "too-many-sessions" => {
                         self.note = Some(t(&self.config.lang, "term.tooMany", &json!({})));
                     }
@@ -1363,6 +1367,33 @@ mod tests {
         assert!(
             matches!(app.session().entries.last(), Some(crate::term::state::Entry::Tools { calls }) if calls[0].output == "/w\n")
         );
+    }
+
+    #[test]
+    fn what_a_connected_hub_refuses_is_said_not_dropped() {
+        // A `!command` over `aria connect` is answered `not-for-remote`; a made-up session, `unknown-session`.
+        for code in ["not-for-remote", "unknown-session"] {
+            let mut app = attached();
+            typed(&mut app, "!pwd");
+            let effects = key(&mut app, Key::Enter);
+            let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else {
+                panic!("{effects:?}")
+            };
+            let PageMessage::PiCommand { id, .. } = &**message else { panic!("{message:?}") };
+            app.update(Input::Dock(DockMessage::Error { id: *id, code: code.into() }));
+            let shown = app.session().entries.last();
+            assert!(
+                matches!(shown, Some(crate::term::state::Entry::Notice { text: crate::term::state::Text::Key { key, .. }, .. }) if key == "term.notForRemote"),
+                "{code}: {shown:?}"
+            );
+        }
+        assert_eq!(t("en", "term.notForRemote", &json!({})), "not available on a connected hub");
+        assert_eq!(t("es", "term.notForRemote", &json!({})), "no disponible en un hub conectado");
+        // An error nobody asked for says nothing.
+        let mut app = attached();
+        let before = app.session().entries.len();
+        app.update(Input::Dock(DockMessage::Error { id: 999, code: "not-for-remote".into() }));
+        assert_eq!(app.session().entries.len(), before);
     }
 
     #[test]

@@ -397,6 +397,8 @@ pub struct InitArgs {
     pub allow_no_sandbox: bool,
     pub settings: bool,
     pub credentials: bool,
+    /// When the binary file was last written (UTC, to the minute): a stale cross-build is easy to ship.
+    pub binary_built: Option<String>,
     pub yes: bool,
 }
 
@@ -585,6 +587,22 @@ pub fn tar_archive(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
     out
 }
 
+/// `secs` since the epoch as `2026-10-22 14:03 UTC`.
+pub fn utc_stamp(secs: u64) -> String {
+    let (days, rest) = ((secs / 86_400) as i64, secs % 86_400);
+    // Days to a civil date (Howard Hinnant's civil_from_days).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z.rem_euclid(146_097);
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 { shifted_month + 3 } else { shifted_month - 9 };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02} {:02}:{:02} UTC", rest / 3600, rest % 3600 / 60)
+}
+
 /// The user of `ssh -G <host>`: its first `user` line.
 pub fn ssh_g_user(output: &str) -> Option<String> {
     output.lines().find_map(|line| line.strip_prefix("user ")).map(|user| user.trim().to_string())
@@ -673,8 +691,9 @@ pub fn plan(probe: &Probe, args: &InitArgs) -> Vec<String> {
         format!("Hub: {} ({}): {}, {}, home {}", args.host, probe.ssh_host, probe.os, probe.arch, probe.home),
         "Aria will do this, in order, once you say yes:".to_string(),
         format!(
-            "1. Upload the Aria tree (installer, service unit, version pins) and the binary {} to {HUB_SRC} on the hub",
-            args.binary.display()
+            "1. Upload the Aria tree (installer, service unit, version pins) and the binary {}{} to {HUB_SRC} on the hub",
+            args.binary.display(),
+            args.binary_built.as_ref().map(|built| format!(" (built {built})")).unwrap_or_default()
         ),
         format!(
             "2. Run the installer there: {INSTALL_COMMAND} (it installs bubblewrap and iproute2 with the hub's package \
@@ -900,6 +919,11 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
         }
     };
     let binary_arch = read_binary_arch(&binary)?;
+    let binary_built = std::fs::metadata(&binary)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| utc_stamp(since.as_secs()));
     let args = InitArgs {
         host: raw.host,
         binary,
@@ -909,6 +933,7 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
         allow_no_sandbox: raw.allow_no_sandbox,
         settings: raw.settings,
         credentials: raw.credentials,
+        binary_built,
         yes: raw.yes,
     };
     let host = args.host.as_str();
@@ -1799,6 +1824,7 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
             allow_no_sandbox: false,
             settings: false,
             credentials: false,
+            binary_built: None,
         }
     }
 
@@ -2002,6 +2028,24 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
             run(&[("XDG_RUNTIME_DIR", "/elsewhere"), ("DBUS_SESSION_BUS_ADDRESS", "unix:path=/mine")]),
             "/elsewhere unix:path=/mine"
         );
+    }
+
+    #[test]
+    fn a_time_is_said_in_utc_to_the_minute() {
+        assert_eq!(utc_stamp(0), "1970-01-01 00:00 UTC");
+        assert_eq!(utc_stamp(1_700_000_000), "2023-11-14 22:13 UTC");
+        assert_eq!(utc_stamp(1_709_164_799), "2024-02-28 23:59 UTC");
+        assert_eq!(utc_stamp(1_709_164_800), "2024-02-29 00:00 UTC", "a leap day");
+    }
+
+    #[test]
+    fn the_plan_says_when_the_binary_was_built() {
+        let mut args = init_args();
+        args.binary_built = Some("2023-11-14 22:13 UTC".into());
+        let text = plan(&probe(), &args).join("\n");
+        assert!(text.contains("release/aria (built 2023-11-14 22:13 UTC)"), "{text}");
+        args.binary_built = None;
+        assert!(!plan(&probe(), &args).join("\n").contains("built"));
     }
 
     #[test]
