@@ -85,7 +85,7 @@ Tests: `bun test extensions`.
 - **Without a box that works** (macOS has no bwrap; on Linux bwrap may be missing, or installed and blocked by the system,
   as AppArmor does on Ubuntu 24.04) the sandbox no longer refuses every command: each one asks first, with the same
   permission card and choices, and the card says there is no sandbox on the machine (`sandbox/route.ts`). Nothing runs
-  unconfined without the user. "Works" is a real probe, `bwrap --unshare-user --ro-bind / / true` exiting 0
+  unconfined without the user. "Works" is a real probe, `bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc true` exiting 0
   (`sandbox/probe.ts`, once per process); where it does, nothing changes. `verify` uses the same probe.
 - **Aria's settings** (phase 2c) reach the extensions through one file, `aria.json` in the agent directory, read by
   `lib/config.ts`. Without it every value is the one these files always had (`DEFAULTS`), so the maintainer's own Pi is

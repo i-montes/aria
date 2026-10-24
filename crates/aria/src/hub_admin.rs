@@ -316,7 +316,9 @@ const REMOTE_EXISTING: &str =
 const SERVICE_KEEPS_RUNNING: &str =
     "the service keeps running: it takes the new binary when idle and the settings within a second";
 const REMOTE_VERSION: &str = "~/.local/bin/aria --version";
-const REMOTE_BWRAP: &str = "bwrap --unshare-user --ro-bind / / true";
+/// What the sandbox extension's probe runs (`extensions/sandbox/probe.ts`), which is the real call's mounts: a server that
+/// cannot mount `/proc` or `/dev` (a container) fails here and not at the first command.
+const REMOTE_BWRAP: &str = "bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc true";
 const REMOTE_SSHD_CONFIG: &str = "cat /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config 2>/dev/null";
 
 /// `systemctl --user` needs `XDG_RUNTIME_DIR` (and the user bus beside it), which a non-login ssh command lacks: set to what

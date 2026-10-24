@@ -230,7 +230,7 @@ A hub is Aria's service on a computer with no desktop (a server), reached from o
   dock page's `scheduleApprove` gives and no client may send), and it can re-bind the hub's Claude or Notion account
   (accepted, since it can already use them). Two session commands typed by such a client, `/effort` and
   `/autocompact`, still write their setting into the hub's `settings.json`. Where the sandbox does not work on the hub (no `bwrap`, or one the system blocks: the extension runs a real
-  `bwrap --unshare-user --ro-bind / / true` and uses the box only when it exits 0) every command asks first, as on a Mac,
+  `bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc true` and uses the box only when it exits 0) every command asks first, as on a Mac,
   and the prompt goes to whichever client is attached, so that key then answers it too: `hub init` does not install the
   client key unless the sandbox works or `--allow-no-sandbox` is given. Revoking a key is removing its line from
   `authorized_keys`.

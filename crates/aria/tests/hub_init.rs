@@ -274,6 +274,24 @@ fn a_sandbox_that_cannot_work_is_said_with_the_fix_printed_not_applied() {
 }
 
 #[test]
+fn the_sandbox_probe_does_what_the_real_call_does_so_a_server_that_cannot_mount_proc_is_caught() {
+    let world = World::new();
+    let output = world.init_yes(&[], &[("ARIA_FAKE_SSH_BWRAP_NOPROC", "1")]);
+    let out = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
+    assert!(out.contains("Can't mount proc"), "what bwrap said: {out}");
+    assert!(out.contains("kernel.apparmor_restrict_unprivileged_userns"), "the fix is printed: {out}");
+    // The probe asks for what the sandbox extension asks for: the disk read-only, /dev and /proc.
+    let probe = commands(&world.log()).into_iter().find(|c| c.starts_with("bwrap ")).expect("a probe ran");
+    assert_eq!(probe, "bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc true");
+    // And no key is installed on such a server without the flag.
+    let key = key_file(&world);
+    let refused = world.init_yes(&["--client-key", &key], &[("ARIA_FAKE_SSH_BWRAP_NOPROC", "1")]);
+    assert_eq!(refused.status.code(), Some(1), "{}{}", text(&refused.stdout), text(&refused.stderr));
+    assert_eq!(world.authorized_keys(), "");
+}
+
+#[test]
 fn a_client_key_is_installed_restricted_and_once() {
     let world = World::new();
     let key_file = world.path("laptop.pub");

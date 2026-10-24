@@ -59,7 +59,7 @@ Some runs have no one to answer a card: a subagent, a scheduled task running by 
 
 ### Where the box does not work
 
-macOS has no bubblewrap yet, and a Linux machine may have none, or have one the system blocks (Ubuntu 24.04 restricts the user namespaces `bwrap` needs unless a profile allows it). Aria does not trust `bwrap --version`. It runs the real thing once per process: `bwrap --unshare-user --ro-bind / / true` must exit 0.
+macOS has no bubblewrap yet, and a Linux machine may have none, or have one the system blocks (Ubuntu 24.04 restricts the user namespaces `bwrap` needs unless a profile allows it). Aria does not trust `bwrap --version`. It runs the real thing once per process: `bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc true` must exit 0 (the mounts the real call makes, so a host that can make the namespace but not mount `/proc`, as a container may be, counts as blocked).
 
 When it does not, **every command asks first**, with the same card and the same choices, and the card says "No sandbox is available on this machine: this command runs with full access." Nothing runs unconfined without you. On Linux the checks after edits do not run at all without a working box, and on macOS they do not run either.
 

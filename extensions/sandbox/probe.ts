@@ -1,9 +1,10 @@
 // Does the box work here? `bwrap --version` succeeding says only that the program is installed: on Ubuntu 24.04 AppArmor
 // (and some kernels' sysctl) refuse the user namespace bwrap needs, and then every boxed command fails. So the check is
-// the real thing: a user namespace with the whole disk read-only, running `true`.
+// the real thing: a user namespace with the whole disk read-only and the `/dev` and `/proc` the real call mounts (a
+// container-style server lets bwrap make the namespace but not mount `/proc`), running `true`.
 import { execFileSync } from 'node:child_process'
 
-export const PROBE_ARGS = ['--unshare-user', '--ro-bind', '/', '/', 'true']
+export const PROBE_ARGS = ['--unshare-user', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', 'true']
 
 type Run = (program: string, args: string[]) => void
 

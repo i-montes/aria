@@ -178,7 +178,7 @@ end). This is one design with four milestones; each milestone gets its own plan.
   service (a new client-allowed message, `oauthCode`, answered like the page's `oauthResult`).
 - **Sandbox on the server:** bwrap needs unprivileged user namespaces, and Ubuntu 24.04 restricts them by default
   (AppArmor), so bwrap may be installed and still fail. `hub init` ends by running a real bwrap probe on the host
-  (`bwrap --unshare-user --ro-bind / / true`) and says plainly if the sandbox cannot work, with the fix for that
+  (`bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc true`) and says plainly if the sandbox cannot work, with the fix for that
   distribution printed (an AppArmor profile for bwrap, or the sysctl) and never applied by Aria; until it works, commands
   ask every time, as on a Mac without bwrap.
 - **Done when:** a schedule created from the laptop's terminal runs while the laptop is off; a session started over
