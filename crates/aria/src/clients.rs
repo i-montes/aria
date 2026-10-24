@@ -11,7 +11,8 @@
 //! - `hello` only counts as a connection's first line (any other first line means there is none: a local terminal): the
 //!   hub answers with its own `hello` (no `remote`), and a different `protocol` is answered `protocol-mismatch` and the
 //!   connection closed. `remote: true` marks a client that came in from another machine: it can never send `secretSave`
-//!   or a `!command` (`not-for-remote`), and a later `hello` cannot lift the mark.
+//!   or a `!command` (`not-for-remote`), and a later `hello` cannot lift the mark. It never chooses a session's folder
+//!   either: its `sessionNew` reaches the chat with no `workdir`.
 //! - Sign-ins: a client (local or remote) may start Claude's or Notion's (`startOauth`, `startMcpOauth`) and paste the
 //!   address its browser could not load (`oauthCode`); they go to the handlers, not the chat. A sign-in answers twice
 //!   (`oauthUrl`, then `oauthResult` or `error`), so its id stays until the last of them. Security: a remote client can
@@ -85,6 +86,16 @@ fn refused_for_remote(message: &PageMessage) -> bool {
         PageMessage::SecretSave { .. } => true,
         PageMessage::Session { message, .. } => matches!(**message, PageMessage::ChatBash { .. }),
         _ => false,
+    }
+}
+
+/// What a remote client's message becomes on its way to the chat: the same message with what it may not choose taken
+/// out. `message` is already one `allowed` lets through.
+fn for_remote(message: PageMessage) -> PageMessage {
+    match message {
+        // Ruling 6 of the spec: no client folder over connect (a session's folder is where its commands may write).
+        PageMessage::SessionNew { id, .. } => PageMessage::SessionNew { id, workdir: None },
+        other => other,
     }
 }
 
@@ -329,6 +340,7 @@ impl Hub {
         match message {
             Some(message) if remote && refused_for_remote(&message) => refuse("not-for-remote"),
             Some(message) if allowed(&message) => {
+                let message = if remote { for_remote(message) } else { message };
                 let _ = self.chat.lock().unwrap().send(message);
             }
             Some(message) if for_handlers(&message) => (self.handlers)(message),
@@ -653,6 +665,26 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    fn new_session_workdir(f: &Fixture) -> Option<String> {
+        match f.chat.recv_timeout(Duration::from_secs(5)).unwrap() {
+            PageMessage::SessionNew { workdir, .. } => workdir,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_remote_client_never_chooses_a_sessions_folder_but_a_local_one_does() {
+        let f = fixture();
+        let mut remote = connect(&f);
+        remote.send(hello(PROTOCOL, Some(true)));
+        remote.next();
+        remote.send(json!({"type": "sessionNew", "id": 1, "workdir": "/home/ana/.local/bin"}));
+        assert_eq!(new_session_workdir(&f), None, "the hub drops a remote client's folder");
+        let mut local = connect(&f);
+        local.send(json!({"type": "sessionNew", "id": 2, "workdir": "/home/ana/Projects/checkout-widget"}));
+        assert_eq!(new_session_workdir(&f).as_deref(), Some("/home/ana/Projects/checkout-widget"));
     }
 
     #[test]
