@@ -627,3 +627,37 @@ fn with_a_working_sandbox_the_key_goes_in_with_no_flag() {
     assert_eq!(world.authorized_keys(), format!("{}\n", restricted(&world)));
     assert!(!text(&output.stdout).contains("warning: the sandbox cannot start"));
 }
+
+#[test]
+fn a_restricted_key_that_went_in_comes_with_the_ssh_config_to_use_it() {
+    let world = World::new();
+    let key = key_file(&world);
+    let output = world.init_yes(&["--client-key", &key], &[]);
+    let out = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
+    let private = key.trim_end_matches(".pub");
+    // The host and user are the ones given; the identity is the key's file without `.pub`.
+    let snippet = format!(
+        "Host aria-hub\n    HostName hub.example\n    User ana\n    IdentityFile {private}\n    IdentitiesOnly yes\n"
+    );
+    assert!(out.contains(&snippet), "{out}");
+    assert!(out.contains("~/.ssh/config") && out.contains("aria connect aria-hub"), "{out}");
+    // A key that was already there, restricted, is as good: same snippet.
+    let again = text(&world.init_yes(&["--client-key", &key], &[]).stdout);
+    assert!(again.contains(&snippet), "{again}");
+    assert!(again.contains("The hub is ready. Connect from this computer with: aria connect aria-hub"), "{again}");
+    // No key asked for, no snippet.
+    let plain = text(&World::new().init_yes(&[], &[]).stdout);
+    assert!(!plain.contains("IdentityFile") && !plain.contains("Host aria-hub"), "{plain}");
+}
+
+#[test]
+fn a_login_key_already_in_authorized_keys_is_told_to_be_a_dedicated_key() {
+    let world = World::new();
+    seed_authorized_keys(&world, &format!("{KEY}\n"));
+    let output = world.init_yes(&["--client-key", &key_file(&world)], &[]);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(1), "{out}{err}");
+    assert!(err.contains("use a dedicated key, not your login key"), "{err}");
+    assert!(!out.contains("IdentityFile"), "no snippet for a key that is not restricted: {out}");
+}

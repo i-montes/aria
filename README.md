@@ -69,12 +69,33 @@ let `aria hub init` do the rest (it prints its plan and asks before it changes a
 
 ```sh
 sh tools/build-headless.sh                       # the headless binary, cross-built for the server (aarch64 by default)
-aria hub init ana@hub.example --client-key ~/.ssh/id_ed25519.pub
-aria connect ana@hub.example                     # the terminal, on the hub's sessions
+ssh-keygen -t ed25519 -f ~/.ssh/aria-hub -N ''   # a key of its own for Aria, never the one you log in with
+aria hub init ana@hub.example --client-key ~/.ssh/aria-hub.pub
 ```
 
+`hub init` ends by printing the entry to add to `~/.ssh/config`, so that ssh uses that key and no other for the hub:
+
+```
+Host aria-hub
+    HostName hub.example
+    User ana
+    IdentityFile ~/.ssh/aria-hub
+    IdentitiesOnly yes
+```
+
+```sh
+aria connect aria-hub                            # the terminal, on the hub's sessions
+```
+
+Use a dedicated key, not your login key: your login key is already in the server's `authorized_keys` without a
+restriction (`hub init` refuses to restrict a key that is there unrestricted), and `aria connect` uses ssh's own
+identity, so unless the entry above names the dedicated key every connection would be the unrestricted one and nothing
+would be protected.
+
 `hub init` copies Aria to the server, installs `aria serve` as a user service, sends your settings and credentials once,
-and, with `--client-key`, allows that key to run only `aria client-stdio` there. Honest note: the server's ssh port stays
+and, with `--client-key`, allows that key to run only `aria client-stdio` there (if the sandbox works on the server: without
+one the key is not installed unless you pass `--allow-no-sandbox`, because every command then asks and whoever holds the key
+can approve it). Honest note: the server's ssh port stays
 whatever it was, and the safe end state is a hub whose ssh is reachable **only over a private network** (Tailscale), with
 the public port closed. Version 1 works without that step (key-only login and the restricted key carry the weight until
 you can close the port), and `hub init` warns when sshd answers on a public address. Terminals on another computer cannot
@@ -88,7 +109,7 @@ save secrets or run `!commands` on the hub. Details: [the hub in the architectur
 | `aria dock` | The dock itself: what the login service runs |
 | `aria serve` | The service with no window, for a server (what `install.sh --headless`'s user unit runs); a dock and a serve on one computer exclude each other |
 | `aria connect [user@]host` | The terminal client on another computer's service, over ssh (`~/.local/bin/aria client-stdio` runs there). Nothing of Aria listens on a port |
-| `aria hub init <user@host>` | Sets a server up as a hub over ssh (see above): `--binary`, `--projects`, `--client-key`, `--yes` |
+| `aria hub init <user@host>` | Sets a server up as a hub over ssh (see above): `--binary`, `--projects`, `--client-key`, `--allow-no-sandbox`, `--yes` |
 | `aria toggle` / `aria show` | Opens or closes the dock (the shortcut does the same) / only opens it; starts it first if it is not running |
 | `aria start` / `aria quit` | Starts the dock under its login service / stops it (its background work and engines first). In the dock, Cmd+Q asks first and quits on a second press |
 | `aria bar install` / `remove` | Puts Aria's face in the Omarchy bar, next to the weather, or takes it out (the installer runs both; nothing happens without the Omarchy shell) |

@@ -355,6 +355,8 @@ pub struct InitArgs {
     pub projects: Option<String>,
     /// The bare public key line, validated.
     pub client_key: Option<String>,
+    /// The file it was read from.
+    pub client_key_file: Option<PathBuf>,
     pub allow_no_sandbox: bool,
     pub yes: bool,
 }
@@ -370,6 +372,8 @@ pub struct Probe {
     pub ssh_host: String,
     /// The port the owner's ssh connects to, which is the one sshd listens on.
     pub sshd_port: u16,
+    /// The user the owner's ssh connects as.
+    pub ssh_user: String,
     pub listeners: Vec<Listener>,
     pub has_xz: bool,
     pub has_bwrap: bool,
@@ -534,6 +538,31 @@ pub fn tar_archive(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
     out
 }
 
+/// The user of `ssh -G <host>`: its first `user` line.
+pub fn ssh_g_user(output: &str) -> Option<String> {
+    output.lines().find_map(|line| line.strip_prefix("user ")).map(|user| user.trim().to_string())
+}
+
+/// What the owner adds to `~/.ssh/config` so `aria connect aria-hub` uses the dedicated key (and only it): the host and
+/// user from what was typed (`fallback_user` when it names none), the key's file without `.pub`.
+pub fn ssh_snippet(host: &str, fallback_user: &str, key_file: &Path) -> Vec<String> {
+    let (user, hostname) = host.split_once('@').unwrap_or((fallback_user, host));
+    let key_file = std::path::absolute(key_file).unwrap_or_else(|_| key_file.to_path_buf());
+    let key = key_file.to_string_lossy();
+    let identity = key.strip_suffix(".pub").unwrap_or(&key);
+    vec![
+        "Add this to ~/.ssh/config on this computer, so that `aria connect aria-hub` uses this key and no other:"
+            .to_string(),
+        "".to_string(),
+        "Host aria-hub".to_string(),
+        format!("    HostName {hostname}"),
+        format!("    User {user}"),
+        format!("    IdentityFile {identity}"),
+        "    IdentitiesOnly yes".to_string(),
+        "".to_string(),
+    ]
+}
+
 /// The program names `command -v` printed a path for.
 pub fn parse_found(output: &str) -> Vec<String> {
     output
@@ -695,7 +724,7 @@ fn probe_listeners(host: &str) -> Result<Vec<Listener>, Failure> {
 }
 
 /// What `ssh -G <host>` gives (the owner's ssh configuration, nothing is connected).
-fn ssh_config(host: &str) -> Result<(u16, String), Failure> {
+fn ssh_config(host: &str) -> Result<(u16, String, String), Failure> {
     crate::connect::check_host(host).map_err(|_| usage_error(format!("{host}: not a host")))?;
     let output = Command::new(crate::connect::ssh_program())
         .arg("-G")
@@ -706,8 +735,9 @@ fn ssh_config(host: &str) -> Result<(u16, String), Failure> {
     if !output.status.success() {
         return Err(failed(format!("ssh -G {host}: {}", first_line(&output.stderr))));
     }
-    let (port, hostname) = parse_ssh_g(&String::from_utf8_lossy(&output.stdout));
-    Ok((port.unwrap_or(22), hostname.unwrap_or_else(|| host.to_string())))
+    let shown = String::from_utf8_lossy(&output.stdout);
+    let (port, hostname) = parse_ssh_g(&shown);
+    Ok((port.unwrap_or(22), hostname.unwrap_or_else(|| host.to_string()), ssh_g_user(&shown).unwrap_or_default()))
 }
 
 // ---- the run --------------------------------------------------------------------------------------------------------
@@ -779,13 +809,14 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
         binary,
         projects: raw.projects,
         client_key,
+        client_key_file: raw.client_key,
         allow_no_sandbox: raw.allow_no_sandbox,
         yes: raw.yes,
     };
     let host = args.host.as_str();
 
     // Read-only probes: nothing on the hub changes until a yes.
-    let (sshd_port, ssh_host) = ssh_config(host)?;
+    let (sshd_port, ssh_host, ssh_user) = ssh_config(host)?;
     let arch = probe_text(host, "uname -m")?;
     if arch != "aarch64" && arch != "x86_64" {
         return Err(failed(format!("the hub is {arch:?}: only aarch64 and x86_64 are supported")));
@@ -817,6 +848,7 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
         home,
         ssh_host,
         sshd_port,
+        ssh_user,
         listeners,
         has_xz: has("xz"),
         has_bwrap: has("bwrap"),
@@ -961,11 +993,17 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
                 Ok(output) if output.status.success() => {
                     println!("      {}", first_line(&output.stdout));
                     key = KeyState::Restricted;
+                    if let Some(file) = &args.client_key_file {
+                        for text in ssh_snippet(host, &probe.ssh_user, file) {
+                            println!("{text}");
+                        }
+                    }
                 }
                 Ok(output) if output.status.code() == Some(KEY_UNRESTRICTED) => {
                     eprintln!(
                         "aria hub init: step 6 (key) failed: that key is already in authorized_keys WITHOUT the \
-                         restriction: edit it yourself to start with `{} `",
+                         restriction: use a dedicated key, not your login key (see the README), or edit that line \
+                         yourself to start with `{} `",
                         authorized_line(&probe.home, "").trim_end()
                     );
                     code = 1;
@@ -988,7 +1026,9 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
 
     check_public_ssh(host, probe, &listeners, key);
     if code == 0 {
-        println!("The hub is ready. Connect from this computer with: aria connect {host}");
+        // With the dedicated key's ssh entry added, `aria-hub` is the way in that uses it.
+        let target = if key == KeyState::Restricted { "aria-hub" } else { host };
+        println!("The hub is ready. Connect from this computer with: aria connect {target}");
     }
     Ok(code)
 }
@@ -1556,6 +1596,7 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
             home: "/home/ana".into(),
             ssh_host: "hub.example".into(),
             sshd_port: 2222,
+            ssh_user: "ana".into(),
             listeners: parse_listeners(SS),
             has_xz: true,
             has_bwrap: false,
@@ -1571,6 +1612,7 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
             binary: PathBuf::from("/src/aria/target/aarch64-unknown-linux-gnu/release/aria"),
             projects: None,
             client_key: None,
+            client_key_file: None,
             yes: false,
             allow_no_sandbox: false,
         }
@@ -1789,6 +1831,24 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
         assert_eq!(parse_ssh_g("port 22\n"), (Some(22), None));
         assert_eq!(parse_ssh_g("port notaport\nport 99999\n"), (None, None));
         assert_eq!(parse_ssh_g(""), (None, None));
+    }
+
+    #[test]
+    fn ssh_g_gives_the_user_the_first_time() {
+        assert_eq!(ssh_g_user("user ana\nhostname hub.example\nuser bob\n").as_deref(), Some("ana"));
+        assert_eq!(ssh_g_user("hostname hub.example\n"), None);
+    }
+
+    #[test]
+    fn the_ssh_config_snippet_names_the_host_the_user_and_the_key_without_pub() {
+        let lines = ssh_snippet("ana@hub.example", "root", Path::new("/home/ana/.ssh/aria-hub.pub")).join("\n");
+        assert!(lines.contains(
+            "Host aria-hub\n    HostName hub.example\n    User ana\n    IdentityFile /home/ana/.ssh/aria-hub\n    IdentitiesOnly yes"
+        ));
+        assert!(lines.contains("~/.ssh/config") && lines.contains("aria connect aria-hub"), "{lines}");
+        // a host with no user: the one ssh would use
+        let lines = ssh_snippet("hub.example", "ana", Path::new("/k/aria-hub.pub")).join("\n");
+        assert!(lines.contains("HostName hub.example\n    User ana\n"), "{lines}");
     }
 
     #[test]

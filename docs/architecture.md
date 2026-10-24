@@ -206,7 +206,7 @@ A hub is Aria's service on a computer with no desktop (a server), reached from o
   computer). A host that starts with `-` is refused. Exit codes: 1 when the hub or ssh cannot be reached, 2 not a host,
   3 another protocol. Closing the client, or losing the connection, stops nothing on the hub.
 - **`hub init` and `hub-import`** — `aria hub init <user@host> [--binary <path>] [--projects <dir>] [--client-key <pubkey
-  file>] [--yes]` (`hub_admin.rs`, English only, run on the owner's computer) probes the host over ssh and prints its plan; only
+  file>] [--allow-no-sandbox] [--yes]` (`hub_admin.rs`, English only, run on the owner's computer) probes the host over ssh and prints its plan; only
   after a yes it uploads the tree and the binary, runs `install/install.sh --headless` there (the user unit
   `install/aria-serve.service`, `loginctl enable-linger`), sends the settings and credentials as one bundle to
   `aria hub-import` on the hub (mode `600` files, the old ones kept as `.bak`; keys come out of the owner's keyring as
@@ -215,7 +215,10 @@ A hub is Aria's service on a computer with no desktop (a server), reached from o
   probe (Ubuntu 24.04 restricts user namespaces, so bwrap can be installed and still fail; a missing bwrap and a blocked
   one are told apart, the fix is printed and never applied): if the sandbox does not work the key is not installed,
   step 6 is reported as skipped and the run ends with status 1, unless `--allow-no-sandbox` is given (the warning is
-  printed either way: until a sandbox works every command asks, and whoever holds the client key can approve). It warns,
+  printed either way: until a sandbox works every command asks, and whoever holds the client key can approve). When the
+  key goes in, it prints the `~/.ssh/config` entry (`Host aria-hub`, the host and user typed, the key's file without
+  `.pub`, `IdentitiesOnly yes`) that makes `aria connect aria-hub` use it: the owner's login key is already in
+  `authorized_keys` unrestricted, and a key found there that way is reported ("use a dedicated key"), never edited. It warns,
   once and without blocking, when sshd answers on a public address. It never edits `sshd_config` or a firewall, and
   creates no accounts.
 - **From a terminal** — `/schedules` lists the scheduled tasks and pauses, resumes and deletes them (creating one stays
