@@ -97,7 +97,9 @@ mod tests {
 
     #[test]
     fn the_config_names_the_conversation_language_as_the_persona_does() {
-        for (code, name) in [("es", "Spanish"), ("en", "English"), ("pt", "Portuguese"), ("French", "French"), ("", "Spanish")] {
+        for (code, name) in
+            [("es", "Spanish"), ("en", "English"), ("pt", "Portuguese"), ("French", "French"), ("", "Spanish")]
+        {
             let mut settings = golden();
             settings.assistant.language = code.into();
             let config = extension_config_with_home(&settings, Path::new("/home/u"));
