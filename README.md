@@ -98,7 +98,9 @@ one the key is not installed unless you pass `--allow-no-sandbox`, because every
 can approve it). Honest note: the server's ssh port stays
 whatever it was, and the safe end state is a hub whose ssh is reachable **only over a private network** (Tailscale), with
 the public port closed. Version 1 works without that step (key-only login and the restricted key carry the weight until
-you can close the port), and `hub init` warns when sshd answers on a public address. Terminals on another computer cannot
+you can close the port), and `hub init` warns when sshd answers on a public address. Running `hub init` again is safe: it
+keeps the service running and the settings and credentials the hub already has (the hub's own Pi may have refreshed
+them); `--settings` and `--credentials` replace them with this computer's. Terminals on another computer cannot
 save secrets or run `!commands` on the hub. Details: [the hub in the architecture](docs/architecture.md#the-hub).
 
 ### Commands
@@ -109,7 +111,7 @@ save secrets or run `!commands` on the hub. Details: [the hub in the architectur
 | `aria dock` | The dock itself: what the login service runs |
 | `aria serve` | The service with no window, for a server (what `install.sh --headless`'s user unit runs); a dock and a serve on one computer exclude each other |
 | `aria connect [user@]host` | The terminal client on another computer's service, over ssh (`~/.local/bin/aria client-stdio` runs there). Nothing of Aria listens on a port |
-| `aria hub init <user@host>` | Sets a server up as a hub over ssh (see above): `--binary`, `--projects`, `--client-key`, `--allow-no-sandbox`, `--yes` |
+| `aria hub init <user@host>` | Sets a server up as a hub over ssh (see above): `--binary`, `--projects`, `--client-key`, `--settings`, `--credentials`, `--allow-no-sandbox`, `--yes` |
 | `aria toggle` / `aria show` | Opens or closes the dock (the shortcut does the same) / only opens it; starts it first if it is not running |
 | `aria start` / `aria quit` | Starts the dock under its login service / stops it (its background work and engines first). In the dock, Cmd+Q asks first and quits on a second press |
 | `aria bar install` / `remove` | Puts Aria's face in the Omarchy bar, next to the weather, or takes it out (the installer runs both; nothing happens without the Omarchy shell) |

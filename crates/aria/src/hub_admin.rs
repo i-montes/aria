@@ -178,7 +178,7 @@ impl Keys<'_> {
 }
 
 /// What `hub-import` runs on the hub with the line it was given: the files of the bundle written into `~/.aria` (mode
-/// 600, each atomically, the one it replaces kept as `<name>.bak`), the names in [`BUNDLE_FILES`] order. A bundle that is
+/// 600, each atomically, the first one it replaces kept as `<name>.bak`: never overwritten by a later import), the names in [`BUNDLE_FILES`] order. A bundle that is
 /// not the expected shape, holds a name that is not one of the four or a file that is not a JSON object writes nothing.
 pub fn import(paths: &AriaPaths, bundle: &str) -> Result<Vec<String>, String> {
     let bundle: Bundle = serde_json::from_str(bundle).map_err(|error| format!("the bundle is not one: {error}"))?;
@@ -202,7 +202,13 @@ pub fn import(paths: &AriaPaths, bundle: &str) -> Result<Vec<String>, String> {
         let path = paths.root.join(name);
         let failed = |error: std::io::Error| format!("{}: {error}", path.display());
         match std::fs::read(&path) {
-            Ok(old) => write_bytes_atomic(&paths.root.join(format!("{name}.bak")), &old, 0o600).map_err(failed)?,
+            // The first copy is the hub's own: a second import never replaces it with what the first one wrote.
+            Ok(old) => {
+                let backup = paths.root.join(format!("{name}.bak"));
+                if !backup.exists() {
+                    write_bytes_atomic(&backup, &old, 0o600).map_err(failed)?;
+                }
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(failed(error)),
         }
@@ -280,7 +286,7 @@ pub fn private_address(ip: IpAddr) -> bool {
 
 const USAGE: &str =
     "usage: aria hub init <user@host> [--binary <path>] [--projects <dir>] [--client-key <pubkey file>] \
-     [--allow-no-sandbox] [--yes]";
+     [--settings] [--credentials] [--allow-no-sandbox] [--yes]";
 
 /// What `aria hub init` uploads from the checkout: the installer, the service unit and the pins the installer reads
 /// (`install/install.sh` reads `../<pin>`, so the tree keeps its shape under `~/.aria/hub-src`).
@@ -299,7 +305,14 @@ const HUB_SRC: &str = "~/.aria/hub-src";
 const REMOTE_UPLOAD: &str = "umask 077 && mkdir -p ~/.aria/hub-src && tar -xf - -C ~/.aria/hub-src";
 const REMOTE_INSTALL: &str = "sh ~/.aria/hub-src/install/install.sh --headless --local ~/.aria/hub-src/aria";
 const REMOTE_IMPORT: &str = "~/.local/bin/aria hub-import";
+const SERVICE_UNIT: &str = "aria-serve.service";
 const REMOTE_RESTART: &str = "systemctl --user restart aria-serve.service";
+const REMOTE_IS_ACTIVE: &str = "systemctl --user is-active aria-serve.service";
+/// Which of the four bundle files the hub has: a `test -f` on each, the names of those that exist.
+const REMOTE_EXISTING: &str =
+    "for f in settings.json auth.json mcp.json mcp-auth.json; do test -f ~/.aria/$f && echo $f; done; true";
+const SERVICE_KEEPS_RUNNING: &str =
+    "the service keeps running: it takes the new binary when idle and the settings within a second";
 const REMOTE_VERSION: &str = "~/.local/bin/aria --version";
 const REMOTE_BWRAP: &str = "bwrap --unshare-user --ro-bind / / true";
 const REMOTE_SSHD_CONFIG: &str = "cat /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config 2>/dev/null";
@@ -344,6 +357,10 @@ pub struct RawInit {
     pub client_key: Option<PathBuf>,
     /// Install the client key even when the sandbox does not work on the hub.
     pub allow_no_sandbox: bool,
+    /// Replace the hub's `settings.json` with this computer's (otherwise a hub that has one keeps it).
+    pub settings: bool,
+    /// Replace the hub's credentials (`auth.json`, `mcp.json`, `mcp-auth.json`) with this computer's.
+    pub credentials: bool,
     pub yes: bool,
 }
 
@@ -358,6 +375,8 @@ pub struct InitArgs {
     /// The file it was read from.
     pub client_key_file: Option<PathBuf>,
     pub allow_no_sandbox: bool,
+    pub settings: bool,
+    pub credentials: bool,
     pub yes: bool,
 }
 
@@ -374,6 +393,10 @@ pub struct Probe {
     pub sshd_port: u16,
     /// The user the owner's ssh connects as.
     pub ssh_user: String,
+    /// `aria-serve.service` was active before this run (a hub that is already working).
+    pub service_active: bool,
+    /// The bundle files `~/.aria` on the hub already has.
+    pub existing: Vec<String>,
     pub listeners: Vec<Listener>,
     pub has_xz: bool,
     pub has_bwrap: bool,
@@ -417,6 +440,8 @@ pub fn parse_init_args(args: &[String]) -> Result<RawInit, String> {
         projects: None,
         client_key: None,
         allow_no_sandbox: false,
+        settings: false,
+        credentials: false,
         yes: false,
     };
     let mut host = None;
@@ -426,6 +451,8 @@ pub fn parse_init_args(args: &[String]) -> Result<RawInit, String> {
         match arg.as_str() {
             "--yes" | "-y" => raw.yes = true,
             "--allow-no-sandbox" => raw.allow_no_sandbox = true,
+            "--settings" => raw.settings = true,
+            "--credentials" => raw.credentials = true,
             "--binary" => raw.binary = Some(PathBuf::from(value("--binary")?)),
             "--projects" => raw.projects = Some(value("--projects")?),
             "--client-key" => raw.client_key = Some(PathBuf::from(value("--client-key")?)),
@@ -606,6 +633,19 @@ pub fn answer_is_yes(answer: &str) -> bool {
     matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
+/// The bundle files this run sends: each one the hub does not have yet, and the ones it has when the flag for them is
+/// given (`--settings` for `settings.json`, `--credentials` for the other three). What a hub already has is its own: it
+/// holds what its Pi rotated and what its owner changed there.
+pub fn files_to_send(probe: &Probe, args: &InitArgs) -> Vec<&'static str> {
+    BUNDLE_FILES
+        .into_iter()
+        .filter(|name| {
+            let flag = if *name == "settings.json" { args.settings } else { args.credentials };
+            flag || !probe.existing.iter().any(|have| have == name)
+        })
+        .collect()
+}
+
 /// What `aria hub init` is about to do, as the lines printed before anything runs.
 pub fn plan(probe: &Probe, args: &InitArgs) -> Vec<String> {
     let projects = args.projects.clone().unwrap_or_else(|| format!("{}/Projects", probe.home.trim_end_matches('/')));
@@ -622,10 +662,15 @@ pub fn plan(probe: &Probe, args: &InitArgs) -> Vec<String> {
              linger)"
         ),
         format!(
-            "3. Send your settings and credentials (settings.json, auth.json, mcp.json and mcp-auth.json, the ones \
-             you have) as one line on the stdin of {REMOTE_IMPORT}; the hub's sandbox projects folder will be {projects}"
+            "3. Send your settings and credentials (the ones you have) as one line on the stdin of {REMOTE_IMPORT}; the \
+             hub's sandbox projects folder will be {projects}. {}",
+            send_detail(probe, args)
         ),
-        format!("4. Restart the service: {REMOTE_RESTART}"),
+        if probe.service_active {
+            format!("4. {SERVICE_KEEPS_RUNNING} ({SERVICE_UNIT} is active: it is not restarted)")
+        } else {
+            format!("4. Restart the service: {REMOTE_RESTART}")
+        },
         format!("5. Check the installed version: {REMOTE_VERSION}"),
     ];
     if let Some(key) = &args.client_key {
@@ -649,6 +694,36 @@ pub fn plan(probe: &Probe, args: &InitArgs) -> Vec<String> {
         lines.push("    sudo apt-get install -y xz-utils".to_string());
     }
     lines
+}
+
+/// Says what step 3 writes on the hub, what it replaces and what it keeps.
+fn send_detail(probe: &Probe, args: &InitArgs) -> String {
+    let sent = files_to_send(probe, args);
+    let (replaced, new): (Vec<&str>, Vec<&str>) =
+        sent.iter().partition(|name| probe.existing.iter().any(|have| have == *name));
+    let kept: Vec<&str> = BUNDLE_FILES
+        .into_iter()
+        .filter(|name| !sent.contains(name) && probe.existing.contains(&name.to_string()))
+        .collect();
+    let mut parts = Vec::new();
+    if !new.is_empty() && !probe.existing.is_empty() {
+        parts.push(format!("Written on the hub, which has none: {}.", new.join(", ")));
+    }
+    if !replaced.is_empty() {
+        parts
+            .push(format!("Replaced on the hub (the first copy it had stays as <name>.bak): {}.", replaced.join(", ")));
+    }
+    if !kept.is_empty() {
+        parts.push(format!(
+            "Kept as the hub has them: {} (--settings replaces settings.json; --credentials replaces auth.json, \
+             mcp.json and mcp-auth.json).",
+            kept.join(", ")
+        ));
+    }
+    if sent.is_empty() {
+        parts.push("Nothing is sent.".to_string());
+    }
+    parts.join(" ")
 }
 
 // ---- ssh ------------------------------------------------------------------------------------------------------------
@@ -811,6 +886,8 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
         client_key,
         client_key_file: raw.client_key,
         allow_no_sandbox: raw.allow_no_sandbox,
+        settings: raw.settings,
+        credentials: raw.credentials,
         yes: raw.yes,
     };
     let host = args.host.as_str();
@@ -842,6 +919,13 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
     } else {
         None
     };
+    let service_active = probe_text(host, REMOTE_IS_ACTIVE)?.lines().next().map(str::trim) == Some("active");
+    let existing: Vec<String> = probe_text(host, REMOTE_EXISTING)?
+        .lines()
+        .map(str::trim)
+        .filter(|name| BUNDLE_FILES.contains(name))
+        .map(str::to_string)
+        .collect();
     let probe = Probe {
         arch,
         os: if os.is_empty() { "unknown OS".to_string() } else { os },
@@ -849,6 +933,8 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
         ssh_host,
         sshd_port,
         ssh_user,
+        service_active,
+        existing,
         listeners,
         has_xz: has("xz"),
         has_bwrap: has("bwrap"),
@@ -857,16 +943,26 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
         node_version,
     };
 
-    let bundle = export_bundle(&AriaPaths::from_env(), &probe.home, args.projects.as_deref())
+    let mut bundle = export_bundle(&AriaPaths::from_env(), &probe.home, args.projects.as_deref())
         .map_err(|why| failed(format!("cannot build the settings to send: {why}")))?;
+    // What the hub already has is its own, unless a flag says to replace it.
+    let sending = files_to_send(&probe, &args);
+    bundle.files.retain(|name, _| sending.contains(&name.as_str()));
     for warning in &bundle.warnings {
         println!("note: {warning}");
     }
     if !bundle.warnings.is_empty() {
         println!("      (a computer that never had a keyring has nothing there to send; otherwise unlock it and run init again)");
     }
-    let mut line = serde_json::to_string(&bundle).map_err(|error| failed(error.to_string()))?;
-    line.push('\n');
+    // Nothing to send (the hub has everything and no flag says to replace it): no bundle line at all.
+    let mut line = if bundle.files.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(&bundle).map_err(|error| failed(error.to_string()))?
+    };
+    if !line.is_empty() {
+        line.push('\n');
+    }
     if line.len() as u64 > MAX_BUNDLE_BYTES {
         return Err(failed("the settings to send are too large"));
     }
@@ -946,20 +1042,29 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
     let listeners =
         if probe.listeners.is_empty() { probe_listeners(host).unwrap_or_default() } else { probe.listeners.clone() };
 
-    println!("step 3 of {total}: sending settings and credentials");
-    let output = remote(host, REMOTE_IMPORT, Some(bundle_line.as_bytes()))
-        .map_err(|error| stopped(3, "import", describe_error(&error)))?;
-    if !output.status.success() {
-        // What hub-import says on stderr can quote a value of the bundle: it is never shown.
-        return Err(stopped(3, "import", format!("the hub refused the bundle ({})", describe(output.status))));
+    if bundle_line.is_empty() {
+        println!("step 3 of {total}: nothing to send: the hub keeps the settings and credentials it has");
+    } else {
+        println!("step 3 of {total}: sending settings and credentials");
+        let output = remote(host, REMOTE_IMPORT, Some(bundle_line.as_bytes()))
+            .map_err(|error| stopped(3, "import", describe_error(&error)))?;
+        if !output.status.success() {
+            // What hub-import says on stderr can quote a value of the bundle: it is never shown.
+            return Err(stopped(3, "import", format!("the hub refused the bundle ({})", describe(output.status))));
+        }
+        let written: Vec<&str> = std::str::from_utf8(&output.stdout).unwrap_or("").lines().collect();
+        println!("      the hub wrote {}", written.join(", "));
     }
-    let written: Vec<&str> = std::str::from_utf8(&output.stdout).unwrap_or("").lines().collect();
-    println!("      the hub wrote {}", written.join(", "));
 
-    println!("step 4 of {total}: restarting the service");
-    let output = remote(host, REMOTE_RESTART, None).map_err(|error| stopped(4, "restart", describe_error(&error)))?;
-    if !output.status.success() {
-        return Err(stopped(4, "restart", format!("{} {}", describe(output.status), first_line(&output.stderr))));
+    if probe.service_active {
+        println!("step 4 of {total}: {SERVICE_KEEPS_RUNNING}");
+    } else {
+        println!("step 4 of {total}: restarting the service");
+        let output =
+            remote(host, REMOTE_RESTART, None).map_err(|error| stopped(4, "restart", describe_error(&error)))?;
+        if !output.status.success() {
+            return Err(stopped(4, "restart", format!("{} {}", describe(output.status), first_line(&output.stderr))));
+        }
     }
 
     println!("step 5 of {total}: checking the version");
@@ -1464,6 +1569,22 @@ mod tests {
     }
 
     #[test]
+    fn import_keeps_the_first_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = hub(dir.path());
+        std::fs::create_dir_all(&paths.root).unwrap();
+        std::fs::write(paths.root.join("auth.json"), r#"{"first":"the hub's own"}"#).unwrap();
+        import(&paths, &line(&[("auth.json", r#"{"second":1}"#)])).unwrap();
+        import(&paths, &line(&[("auth.json", r#"{"third":2}"#)])).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(paths.root.join("auth.json.bak")).unwrap(),
+            r#"{"first":"the hub's own"}"#,
+            "the first backup is never overwritten"
+        );
+        assert_eq!(std::fs::read_to_string(paths.root.join("auth.json")).unwrap(), r#"{"third":2}"#);
+    }
+
+    #[test]
     fn import_rejects_a_bundle_that_is_not_json_without_touching_files() {
         let dir = tempfile::tempdir().unwrap();
         let paths = hub(dir.path());
@@ -1597,6 +1718,8 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
             ssh_host: "hub.example".into(),
             sshd_port: 2222,
             ssh_user: "ana".into(),
+            service_active: false,
+            existing: vec![],
             listeners: parse_listeners(SS),
             has_xz: true,
             has_bwrap: false,
@@ -1615,6 +1738,8 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
             client_key_file: None,
             yes: false,
             allow_no_sandbox: false,
+            settings: false,
+            credentials: false,
         }
     }
 
@@ -1762,6 +1887,45 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
     }
 
     #[test]
+    fn a_first_init_plans_to_send_everything_and_restart() {
+        let text = plan(&probe(), &init_args()).join("\n");
+        assert!(text.contains("Restart the service: systemctl --user restart aria-serve.service"), "{text}");
+        assert!(!text.contains("kept") && !text.contains("keeps running"), "{text}");
+        assert_eq!(files_to_send(&probe(), &init_args()), BUNDLE_FILES);
+    }
+
+    #[test]
+    fn a_rerun_plans_to_keep_what_the_hub_has_and_not_to_restart() {
+        let mut host = probe();
+        host.service_active = true;
+        host.existing = BUNDLE_FILES.iter().map(|name| name.to_string()).collect();
+        let text = plan(&host, &init_args()).join("\n");
+        assert!(
+            text.contains(
+                "the service keeps running: it takes the new binary when idle and the settings within a second"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("Restart the service"), "{text}");
+        assert!(text.contains("Nothing is sent") || text.contains("kept"), "{text}");
+        assert!(text.contains("--settings") && text.contains("--credentials"), "{text}");
+        assert!(files_to_send(&host, &init_args()).is_empty());
+        let mut with = init_args();
+        with.credentials = true;
+        assert_eq!(files_to_send(&host, &with), ["auth.json", "mcp.json", "mcp-auth.json"]);
+        let text = plan(&host, &with).join("\n");
+        assert!(text.contains("replace") && text.contains("auth.json"), "{text}");
+        with.credentials = false;
+        with.settings = true;
+        assert_eq!(files_to_send(&host, &with), ["settings.json"]);
+        // a file the hub lacks is sent without a flag
+        host.existing = vec!["auth.json".into()];
+        assert_eq!(files_to_send(&host, &init_args()), ["settings.json", "mcp.json", "mcp-auth.json"]);
+        // an active service is not restarted even on a first import
+        assert!(plan(&host, &init_args()).join("\n").contains("keeps running"));
+    }
+
+    #[test]
     fn the_plan_says_when_the_installer_would_need_xz() {
         let mut host = probe();
         host.has_xz = false;
@@ -1887,10 +2051,12 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
             "--client-key",
             "/k.pub",
             "--allow-no-sandbox",
+            "--settings",
+            "--credentials",
             "--yes",
         ])
         .unwrap();
-        assert!(all.allow_no_sandbox);
+        assert!(all.allow_no_sandbox && all.settings && all.credentials);
         assert_eq!(all.host, "ana@hub.example");
         assert_eq!(all.binary, Some(PathBuf::from("/b/aria")));
         assert_eq!(all.projects.as_deref(), Some("/srv/work"));
@@ -1898,7 +2064,7 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
         assert!(all.yes);
         let few = args(&["--yes", "hub.example"]).unwrap();
         assert!(few.yes && few.binary.is_none() && few.projects.is_none() && few.client_key.is_none());
-        assert!(!few.allow_no_sandbox);
+        assert!(!few.allow_no_sandbox && !few.settings && !few.credentials);
         assert!(args(&[]).is_err(), "a host is needed");
         assert!(args(&["a", "b"]).is_err(), "one host");
         assert!(args(&["a", "--binary"]).is_err(), "an option needs its value");

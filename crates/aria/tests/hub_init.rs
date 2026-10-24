@@ -7,8 +7,8 @@ use std::process::{Command, Output, Stdio};
 
 const PINS: [&str; 5] = ["pi-version", "pi-packages", "engram-version", "agent-browser-version", "node-version"];
 const KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl ana@laptop";
-const TOOLS: [&str; 13] =
-    ["sh", "head", "tail", "cat", "wc", "tr", "mkdir", "tar", "cut", "grep", "touch", "chmod", "rm"];
+const TOOLS: [&str; 14] =
+    ["sh", "head", "tail", "cat", "wc", "tr", "mkdir", "tar", "cut", "grep", "touch", "chmod", "rm", "cp"];
 
 /// An owner's computer (a home with settings) and a checkout of the repository, next to a hub that is only the fake ssh.
 struct World {
@@ -104,8 +104,16 @@ fn commands(log: &[String]) -> Vec<String> {
 
 /// The remote commands that change something on the hub (every probe reads only).
 fn writes(log: &[String]) -> Vec<String> {
-    const PROBES: [&str; 6] =
-        ["uname -m", "cat /etc/os-release", "echo $HOME", "ss -ltnH -n", "command -v", "node --version"];
+    const PROBES: [&str; 8] = [
+        "uname -m",
+        "cat /etc/os-release",
+        "echo $HOME",
+        "ss -ltnH -n",
+        "command -v",
+        "node --version",
+        "is-active",
+        "test -f",
+    ];
     commands(log)
         .into_iter()
         .filter(|command| !command.starts_with("-G ") && !PROBES.iter().any(|probe| command.contains(probe)))
@@ -208,7 +216,7 @@ fn a_yes_uploads_installs_and_imports_in_order() {
     assert!(position(&steps, "systemctl --user restart aria-serve") < position(&steps, "aria --version"));
     assert!(steps[1].ends_with("install.sh --headless --local ~/.aria/hub-src/aria"), "{}", steps[1]);
     assert!(steps[2].ends_with("~/.local/bin/aria hub-import"), "{}", steps[2]);
-    assert_eq!(steps[3], "systemctl --user restart aria-serve.service");
+    assert!(steps[3].ends_with("systemctl --user restart aria-serve.service"), "{}", steps[3]);
     // Every remote command is one argument after the host, and the host is the one given.
     assert!(log.iter().filter(|line| !line.starts_with("-G ")).all(|line| line.starts_with("ana@hub.example\t")));
     // The tree and the binary arrived where the installer reads them.
@@ -660,4 +668,108 @@ fn a_login_key_already_in_authorized_keys_is_told_to_be_a_dedicated_key() {
     assert_eq!(output.status.code(), Some(1), "{out}{err}");
     assert!(err.contains("use a dedicated key, not your login key"), "{err}");
     assert!(!out.contains("IdentityFile"), "no snippet for a key that is not restricted: {out}");
+}
+
+/// The hub's files, as an owner who already ran `hub init` has them: each holds its own name, so a change shows.
+fn seed_hub_files(world: &World) {
+    let dir = world.path("hub/home/.aria");
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["settings.json", "auth.json", "mcp.json", "mcp-auth.json"] {
+        std::fs::write(dir.join(name), format!("{{\"hub's own\":\"{name}\"}}")).unwrap();
+    }
+}
+
+/// The names the hub was last sent in a bundle (none when nothing was).
+fn last_bundle(world: &World) -> Vec<String> {
+    let bundle = std::fs::read_to_string(world.path("hub/last-bundle")).unwrap_or_default();
+    ["settings.json", "auth.json", "mcp.json", "mcp-auth.json"]
+        .into_iter()
+        .filter(|name| bundle.contains(&format!("\"{name}\":")))
+        .map(str::to_string)
+        .collect()
+}
+
+fn owner_has_all_files(world: &World) {
+    std::fs::write(world.path("home/.aria/mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
+    std::fs::write(world.path("home/.aria/mcp-auth.json"), r#"{"mcp__notion|u":{}}"#).unwrap();
+}
+
+#[test]
+fn a_rerun_sends_nothing_and_leaves_the_running_service_alone() {
+    let world = World::new();
+    owner_has_all_files(&world);
+    seed_hub_files(&world);
+    let output = world.init_yes(&[], &[("ARIA_FAKE_SSH_ACTIVE", "1")]);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    let steps = writes(&world.log());
+    assert!(!steps.iter().any(|c| c.contains("hub-import")), "no bundle was sent: {steps:?}");
+    assert!(!steps.iter().any(|c| c.contains("restart")), "no restart: {steps:?}");
+    assert!(
+        out.contains("the service keeps running: it takes the new binary when idle and the settings within a second"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Kept as the hub has them") && out.contains("--credentials") && out.contains("--settings"),
+        "the plan says what is kept: {out}"
+    );
+    assert_eq!(last_bundle(&world), Vec::<String>::new());
+    // the hub's own files were not touched
+    assert_eq!(
+        std::fs::read_to_string(world.path("hub/home/.aria/auth.json")).unwrap(),
+        r#"{"hub's own":"auth.json"}"#
+    );
+    // the installer and the version check still ran
+    assert!(steps.iter().any(|c| c.contains("install.sh")) && steps.iter().any(|c| c.contains("--version")));
+}
+
+#[test]
+fn a_flag_sends_only_the_files_it_names() {
+    let world = World::new();
+    owner_has_all_files(&world);
+    seed_hub_files(&world);
+    let output = world.init_yes(&["--credentials"], &[("ARIA_FAKE_SSH_ACTIVE", "1")]);
+    assert_eq!(output.status.code(), Some(0), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(last_bundle(&world), ["auth.json", "mcp.json", "mcp-auth.json"]);
+    assert!(!writes(&world.log()).iter().any(|c| c.contains("restart")), "the service was active: no restart");
+    let world = World::new();
+    owner_has_all_files(&world);
+    seed_hub_files(&world);
+    let output = world.init_yes(&["--settings"], &[("ARIA_FAKE_SSH_ACTIVE", "1")]);
+    assert_eq!(output.status.code(), Some(0), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(last_bundle(&world), ["settings.json"]);
+    // both flags: all four
+    let world = World::new();
+    owner_has_all_files(&world);
+    seed_hub_files(&world);
+    world.init_yes(&["--settings", "--credentials"], &[("ARIA_FAKE_SSH_ACTIVE", "1")]);
+    assert_eq!(last_bundle(&world), ["settings.json", "auth.json", "mcp.json", "mcp-auth.json"]);
+}
+
+#[test]
+fn a_first_init_sends_everything_and_restarts_the_service() {
+    let world = World::new();
+    owner_has_all_files(&world);
+    let output = world.init_yes(&[], &[]);
+    assert_eq!(output.status.code(), Some(0), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(last_bundle(&world), ["settings.json", "auth.json", "mcp.json", "mcp-auth.json"]);
+    assert!(writes(&world.log()).iter().any(|c| c.contains("restart")));
+    assert!(!text(&output.stdout).contains("the service keeps running"));
+}
+
+#[test]
+fn a_hub_with_only_some_files_gets_the_missing_ones() {
+    let world = World::new();
+    owner_has_all_files(&world);
+    let dir = world.path("hub/home/.aria");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("auth.json"), "{}").unwrap();
+    let output = world.init_yes(&[], &[("ARIA_FAKE_SSH_ACTIVE", "1")]);
+    assert_eq!(output.status.code(), Some(0), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(
+        last_bundle(&world),
+        ["settings.json", "mcp.json", "mcp-auth.json"],
+        "auth.json stays as the hub has it"
+    );
+    assert!(!writes(&world.log()).iter().any(|c| c.contains("restart")), "still no restart: it was active");
 }

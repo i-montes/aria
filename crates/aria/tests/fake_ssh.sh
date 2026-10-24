@@ -13,6 +13,7 @@
 #   ARIA_FAKE_SSH_BWRAP_FAIL   1: the sandbox probe fails (bwrap cannot make a user namespace); missing: there is no bwrap
 #   ARIA_FAKE_SSH_IMPORT_FAIL  1: `aria hub-import` fails and complains on stderr, quoting the start of what it read
 #   ARIA_FAKE_SSH_PASSWORDS    yes: sshd_config allows password logins (default no)
+#   ARIA_FAKE_SSH_ACTIVE       1: aria-serve.service is already active before the run (default: it is not)
 # ARIA_FAKE_SSH_ROOT is the hub's computer: the upload is unpacked, and the key is added to authorized_keys, under
 # $ARIA_FAKE_SSH_ROOT/home, the only place a command is really run.
 log=${ARIA_FAKE_SSH_LOG:?ARIA_FAKE_SSH_LOG}
@@ -59,6 +60,9 @@ case "$cmd" in
       case "$missing" in *" $name "*) ;; *) echo "/usr/bin/$name" ;; esac
     done ;;
   "node --version") echo "${ARIA_FAKE_SSH_NODE:-v18.19.1}" ;;
+  *"test -f"*) HOME="$root/home" sh -c "$cmd" ;;
+  *is-active*)
+    if [ "${ARIA_FAKE_SSH_ACTIVE:-0}" = 1 ]; then echo active; else echo inactive; exit 3; fi ;;
   *"tar -xf"*) HOME="$root/home" sh -c "$cmd" < "$stdin_file" ;;
   *install.sh*) touch "$root/installed"; echo "fake installer: Aria is installed and running as aria-serve.service" ;;
   *hub-import*)
@@ -66,7 +70,11 @@ case "$cmd" in
       printf 'aria hub-import: the bundle is not one: invalid value: %s\n' "$(cut -c1-60 "$stdin_file")" >&2
       exit 1
     fi
-    echo settings.json ;;
+    # what a real hub-import would have written: the names the bundle holds (the bundle is kept for the tests)
+    cp "$stdin_file" "$root/last-bundle"
+    for name in settings.json auth.json mcp.json mcp-auth.json; do
+      if grep -q "\"$name\":" "$stdin_file"; then echo "$name"; fi
+    done ;;
   *systemctl*) ;;
   *bwrap*)
     case "${ARIA_FAKE_SSH_BWRAP_FAIL:-0}" in
