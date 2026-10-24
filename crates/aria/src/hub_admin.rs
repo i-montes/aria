@@ -697,6 +697,12 @@ pub fn files_to_send(probe: &Probe, args: &InitArgs) -> Vec<&'static str> {
 
 /// What `aria hub init` is about to do, as the lines printed before anything runs.
 pub fn plan(probe: &Probe, args: &InitArgs) -> Vec<String> {
+    plan_sending(probe, args, &files_to_send(probe, args))
+}
+
+/// The plan for a run that will send exactly `sent` (the bundle files the flags and the hub's state call for that this
+/// computer actually has).
+pub fn plan_sending(probe: &Probe, args: &InitArgs, sent: &[&str]) -> Vec<String> {
     let projects = args.projects.clone().unwrap_or_else(|| format!("{}/Projects", probe.home.trim_end_matches('/')));
     let mut lines = vec![
         format!("Hub: {} ({}): {}, {}, home {}", args.host, probe.ssh_host, probe.os, probe.arch, probe.home),
@@ -714,14 +720,14 @@ pub fn plan(probe: &Probe, args: &InitArgs) -> Vec<String> {
         ),
         format!(
             "3. Send your settings and credentials (the ones you have) as one line on the stdin of {REMOTE_IMPORT}. {}{}",
-            if files_to_send(probe, args).contains(&"settings.json") {
+            if sent.contains(&"settings.json") {
                 format!("The hub's sandbox projects folder will be {projects}. ")
             } else if args.projects.is_some() {
                 "--projects has no effect without --settings: the hub keeps its own settings.json. ".to_string()
             } else {
                 String::new()
             },
-            send_detail(probe, args)
+            send_detail(probe, sent)
         ),
         if probe.service_active {
             format!("4. {SERVICE_KEEPS_RUNNING} ({SERVICE_UNIT} is active: it is not restarted)")
@@ -754,8 +760,7 @@ pub fn plan(probe: &Probe, args: &InitArgs) -> Vec<String> {
 }
 
 /// Says what step 3 writes on the hub, what it replaces and what it keeps.
-fn send_detail(probe: &Probe, args: &InitArgs) -> String {
-    let sent = files_to_send(probe, args);
+fn send_detail(probe: &Probe, sent: &[&str]) -> String {
     let (replaced, new): (Vec<&str>, Vec<&str>) =
         sent.iter().partition(|name| probe.existing.iter().any(|have| have == *name));
     let kept: Vec<&str> = BUNDLE_FILES
@@ -1033,7 +1038,9 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
         return Err(failed("the settings to send are too large"));
     }
 
-    for text in plan(&probe, &args) {
+    // What is sent is what the bundle holds: a file this computer lacks is not.
+    let sent: Vec<&str> = BUNDLE_FILES.into_iter().filter(|name| bundle.files.contains_key(*name)).collect();
+    for text in plan_sending(&probe, &args, &sent) {
         println!("{text}");
     }
     if needs_xz(&probe) {
@@ -1288,6 +1295,13 @@ fn probe_sandbox(host: &str) -> Sandbox {
 }
 
 /// What is said when the sandbox does not work on the hub; the fix is only printed, never run. Nothing for a working one.
+/// Whether what `bwrap` said is its `/proc` or `/dev` mount failing (the namespace itself worked), which the probe's
+/// `--dev /dev --proc /proc` catches and the AppArmor fixes do not cure.
+fn mount_failed(said: &str) -> bool {
+    let said = said.to_ascii_lowercase();
+    said.contains("mount proc") || said.contains("/newroot/proc") || said.contains("/newroot/dev")
+}
+
 fn sandbox_warning(sandbox: &Sandbox) -> Vec<String> {
     let mut lines = match sandbox {
         Sandbox::Works => return Vec::new(),
@@ -1295,6 +1309,14 @@ fn sandbox_warning(sandbox: &Sandbox) -> Vec<String> {
             "warning: the sandbox cannot start on the hub: bubblewrap is not installed (bwrap: not found).".to_string(),
             "  Install it on the hub:".to_string(),
             "      sudo apt-get install -y bubblewrap".to_string(),
+        ],
+        Sandbox::Blocked(problem) if mount_failed(problem) => vec![
+            format!("warning: the sandbox cannot start on the hub ({problem})."),
+            "  bwrap can make a user namespace here, but the mount of /proc or /dev that its real call makes failed (a"
+                .to_string(),
+            "  container-style server often does this). The AppArmor and sysctl fixes do not help with it: the host has to allow"
+                .to_string(),
+            "  the mount, or the sandbox cannot be used on it. Aria did not run anything to change this.".to_string(),
         ],
         Sandbox::Blocked(problem) => vec![
             format!("warning: the sandbox cannot start on the hub ({problem})."),
@@ -2032,6 +2054,19 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
         chosen.settings = true;
         let text = plan(&host, &chosen).join("\n");
         assert!(text.contains("sandbox projects folder will be /srv/work") && !text.contains("no effect"), "{text}");
+    }
+
+    #[test]
+    fn the_plan_names_the_projects_folder_only_when_the_bundle_holds_settings() {
+        let mut chosen = init_args();
+        chosen.projects = Some("/srv/work".into());
+        // settings.json is called for (a first init) but this computer has none: it is not in what is sent.
+        let text = plan_sending(&probe(), &chosen, &["auth.json"]).join("\n");
+        assert!(!text.contains("projects folder will be"), "{text}");
+        assert!(text.contains("--projects has no effect"), "{text}");
+        let text = plan_sending(&probe(), &chosen, &["settings.json", "auth.json"]).join("\n");
+        assert!(text.contains("projects folder will be /srv/work") && !text.contains("no effect"), "{text}");
+        assert!(plan_sending(&probe(), &init_args(), &[]).join("\n").contains("Nothing is sent"));
     }
 
     #[test]

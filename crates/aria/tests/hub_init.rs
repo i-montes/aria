@@ -280,7 +280,14 @@ fn the_sandbox_probe_does_what_the_real_call_does_so_a_server_that_cannot_mount_
     let out = text(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
     assert!(out.contains("Can't mount proc"), "what bwrap said: {out}");
-    assert!(out.contains("kernel.apparmor_restrict_unprivileged_userns"), "the fix is printed: {out}");
+    // It says the mount failed, not that the namespace could not be made, and the AppArmor fixes are not offered for it.
+    assert!(out.contains("mount of /proc or /dev"), "{out}");
+    assert!(out.contains("do not help"), "{out}");
+    assert!(
+        !out.contains("kernel.apparmor_restrict_unprivileged_userns")
+            && !out.contains("cannot create a user namespace"),
+        "{out}"
+    );
     // The probe asks for what the sandbox extension asks for: the disk read-only, /dev and /proc.
     let probe = commands(&world.log()).into_iter().find(|c| c.starts_with("bwrap ")).expect("a probe ran");
     assert_eq!(probe, "bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc true");
