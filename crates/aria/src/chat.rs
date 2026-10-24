@@ -2204,7 +2204,7 @@ impl Chat {
             .collect();
         let grants = json!({
             "connectors": connectors,
-            "sandbox": {"askToLeave": false, "extraWritable": task.grants.writable},
+            "sandbox": {"askToLeave": false, "extraWritable": self.ctx.schedules.runnable_writable(task)},
             "noAsk": true,
         });
         self.inner.lock().unwrap().scheduled =

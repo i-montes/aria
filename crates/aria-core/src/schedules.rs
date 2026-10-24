@@ -208,6 +208,58 @@ pub fn validate(task: &Task, servers: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Why a writable folder of a scheduled task is not allowed, None when it is: it must lie inside the projects folder
+/// (`sandbox.projectsDir`, expanded) or `/tmp`, and never be the home folder, a home-level dot folder (`~/.config`,
+/// `~/.local`, `~/.ssh`, `~/.aria`, any `~/.<name>`) or hold a `..` component. The check is lexical: it does not follow
+/// symlinks (the store also keeps the folder's real path and refuses the wide and secret ones there), so a link inside
+/// the projects folder is judged by where it sits, then by where it points.
+pub fn writable_problem(dir: &str, projects: &std::path::Path, home: &std::path::Path) -> Option<String> {
+    use std::path::{Component, Path, PathBuf};
+    let rule = || {
+        Some(format!(
+            "{dir}: a scheduled task may write only inside the projects folder ({}) or /tmp, never the home folder or a \
+             dot folder of it, and never with `..` in the path",
+            projects.display()
+        ))
+    };
+    // The path without `.` and trailing slashes; `None` for a relative one or one with `..`.
+    let clean = |path: &Path| -> Option<PathBuf> {
+        let mut out = PathBuf::new();
+        for part in path.components() {
+            match part {
+                Component::RootDir => out.push("/"),
+                Component::Normal(name) => out.push(name),
+                Component::CurDir => {}
+                Component::ParentDir | Component::Prefix(_) => return None,
+            }
+        }
+        out.is_absolute().then_some(out)
+    };
+    let Some(path) = clean(Path::new(dir)) else { return rule() };
+    let roots = |base: &Path| {
+        let mut all: Vec<PathBuf> = clean(base).into_iter().collect();
+        all.extend(std::fs::canonicalize(base).ok());
+        all
+    };
+    let homes = roots(home);
+    for home in &homes {
+        if path == *home {
+            return rule();
+        }
+        if let Ok(rest) = path.strip_prefix(home) {
+            if rest.components().next().is_some_and(|first| first.as_os_str().to_string_lossy().starts_with('.')) {
+                return rule();
+            }
+        }
+    }
+    let allowed: Vec<PathBuf> = roots(projects).into_iter().chain(roots(Path::new("/tmp"))).collect();
+    if allowed.iter().any(|root| path.starts_with(root)) {
+        None
+    } else {
+        rule()
+    }
+}
+
 /// Whether a task can change anything: a connector it may write to, or a folder it may write in.
 pub fn writes(task: &Task) -> bool {
     task.grants.connectors.values().any(|level| level == "allow") || !task.grants.writable.is_empty()
@@ -250,6 +302,63 @@ pub fn save(paths: &AriaPaths, tasks: &[Task]) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    fn problem(dir: &str) -> Option<String> {
+        super::writable_problem(dir, Path::new("/home/ana/Projects"), Path::new("/home/ana"))
+    }
+
+    #[test]
+    fn a_writable_folder_inside_the_projects_folder_or_tmp_is_accepted() {
+        for dir in [
+            "/home/ana/Projects",
+            "/home/ana/Projects/acme/checkout-widget",
+            "/home/ana/Projects/acme/out/",
+            "/home/ana/Projects/./acme",
+            "/tmp",
+            "/tmp/aria-work",
+        ] {
+            assert_eq!(problem(dir), None, "{dir}");
+        }
+    }
+
+    #[test]
+    fn any_other_writable_folder_is_refused_and_the_error_names_the_rule() {
+        for dir in [
+            "/home/ana/.config",
+            "/home/ana/.local/bin",
+            "/home/ana/.config/systemd/user",
+            "/home/ana/.ssh",
+            "/home/ana/.aria",
+            "/home/ana",
+            "/home/ana/Documents",
+            "/home/ana/Projectsx",
+            "/etc",
+            "/",
+            "/tmpx",
+            "/home/ana/Projects/../.config",
+            "/home/ana/Projects/acme/../../.ssh",
+            "/tmp/../etc",
+            "projects/acme",
+            "",
+        ] {
+            let why = problem(dir).unwrap_or_else(|| panic!("{dir:?} should be refused"));
+            assert!(why.contains("projects folder") && why.contains("/tmp"), "{dir}: {why}");
+        }
+    }
+
+    #[test]
+    fn a_dot_folder_of_the_home_is_never_allowed_even_when_the_projects_folder_is_the_home() {
+        let home = |dir: &str| super::writable_problem(dir, Path::new("/home/ana"), Path::new("/home/ana"));
+        assert_eq!(home("/home/ana/notes"), None);
+        for dir in
+            ["/home/ana/.config", "/home/ana/.local/bin", "/home/ana/.ssh", "/home/ana/.aria", "/home/ana/.hidden/x"]
+        {
+            assert!(home(dir).is_some(), "{dir}");
+        }
+        assert!(home("/home/ana").is_some(), "the home folder itself is too wide");
+    }
+
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 

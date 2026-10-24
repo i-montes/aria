@@ -629,6 +629,23 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
     }
 
     #[test]
+    fn create_and_update_refuse_a_writable_folder_outside_the_projects_folder_and_tmp() {
+        let s = setup(false);
+        let socket = bind(&s, "s1");
+        let mut c = Client::connect(&socket);
+        let refused = c.ask(json!({"id": 1, "op": "schedule_create", "title": "t", "prompt": "p", "at": "07:30", "writable": ["/home/ana/.config"]}));
+        assert_eq!(refused["ok"], false, "{refused}");
+        let error = refused["error"].as_str().unwrap();
+        assert!(error.contains("projects folder") && error.contains("/tmp"), "{error}");
+        let id = c.ask(json!({"id": 2, "op": "schedule_create", "title": "t", "prompt": "p", "at": "07:30"}))["task"]
+            ["id"]
+            .clone();
+        let refused = c.ask(json!({"id": 3, "op": "schedule_update", "task": id, "writable": ["/etc"]}));
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert!(refused["error"].as_str().unwrap().contains("projects folder"), "{refused}");
+    }
+
+    #[test]
     fn update_pauses_a_task() {
         let s = setup(false);
         let socket = bind(&s, "s1");

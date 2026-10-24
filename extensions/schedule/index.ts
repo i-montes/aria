@@ -11,7 +11,7 @@ const EVERY_DAY = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 
 const CREATE_DESCRIPTION = [
   'Schedule a task Aria runs by itself at a time of day, in its own tab, with a desktop notification: "every day at 7:30 give me my Notion tasks", "on weekdays at 18:00 summarise my day", "on 2026-11-02 at 9:00 remind me to…".',
-  'Before calling this, tell the person in one line when it will run and what it may do (each connector read-only unless they said it may write, and no folder outside the projects folder unless they named one), and wait for their yes.',
+  'Before calling this, tell the person in one line when it will run and what it may do (each connector read-only unless they said it may write, and no writable folder unless they named one), and wait for their yes.',
   '`prompt` is the whole instruction as it will be sent at that time (the run does not see this conversation). `at` is local 24-hour HH:MM. `days`: some of mon tue wed thu fri sat sun (default every day), or `date` YYYY-MM-DD for a single run.',
   '`connectors`: a level per connector the task uses, "read" or "allow" (allow = it may write there without asking). Nothing is ever asked during a scheduled run: what is not granted is refused.',
   'A task that may write (any "allow", or writable folders) is saved paused until the person presses Approve in /schedules; a read-only task starts at once.',
@@ -23,7 +23,7 @@ const CONNECTORS_SCHEMA = {
   additionalProperties: { type: 'string', enum: ['read', 'allow'] },
   description: 'Level per connector (MCP server name): "read" or "allow". Unlisted connectors are read-only.',
 }
-const WRITABLE_SCHEMA = { type: 'array', items: { type: 'string' }, description: 'Absolute folders outside the projects folder it may write (default none).' }
+const WRITABLE_SCHEMA = { type: 'array', items: { type: 'string' }, description: 'Absolute folders it may write (default none). Each must lie inside the projects folder or /tmp: anything else, a dot folder of the home folder included, is refused.' }
 
 const text = (t: string, details: any = undefined) => textResult(t, false, details)
 

@@ -17,6 +17,10 @@ pub struct ScheduleStore {
     on_awaiting: OnDelete,
 }
 
+fn home() -> std::path::PathBuf {
+    std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default()
+}
+
 fn strings(value: &Value) -> Option<Vec<String>> {
     value.as_array().map(|items| items.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
 }
@@ -68,10 +72,20 @@ impl ScheduleStore {
 
     /// Checks a task as it would be kept: the core rules, and every writable folder there and narrow enough. Folders are
     /// kept by their real path, so a link cannot be pointed elsewhere later.
-    fn check(&self, task: &mut Task) -> Result<(), String> {
+    ///
+    /// Every folder must follow `schedules::writable_problem` (inside the projects folder or `/tmp`); the ones in `kept`
+    /// (the folders the task already had) are not judged by it again, so a task stored before the rule can still be
+    /// paused or reworded: a run drops them (`runnable_writable`).
+    fn check(&self, task: &mut Task, kept: &[String]) -> Result<(), String> {
         schedules::validate(task, &self.servers())?;
+        let (projects, home) = (self.projects(), home());
         let mut real = Vec::new();
         for dir in &task.grants.writable {
+            if !kept.contains(dir) {
+                if let Some(why) = schedules::writable_problem(dir, &projects, &home) {
+                    return Err(why);
+                }
+            }
             let path = std::fs::canonicalize(dir).map_err(|_| format!("{dir} is not a folder"))?;
             if !path.is_dir() {
                 return Err(format!("{dir} is not a folder"));
@@ -79,10 +93,42 @@ impl ScheduleStore {
             if let Some(why) = too_wide(&path, &self.paths.root) {
                 return Err(format!("{dir}: {why}"));
             }
+            // Where a link points is judged too: a link in the projects folder cannot reach a dot folder.
+            if !kept.contains(dir) {
+                if let Some(why) = schedules::writable_problem(&path.display().to_string(), &projects, &home) {
+                    return Err(why);
+                }
+            }
             real.push(path.display().to_string());
         }
         task.grants.writable = real;
         Ok(())
+    }
+
+    /// The settings' projects folder (`sandbox.projectsDir`, `~/Projects` without settings).
+    fn projects(&self) -> std::path::PathBuf {
+        aria_core::agent::workdir(aria_core::settings::load(&self.paths).ok().flatten().as_ref())
+    }
+
+    /// The writable folders a run may have: the task's own that follow the rule now. A task stored before the rule (or
+    /// under another projects folder) keeps its grants on disk, but a run never gets the ones outside it; one line says so.
+    pub fn runnable_writable(&self, task: &Task) -> Vec<String> {
+        let (projects, home) = (self.projects(), home());
+        task.grants
+            .writable
+            .iter()
+            .filter(|dir| match schedules::writable_problem(dir, &projects, &home) {
+                None => true,
+                Some(_) => {
+                    crate::note(&format!(
+                        "scheduled task {}: its writable folder {dir} is outside the projects folder and /tmp, so this run does not get it",
+                        task.id
+                    ));
+                    false
+                }
+            })
+            .cloned()
+            .collect()
     }
 
     fn save(&self, tasks: &[Task]) -> Result<(), String> {
@@ -134,7 +180,7 @@ impl ScheduleStore {
             last_result: None,
         };
         Self::apply(&mut task, input)?;
-        self.check(&mut task)?;
+        self.check(&mut task, &[])?;
         // A task that can write waits for the person: the model asked for it, the person approves it in /schedules.
         task.awaiting = schedules::writes(&task);
         task.enabled = !task.awaiting;
@@ -160,7 +206,7 @@ impl ScheduleStore {
         let before = tasks[at].clone();
         let mut task = before.clone();
         Self::apply(&mut task, input)?;
-        self.check(&mut task)?;
+        self.check(&mut task, &before.grants.writable)?;
         if before.awaiting && task.enabled {
             return Err("only the person can approve it, with Approve in /schedules".into());
         }
@@ -504,6 +550,88 @@ mod tests {
         assert!(store.set_enabled(&task.id, true).unwrap().enabled);
         assert!(store.set_enabled("s-none", true).is_err());
         assert!(store.approve("s-none").is_err());
+    }
+
+    /// The store of `store()` with `projects` as the settings' projects folder.
+    fn with_projects(store: &ScheduleStore, projects: &std::path::Path) {
+        let mut settings = aria_core::settings::Settings::defaults("en");
+        settings.sandbox.projects_dir = projects.display().to_string();
+        aria_core::settings::save(&store.paths, &settings).unwrap();
+    }
+
+    fn create_writing(store: &ScheduleStore, folder: &std::path::Path) -> Result<Task, String> {
+        store.create(&json!({"title": "t", "prompt": "p", "at": "07:30", "writable": [folder]}), 0)
+    }
+
+    #[test]
+    fn a_task_may_write_only_inside_the_projects_folder_or_tmp() {
+        let (_dir, store) = store();
+        let work = tempfile::tempdir().unwrap();
+        let projects = work.path().join("work");
+        std::fs::create_dir_all(projects.join("acme/out")).unwrap();
+        with_projects(&store, &projects);
+        let task = create_writing(&store, &projects.join("acme/out")).unwrap();
+        assert!(task.awaiting, "{task:?}");
+        let tmp = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        assert!(create_writing(&store, tmp.path()).is_ok(), "/tmp is allowed");
+        let why = create_writing(&store, std::path::Path::new("/usr")).unwrap_err(); // exists, outside both
+        assert!(why.contains("projects folder") && why.contains("/tmp"), "{why}");
+    }
+
+    #[test]
+    fn home_dot_folders_and_traversal_are_refused_whether_or_not_they_exist() {
+        let (_dir, store) = store();
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+        with_projects(&store, &home); // even with the home folder as the projects folder
+        for folder in [".config", ".local/bin", ".config/systemd/user", ".ssh", ".aria", ".not-there"] {
+            let why = create_writing(&store, &home.join(folder)).unwrap_err();
+            assert!(why.contains("projects folder"), "{folder}: {why}");
+        }
+        assert!(create_writing(&store, &home).is_err(), "the home folder itself");
+        assert!(create_writing(&store, std::path::Path::new("/etc")).is_err());
+        let work = tempfile::tempdir().unwrap();
+        let projects = work.path().join("work");
+        std::fs::create_dir_all(projects.join("a")).unwrap();
+        with_projects(&store, &projects);
+        let why = create_writing(&store, &projects.join("a/../../work")).unwrap_err();
+        assert!(why.contains("projects folder"), "a `..` is refused even where it lands inside: {why}");
+        assert!(store.list(0).is_empty(), "nothing was stored");
+    }
+
+    #[test]
+    fn the_rule_holds_when_a_task_is_changed_and_a_stored_violation_is_not_widened() {
+        let (_dir, store) = store();
+        let work = tempfile::tempdir().unwrap();
+        let projects = work.path().join("work");
+        std::fs::create_dir_all(projects.join("ok")).unwrap();
+        with_projects(&store, &projects);
+        let task = create_writing(&store, &projects.join("ok")).unwrap();
+        let why = store.update(&json!({"id": task.id, "writable": ["/usr"]})).unwrap_err();
+        assert!(why.contains("projects folder"), "{why}");
+        // A task stored before the rule: it stays, can be paused, and a new folder is judged.
+        let mut old = task.clone();
+        old.id = "s-oldoldoldold".into();
+        old.grants.writable = vec!["/usr".into()];
+        schedules::save(&store.paths, &[old.clone()]).unwrap();
+        let store = ScheduleStore::open(store.paths.clone());
+        assert_eq!(store.get(&old.id).unwrap().grants.writable, old.grants.writable, "stays stored");
+        assert!(store.update(&json!({"id": old.id, "enabled": false})).is_ok(), "and can still be paused");
+        assert!(store.update(&json!({"id": old.id, "writable": ["/usr", "/etc"]})).is_err(), "a new folder is judged");
+    }
+
+    #[test]
+    fn a_run_drops_the_writable_grants_that_break_the_rule() {
+        let (_dir, store) = store();
+        let work = tempfile::tempdir().unwrap();
+        let projects = work.path().join("work");
+        std::fs::create_dir_all(projects.join("ok")).unwrap();
+        with_projects(&store, &projects);
+        let mut task = create_writing(&store, &projects.join("ok")).unwrap();
+        let kept = task.grants.writable.clone();
+        assert_eq!(store.runnable_writable(&task), kept, "a grant that follows the rule is kept");
+        task.grants.writable.push("/home/ana/.config".into());
+        task.grants.writable.push("/etc".into());
+        assert_eq!(store.runnable_writable(&task), kept, "the others are dropped, never widened");
     }
 
     #[test]

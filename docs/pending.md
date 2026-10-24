@@ -111,9 +111,6 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
 - **A Claude plan on a hub**: `/signin anthropic` works, but the Claude provider package (`pi-claude-agent-sdk`) is
   installed only by the dock's `/connect` (`installClaudeBridge` is refused to every client), and neither `hub init` nor
   `install.sh --headless` installs it or Claude Code.
-- **The writable-folder check for a scheduled task is a list**: `too_wide` in `schedule_store.rs` refuses the disk, the home
-  folder, Aria's own folder and seventeen named folders of the home. Any other folder that exists passes, including
-  `~/.config` and `~/.local/bin`.
 - **`/autocompact <n>` from a client** writes the hub's `settings.json`, though the design says clients cannot
   change settings.
 - **The footer's git status is local**: a remote session shows no branch, because git runs on the computer of the

@@ -27,7 +27,7 @@ permissions are fixed when the task is created, and anything outside them is ref
 - `when.at` is local `HH:MM` (24 h). `days` is any non-empty subset of `mon … sun` (every day is all seven), or
   `date: "YYYY-MM-DD"` for one run (then `days` is ignored and the task disables itself after it runs).
 - `grants.connectors` maps a connector (an `mcp.json` server name) to `read` or `allow`; a connector not listed is `read`.
-  `grants.writable` lists folders outside the projects folder a command may write (default none). Nothing is ever asked
+  `grants.writable` lists folders a command may write (default none); each lies inside the projects folder or `/tmp`. Nothing is ever asked
   in a scheduled tab: what the grants do not cover is refused and the answer says so.
 - `lastRun` is the epoch ms of the last run started; `lastResult` is `{ "at", "ok": bool, "summary": first line ≤ 140 chars }`.
 - Time is the computer's local time (`localtime_r` / `mktime`): "07:30" stays 07:30 across a time-zone change and a
@@ -58,7 +58,7 @@ A Pi extension `extensions/schedule/` registers four tools; Aria uses them when 
 They reach the dock through the session's jobs socket (`ARIA_JOBS_SOCK`), as new ops `schedule_create|list|update|delete`
 answered from the shared store. Inside a subagent (`ctx.mode === 'json'`) and without a dock they refuse, like the
 background tools. The dock validates every field (time format, days, connector names exist in `mcp.json`, writable
-paths absolute and not secret, prompt non-empty, at most 50 tasks).
+paths absolute, inside the projects folder or `/tmp`, and not secret, prompt non-empty, at most 50 tasks).
 
 ## Its tab
 

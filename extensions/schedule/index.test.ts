@@ -94,6 +94,17 @@ describe('the schedule extension', () => {
     expect(text(out)).toContain('gmail')
   })
 
+  test('the writable folders are said to be bounded, and the dock\'s refusal of one reaches the model', async () => {
+    const rule = '/home/ana/.config: a scheduled task may write only inside the projects folder (/home/ana/Projects) or /tmp'
+    const pi = await withDock((req) => (req.op === 'schedule_create' ? { ok: false, error: rule } : undefined))
+    const tool = pi.tools.get('schedule_create')
+    expect(tool.parameters.properties.writable.description).toContain('projects folder or /tmp')
+    const out = await pi.run('schedule_create', { title: 't', prompt: 'p', at: '07:30', writable: ['/home/ana/.config'] }, rpc)
+    expect(out.isError).toBe(true)
+    expect(text(out)).toContain('projects folder')
+    expect(text(out)).toContain('/tmp')
+  })
+
   test('refuses in a subagent', async () => {
     const pi = await withDock()
     const out = await pi.run('schedule_list', {}, child)
