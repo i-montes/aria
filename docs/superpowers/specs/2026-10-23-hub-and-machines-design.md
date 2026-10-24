@@ -44,8 +44,9 @@ end). This is one design with four milestones; each milestone gets its own plan.
   needs nothing from Aria: key-only ssh and the restricted keys below carry the weight until then.
 - Not multi-user: one owner, their devices. No sharing sessions with other people.
 - Not remote tools: Pi does **not** run on the hub with its `bash`/`edit` proxied to machines (rejected, below).
-- Remote clients cannot change settings, read keys or touch the service's own state: the clients protocol's whitelist
-  (`clients.rs::allowed`) stays as it is. Settings are edited where the service runs (file, or the dock on that
+- Remote clients cannot change settings, read keys or touch the service's own state through the protocol: the clients
+  protocol's whitelist (`clients.rs::allowed`) stays as it is. (Two session commands typed in a session, `/effort` and
+  `/autocompact`, do write their setting into `settings.json` on the hub.) Settings are edited where the service runs (file, or the dock on that
   machine).
 - Not Windows. Not a phone app (a web client in M3 covers a phone).
 
@@ -89,9 +90,10 @@ end). This is one design with four milestones; each milestone gets its own plan.
   Revoking a key (one line in `authorized_keys`) is immediate. The hub's `client-stdio` applies this set, the
   machine's `aria link` applies it again for relayed lines.
 - **Versions.** The first line each side sends is a hello with a protocol number (and the binary's version). A client,
-  hub or machine with a different protocol number is refused with a message saying which side is old and to run
-  `aria update` there; messages inside one protocol number are additive only. A hub updates by that command (the dock's
-  existing wait-for-jobs logic, which `aria serve` keeps), never by itself.
+  hub or machine with a different protocol number is refused with a message saying which side is old and to update it;
+  messages inside one protocol number are additive only. A hub is updated by running `hub init` again with a new binary
+  (there is no `aria update` command; the dock's existing wait-for-jobs logic, which `aria serve` keeps, decides when the
+  service restarts), never by itself.
 - **Machines are federated, not proxied.** `aria link` on a machine connects to the hub and to the machine's own
   `clients.sock`, and relays lines both ways wrapped in an envelope (`{ m: machine, c: client, line }`). A remote
   client is, for the machine, one more terminal client: the same `allowed()` whitelist, the same ids rewriting, the
@@ -248,7 +250,7 @@ the shared-versus-local settings list, and how the terminal shows a machine and 
 5. **Headless via a `gui` cargo feature**, not a second binary. Cost: every change builds both ways.
 6. **Over `connect` there is no "current folder"** until M2 (it is on another computer).
 7. **One shared memory on the hub**, reached through the link. Cost: no memory when the hub is unreachable.
-8. **Settings stay local to where the service runs**; remote clients cannot change them.
+8. **Settings stay local to where the service runs**; remote clients cannot change them through the protocol (`/effort` and `/autocompact` typed in a session still do).
 9. **No provider or VPS size chosen**: any Linux with systemd and user namespaces, 2 vCPU / 2 GB to start.
 10. **The word "machine"**, never the owner's "slave", in code and docs.
 

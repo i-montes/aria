@@ -2,38 +2,44 @@
 
 These are the owner's Pi extensions, copied from his Pi (`~/.pi/agent/extensions/`) and adapted with the smallest diffs
 that let them run inside Aria. Aria embeds this folder and writes it into its own Pi's directory (`~/.aria/agent/extensions/`)
-every time a session starts; an extension the owner edited there is kept (see `crates/aria-core/src/agent.rs`).
+every time a session's Pi starts (the tests and this README are left out); an extension the owner edited there is kept
+(see `crates/aria-core/src/agent.rs`). `lib/` holds the helpers the extensions share; it is not an extension. The
+settings that reach these extensions are in [settings](../docs/settings.md); what each one means for you is in the
+[agent](../docs/guide/agent.md), [safety](../docs/guide/safety.md), [automation](../docs/guide/automation.md) and
+[integrations](../docs/guide/integrations.md) guides.
 
 | Extension | What it does |
 |---|---|
-| `jev-router` | Jev classifies each message (route, memory, web, Notion, read-only, sizable) and adds a hidden hint and the answer-style rule; reasoning effort follows the route (`/effort`); `/plan` starts slice's phase A (one round of questions, then the plan in `docs/plans/`) and, for sizable work, the offer to plan it first (`plan=offer`, the `start_plan` tool) does the same; `plan_ready` shows the plan and asks for approval, and approving it launches phase B, a committing background subagent; `/execute` builds the next open phase of a plan with phases (it resumes one); after each slice job the router adds a `[slice]` hint with the next step (review, a question to ask, the manual checks); while a phase builds, the plan's marks are published as the status `aria-tasks` (the dock's task dock and the terminal's tasks strip) |
-| `sandbox` | every bash command runs in bwrap: writes only in the project, `/tmp` and caches; asks before leaving it, with Jev's review; also `background_run` (a never-ending command for Aria's dock), on the same route as bash |
-| `quota-fallback` | when the OpenCode Go quota is almost spent, asks to switch to the free model (countdown) |
-| `autocompact` | compacts the context at a set percent (`/autocompact`) |
-| `ask-user` | the `ask_user` tool: 1–4 questions with options |
-| `subagent-mode` | subagents (`pi --mode json` children) get a lean prompt (`SUBAGENT.md`) |
-| `subagent-watch` | children stream what they do to a socket so it can be watched (and traced: `child.ts` sends times, call ids and usage for `/debug`) |
+| `jev-router` | Jev classifies each message (route, memory, web, Notion, read-only, sizable) and adds a hidden hint and the answer-style rule; reasoning effort follows the route (`/effort`); `/plan` starts slice's phase A (one round of questions, then the plan in `docs/plans/`) and, for sizable work, the offer to plan it first (`plan=offer`, the `start_plan` tool) does the same; `plan_ready` shows the plan and asks for approval, and approving it launches phase B, a committing background subagent; `/execute` builds the next open phase of a plan with phases (it resumes one); after each slice job the router adds a `[slice]` hint with the next step (review, a question to ask, the manual checks); while a phase builds, the plan's marks are published as the status `aria-tasks` (the dock's task dock and the terminal's tasks strip); every `bash` call also goes through the process guard (`process-guard.ts`: no `pkill`, `killall` or `fuser -k`, and a `kill` only for the session's own or the project's processes), which works with the router off; `parallel` subagents get an expert assigned |
+| `sandbox` | every bash command runs in bwrap (Linux): writes only in the project, `/tmp` and caches; asks before leaving it, with Jev's review; where there is no box that works (macOS, or bwrap missing or blocked) every command asks first; also `background_run` (a never-ending command for Aria's dock), on the same route as bash; `/sandbox` shows the rules and `/sandbox reset` forgets the session's grants |
+| `quota-fallback` | when an OpenCode Go model's 5-hour or weekly quota is almost spent, asks to switch to the free model (countdown), and switches back after the window resets; only for OpenCode Go models; `PI_QUOTA_FALLBACK=0` turns it off |
+| `autocompact` | compacts the context at a set percent (`/autocompact <0-100>`; alone it shows the share) |
+| `ask-user` | the `ask_user` tool: 1–4 questions with options, each with a free-text answer too; subagents do not get it, and its description tells the model to write in Spanish |
+| `subagent-mode` | subagents (`pi --mode json` children) get a lean prompt (`SUBAGENT.md`), may read memory but not write it, end with their lessons, and stop at `subagents.turnLimit` turns when one is set; `PI_SUBAGENT_LEAN=0` turns it off |
+| `subagent-watch` | children stream what they do to a socket so it can be watched (and traced: `child.ts` sends times, call ids and usage for `/debug`); the overlay it adds (`alt+a`, `/agents`) opens only in Pi's own terminal UI, and in Aria the dock reads the same socket for its subagents panel |
 | `clock` | Aria's own: each user message gets a hidden `[now]` line with the local date, time, weekday and time zone |
 | `background` | Aria's own: under Aria's dock (`ARIA_JOBS_SOCK`), the tools `background_agent`, `background_list`, `background_output`, `background_stop` (and `background_run` with `PI_SANDBOX=0`); a hidden `[background]` line while something runs; an `aria-background` message when a job ends; `background_agent` takes `commits` (a slice phase's subagent commits locally in the folder, never in a worktree) |
 | `connectors` | Aria's own: every MCP tool call that writes asks first on the chat's permission card (`kind: "connector"`), by the access level of its connector in Aria's settings (`aria.json` `connectors`: Read only refuses writes, Ask asks, Allow runs them); reads run, codemode's nested calls are gated the same, `engram` never is; "don't ask again" lasts the session |
 | `install` | Aria's own: the `install` tool puts in a skill, an MCP server or a Pi package the user asked for, after the user confirms it on the permission card; the `install-from-link` skill (`agent-files/skills/`) tells the model how to read a link |
-| `schedule` | Aria's own: under Aria's dock (`ARIA_JOBS_SOCK`), the tools `schedule_create`, `schedule_list`, `schedule_update`, `schedule_delete` for tasks the dock runs by itself at a time of day, each in its own tab; the model states the schedule and the permissions and waits for a yes before creating one |
+| `schedule` | Aria's own: under Aria's dock (`ARIA_JOBS_SOCK`), the tools `schedule_create`, `schedule_list`, `schedule_update`, `schedule_delete` for tasks the dock runs by itself at a time of day, each in its own tab; the model states the schedule and the permissions and waits for a yes before creating one; a task that may write is saved paused until the person approves it in `/schedules`; not in subagents |
 | `rotate` | Aria's own: the command `/aria-rotate` (Aria sends it after a compaction, while the tab is quiet) continues the conversation in a new session file whose header names the old one and whose model context is the same: the latest compaction's summary, framed as Pi frames it, as a visible `aria-earlier` message (`details`: the old session id and the raw summary), then everything Pi kept (messages and custom messages, context edits applied); no model turn; without a compaction it does nothing |
 | `secrets` | Aria's own: the person's passwords, keys and tokens, never seen by the model: `request_secret` (a secret card; the page sends the value straight to the dock, which keeps it in the keyring), `secret_import` (the dock reads a file and keeps one value), `secrets_list` (names only); every tool output is masked (stored values by name, key shapes, secret-named assignments) with a note offering `secret_import`; the sandbox gives a command the `$ARIA_SECRET_<NAME>` it names |
 | `loadout` | Aria's own: a resumed session restores the tools recorded in its transcript, so a tool a newer Aria added would never be declared; at every session start the tools of Aria's extensions that are not active become active (not in subagents) |
 | `tasks` | Aria's own: the `tasks_update` tool, the task list of multi-step work (the whole list each time, at most 20); Aria's terminal draws it above the editor from the tool's result, live and from the history; not in subagents |
 | `context` | Aria's own: before every run, what fills the context (system prompt, tools, skills, conversation) in tokens estimated at 4 characters each, published as the status `aria-context`; the terminal's `/context` draws it |
-| `verify` | Aria's own: after a run that edited files, the project's checks (`.aria/verify.json`, else on Linux what package.json, Cargo.toml or pyproject.toml show), boxed by bwrap on Linux, 5 minutes each; the result is the status `aria-verify` (the terminal's footer) and a failure is told to the model once; `/verify off\|on` |
+| `verify` | Aria's own: after a run that edited files, the project's checks (`.aria/verify.json`, else what package.json, Cargo.toml or pyproject.toml show), boxed by bwrap, 5 minutes each; they run on Linux only, and there only where the box works: on macOS nothing runs, not even `.aria/verify.json`; the result is the status `aria-verify` (the terminal's footer) and a failure is told to the model once; `/verify off\|on`; not in subagents |
 
 Tests: `bun test extensions`.
 
 ## What differs from the owner's copy
 
 - **Paths** go through `lib/agent-dir.ts`: `agentDir()` is `$PI_CODING_AGENT_DIR` (Aria sets `~/.aria/agent`), falling back to
-  `~/.pi/agent`; `projectsDir()` is `$ARIA_PROJECTS_DIR` (Aria sets its working folder), falling back to `~/Projects`. Files
-  changed: `jev-router/{index,usage,modes}.ts`, `autocompact/autocompact.ts`. The same files still run in the owner's own Pi.
+  `~/.pi/agent`; `projectsDir()` is `$ARIA_PROJECTS_DIR` (Aria sets its working folder), falling back to `~/Projects`. The
+  owner's files changed this way: `jev-router/{index,usage,modes}.ts`, `autocompact/autocompact.ts`; they still run in his own
+  Pi.
 - **The sandbox also protects Aria's credentials** (`~/.aria/auth.json`, `mcp.json`, `mcp-auth.json` and their links in
-  `~/.aria/agent/`), in `sandbox/policy.ts`.
+  `~/.aria/agent/`), in `sandbox/policy.ts`, and keeps the project's `.pi` and `.aria` (where `verify.json` lives) and a
+  repository's `.git/config` and `hooks` read-only.
 - **In Aria's dock (Pi's RPC mode)** the extensions talk to the chat instead of a terminal. The terminal paths
   (`mode === 'tui'`) are unchanged.
   - `jev-router/modes.ts`: `routedMode` routes in `tui`, `print` and `rpc`. `jev-router/route.ts` adds `jevStatus`;
@@ -53,8 +59,8 @@ Tests: `bun test extensions`.
     not Superpowers' brainstorming and writing-plans: one round of up to 4 questions, then a plan of phases and tasks in
     `docs/plans/<date>-<slug>.md`, committed (unless the owner keeps `docs/` out of the repository). Plan mode writes only `docs/plans/`, the repo root's `.gitignore`, `.git`
     and `/tmp`. `plan_ready` shows the plan (the chat draws it as a card) and asks to approve or change it; approved, plan
-    mode ends and the build starts when the model's answer ends. There is no execute mode any more: the build is a
-    background job and the chat stays routed (only the build-start message itself is not classified). Leaving plan mode (`/plan off`) cancels an approved build that has not
+    mode ends and the build starts when the model's answer ends. There is no execute mode (`/execute` is a command that
+    builds the next open phase): the build is a background job and the chat stays routed (only the build-start message itself is not classified). Leaving plan mode (`/plan off`) cancels an approved build that has not
     started. The skill is hidden from the model's own choice (`disable-model-invocation`): only `/plan` and the router's
     offer reach it.
   - `lib/jev.ts`: every question to Jev (the router's, the sandbox review's) goes down a chain of the classifiers Pi
