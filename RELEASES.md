@@ -5,6 +5,36 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.20.1 — 2026-10-23
+
+### Fixed
+
+- the store refuses a kept writable grant that was swapped for a link out; docs state the grant-rebinding limit
+- hub init accepts only from=, expiry-time= and verify-required after the forced command
+- secret_import opens the file once and judges what it opened
+- the permission footer names exactly the letters whose option exists; the docs say which folder @ can list
+- hub init sends and plans from what the bundle holds, and says a /proc mount failure is not the AppArmor one
+- hub init allows only from=, expiry-time= and no-* options after the forced command
+- the sandbox and credentials texts say what an off toggle and a missing keyring do; ask-user drops an Other in more languages
+- every granted writable root keeps its git hooks, git config, .pi and .aria read-only
+- the language written into aria.json is one line of at most 40 characters
+- a run judges each writable grant by its real path; a task names at most 16; a projects folder of / or a relative one allows nothing
+- Alt+A and Alt+D fire on the key labelled with the letter on any layout, never with Ctrl or Cmd
+- secret_import judges a file by its real path against the real project and projects folder
+- the settings and setup texts say what the code does, and the welcome screen counts its steps from the real list
+- the tool asks in the conversation's language, named from aria.json, not in Spanish
+- Alt+A is read by the key's place, so Option+A works on a Mac
+- Enter on a / word no command matches sends it as a message, as the dock does
+- @ lists the session's folder, not the projects folder
+- a permission card's footer names the keys that work (a number or a click), not y/a/n
+- aria start starts the unit that is installed, so it is right on a hub too
+- hub init checks the forced command, names the projects folder only when it sends settings, and says it reads the keyring
+- the bwrap probes mount /dev and /proc like the real call
+- a remote sessionClose for an unknown session is refused
+- secret_import reads only inside the project or the projects folder
+- a task may write only inside the projects folder or /tmp
+- only the dock page's Approve approves a waiting task; the service refuses it from every client
+
 ## 0.20.0 — 2026-10-23
 
 ### New
