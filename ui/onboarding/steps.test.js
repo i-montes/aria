@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import {
   applyProvider, canContinue, credentialFor, defaultSettings, finish, isSignedIn, JEV_PROVIDERS, jevBackend, languageChoice,
-  nextStep, previousStep, PROVIDERS, rivals, setLanguageChoice, setRouter, skip, stepIds,
+  fullStepCount, maxFullSteps, nextStep, previousStep, PROVIDERS, rivals, setLanguageChoice, setRouter, skip, stepIds,
 } from './steps.js'
 
 const golden = (name) => JSON.parse(readFileSync(new URL(`../../crates/aria-core/tests/golden/${name}.json`, import.meta.url), 'utf8'))
@@ -37,6 +37,13 @@ describe('flows', () => {
   test('full steps without a quota', () => {
     expect(stepIds('full', 'anthropic-api')).not.toContain('quota')
     expect(stepIds('full', 'anthropic-api')).toHaveLength(12)
+  })
+  test('the count the welcome screen shows is the length of the real list', () => {
+    for (const id of PROVIDER_IDS) expect(fullStepCount(id)).toBe(stepIds('full', id).length)
+    expect(fullStepCount('opencode-go')).toBe(fullStepCount('anthropic-api') + 1) // the quota step
+    // before a provider is chosen the most a flow can have
+    expect(maxFullSteps()).toBe(Math.max(...PROVIDER_IDS.map(fullStepCount)))
+    expect(maxFullSteps()).toBe(stepIds('full', 'opencode-go').length)
   })
   test('back from the first step is the welcome screen', () => {
     expect(previousStep(stepIds('full', 'opencode-go'), 'provider')).toBe('welcome')

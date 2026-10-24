@@ -158,6 +158,12 @@ export function stepIds(mode, providerId) {
   ]
 }
 
+/** How many steps the full flow has for this provider (OpenCode Go adds the quota step). */
+export const fullStepCount = (providerId) => stepIds('full', providerId).length
+
+/** The most steps a full flow can have: what the welcome screen promises before a provider is chosen. */
+export const maxFullSteps = () => Math.max(...PROVIDERS.map((p) => fullStepCount(p.id)))
+
 /** The step after `current`, or `null` when `current` was the last one (time to save). */
 export function nextStep(ids, current) {
   const at = ids.indexOf(current)

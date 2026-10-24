@@ -42,14 +42,8 @@ The thread and the composer (known limits of the page, from the review, deferred
 
 Settings screen and setup texts that disagree with the code (`ui/i18n/en.json`, `es.json`):
 
-- `ob.sandbox.askToLeave.desc` says Aria asks when a command "needs the network"; the box shares the network, so only a
-  command the model marks as outside, or any command where there is no box, asks (`extensions/sandbox/route.ts`).
-- `ob.sandbox.intro` says commands write "only inside your projects folder"; the box writes in the project's git root (the
-  session's folder when there is none), `/tmp`, caches and `sandbox.extraWritable` (`extensions/sandbox/policy.ts`).
-- `ob.signin.stored.desc` says credentials go to `auth.json` at mode 600; with the keyring on (the default) they are in it.
 - `ob.router.b4` lists "Experts assigned to each part of a big task" as part of the router, but `assignExperts`
   (`extensions/jev-router/index.ts`) runs on every `parallel` call whether `router.enabled` is on or not.
-- `welcome.customize.steps` says "12 steps"; the flow has 12, or 13 with OpenCode Go's quota step (`stepIds`).
 - The settings screen has no row for the keyring: `credentials.keyring`, `aria keyring on|off|status` and the dock's log.
 - The settings screen shows an outside change (`/effort`, `/autocompact`) at once, unless it has unsaved changes of the
   reader's own: those stay, and saving them writes over the outside change.

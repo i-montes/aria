@@ -101,7 +101,7 @@ Press the shortcut. The dock opens on the right of the screen you are looking at
 You choose one of three paths:
 
 - **Quick setup** (about a minute): your provider and its sign-in, then your name. Everything else takes the recommended defaults.
-- **Customize** (about a dozen steps): every step below.
+- **Customize** (12 steps, or 13 with OpenCode Go, which adds the quota step; the card says "up to 13 steps" until a provider is chosen): every step below.
 - **Skip for now**: nothing is configured and the dock closes. The welcome screen comes back the next time you open it, and there is no chat until a setup is finished.
 
 Each step has Back and Continue. In Customize, from the third step on, "Use recommended defaults for the rest" jumps to the review.

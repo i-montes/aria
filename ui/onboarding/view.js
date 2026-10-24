@@ -7,7 +7,7 @@ import { renderPanelHead } from '../chat/parts/panelhead.js'
 import { orderedModels, renderModelPicker } from '../chat/parts/models.js'
 import {
   applyProvider, canContinue, credentialFor, defaultSettings, finish, isSignedIn, JEV_PROVIDERS, jevBackend, languageChoice,
-  nextStep, previousStep, PROVIDERS, providerModule, rivals, setLanguageChoice, setRouter, skip, stepIds,
+  fullStepCount, maxFullSteps, nextStep, previousStep, PROVIDERS, providerModule, rivals, setLanguageChoice, setRouter, skip, stepIds,
 } from './steps.js'
 
 const SERVICES = ['notion', 'tavily']
@@ -173,6 +173,11 @@ export function createOnboarding(env) {
     if (state.picker) focusModelSearch()
   }
 
+  /** "13 steps", counted from the real list: the chosen provider's, or "up to" the longest before one is chosen. */
+  function customizeSteps() {
+    return module() ? t('welcome.customize.steps', { n: fullStepCount(state.settings.provider.id) }) : t('welcome.customize.stepsUpTo', { n: maxFullSteps() })
+  }
+
   function welcomeHtml() {
     return `
       <span class="dot"></span>
@@ -183,7 +188,7 @@ export function createOnboarding(env) {
         <div class="description">${c.esc(t('welcome.quick.description'))}</div>
       </button>
       <button class="card" data-nav data-action="choose" data-value="full">
-        <div class="row"><b>${c.esc(t('welcome.customize.title'))}</b><span class="meta">${c.esc(t('welcome.customize.steps'))}</span></div>
+        <div class="row"><b>${c.esc(t('welcome.customize.title'))}</b><span class="meta">${c.esc(customizeSteps())}</span></div>
         <div class="description">${c.esc(t('welcome.customize.description'))}</div>
       </button>
       <div class="footer">

@@ -1378,3 +1378,30 @@ describe('the shortcut row', () => {
     expect(h.root.innerHTML).not.toContain('ob.shortcut.label')
   })
 })
+
+describe('the welcome screen counts the steps of the real flow', () => {
+  const meta = (html) => html.match(/<span class="meta">([^<]*)<\/span>/g).map((m) => m.replace(/<[^>]*>/g, ''))
+  const counting = { t: (key, vars) => (vars ? `${key}=${vars.n}` : key) }
+
+  test('before a provider is chosen it says "up to" the longest flow', () => {
+    const h = harness(counting)
+    h.ob.start(null)
+    expect(meta(h.root.innerHTML)).toContain('welcome.customize.stepsUpTo=13')
+  })
+
+  test('once the provider is known it is that provider\'s count', () => {
+    for (const [id, n] of [['opencode-go', 13], ['anthropic-api', 12]]) {
+      const h = harness(counting)
+      h.ob.start({ ...applyProvider(defaultSettings('en'), id) })
+      expect(meta(h.root.innerHTML)).toContain(`welcome.customize.steps=${n}`)
+    }
+  })
+
+  test('the strings take the number, in both languages', () => {
+    for (const code of ['en', 'es']) {
+      const catalog = JSON.parse(readFileSync(new URL(`../i18n/${code}.json`, import.meta.url), 'utf8'))
+      expect(catalog['welcome.customize.steps']).toContain('{n}')
+      expect(catalog['welcome.customize.stepsUpTo']).toContain('{n}')
+    }
+  })
+})
