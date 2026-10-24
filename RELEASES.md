@@ -5,6 +5,38 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.20.0 — 2026-10-23
+
+### New
+
+- aria serve exits 1 when terminals cannot connect
+- sign in from a terminal by pasting the redirect address
+- /schedules lists, pauses and deletes the scheduled tasks
+- aria hub init installs a hub over ssh and says what it could not do
+- the bundle a hub is set up from, and the import that writes it
+- a headless install, a private Node, and a cross-build for the server
+- aria serve runs the service with no window, behind the gui feature
+- aria connect opens the terminal on another computer's service over ssh
+- aria client-stdio, a bridge from ssh to the clients socket
+- a hello with a protocol number, and what a remote client may not do
+
+### Fixed
+
+- the terminal says what a hub refuses, a banner before the hello is skipped, and the docs say what is real
+- a non-login ssh gets the user manager's directory, a hub without linger is not called ready, and a server skips the browser
+- running hub init again keeps the service running and what the hub already has
+- the quick start uses a dedicated key, and hub init prints the ssh entry that makes connect use it
+- where the box does not work every command asks, and the client key waits for a working sandbox
+- a remote client can talk only to sessions the hub has
+- a remote client's Pi commands are the terminal's own, and the whole surface is pinned
+- a remote client never chooses a new session's folder
+- texts for the sign-in errors the dock can now emit
+- a resume in /schedules is checked against a fresh list and never approves a waiting task
+- the client key is added whole and restricted, a failed ss is said, and a failing step says what is on the hub
+- a credential file left out because the keyring could not be opened is reported
+- the private Node is checked against a hash pinned in the repo
+- aria connect gives ssh 60 s to log in, and shows no local git for a remote session
+
 ## 0.19.0 — 2026-10-23
 
 ### New
