@@ -205,7 +205,7 @@ Format: one or more modifiers, then one key (a letter, a digit, `Space` or `F1`�
 | `Enter`, `Tab` | A picker | Choose |
 | `Esc` | Anywhere in the dock | Closes the first thing open: dictation (cancels), a picker, the `/connect` card, an open trace step, a panel (memory, schedules, subagents, session) back to the chat, the tab menu. With none, hides the dock. It never stops a run: use the Stop button |
 | `Alt+D` | Chat | Starts dictation; again stops it and writes the text |
-| `Alt+A` | Chat | The subagents view, and back. On macOS it is `Option+A`; like `Alt+D`, it is read by the key's place, so the character `Option+A` types does not matter |
+| `Alt+A` | Chat | The subagents view, and back. On macOS it is `Option+A`. It fires on the key labelled A on any layout (by its place or by its letter), so the character `Option+A` types does not matter; `Ctrl+Alt+A` and `Cmd+Option+A` do not fire it |
 | `Cmd+Q` twice within 2 s | macOS | Quits Aria (the first press shows `Press ⌘Q again to quit Aria`). On Omarchy `Super+Q` is the compositor's |
 | `Cmd+C` `V` `X` `A` | macOS | Copy, paste, cut, select all |
 | `↑` `↓` | Setup and settings screens | Move focus between the controls |

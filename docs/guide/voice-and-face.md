@@ -14,7 +14,7 @@ The transcription is done by Whisper (the `large-v3-turbo` model, quantized to `
 
 ### How to use it
 
-1. Open the dock and click into a conversation. Press the microphone button next to the send button, or `Alt+D` (on a Mac, `Option+D`; the key is read by its place, so the character `Option+D` types does not matter).
+1. Open the dock and click into a conversation. Press the microphone button next to the send button, or `Alt+D` (on a Mac, `Option+D`; it fires on the key labelled D on any layout, so the character `Option+D` types does not matter).
 2. The first time, Aria asks "Download the voice model (574 MB)? It stays on this computer, and so does your voice." Press **Download**. A progress line shows the percentage, and the recording starts when the model is in place. **Not now** closes the question and records nothing.
 3. Speak. The button turns red and shows the time recorded (`0:07`).
 4. Press the button or `Alt+D` again to stop. The button shows a spinner and "Writing…" (its tooltip reads "Writing what you said…") while Whisper works.
