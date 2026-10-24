@@ -207,7 +207,7 @@ A session counts as looked at while the dock shows it or a focused terminal is a
 
 All of them do the same thing, in this order: every background job stops (queued subagents never start), then every session's Pi stops, then the service exits cleanly. A run in progress is cut; the conversation up to that point stays in its session. The service manager does not restart a clean exit.
 
-To start it again, run `aria start` (`systemctl --user start aria.service` on Omarchy, `launchctl kickstart` on macOS), or `aria show` or `aria toggle`, which start the dock when nothing answers. After a `launchctl bootout`, `aria start` finds no loaded agent: load it with `launchctl bootstrap gui/<uid> ~/Library/LaunchAgents/com.aria.dock.plist`. On a hub, `aria start` looks for the dock's unit; use `systemctl --user start aria-serve.service`.
+To start it again, run `aria start` (`systemctl --user start aria.service` on Omarchy, `aria-serve.service` on a hub, `launchctl kickstart` on macOS), or `aria show` or `aria toggle`, which start the dock when nothing answers. After a `launchctl bootout`, `aria start` finds no loaded agent: load it with `launchctl bootstrap gui/<uid> ~/Library/LaunchAgents/com.aria.dock.plist`. On a hub, `aria start` finds that only `aria-serve.service` is installed and starts it (and says so); `systemctl --user start aria-serve.service` does the same.
 
 ## Limits
 

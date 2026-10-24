@@ -312,7 +312,7 @@ journalctl --user -u aria-serve.service -f
 systemctl --user restart aria-serve.service
 ```
 
-The unit restarts the service five seconds after a failure. `aria quit` exits 0, so the unit stays stopped. On a hub, start it again with `systemctl --user start aria-serve.service`: `aria start` starts `aria.service`, the dock's unit, which a headless install does not have.
+The unit restarts the service five seconds after a failure. `aria quit` exits 0, so the unit stays stopped. On a hub, start it again with `aria start`, which finds that `aria-serve.service` is the unit installed and starts it, or with `systemctl --user start aria-serve.service`.
 
 | Path on the hub | What it is |
 |---|---|
@@ -357,7 +357,7 @@ The unit restarts the service five seconds after a failure. `aria quit` exits 0,
 |---|---|
 | `ssh is not installed here (or ARIA_SSH names a program that is not there).` (exit 1) | Install ssh, or fix `ARIA_SSH`. |
 | `ssh did not finish connecting to <host> in 60 seconds. ...` (exit 1) | The first connection to a host asks you to accept its key. Run `ssh <host>` by hand once. A passphrase prompt or a slow login can cause this too. |
-| ``Aria is not running on that computer: start it there with `aria start`.`` (exit 1) | The service is down. On a hub, log in and run `systemctl --user start aria-serve.service` (see above for why not `aria start`). |
+| ``Aria is not running on that computer: start it there with `aria start`.`` (exit 1) | The service is down. Log in to that computer and run `aria start` (on a hub it starts `aria-serve.service`). |
 | `Aria on that computer is older than this aria: update it there.` (exit 1) | The hub does not know this client's first line. Update the hub. |
 | `This aria speaks protocol N and Aria on that computer speaks M: update the older one.` (exit 3) | Update whichever side has the lower number. |
 | `Aria's dock could not start: the connection closed before the hub answered` | ssh ended before the bridge answered: the key was refused (look for `Permission denied` above it), or there is no `~/.local/bin/aria` on the hub. |

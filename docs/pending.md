@@ -96,9 +96,6 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
   `--allow-no-sandbox` is given. Until then treat the client key as shell access to the hub user.
 - **`aria update`**: there is no such command, though the hub design names one. A hub is updated by running `hub init`
   again with a new binary; the protocol-mismatch messages only say to update the older side.
-- **`aria start` on a hub** starts `aria.service`, not `aria-serve.service` (`main.rs`, `start_service`), yet the text a
-  terminal shows when a hub is down (`term.hubDown`, `term/texts.rs`) and `aria quit`'s hint say to run it. On a hub use
-  `systemctl --user start aria-serve.service`.
 - **A run that survives a dropped client** needs a model provider, so the acceptance script does not fake it: the maintainer
   checks by hand that a run started over `aria connect` goes on after the client is killed and shows again from a
   second connect (the design's "done when" for M1).

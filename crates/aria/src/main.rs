@@ -441,7 +441,33 @@ pub(crate) fn request_quit() {
     QUIT.store(true, Ordering::SeqCst);
 }
 
-/// `aria start`: the dock again under the service manager that starts it at login, so it is supervised as usual.
+/// The systemd unit `aria start` starts, from whether each is installed: the dock's wins when both are (a computer with
+/// both is unusual), a hub has only the headless one, and none is no unit at all.
+#[cfg(any(target_os = "linux", test))]
+fn unit_to_start(dock_installed: bool, serve_installed: bool) -> Option<&'static str> {
+    if dock_installed {
+        Some("aria.service")
+    } else if serve_installed {
+        Some("aria-serve.service")
+    } else {
+        None
+    }
+}
+
+/// Whether the user's systemd knows `unit` (`systemctl --user cat` reads the unit file and changes nothing).
+#[cfg(target_os = "linux")]
+fn unit_installed(unit: &str) -> bool {
+    std::process::Command::new("systemctl")
+        .args(["--user", "cat", unit])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+/// `aria start`: the service again under the service manager that starts it at login, so it is supervised as usual. On
+/// Linux that is the dock's unit or, on a hub, the headless one.
 fn start_service() {
     #[cfg(target_os = "macos")]
     let status = std::process::Command::new("launchctl")
@@ -449,7 +475,15 @@ fn start_service() {
         .arg(format!("gui/{}/com.aria.dock", unsafe { libc::getuid() }))
         .status();
     #[cfg(target_os = "linux")]
-    let status = std::process::Command::new("systemctl").args(["--user", "start", "aria.service"]).status();
+    let status = match unit_to_start(unit_installed("aria.service"), unit_installed("aria-serve.service")) {
+        Some(unit) => {
+            if unit != "aria.service" {
+                println!("Starting {unit} (this computer has no aria.service)");
+            }
+            std::process::Command::new("systemctl").args(["--user", "start", unit]).status()
+        }
+        None => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no Aria unit is installed")),
+    };
     match status {
         Ok(status) if status.success() => println!("Aria is running"),
         _ => {
@@ -505,6 +539,13 @@ mod tests {
     fn serve_is_the_service_without_a_window() {
         assert_eq!(mode(Some("serve"), true), Mode::Serve);
         assert_eq!(mode(Some("serve"), false), Mode::Serve, "a unit runs it with no terminal");
+    }
+    #[test]
+    fn the_unit_to_start_is_the_one_that_is_installed() {
+        assert_eq!(unit_to_start(true, false), Some("aria.service"));
+        assert_eq!(unit_to_start(false, true), Some("aria-serve.service"), "a hub has only the headless unit");
+        assert_eq!(unit_to_start(true, true), Some("aria.service"), "both: the desktop wins");
+        assert_eq!(unit_to_start(false, false), None);
     }
     use super::*;
 }
