@@ -1,57 +1,18 @@
 # Drives the real `aria` client in a pseudo-terminal: a new session in a folder, !pwd there, Ctrl+C, back again, /exit.
-import json, os, pty, re, select, sys, time
+import json, os, sys, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I leaves the script's folder out
+from pty_helpers import ok, read, socket_alive, spawn, until
 
 aria, folder, home, socket_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-ANSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[()][A-Z0-9]|\x1b[=>]")
 
 def start():
-    pid, fd = pty.fork()
-    if pid == 0:
-        os.chdir(folder)
-        os.environ["COLUMNS"], os.environ["LINES"] = "100", "30"
-        os.execv(aria, [aria])
-    import fcntl, struct, termios
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
-    return pid, fd
-
-def read(fd, seconds):
-    out = b""
-    end = time.time() + seconds
-    while time.time() < end:
-        r, _, _ = select.select([fd], [], [], 0.1)
-        if r:
-            try:
-                out += os.read(fd, 65536)
-            except OSError:
-                break
-    return ANSI.sub(b"", out).decode("utf-8", "replace")
-
-def until(fd, needle, seconds=20):
-    seen = ""
-    end = time.time() + seconds
-    while time.time() < end:
-        seen += read(fd, 0.5)
-        if needle in seen:
-            return seen
-    raise SystemExit(f"FAIL: never saw {needle!r}; last screen text: {seen[-600:]!r}")
-
-def ok(what):
-    print(f"ok: {what}")
+    return spawn([aria], folder)
 
 def sessions():
     return json.load(open(os.path.join(home, "sessions.json")))["sessions"]
 
-import socket
-
 def dock_alive():
-    s = socket.socket(socket.AF_UNIX)
-    try:
-        s.connect(socket_path)
-        return True
-    except OSError:
-        return False
-    finally:
-        s.close()
+    return socket_alive(socket_path)
 
 # The client starts the dock; closing the client's terminal (a hang-up, no Ctrl+C) leaves the dock running.
 assert not dock_alive(), "FAIL: a dock was already running"
