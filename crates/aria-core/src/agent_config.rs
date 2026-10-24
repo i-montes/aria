@@ -136,6 +136,7 @@ mod tests {
         let long = language(&"x".repeat(200));
         assert_eq!(long.as_str().unwrap().chars().count(), 40);
         assert_eq!(language(&format!("{} {}", "y".repeat(39), "z".repeat(10))), "y".repeat(39)); // no trailing space
+
         // the persona keeps the text as written
         let mut settings = golden();
         settings.assistant.language = "French\nGerman".into();
