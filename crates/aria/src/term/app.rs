@@ -584,6 +584,11 @@ impl App {
     /// click never closes a session).
     fn picked(&mut self, kind: PickerKind, outcome: Outcome, run: bool) -> Vec<Effect> {
         match outcome {
+            // Enter on a `/` word no command matches: it goes to the session as typed, as in the dock.
+            Outcome::None if run && kind == PickerKind::Commands => {
+                self.picker = None;
+                self.submit()
+            }
             Outcome::None => Vec::new(),
             Outcome::Closed => {
                 self.picker = None;
@@ -1530,6 +1535,23 @@ mod tests {
         typed(&mut other, "verb");
         key(&mut other, Key::Tab);
         assert_eq!(other.editor.text(), "/verbose ");
+    }
+
+    #[test]
+    fn enter_on_a_word_no_command_matches_sends_it_as_a_message() {
+        let mut app = attached();
+        typed(&mut app, "/");
+        let id = app.pending.iter().find(|(_, p)| **p == Pending::Commands).map(|(id, _)| *id).unwrap();
+        app.update(in_session(DockMessage::Commands { id, commands: json!([]) }));
+        typed(&mut app, "zzz");
+        let effects = key(&mut app, Key::Enter);
+        assert!(
+            matches!(&effects[..], [Effect::Send(PageMessage::Session { message, .. })]
+            if **message == PageMessage::ChatSend { text: "/zzz".into(), behavior: None, attachments: vec![] }),
+            "{effects:?}"
+        );
+        assert_eq!(app.editor.text(), "");
+        assert!(app.picker.is_none(), "the list closes with the message");
     }
 
     #[test]
