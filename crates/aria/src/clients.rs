@@ -12,7 +12,7 @@
 //!   hub answers with its own `hello` (no `remote`), and a different `protocol` is answered `protocol-mismatch` and the
 //!   connection closed. `remote: true` marks a client that came in from another machine: it can never send `secretSave`
 //!   or a `!command` (`not-for-remote`), and a later `hello` cannot lift the mark. It never chooses a session's folder
-//!   either: it talks only to sessions the hub knows (`unknown-session`, so a made-up id never starts a Pi), its `sessionNew` reaches the chat with no `workdir`, and of Pi's own commands (`piCommand`) it may send only
+//!   either: it talks only to sessions the hub knows, and closes only those (`unknown-session`, so a made-up id never starts a Pi or grows the closed set), its `sessionNew` reaches the chat with no `workdir`, and of Pi's own commands (`piCommand`) it may send only
 //!   `get_session_stats`, with none of the arguments it names (`REMOTE_PI_COMMANDS`). The test `the_whole_surface_a_client_may_reach_is_pinned`
 //!   states everything a local and a remote client may reach, for every message the page can send.
 //! - Sign-ins: a client (local or remote) may start Claude's or Notion's (`startOauth`, `startMcpOauth`) and paste the
@@ -128,6 +128,8 @@ fn for_remote(message: PageMessage, known: &(dyn Fn(&str) -> bool + Send + Sync)
             };
             Ok(PageMessage::Session { session, message: Box::new(message) })
         }
+        // Closing a made-up id would still grow the closed set, rewrite `sessions.json` and tell every client.
+        PageMessage::SessionClose { session } if !known(&session) => Err("unknown-session"),
         other => Ok(other),
     }
 }
@@ -1080,6 +1082,27 @@ mod tests {
         let mut local = connect(&f);
         local.send(json!({"type": "session", "session": "zz", "message": {"type": "chatAbort"}}));
         assert!(matches!(f.chat.recv_timeout(Duration::from_secs(5)).unwrap(), PageMessage::Session { .. }));
+    }
+
+    #[test]
+    fn a_remote_client_cannot_close_a_session_that_does_not_exist() {
+        let f = fixture_knowing(Arc::new(|id| id == "aa"));
+        let mut remote = connect(&f);
+        remote.send(hello(PROTOCOL, Some(true)));
+        remote.next();
+        // a made-up id would grow the closed set, rewrite sessions.json and broadcast: refused before the chat sees it
+        remote.send(json!({"type": "sessionClose", "session": "zz"}));
+        assert_eq!(remote.next(), json!({"type": "error", "id": 0, "code": "unknown-session"}));
+        assert!(f.chat.try_recv().is_err());
+        remote.send(json!({"type": "sessionClose", "session": "aa"}));
+        assert!(matches!(
+            f.chat.recv_timeout(Duration::from_secs(5)).unwrap(),
+            PageMessage::SessionClose { session } if session == "aa"
+        ));
+        // a local terminal is not asked (it closes the tab of a session the dock may not have loaded yet)
+        let mut local = connect(&f);
+        local.send(json!({"type": "sessionClose", "session": "zz"}));
+        assert!(matches!(f.chat.recv_timeout(Duration::from_secs(5)).unwrap(), PageMessage::SessionClose { .. }));
     }
 
     #[test]

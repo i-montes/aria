@@ -259,7 +259,7 @@ The hub's bridge marks every connection that comes through `aria connect` as rem
 | Save a secret | `not-for-remote` |
 | Run a `!command` | `not-for-remote` |
 | Send any other Pi command (`export_html`, `compact`, and the rest) | `not-for-remote` |
-| Talk to a session the hub does not have | `unknown-session` |
+| Talk to, or close, a session the hub does not have | `unknown-session` |
 | Read or change settings or keys, import MCP servers, stop or dismiss background jobs, restart the engines, dictate, or anything else that changes the service's own state | `not-for-clients` |
 
 The terminal shows the first two refusals as `not available on a connected hub`.

@@ -224,7 +224,7 @@ A hub is Aria's service on a computer with no desktop (a server), reached from o
   the mark); no folder for a new session (`sessionNew` reaches the chat without its `workdir`, because a session's folder
   is where its boxed commands may write); of Pi's own commands only `get_session_stats`, with none of the arguments
   (`export_html` writes to a path the client names), the rest answered `not-for-remote`; and only sessions the hub has (a
-  made-up id would start a Pi of its own: `unknown-session`). A stolen client key therefore gets no shell and cannot save a
+  made-up id would start a Pi of its own, or be closed for nothing: `unknown-session`, for `sessionClose` too). A stolen client key therefore gets no shell and cannot save a
   secret, but it is a terminal at the keyboard: it can chat with a model that runs commands inside the sandbox
   and answer its prompts (the permission cards; not the approval of a scheduled task that waits for one, which only the
   dock page's `scheduleApprove` gives and no client may send), and it can re-bind the hub's Claude or Notion account
