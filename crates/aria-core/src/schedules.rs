@@ -15,6 +15,8 @@ pub const DAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 /// A run that starts more than this after its time says it ran late.
 pub const LATE_MS: i64 = 120_000;
 pub const MAX_TASKS: usize = 50;
+/// The most writable folders one task may name.
+pub const MAX_WRITABLE: usize = 16;
 const DAY_MS: i64 = 86_400_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -202,6 +204,9 @@ pub fn validate(task: &Task, servers: &[String]) -> Result<(), String> {
             return Err(format!("{name}: a scheduled task can only read or be allowed, never ask"));
         }
     }
+    if task.grants.writable.len() > MAX_WRITABLE {
+        return Err(format!("a task may name at most {MAX_WRITABLE} writable folders"));
+    }
     if let Some(bad) = task.grants.writable.iter().find(|p| !p.starts_with('/')) {
         return Err(format!("{bad:?} is not an absolute folder"));
     }
@@ -212,7 +217,8 @@ pub fn validate(task: &Task, servers: &[String]) -> Result<(), String> {
 /// (`sandbox.projectsDir`, expanded) or `/tmp`, and never be the home folder, a home-level dot folder (`~/.config`,
 /// `~/.local`, `~/.ssh`, `~/.aria`, any `~/.<name>`) or hold a `..` component. The check is lexical: it does not follow
 /// symlinks (the store also keeps the folder's real path and refuses the wide and secret ones there), so a link inside
-/// the projects folder is judged by where it sits, then by where it points.
+/// the projects folder is judged by where it sits, then by where it points. A projects folder that is `/` or not
+/// absolute allows nothing.
 pub fn writable_problem(dir: &str, projects: &std::path::Path, home: &std::path::Path) -> Option<String> {
     use std::path::{Component, Path, PathBuf};
     let rule = || {
@@ -236,6 +242,11 @@ pub fn writable_problem(dir: &str, projects: &std::path::Path, home: &std::path:
         out.is_absolute().then_some(out)
     };
     let Some(path) = clean(Path::new(dir)) else { return rule() };
+    // A projects folder that is the whole disk, or is not an absolute path (it would be read against whatever the
+    // process's folder is), is unusable: nothing is allowed until it is fixed.
+    if clean(projects).is_none_or(|projects| projects == Path::new("/")) {
+        return rule();
+    }
     let roots = |base: &Path| {
         let mut all: Vec<PathBuf> = clean(base).into_iter().collect();
         all.extend(std::fs::canonicalize(base).ok());
@@ -345,6 +356,28 @@ mod tests {
             let why = problem(dir).unwrap_or_else(|| panic!("{dir:?} should be refused"));
             assert!(why.contains("projects folder") && why.contains("/tmp"), "{dir}: {why}");
         }
+    }
+
+    #[test]
+    fn a_projects_folder_that_is_the_disk_or_not_absolute_allows_nothing() {
+        let with =
+            |projects: &str, dir: &str| super::writable_problem(dir, Path::new(projects), Path::new("/home/ana"));
+        for projects in ["/", "Projects", "", "./Projects", "/home/ana/Projects/../x"] {
+            for dir in ["/home/ana/Projects/acme", "/srv/work", "/tmp/x", "/etc", "/"] {
+                assert!(with(projects, dir).is_some(), "projects {projects:?}, {dir}");
+            }
+        }
+        assert_eq!(with("/home/ana/Projects", "/home/ana/Projects/acme"), None);
+    }
+
+    #[test]
+    fn a_task_names_at_most_sixteen_writable_folders() {
+        let mut t = task("07:30", &["mon"]);
+        t.grants.writable = (0..16).map(|n| format!("/tmp/w{n}")).collect();
+        assert!(super::validate(&t, &[]).is_ok());
+        t.grants.writable.push("/tmp/w16".into());
+        let why = super::validate(&t, &[]).unwrap_err();
+        assert!(why.contains("16"), "{why}");
     }
 
     #[test]

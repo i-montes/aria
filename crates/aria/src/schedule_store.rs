@@ -110,24 +110,38 @@ impl ScheduleStore {
         aria_core::agent::workdir(aria_core::settings::load(&self.paths).ok().flatten().as_ref())
     }
 
-    /// The writable folders a run may have: the task's own that follow the rule now. A task stored before the rule (or
-    /// under another projects folder) keeps its grants on disk, but a run never gets the ones outside it; one line says so.
+    /// The writable folders a run may have: the task's own that follow the rule now, judged where they really are at
+    /// this moment (a folder the session replaced by a link after the approval is judged by the link's target). A grant
+    /// that breaks the rule, or cannot be resolved, is dropped with one line in the log, never widened; one whose real
+    /// path follows the rule is given as that real path, which is what the sandbox binds. A task stored before the rule
+    /// (or under another projects folder) keeps its grants on disk.
     pub fn runnable_writable(&self, task: &Task) -> Vec<String> {
         let (projects, home) = (self.projects(), home());
+        let drop = |dir: &str, why: &str| {
+            crate::note(&format!(
+                "scheduled task {}: its writable folder {dir} {why}, so this run does not get it",
+                task.id
+            ));
+        };
         task.grants
             .writable
             .iter()
-            .filter(|dir| match schedules::writable_problem(dir, &projects, &home) {
-                None => true,
-                Some(_) => {
-                    crate::note(&format!(
-                        "scheduled task {}: its writable folder {dir} is outside the projects folder and /tmp, so this run does not get it",
-                        task.id
-                    ));
-                    false
+            .filter_map(|dir| {
+                if schedules::writable_problem(dir, &projects, &home).is_some() {
+                    drop(dir, "is outside the projects folder and /tmp");
+                    return None;
                 }
+                let Ok(real) = std::fs::canonicalize(dir) else {
+                    drop(dir, "cannot be resolved");
+                    return None;
+                };
+                let real = real.display().to_string();
+                if real != *dir && schedules::writable_problem(&real, &projects, &home).is_some() {
+                    drop(dir, &format!("now leads to {real}, outside the projects folder and /tmp"));
+                    return None;
+                }
+                Some(real)
             })
-            .cloned()
             .collect()
     }
 
@@ -559,6 +573,11 @@ mod tests {
         aria_core::settings::save(&store.paths, &settings).unwrap();
     }
 
+    /// A folder that is not under `/tmp`, so "inside the projects folder" is not "inside /tmp".
+    fn outside_tmp() -> tempfile::TempDir {
+        tempfile::tempdir_in("/var/tmp").unwrap()
+    }
+
     fn create_writing(store: &ScheduleStore, folder: &std::path::Path) -> Result<Task, String> {
         store.create(&json!({"title": "t", "prompt": "p", "at": "07:30", "writable": [folder]}), 0)
     }
@@ -566,7 +585,7 @@ mod tests {
     #[test]
     fn a_task_may_write_only_inside_the_projects_folder_or_tmp() {
         let (_dir, store) = store();
-        let work = tempfile::tempdir().unwrap();
+        let work = outside_tmp();
         let projects = work.path().join("work");
         std::fs::create_dir_all(projects.join("acme/out")).unwrap();
         with_projects(&store, &projects);
@@ -574,6 +593,7 @@ mod tests {
         assert!(task.awaiting, "{task:?}");
         let tmp = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
         assert!(create_writing(&store, tmp.path()).is_ok(), "/tmp is allowed");
+        assert!(!projects.starts_with("/tmp"), "the projects folder is not /tmp, so the two are told apart");
         let why = create_writing(&store, std::path::Path::new("/usr")).unwrap_err(); // exists, outside both
         assert!(why.contains("projects folder") && why.contains("/tmp"), "{why}");
     }
@@ -589,7 +609,7 @@ mod tests {
         }
         assert!(create_writing(&store, &home).is_err(), "the home folder itself");
         assert!(create_writing(&store, std::path::Path::new("/etc")).is_err());
-        let work = tempfile::tempdir().unwrap();
+        let work = outside_tmp();
         let projects = work.path().join("work");
         std::fs::create_dir_all(projects.join("a")).unwrap();
         with_projects(&store, &projects);
@@ -601,7 +621,7 @@ mod tests {
     #[test]
     fn the_rule_holds_when_a_task_is_changed_and_a_stored_violation_is_not_widened() {
         let (_dir, store) = store();
-        let work = tempfile::tempdir().unwrap();
+        let work = outside_tmp();
         let projects = work.path().join("work");
         std::fs::create_dir_all(projects.join("ok")).unwrap();
         with_projects(&store, &projects);
@@ -622,7 +642,7 @@ mod tests {
     #[test]
     fn a_run_drops_the_writable_grants_that_break_the_rule() {
         let (_dir, store) = store();
-        let work = tempfile::tempdir().unwrap();
+        let work = outside_tmp();
         let projects = work.path().join("work");
         std::fs::create_dir_all(projects.join("ok")).unwrap();
         with_projects(&store, &projects);
@@ -632,6 +652,70 @@ mod tests {
         task.grants.writable.push("/home/ana/.config".into());
         task.grants.writable.push("/etc".into());
         assert_eq!(store.runnable_writable(&task), kept, "the others are dropped, never widened");
+    }
+
+    #[test]
+    fn a_link_in_the_projects_folder_is_judged_by_where_it_points_when_the_task_is_made() {
+        let (_dir, store) = store();
+        let work = outside_tmp();
+        let projects = work.path().join("work");
+        std::fs::create_dir_all(projects.join("real")).unwrap();
+        with_projects(&store, &projects);
+        std::os::unix::fs::symlink("/usr", projects.join("to-usr")).unwrap();
+        let why = create_writing(&store, &projects.join("to-usr")).unwrap_err();
+        assert!(why.contains("projects folder"), "{why}");
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+        if home.join(".config").is_dir() {
+            std::os::unix::fs::symlink(home.join(".config"), projects.join("to-config")).unwrap();
+            assert!(create_writing(&store, &projects.join("to-config")).is_err(), "a link to ~/.config");
+        }
+        std::os::unix::fs::symlink(projects.join("real"), projects.join("inside")).unwrap();
+        let task = create_writing(&store, &projects.join("inside")).unwrap();
+        assert_eq!(task.grants.writable, vec![projects.join("real").canonicalize().unwrap().display().to_string()]);
+        assert!(store.list(0).len() == 1, "only the good one was stored");
+    }
+
+    #[test]
+    fn a_run_judges_a_grant_by_its_real_path_and_drops_one_that_became_a_link_out() {
+        let (_dir, store) = store();
+        let work = outside_tmp();
+        let projects = work.path().join("work");
+        for dir in ["out", "other", "gone"] {
+            std::fs::create_dir_all(projects.join(dir)).unwrap();
+        }
+        with_projects(&store, &projects);
+        let task = store
+            .create(&json!({"title": "t", "prompt": "p", "at": "07:30", "writable": [projects.join("out"), projects.join("gone")]}), 0)
+            .unwrap();
+        let (out, gone) = (task.grants.writable[0].clone(), task.grants.writable[1].clone());
+        assert_eq!(store.runnable_writable(&task), vec![out.clone(), gone.clone()], "untouched grants are kept");
+        // After the approval the folders are replaced: one by a link out, one removed.
+        std::fs::remove_dir(&out).unwrap();
+        std::os::unix::fs::symlink("/usr", &out).unwrap();
+        std::fs::remove_dir(&gone).unwrap();
+        assert_eq!(store.runnable_writable(&task), Vec::<String>::new(), "a link out and a missing folder are dropped");
+        // A link to another folder inside the projects folder: the grant is the real folder.
+        std::fs::remove_file(&out).unwrap();
+        std::os::unix::fs::symlink(projects.join("other"), &out).unwrap();
+        let real = projects.join("other").canonicalize().unwrap().display().to_string();
+        assert_eq!(store.runnable_writable(&task), vec![real]);
+    }
+
+    #[test]
+    fn a_task_names_at_most_sixteen_writable_folders() {
+        let (_dir, store) = store();
+        let work = outside_tmp();
+        let projects = work.path().join("work");
+        let dirs: Vec<_> = (0..17).map(|n| projects.join(format!("d{n}"))).collect();
+        for dir in &dirs {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        with_projects(&store, &projects);
+        let make =
+            |n: usize| store.create(&json!({"title": "t", "prompt": "p", "at": "07:30", "writable": &dirs[..n]}), 0);
+        assert!(make(16).is_ok());
+        let why = make(17).unwrap_err();
+        assert!(why.contains("16"), "{why}");
     }
 
     #[test]
