@@ -4,7 +4,7 @@ A personal assistant that works on your own computer, with your own files, in yo
 
 Press **Super + A** (**Option + Space** on a Mac) and a dock opens over whatever you are doing. Ask for something and
 Aria reads, edits, runs commands, plans and delegates, inside limits you can see. Or type `aria` in a terminal and get
-the same sessions there. Or run Aria on a server and attach to it from any computer, so its work goes on while your
+the same sessions there. Or run Aria on a server and attach to it from another computer, so its background work goes on while your
 laptop is off.
 
 > **Status.** Aria runs on **Omarchy** (Hyprland 0.56 or newer with the Lua configuration) and **macOS 12+**, and its
@@ -18,10 +18,20 @@ laptop is off.
 |---|---|---|
 | **The dock** | A column on the right of the screen you open with a shortcut, with your sessions as tabs. Omarchy and macOS. | [The dock](docs/guide/dock.md) |
 | **The terminal** | `aria` in a terminal: the same sessions, as a list and a conversation. Leaving it stops nothing. | [Aria in a terminal](docs/guide/terminal.md) |
-| **A hub** | The service on an always-on Linux server, reached from a terminal over ssh. Scheduled tasks and background work keep going while your computer is off. | [Running Aria on a server](docs/guide/hub.md) |
+| **A hub** | The service on an always-on Linux server, reached from a terminal over ssh. Background work, and scheduled tasks that only read, keep going while your computer is off. | [Running Aria on a server](docs/guide/hub.md) |
 
 All three are windows onto one thing: the **service**, which owns your sessions. Closing the dock or a terminal never
 stops work in progress.
+
+## Words used here
+
+- **Service**: the process that owns your sessions and their work; the dock and the terminal are windows onto it.
+- **Hub**: a service on a server with no window, reached over ssh. **Session**: one conversation, a tab in the dock.
+- **Pi**: the agent engine Aria runs, one per session. An **extension** adds behaviour inside it.
+- **Expert**: a persona the agent can delegate a task to. **Engram**: Aria's memory.
+- **Router**, **Jev**: the router reads each message; Jev is the small classifier it asks. Jev never chats.
+- **slice**: Aria's method for big work (plan, then build). **Ponytail**: a Pi package, a rule of the smallest change.
+- **Connector**, **MCP**: a service such as Notion that gives the agent extra tools, and the protocol it speaks.
 
 ## What it does
 
@@ -49,7 +59,8 @@ stops work in progress.
 
 **Work without you watching**
 - Scheduled tasks you ask for in plain words ("every day at 7:30 give me my Notion tasks"), each in its own tab, with
-  only the permissions you gave it.
+  only the permissions you gave it. A hub runs only read-only tasks: a task that may write needs an Approve that only the
+  dock offers.
 - Dev servers and long jobs in the background, owned by the service; a second writing subagent in the same repository
   gets its own git worktree.
 - Desktop notifications only when nobody is looking (none on a hub); a watchdog for a stuck run; updates that wait
@@ -61,8 +72,11 @@ stops work in progress.
   bubblewrap fails, so there every command asks first), and a card asks before anything leaves it.
 - Each connector is read-only, ask-first or allowed.
 - Your keys live in the system keyring where there is one (not on a hub), and Aria keeps your secrets out of what the
-  model reads, within limits the guide spells out. Before each message it keeps a copy of the session's folder (where
-  it can); undo, for files and conversation, is in the terminal.
+  model reads, within limits the guide spells out. Before each turn it keeps a copy of the session's folder (where it
+  can); undo, for files and conversation, is in the terminal and not in the projects folder, which is where the dock's
+  sessions work. To let Aria tidy one project with a way back, follow
+  [the recipe](docs/guide/safety.md#let-aria-work-on-one-project-safely): commit, then open the session from inside it.
+- [What leaves your computer](docs/guide/safety.md#what-leaves-your-computer): the calls Aria makes, to whom and when.
   → [Safety](docs/guide/safety.md)
 
 **Connect**
@@ -73,7 +87,9 @@ stops work in progress.
 
 **See and hear**
 - In the dock only, not in a terminal or on a hub: dictation with Whisper on your computer, so your voice never leaves
-  it; Aria's face in the Omarchy bar or beside the Mac's notch; a live trace of every step of a turn (`/debug`).
+  it (the text you send does go to your model provider: see
+  [what leaves your computer](docs/guide/safety.md#what-leaves-your-computer)); Aria's face in the Omarchy bar or beside
+  the Mac's notch; a live trace of every step of a turn (`/debug`).
   → [Voice, face and trace](docs/guide/voice-and-face.md)
 
 ## Install
@@ -99,13 +115,20 @@ checkout. It prints its plan and asks before it changes anything:
 
 ```sh
 sh tools/build-headless.sh
-ssh-keygen -t ed25519 -f ~/.ssh/aria-hub -N ''
+ssh-keygen -t ed25519 -f ~/.ssh/aria-hub
 aria hub init ana@hub.example --client-key ~/.ssh/aria-hub.pub
 aria connect aria-hub    # after you add the ssh entry that hub init prints
 ```
 
+`build-headless.sh` needs `rustup` and `mise` (it asks `mise` for zig) installed on your computer. Give the key a
+passphrase and keep it in `ssh-agent`. On Ubuntu 24.04 the server's sandbox may be blocked by AppArmor: until an
+administrator fixes that, `hub init` skips the client key and exits 1
+([the two fixes](docs/guide/hub.md#set-up-a-hub)). Nothing of Aria's listens on a port other computers can reach (a
+sign-in listens briefly on the server's own loopback address); terminals come in through ssh.
+
 The dedicated key and the ssh entry are part of it: read [the hub guide](docs/guide/hub.md) before you run it, in
 particular what a stolen client key could do and why the server's ssh should be reachable only over a private network.
+To connect from a second computer, see [Connect from another computer](docs/guide/hub.md#connect-from-another-computer).
 
 ## Documentation
 
@@ -157,7 +180,7 @@ docs/                  guides, reference, architecture, pending work, and the de
 cargo test --workspace              # Rust: the five crates
 bun test ui                         # the dock page's logic and strings
 bun test extensions                 # Aria's Pi extensions
-sh tools/parity/suites.sh           # the offline suites, in one run
+sh tools/parity/suites.sh           # the offline suites (not the pre-push hook's test: see development)
 sh tools/check-macos.sh             # type-checks the macOS build from Linux
 ```
 

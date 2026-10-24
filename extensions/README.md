@@ -1,8 +1,8 @@
-# The owner's extensions
+# The maintainer's extensions
 
-These are the owner's Pi extensions, copied from his Pi (`~/.pi/agent/extensions/`) and adapted with the smallest diffs
+These are the maintainer's Pi extensions, copied from that Pi (`~/.pi/agent/extensions/`) and adapted with the smallest diffs
 that let them run inside Aria. Aria embeds this folder and writes it into its own Pi's directory (`~/.aria/agent/extensions/`)
-every time a session's Pi starts (the tests and this README are left out); an extension the owner edited there is kept
+every time a session's Pi starts (the tests and this README are left out); an extension the maintainer edited there is kept
 (see `crates/aria-core/src/agent.rs`). `lib/` holds the helpers the extensions share; it is not an extension. The
 settings that reach these extensions are in [settings](../docs/settings.md); what each one means for you is in the
 [agent](../docs/guide/agent.md), [safety](../docs/guide/safety.md), [automation](../docs/guide/automation.md) and
@@ -31,11 +31,11 @@ settings that reach these extensions are in [settings](../docs/settings.md); wha
 
 Tests: `bun test extensions`.
 
-## What differs from the owner's copy
+## What differs from the maintainer's copy
 
 - **Paths** go through `lib/agent-dir.ts`: `agentDir()` is `$PI_CODING_AGENT_DIR` (Aria sets `~/.aria/agent`), falling back to
   `~/.pi/agent`; `projectsDir()` is `$ARIA_PROJECTS_DIR` (Aria sets its working folder), falling back to `~/Projects`. The
-  owner's files changed this way: `jev-router/{index,usage,modes}.ts`, `autocompact/autocompact.ts`; they still run in his own
+  maintainer's files changed this way: `jev-router/{index,usage,modes}.ts`, `autocompact/autocompact.ts`; they still run in the maintainer's own
   Pi.
 - **The sandbox also protects Aria's credentials** (`~/.aria/auth.json`, `mcp.json`, `mcp-auth.json` and their links in
   `~/.aria/agent/`), in `sandbox/policy.ts`, and keeps the project's `.pi` and `.aria` (where `verify.json` lives) and a
@@ -57,7 +57,7 @@ Tests: `bun test extensions`.
   - `quota-fallback/ask.ts` (new): `quotaQuestion` builds the quota card in RPC, the old text in the terminal.
   - `jev-router/modes.ts`, `slice.ts`, `approve.ts`: `/plan` is phase A of the `slice` skill (`agent-files/skills/slice/`),
     not Superpowers' brainstorming and writing-plans: one round of up to 4 questions, then a plan of phases and tasks in
-    `docs/plans/<date>-<slug>.md`, committed (unless the owner keeps `docs/` out of the repository). Plan mode writes only `docs/plans/`, the repo root's `.gitignore`, `.git`
+    `docs/plans/<date>-<slug>.md`, committed (unless the maintainer keeps `docs/` out of the repository). Plan mode writes only `docs/plans/`, the repo root's `.gitignore`, `.git`
     and `/tmp`. `plan_ready` shows the plan (the chat draws it as a card) and asks to approve or change it; approved, plan
     mode ends and the build starts when the model's answer ends. There is no execute mode (`/execute` is a command that
     builds the next open phase): the build is a background job and the chat stays routed (only the build-start message itself is not classified). Leaving plan mode (`/plan off`) cancels an approved build that has not
@@ -71,7 +71,7 @@ Tests: `bun test extensions`.
   - `jev-router/route.ts`, `index.ts`: Jev also asks whether the work is sizable; sizable work that changes things gets
     `plan=offer`, the assistant offers once to plan it first and, accepted, starts plan mode with `start_plan`.
   - `ask-user/index.ts`: the tool's description asks for one batch of up to 4 independent questions per call, even when
-    a skill asks one at a time (the dock shows them as one card; the owner asked for it).
+    a skill asks one at a time (the dock shows them as one card; the maintainer asked for it).
   - `ask-user/questions.ts`: `questionCard`, `parseCardAnswers` and `TALK_LABEL`. `ask-user/dock.ts` (new) asks with
     the card through `ui.input` with the abort signal; `index.ts` calls it in RPC.
 - **The sandbox's `background_run`** (new): a command that never ends (a dev server, a watcher) starts in Aria's dock
@@ -88,7 +88,7 @@ Tests: `bun test extensions`.
   unconfined without the user. "Works" is a real probe, `bwrap --unshare-user --ro-bind / / true` exiting 0
   (`sandbox/probe.ts`, once per process); where it does, nothing changes. `verify` uses the same probe.
 - **Aria's settings** (phase 2c) reach the extensions through one file, `aria.json` in the agent directory, read by
-  `lib/config.ts`. Without it every value is the one these files always had (`DEFAULTS`), so the owner's own Pi is
+  `lib/config.ts`. Without it every value is the one these files always had (`DEFAULTS`), so the maintainer's own Pi is
   unchanged. Under Aria:
   - `jev-router`: the `/plan` model, its effort and its quota threshold (`planModel`, `planThinking`,
     `planQuotaThreshold` in `modes.ts`); the effort decision moved to `effort.ts` (`effortFor`), where Aria's fixed
@@ -108,7 +108,7 @@ Tests: `bun test extensions`.
     sessions are the `pi` shim's job (`crates/aria-core/src/pi.rs`).
   - `/effort` and `/autocompact` write Aria's settings (`ARIA_SETTINGS`, `writeAriaSetting` in `lib/config.ts`) instead
     of `jev-router-effort.json` and `autocompact.json`; the dock applies the change when the run settles.
-- **Checks with real models:** `jev-router/eval.ts`, `sandbox/review-eval.ts` and `sandbox/accept.sh`, the owner's
+- **Checks with real models:** `jev-router/eval.ts`, `sandbox/review-eval.ts` and `sandbox/accept.sh`, the maintainer's
   evals, run against Aria's pinned Pi through a scratch Aria home (`tools/parity/scratch-home.sh`; how to run them is in
-  `tools/parity/README.md`). The cases name neutral projects instead of the owner's, and the experts are the ones Aria
+  `tools/parity/README.md`). The cases name neutral projects instead of the maintainer's, and the experts are the ones Aria
   writes for its settings.

@@ -51,7 +51,7 @@ A session is a conversation with its own engine. Each is a tab, and you can have
 
 - **New**: the `+` button opens a session in your projects folder. It is disabled at eight ("Close a session to open another").
 - **Title**: the first line of your first message, cut at 28 characters. Double-click a title to rename it; `Enter` or clicking away saves it, `Esc` cancels.
-- **Close**: the `×` on a tab, shown only when there is more than one. A bar says "Closed … Undo" for eight seconds, and the tab's engine keeps running until that window ends. The last tab cannot be closed.
+- **Close**: the `×` on a tab, shown only when there is more than one. A bar says "Closed … Undo" for eight seconds, and the tab's engine keeps running until that window ends. That Undo reopens the tab; it does not take back Aria's edits (see [Safety](safety.md#checkpoints-and-undo)). The last tab cannot be closed.
 - **Overflow**: the header shows up to three tabs, and the active one is always among them. The rest are under a `+N` button, which turns to "a hidden session needs you" when one of them does.
 - **States**: a dot shows what each session is doing: working, needs you (a card is waiting for an answer), done (it finished while you were away, until you open it) or idle.
 - **Hover card**: with more than one tab, pointing at a tab shows its title and state, the model, how full its context is, and the provider's quota windows with their reset times. A free model says it uses no quota; a provider with no readable quota says that.

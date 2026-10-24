@@ -373,6 +373,7 @@ compaction. The full list by surface is in [the commands reference](../reference
 - A provider is removed only from Settings → Providers (Remove, not for the main provider); there is no command for it,
   and removing the credential leaves the Claude provider package installed. Closing the connect card does not cancel a
   sign-in still waiting in the browser (it times out after five minutes).
+- A Claude plan does not work on a [hub](hub.md#sign-in-from-a-terminal) today: the dock's `/connect` installs the Claude provider package and a hub has no dock.
 - Pi packages come only from a local folder (Settings → Integrations); npm, git and a gallery are not built.
 - Slice builds one phase at a time. The goals engine, where Aria pursues a goal on its own, is not built.
 

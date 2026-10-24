@@ -20,12 +20,12 @@ Contents:
 
 | Tool | Why |
 |---|---|
-| Rust (the 2021 edition, with `cargo`) | the workspace. The repository pins no toolchain file; `rustup` is also what `tools/check-macos.sh` and `tools/build-headless.sh` use to add a target |
-| `bun` | the UI, extensions and tools tests. There is no `package.json` and nothing to install |
+| Rust (the 2021 edition, with `cargo`) | the workspace. The repository sets no minimum Rust version and has no toolchain file. `rustup` must be on your `PATH` for `tools/check-macos.sh` and `tools/build-headless.sh`, which run `rustup target add` |
+| `bun` | the UI, extensions and tools tests (`suites.sh` runs them as `bun test`) and the TypeScript tools such as `bun tools/ui-sandbox/serve.ts`. It must be on your `PATH`; there is no `package.json` and nothing to install |
 | `cmake` and `clang` | dictation's built-in whisper.cpp (`clang` because bindgen reads its headers through libclang) |
 | a C compiler | a dependency (`ring`) builds C even in the headless build |
 | `python3` | the pseudo-terminal drivers in `tools/term` and `tools/hub`, and the compiler wrappers in the cross-build scripts |
-| `mise` with `zig` 0.14.1 | only for `tools/check-macos.sh` and `tools/build-headless.sh`, which ask mise for that zig |
+| `mise` with `zig` 0.14.1 | only for `tools/check-macos.sh` and `tools/build-headless.sh`: each runs `mise x zig@0.14.1 -- which zig`, so `mise` must be on your `PATH`. The repository neither installs `mise` nor pins zig in a mise file |
 
 On Omarchy (Arch) the build also needs these libraries: `gtk3`, `webkit2gtk-4.1`, `gtk-layer-shell`, `alsa-lib` (the microphone), and, for whisper.cpp's Vulkan backend, the Vulkan headers and a shader compiler (`vulkan-headers` and `shaderc` on Arch; no file in the repository checks them). Running Aria also uses `bubblewrap`, `iproute2` and `libsecret` (`secret-tool`); the installer's list is in `install/install.sh` (`PACKAGES`).
 
@@ -94,7 +94,7 @@ It has the design's "simulate" buttons (permission and quota cards, questions, c
 
 ### Everything at once
 
-`sh tools/parity/suites.sh` runs every offline suite, in this order, and stops at the first failure. `tools/release.sh` runs it before it makes a release.
+`sh tools/parity/suites.sh` runs the offline suites below, in this order, and stops at the first failure. `tools/release.sh` runs it before it makes a release. It needs the network only to fetch crates and, the first time, the macOS target and zig for step 6. A cold run builds the workspace several times (the default build, the headless build in its own target folder, the macOS type-check); the repository does not record how long that takes.
 
 | Step | What it runs |
 |---|---|
@@ -105,7 +105,9 @@ It has the design's "simulate" buttons (permission and quota cards, questions, c
 | 5 | `sh tools/parity/scratch-home.test.sh` and `sh tools/release.test.sh` |
 | 6 | Linux only: `sh tools/check-macos.sh` |
 
-It does not run `aria-mac`'s tests, `tools/hooks/pre-push.test.sh`, the UI sandbox check, `tools/term/live-check.sh` or anything marked `#[ignore]`; they are below.
+It does not run `aria-mac`'s tests (`cargo test -p aria-mac`), `tools/hooks/pre-push.test.sh`, the UI sandbox check, `tools/term/live-check.sh` or anything marked `#[ignore]`; they are below. So before a change that touches a Mac-only crate or the pre-push hook, run `suites.sh` and those two commands.
+
+Some things skip without failing the run, so "all suites passed" does not prove they ran: the tests in `bun test extensions` that need `bwrap` (they look for `/usr/bin/bwrap`) or `agent-browser` are skipped where it is missing, and bun counts them as skipped in its summary; `install/install.test.sh` prints `skip:` and succeeds off Linux; steps 2 and 6 run on Linux only. On a Mac the counterpart of step 6 is `cargo test --workspace`, which compiles the Mac code for real; step 2 has none, because a Mac has no build without a window. Say so when you did not run something.
 
 ### One suite at a time
 
@@ -198,14 +200,14 @@ The architecture is described in [architecture](architecture.md); the extensions
 
 ## The rules the project keeps
 
-They are in `CLAUDE.md`, which is written for coding agents; the substance is:
+They are in `CLAUDE.md`, which is written for coding agents; the substance is below. The first four are for everyone who sends a change; the last two are the maintainer's, who pushes `main`.
 
 - **Everything is in English**: code, names, messages, docs and commit messages. (The UI has English and Spanish strings; those are data.)
 - **Both platforms keep working.** A change made on one platform must not break the other. `sh tools/check-macos.sh` type-checks the macOS build from Linux; on a Mac, run the counterparts of the Linux-only suites or say they were not run. Behaviour that depends on the platform (keys, user agent, service manager, keyring tool) is tested for both, or the test says which one it covers.
 - **Conventional commit subjects decide the version** (below).
 - **The repository is public, so it carries no personal data**: no real home paths, employer or client names, project or task names. Test fixtures use neutral ones (`/home/ana`, `acme/checkout-widget`).
-- **A push of `main` goes through a hook.** Turn it on once per clone with `git config core.hooksPath tools/hooks`. `tools/hooks/pre-push` refuses a push of `main` when the outgoing commits add this machine's home path or a line matching one of your own patterns, and when the commits call for a release that has not been made. Your patterns go in `.git/info/personal-data`, one extended regular expression per line; that file is never committed. `git push --no-verify` skips the hook.
-- **Before a push of `main`:** the hook is on; the scan is empty; run `sh tools/release.sh --next`. If it prints a version, run `sh tools/release.sh`, read the new section of `RELEASES.md`, and push the tag with `main` (`git push origin main vX.Y.Z`); if it prints nothing, push `main` alone. The project's instructions say to ask the owner before pushing.
+- **A push of `main` goes through a hook** (it checks only pushes of `main`, so a branch is not touched by it). Turn it on once per clone with `git config core.hooksPath tools/hooks`. `tools/hooks/pre-push` refuses a push of `main` when the outgoing commits add this machine's home path or a line matching one of your own patterns, and when the commits call for a release that has not been made. Your patterns go in `.git/info/personal-data`, one extended regular expression per line; that file is never committed. `git push --no-verify` skips the hook.
+- **Before a push of `main`:** the hook is on; the scan is empty; run `sh tools/release.sh --next`. If it prints a version, run `sh tools/release.sh`, read the new section of `RELEASES.md`, and push the tag with `main` (`git push origin main vX.Y.Z`); if it prints nothing, push `main` alone. The project's instructions say to ask the maintainer before pushing.
 
 Rust is formatted with the repository's `rustfmt.toml` (maximum width 120).
 
@@ -240,14 +242,7 @@ A published release must put these files next to the binary, because the `curl |
 
 ### A provider
 
-A provider is one module in `crates/aria-core/src/providers.rs`; nothing else in Aria hard-codes one. [Adding a provider](adding-a-provider.md) has the steps, in short:
-
-1. Declare it in `PROVIDERS` (and bump the array length): its id, label, auth kind, the `auth.json` entries its credential lives under, models, free models, quota support and defaults.
-2. Add a `KeyKind` and its probe in `crates/aria-core/src/validate.rs`: one cheap request that tells a valid key from a rejected one. For an API-key provider, also map its id to that `KeyKind` in `key_target` in `crates/aria/src/handlers.rs`, which handles the page's key check and save.
-3. Add it to `PROVIDERS` in `ui/onboarding/steps.js`, and its strings to `ui/i18n/en.json` and `ui/i18n/es.json`.
-4. Test it: `apply_provider` should produce the settings you expect. The Rust and the JS provider defaults are both tested against the golden files in `crates/aria-core/tests/golden/`; after an intended change, regenerate them with `cargo test -p aria-core regenerate_golden -- --ignored`.
-
-Only providers with a free tier get fallback models.
+A provider is one module in `crates/aria-core/src/providers.rs`, but the setup page, both model pickers, the `/connect` card and the quota reader also name providers, so a new one touches several files. [Adding a provider](adding-a-provider.md) is the one list of those places and the steps, and it says how a provider reaches Pi and which existing module to copy. Only OpenCode Go has a free-model fallback today, and the fallback is tied to that provider; the same page says what that means for a new one.
 
 ### A platform
 
@@ -268,19 +263,21 @@ Most features have a design and a plan under `docs/superpowers/`:
 - `specs/` holds the designs, one file per feature or milestone, named `YYYY-MM-DD-<topic>-design.md`: what was decided, what the behaviour is, and the rulings behind it. The code's comments and the [architecture](architecture.md) link to them for the reasons.
 - `plans/` holds the implementation plans, named `YYYY-MM-DD-<topic>.md`: a goal, the architecture and the interfaces, then the tasks in order, each with the files it touches, the tests to write first and the commit message. Some plans (the secrets one, the chat's design fidelity) have no separate design.
 
-The base design, [2026-10-18-aria-base-design.md](superpowers/specs/2026-10-18-aria-base-design.md), has the roadmap and the owner's early decisions. [Ideas](ideas.md) lists what may come next (each one gets its own design before anything is built), [pending](pending.md) lists what the chat shows but nothing feeds yet and what each part still lacks, and [parity](parity.md) walks the owner's Pi setup against Aria.
+The base design, [2026-10-18-aria-base-design.md](superpowers/specs/2026-10-18-aria-base-design.md), has the roadmap and the maintainer's early decisions. [Ideas](ideas.md) lists what may come next (each one gets its own design before anything is built), [pending](pending.md) lists what the chat shows but nothing feeds yet and what each part still lacks, and [parity](parity.md) walks the maintainer's Pi setup against Aria.
 
 ## How a change goes in
 
-The repository's own files describe this much and no more:
+**If you are sending a change**, the repository does not say how: it has no `CONTRIBUTING` file, no CI and no defined review process. The usual way on a public repository, which this page assumes, is a branch and a pull request. The release and the push of `main` are the maintainer's, per `CLAUDE.md` (see [the rules](#the-rules-the-project-keeps)), so leave `tools/release.sh` and the push of `main` to them. Nothing checks your change for you, so run the checks yourself: `sh tools/parity/suites.sh`, `cargo test -p aria-mac` and `sh tools/hooks/pre-push.test.sh`, and say what you could not run (on a Mac, the Linux-only steps; the tests that skip without `bwrap` or `agent-browser`). Write commit subjects in the conventional form (`feat(scope): …`, `fix(scope): …`), because they decide the version, and keep everything in English and free of personal data.
+
+The repository's own files describe how the project builds its features, and no more:
 
 1. **A design.** A feature starts as a spec in `docs/superpowers/specs/` ([ideas](ideas.md) says each idea gets its own design before anything is built).
 2. **A plan.** The plan in `docs/superpowers/plans/` breaks it into tasks. Each task lists the files and interfaces it touches, starts with failing tests, then the implementation, then the run of those tests (and `sh tools/check-macos.sh` where a platform is touched), then one commit with a conventional subject. Most plans open with their global constraints and a "Review Focus" listing the inputs the tasks' happy paths do not exercise; the hub's plan also ends with a self-review against its design. The plans are written to be executed task by task.
-3. **Tests with the change.** The suites above are the project's checks; `sh tools/parity/suites.sh` is the whole offline set.
+3. **Tests with the change.** The suites above are the project's checks; `sh tools/parity/suites.sh` is the offline set, with the exceptions listed there.
 4. **Docs with the change.** A plan's last task is usually the acceptance check and the docs; the documents under `docs/` describe the code as it is.
-5. **Commit, release, push** as in [the rules](#the-rules-the-project-keeps) and [versions](#versions-and-releases).
+5. **Commit, release, push**, the maintainer's part, as in [the rules](#the-rules-the-project-keeps) and [versions](#versions-and-releases).
 
-The repository does not define a review process beyond the plans' review focus.
+Steps 1 and 2 are how the maintainer works; the repository does not say they are required of an outside change. Nor does it define a review process beyond the plans' review focus.
 
 ## See also
 

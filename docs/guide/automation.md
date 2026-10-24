@@ -42,10 +42,10 @@ When a run ends, Aria records the first line of its answer as the task's last re
 A scheduled run has no one to ask, so its permissions are fixed when the task is made, and anything else is refused, never asked:
 
 - **Connectors** (MCP services such as Notion): each is `read` or `allow` (it may change things there without asking). A connector the task does not name is `read`, never `ask`. See [safety](safety.md) for what the access levels mean.
-- **Writable folders** outside the projects folder: none by default. A folder must exist, and Aria refuses one that is too wide (the whole disk, your home folder, Aria's own folder) or that holds secrets or programs that start by themselves (`.ssh`, `.config/systemd` and the like). Folders are kept by their real path.
+- **Writable folders** outside the projects folder: none by default. A folder must exist, and Aria refuses these: the whole disk, your home folder and any folder that contains it, Aria's own folder, and anything inside one of these folders of your home: `.ssh`, `.gnupg`, `.aws`, `.config/gh`, `.docker`, `.codex`, `.kube`, `.config/gcloud`, `.config/opencode`, `.local/share/opencode`, `.pi`, `Library/LaunchAgents`, `Library/Keychains`, `.local/share/keyrings`, `.config/autostart`, `.config/systemd` and `.config/hypr`. It is a fixed list, not a rule: any other folder that exists is accepted, `~/.config` itself and `~/.local/bin` included, so grant a task only a folder you would accept seeing changed. Folders are kept by their real path.
 - The run cannot ask you a question, cannot ask to leave the sandbox, cannot ask for a secret and cannot get a plan approved. The answer says what was refused. Inside the projects folder the run has the sandbox's usual write access.
 
-A task that can write, meaning any connector set to `allow` or any writable folder, is saved **paused and waiting for your approval**. The dock opens `/schedules` on it, and you press **Approve**. Changing a task so that it writes somewhere new, or rewording the prompt of a task that writes, makes it wait again. The model cannot approve, and the terminal's panel does not offer it (below), but the service does not block it: it takes a resume message from any client as your approval (on a [hub](hub.md#the-security-model) that is what a stolen client key could send). A read-only task starts at once.
+A task that can write, meaning any connector set to `allow` or any writable folder, is saved **paused and waiting for your approval**. The dock opens `/schedules` on it, and you press **Approve**. Changing a task so that it writes somewhere new, or rewording the prompt of a task that writes, makes it wait again. The model cannot approve, and the terminal's panel does not offer it (below), but the service does not block it: it takes a resume message from any client as your approval (on a [hub](hub.md#what-a-stolen-client-key-can-do) that is what a stolen client key could send). A read-only task starts at once.
 
 ### When a task runs, and what a missed run does
 
@@ -80,7 +80,7 @@ A task that waits for approval shows "waiting for approval in the dock". The ter
 
 ### On a hub
 
-Schedules belong to the service that holds them. On a [hub](hub.md) they run on the server, with the server's clock and time zone, while your laptop is off. You can ask for a task from a terminal and manage it with `/schedules` there. A hub has no dock, so a task that may write stays paused there; read-only tasks work normally. Scheduling and background work both need the user's runtime directory on the server (`$XDG_RUNTIME_DIR`, `/run/user/<uid>`); without it, sessions have no jobs socket and the tools refuse.
+Schedules belong to the service that holds them. On a [hub](hub.md#scheduled-tasks-on-the-hub) they run on the server, with the server's clock and time zone, while your laptop is off. You can ask for a task from a terminal and manage it with `/schedules` there. Only read-only tasks run: a task that may write waits for an Approve that only the dock offers, and a hub has no dock. A scheduled run cannot ask to leave the sandbox, so where the hub's sandbox does not work it cannot run shell commands. A hub sends no notification and its terminal does not list scheduled runs; to read a result, ask Aria in a session, which can list each task with the first line of its last result. Scheduling and background work both need the user's runtime directory on the server (`$XDG_RUNTIME_DIR`, `/run/user/<uid>`); without it, sessions have no jobs socket and the tools refuse.
 
 ### Where tasks are stored
 
@@ -211,7 +211,7 @@ To start it again, run `aria start` (`systemctl --user start aria.service` on Om
 
 ## Limits
 
-- A scheduled task runs only while the service runs. A laptop that sleeps misses its times; a hub does not. See [pending](../pending.md) for the rest of what is not built: intervals ("every 2 hours"), results sent outside Aria, editing a task in a form.
+- A scheduled task runs only while the service runs. A laptop that sleeps misses its times; a hub does not, but a hub runs read-only tasks only. See [pending](../pending.md) for the rest of what is not built: intervals ("every 2 hours"), results sent outside Aria, editing a task in a form.
 - A scheduled run with a real model has not been tried on Omarchy yet; see [pending](../pending.md).
 - Notifications on macOS cannot open the dock.
 

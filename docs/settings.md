@@ -76,7 +76,7 @@ The first section of the settings screen.
 |---|---|---|---|
 | `assistant.userName` | string | `""` | Your name. Aria uses it to greet you and in its replies; empty leaves it out of the persona. |
 | `assistant.name` | string | `"Aria"` | The assistant's name in the persona. The setup and the settings screen do not offer to change it; editing the file does. |
-| `assistant.language` | string | `"en"` | The conversation language: a code (`es`, `en`, `pt`) or free text such as `French`, named as written in the persona. The dock's own interface follows it for `en` and `es`; any other language shows English. The terminal does the same. |
+| `assistant.language` | string | `"en"` | The conversation language: a code (`es`, `en`, `pt`) or free text such as `French`, named as written in the persona. The dock's own interface follows it for `en` and `es`; any other language shows English. The terminal does the same. Dictation understands only `es`: any other value, `pt` included, is listened to in English. |
 | `assistant.style` | string | `"very-short"` | How long answers run: `very-short`, `brief`, `detailed`, `technical` or `teaching`. Written into the persona as one rule. |
 | `shortcut` | string | `""` | The dock's shortcut, [below](#the-shortcut). `""` is the platform's default. The dock only: a hub ignores it. |
 | `display.verbose` | boolean | `true` | What a conversation shows. On: the thinking and every tool with its output. Off: one line per step, with what it did and on what, without its output (`✓ Read file  coupon.ts`; `Leer archivo` in Spanish), as the dock's accordion. `/verbose [on\|off]` and `Ctrl+O` change it in the terminal, and so does this screen. The terminal reads it; the dock does not yet. |
@@ -199,7 +199,7 @@ Not on the settings screen, except as noted.
 A hub reads the same file, from the same place on the server. `aria hub init` sends your `settings.json` once, with
 `credentials.keyring` set to `false` and `sandbox.projectsDir` set to the hub's folder; after that the hub's copy is its
 own (`--settings` sends yours again). `shortcut` and the dock's settings screen mean nothing on a hub: you change its
-settings by editing the file there ([the hub](guide/hub.md)).
+settings by editing the file there ([the hub](guide/hub.md)). A terminal attached to a hub cannot read or change settings through its protocol; the commands `/autocompact` and `/effort`, typed in a session, still rewrite their own setting in the hub's file.
 
 Planned, not built (milestone M2 of [the hub design](superpowers/specs/2026-10-23-hub-and-machines-design.md)): a computer
 linked to a hub would take provider and models, persona and experts, language and integrations from the hub, shown

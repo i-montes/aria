@@ -14,6 +14,8 @@ aria
 
 If the service is not running, `aria` starts it in the background (the same `aria dock` the login service runs) and waits up to 3 seconds for it. If an older service is running that cannot take terminals, `aria` says so at once and tells you to restart it with `aria quit` and `aria`.
 
+Leave with `Ctrl+C` or `Ctrl+D`. `/exit` is different: it closes the session, ends its background jobs and deletes its undo history.
+
 ## The session list
 
 The first screen lists the service's open sessions, the one whose state changed last first. Scheduled runs are not listed. Each row shows:
@@ -105,11 +107,11 @@ These are the commands the terminal handles itself.
 
 | Command | What it does |
 |---|---|
-| `/exit` | Closes this session: its engine stops and its tab closes in the dock too. The service keeps at least one session, so a fresh one takes the place of the last |
+| `/exit` | Closes this session for good: its engine stops, the background jobs it owns end, its checkpoints (and with them its undo) are deleted, and its tab closes in the dock too. The service keeps at least one session, so a fresh one takes the place of the last. It is not the way to leave: use `Ctrl+C` or `Ctrl+D`, which leave the session running |
 | `/sessions` | Back to the list. The session goes on |
-| `/model` | Opens a list of models to switch this session to. Only the providers you have signed in to are listed (OpenCode Zen only when `models.allowPayPerUse` is on), newest first, with `●` on the one in use |
+| `/model` | Opens a list of models to switch this session to. Only the providers you have signed in to are listed (OpenCode Zen only when `models.allowPayPerUse` is on), newest first, with `●` on the one in use. Over `aria connect` it lists only the model in use (see [Over ssh](#over-ssh)) |
 | `/verbose [on\|off]` | Shows everything or one line per step. With no argument it flips |
-| `/undo` | Opens Rewind, as `Esc Esc` does |
+| `/undo` | Opens Rewind, as `Esc Esc` does. Over `aria connect` it goes back in the conversation only |
 | `/context` | Draws what fills the context |
 | `/schedules` | Lists the scheduled tasks. `↑` `↓` select, `Enter` pauses or resumes, `d` then `y` deletes, `Esc` closes. A task waiting for approval shows as such; the panel does not offer approval, so it is approved in the dock |
 | `/signin anthropic` or `/signin notion` | Signs in to your Claude plan or to Notion from the terminal. It shows an address to open in a browser, then asks for the address of the page that failed to load at `localhost`; paste it and press `Enter`. Meant for a computer with no browser, such as a hub |
@@ -127,11 +129,11 @@ When an instruction changed files, one line follows its answer: `3 files changed
 3. Restore code.
 4. Never mind.
 
-The two code options are there only when a checkpoint was kept for that message and code changed from there on. `Esc` goes back one step, and then closes.
+The two code options are there only when a checkpoint was kept for that message and code changed from there on. `Esc` goes back one step, and then closes. Over `aria connect` to a [hub](hub.md) there is never a checkpoint, so only "Restore conversation" is offered.
 
 Going back in the conversation puts the message's text back in the editor, so you can change it and send it again. Going back in the code restores the files that changed, deletes the ones created since and brings back the ones deleted; nothing outside what the checkpoint covers is touched. Undo is refused while Aria is working ("Not now: Aria is working. Undo once it is quiet.").
 
-Checkpoints are taken one per turn, before the message that starts it (none for a `/command`), in a git repository of Aria's own under `~/.aria/checkpoints/`. Your project's `.git` is not touched, its `.gitignore` is respected, files over 5 MB are left out, and the last 50 are kept. Closing the session (`/exit`, or its tab in the dock) deletes its checkpoints. A session keeps none, and Rewind says why, in the projects folder itself, in your home folder, in a system folder, or in a folder with more than 20,000 files. In those only the conversation can go back. [Safety](safety.md) has the rest.
+Checkpoints are taken one per turn, before the message that starts it (none for a `/command`), in a git repository of Aria's own under `~/.aria/checkpoints/`. Your project's `.git` is not touched, its `.gitignore` is respected, files over 5 MB are left out, and the last 50 are kept. Closing the session (`/exit`, or its tab in the dock) deletes its checkpoints, and with them the undo history. A session keeps none, and Rewind says why, in the projects folder itself, in your home folder, in a system folder, or in a folder with more than 20,000 files. In those only the conversation can go back. [Safety](safety.md) has the rest.
 
 ## Context
 
@@ -190,12 +192,15 @@ The palette is the dock's: a near-black ground, light text, grey for what matter
 
 ## Over ssh
 
-`aria connect [user@]host` gives you this same client on a [hub](hub.md): Aria's service on a server, reached through ssh, with nothing listening on a port. Everything above works the same, with these differences:
+`aria connect [user@]host` gives you this same client on a [hub](hub.md): Aria's service on a server, reached through ssh, with no port open for it (a sign-in listens briefly on the hub's own loopback address; see [the hub guide](hub.md#transport)). Everything above works the same, with these differences:
 
 - The list says `+ new on <host>`. A session started there has no folder of yours: it works where the hub decides, since your folders are not on that computer.
 - `!command` and secrets are refused with "not available on a connected hub". A terminal over ssh cannot run commands on the hub by hand or hand it a secret.
 - The footer shows no git branch: git would read your computer's folders, not the hub's.
-- `/model` lists only the model already in use, because the client does not know the hub's sign-ins; it cannot switch models there yet.
+- `/model` lists only the model already in use, because the client picks the providers to list from the sign-ins of its own computer, and over ssh it has none. The hub accepts a model change, but this terminal has no list to choose from, so it cannot switch models there yet.
+- `/undo` and `Esc Esc` go back in the conversation only: the session works in the hub's projects folder, where no code checkpoints are kept. To take back a file edit, log in to the hub with your own ssh and use git; `!git restore` is refused here.
+- `/exit` closes the session on the hub, with its background jobs and its undo history. To leave and come back, use `Ctrl+C` or `Ctrl+D`.
+- `@` lists files under the hub's projects folder.
 - `/signin` and `/schedules` do work, which is what makes `/signin` useful there.
 - The first time you connect to a host, run `ssh host` once by hand to accept its key; `aria connect` gives up after 60 seconds. `ARIA_SSH` names another program to use instead of `ssh`.
 
@@ -216,7 +221,7 @@ The client, the keys and the checkpoints are the same on both platforms. What di
 - No syntax highlighting in code blocks.
 - The task strip shows a subagent's name, not its model.
 - The dock's own page shows a slice's phase marks as tasks, but not the model's own task list, and it does not show the changes line, `/context` or the checks, nor read `display.verbose`. See [pending](../pending.md).
-- The `@` list searches the projects folder of the [settings](../settings.md) (`sandbox.projectsDir`), not the folder of the session you are in, so for a session started elsewhere its paths may not match that session's files.
+- The `@` list searches the projects folder of the service's [settings](../settings.md) (`sandbox.projectsDir`; over `aria connect`, the hub's), not the folder of the session you are in, so for a session started elsewhere its paths may not match that session's files.
 - Over ssh, a lost connection freezes the screen for up to 60 seconds while it reconnects, and the note it ends with names the local dock, not the hub.
 
 ## How it works

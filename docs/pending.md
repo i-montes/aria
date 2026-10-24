@@ -1,6 +1,6 @@
 # Pending
 
-This is the honest list of what Aria does not do yet, what is rough or inconsistent, and what the owner decided to do
+This is the honest list of what Aria does not do yet, what is rough or inconsistent, and what the maintainer decided to do
 differently from the design. The guides describe what works and link here for the limits; for the whole documentation
 map start at [the documentation index](README.md). An entry says where the thing lives, so it can be fixed.
 It is not a roadmap: ideas are in [ideas.md](ideas.md) and designs in [superpowers/specs](superpowers/specs/).
@@ -67,7 +67,7 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
   session as typed. The terminal does not page back to earlier history (`term/` has no `chatEarlier`).
 - `@` lists files under the settings' projects folder, not the session's own folder (`chat.rs`, `ListFiles`).
 - `/model` over `aria connect` lists only the model in use: `run_remote` passes no connected providers
-  (`term/mod.rs`, `connected: Vec::new()`).
+  (`term/mod.rs`, `connected: Vec::new()`). The hub does accept a client's `setModel`; only this client has no list to pick from.
 - The footer of a permission card says "y once · a always · n no" (`term.permission.keys`), but the sandbox and
   connector cards carry their long labels as values, so only the number or a click answers them (`term/dialog.rs`,
   `extensions/sandbox/card.ts`).
@@ -86,7 +86,7 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
 - **Machines (M2)**: linking other computers to a hub (`aria machine add`, `aria link`), one list over all of them,
   "new here", the credentials pushed to each; attachments from a client's computer. **A web client (M3)** and **push
   notifications (M4)**. **Shared memory**: Engram is per service, so a hub has its own.
-- **The public ssh port**: the hub's sshd answers on a public address until the owner can close it and reach the hub
+- **The public ssh port**: the hub's sshd answers on a public address until you can close it and reach the hub
   only over a private network (Tailscale). Until then the protection is key-only login and the restricted keys
   `aria hub init --client-key` writes; `hub init` warns once and never touches `sshd_config` or the firewall.
 - **bwrap on Ubuntu 24.04**: unprivileged user namespaces are restricted by AppArmor there, so the sandbox can be
@@ -94,18 +94,26 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
   every command asks first, and on a hub the prompt goes to whichever client is attached, so a holder of the client key can
   approve it; that is why `hub init` does not install the client key without a working sandbox unless
   `--allow-no-sandbox` is given. Until then treat the client key as shell access to the hub user.
-- **`aria update`**: there is no such command, although [architecture.md](architecture.md) and the hub design name it. A
-  hub is updated by running `hub init` again with a new binary; the protocol-mismatch messages only say to update the
-  older side.
+- **`aria update`**: there is no such command, though the hub design names one. A hub is updated by running `hub init`
+  again with a new binary; the protocol-mismatch messages only say to update the older side.
 - **`aria start` on a hub** starts `aria.service`, not `aria-serve.service` (`main.rs`, `start_service`), yet the text a
   terminal shows when a hub is down (`term.hubDown`, `term/texts.rs`) and `aria quit`'s hint say to run it. On a hub use
   `systemctl --user start aria-serve.service`.
-- **A run that survives a dropped client** needs a model provider, so the acceptance script does not fake it: the owner
+- **A run that survives a dropped client** needs a model provider, so the acceptance script does not fake it: the maintainer
   checks by hand that a run started over `aria connect` goes on after the client is killed and shows again from a
   second connect (the design's "done when" for M1).
 - **A scheduled task that may write can never be approved on a hub**: it waits for Approve in the dock, a hub has none,
   and the terminal's panel only says "waiting for approval in the dock". A task never asks (`noAsk`), so with no working
   sandbox it cannot run shell commands either.
+- **A scheduled run's result cannot be read from a terminal**: the terminal's list hides scheduled sessions
+  (`term/app.rs`), and `/schedules` shows the next run, not the last result. Only the model's `schedule_list` tool has
+  the first line of it, so on a hub you ask Aria in a session.
+- **A Claude plan on a hub**: `/signin anthropic` works, but the Claude provider package (`pi-claude-agent-sdk`) is
+  installed only by the dock's `/connect` (`installClaudeBridge` is refused to every client), and neither `hub init` nor
+  `install.sh --headless` installs it or Claude Code.
+- **The writable-folder check for a scheduled task is a list**: `too_wide` in `schedule_store.rs` refuses the disk, the home
+  folder, Aria's own folder and seventeen named folders of the home. Any other folder that exists passes, including
+  `~/.config` and `~/.local/bin`.
 - **The service does not enforce "approve in the dock"**: `chat.rs` calls `set_enabled_by_person` for any
   `ScheduleUpdate`, so a remote client (or a stolen client key) that sends the resume message approves a writing task.
   Likewise `/autocompact <n>` from a client writes the hub's `settings.json`, though the design says clients cannot
@@ -117,7 +125,8 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
   start it."), not one that names the hub or says to run `aria connect` again.
 - **`hub init`'s plan line** says the hub's projects folder "will be <dir>" even when `settings.json` is not sent (then
   `--projects` has no effect). It audits only the key it adds, not the existing `authorized_keys` lines as the design
-  says, and reads `has_tailscale` without using it (`hub_admin.rs`). Nothing in the repo creates the hub's projects folder.
+  says, and reads `has_tailscale` without using it (`hub_admin.rs`). `hub init` does not create the hub's projects folder;
+  the service makes it when a session starts (`working_folder` in `chat.rs`).
 - **Smaller things worth doing**, from the review of the first milestone:
   - `aria client-stdio`: replies still in flight are lost when the client's stdin reaches EOF.
   - `aria serve`'s loop wakes about 62 times a second when idle (it should sleep until something happens).
@@ -125,7 +134,7 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
     module); one `hub init` opens a separate ssh connection for each question and step, more than a dozen on a first run (no `ControlMaster`).
   - A schedule's `replace()` can overwrite a live "awaiting" mark, and the dock approves any `enabled: true` it is sent.
   - Esc in `/signin` leaves the dock's sign-in alive until its timeout.
-  - `tools/hub/accept.sh` keeps the owner's environment, and a failed check hides the ones after it.
+  - `tools/hub/accept.sh` keeps the maintainer's environment, and a failed check hides the ones after it.
   - `hub init` sends the whole `settings.json` with only `sandbox.projectsDir` rewritten: other path-like keys
     (`integrations.packages.path`, `sandbox.extraWritable`) point at paths that do not exist on the hub. The settings
     split belongs to M2.
@@ -161,7 +170,7 @@ The quota bars:
 Router, language and compaction:
 
 - The router eval is 93/94: one expert case ("performance opportunities in the bundle") sits on the line between
-  `reviewer` and `frontend` (0.48 against 0.52) and flips between runs; the experts are the owner's, word for word.
+  `reviewer` and `frontend` (0.48 against 0.52) and flips between runs; the experts are the maintainer's, word for word.
 - The `ask_user` tool's description tells the model to write questions in Spanish (`extensions/ask-user/index.ts`), and
   the router's "no expert" value is `ninguno` (`extensions/jev-router/route.ts`), whatever `assistant.language` is.
 - A slice job that ends while the main agent is in the middle of a turn gets no `[slice]` hint and no tasks-feed finish:
@@ -266,7 +275,7 @@ Secrets and the keyring:
   stay in the keyring, and a later save refuses with `keyring-off`.
 - Claude Code's own credentials (the Claude sign-in through `claude-bridge`) stay where Claude Code keeps them.
 - On Omarchy the keyring needs a running Secret Service (gnome-keyring); without one the dock keeps plain files and says
-  why in its log. Not yet tried on the Omarchy machine. No Touch ID: the keyring opens with the session (the owner's
+  why in its log. Not yet tried on the Omarchy machine. No Touch ID: the keyring opens with the session (the maintainer's
   choice, 2026-10-21).
 
 ## Integrations ([guide](guide/integrations.md))
@@ -277,7 +286,7 @@ Memory:
   `chat.setMemory` (only the UI sandbox does), so it always shows "No memories here yet". It needs a read of Engram's
   memories and the actions (pin, forget) written back; the contract is in `ui/chat/parts/memory.js`.
 - Aria's memory starts with a single memory of its own (Aria saves it so Engram knows the project): its Engram database
-  is its own (the owner's decision), so the memories in `~/.engram` are not in it. Importing them would be a new feature.
+  is its own (the maintainer's decision), so the memories in `~/.engram` are not in it. Importing them would be a new feature.
 
 Connectors, sign-ins and the MCP import:
 
@@ -379,23 +388,23 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
   `dock/gtk.rs`; they can be shared now that the Mac build is at hand.
 - No `.app` bundle, signing or notarization, so the standard "open at login" UI and notification actions wait.
 - The panel opens on the screen under the pointer and joins all spaces; multi-monitor and full-screen behavior needs
-  manual testing on the owner's layout.
+  manual testing on the maintainer's layout.
 - `~/.local/bin` is not on the default macOS `PATH`, so the CLI is `~/.local/bin/aria toggle` (the hotkey does not need it).
 
-## Parity with the owner's Pi
+## Parity with the maintainer's Pi
 
 [parity.md](parity.md) walks every item of `ARIA-SETUP.md` with its check and its last result (2026-10-19 to 23). Left:
 
-- The manual rows wait for the owner: Claude Max in the dock, Notion and Tavily, a subagent's `## Learnings`, the
+- The manual rows wait for the maintainer: Claude Max in the dock, Notion and Tavily, a subagent's `## Learnings`, the
   `ask_user` answer lifting read-only mode, and the `PI_*` switches through the dock's environment.
-- Parity is accepted by the owner using Aria for real work, not by the matrix.
+- Parity is accepted by the maintainer using Aria for real work, not by the matrix.
 
 ## Deliberate differences from the design
 
-- Esc never stops a run (the owner's choice, 2026-10-19): it closes a picker or a panel, and otherwise closes the dock
+- Esc never stops a run (the maintainer's choice, 2026-10-19): it closes a picker or a panel, and otherwise closes the dock
   while the run goes on. The stop button stops it; the composer no longer shows "esc stop".
-- The working folder row and the settings button (owner's decisions).
-- The header has no model button or meter (owner's decision; the design has one beside the name): the model is the chip
+- The working folder row and the settings button (the maintainer's decisions).
+- The header has no model button or meter (the maintainer's decision; the design has one beside the name): the model is the chip
   under the input; the quota chip beside the name and each tab's hover open the same quota card.
-- Buttons and cards use solid fills; only the border takes the accent (owner's taste). The message index's chips grow
+- Buttons and cards use solid fills; only the border takes the accent (the maintainer's taste). The message index's chips grow
   with the pointer but do not fade by distance.

@@ -1,6 +1,6 @@
 # Running Aria on a server
 
-A hub is Aria's service running on an always-on Linux server with no desktop. You use it from a terminal on any of your computers, over ssh, and its sessions, scheduled tasks and background work go on while your laptop is off. This guide is for the person who sets the server up and connects to it.
+A hub is Aria's service running on an always-on Linux server with no desktop. You use it from a terminal on another of your computers, over ssh, and its sessions and background work go on while your laptop is off, and so do its scheduled tasks that only read (a task that may write cannot be approved from a terminal: see [Scheduled tasks on the hub](#scheduled-tasks-on-the-hub)). This guide is for the person who sets the server up and connects to it.
 
 ## What a hub is
 
@@ -18,7 +18,7 @@ aria connect aria-hub               sshd
                                             background jobs
 ```
 
-Closing the terminal, or losing the connection, stops nothing on the server. Open `aria connect` again, from the same computer or another one, and the sessions are there with their history. A run in progress belongs to the service, not to the terminal, so it goes on. The automated acceptance check covers a session and the service surviving a killed client. A run that outlives the client needs a model provider, which that check does not have, so it is checked by hand.
+Closing the terminal, or losing the connection, stops nothing on the server. Open `aria connect` again, from the same computer or another one, and the sessions are there with their history. A run in progress belongs to the service, not to the terminal, so it goes on. The automated acceptance check covers a session and the service surviving a killed client. A run that outlives the client needs a model provider, which that check does not have, so it is meant to be checked by hand, and nothing in the repository records that this has been done.
 
 Nothing of Aria listens on a port that other computers can reach. The only way in is the ssh server (`sshd`) that the machine already has. The one exception is a sign-in, which listens briefly on the hub's own loopback address (see [The security model](#the-security-model)).
 
@@ -41,7 +41,7 @@ On your computer:
 
 - A checkout of the Aria repository, and Aria already set up (`~/.aria/settings.json` exists): `hub init` sends your settings and credentials to the server, so you do not type a key twice.
 - `ssh`. `aria connect` runs from Omarchy or macOS; the hub itself is Linux only.
-- A way to build the headless binary for the server's architecture. Nothing is compiled on the server. `sh tools/build-headless.sh` cross-builds it with the Rust toolchain (`rustup`), zig (through `mise`) and `python3`, for `aarch64` by default or for `x86_64` with `sh tools/build-headless.sh x86_64-unknown-linux-gnu`. It is linked against glibc 2.39 (Ubuntu 24.04), so an older distribution may not run it.
+- A way to build the headless binary for the server's architecture. Nothing is compiled on the server. `sh tools/build-headless.sh` cross-builds it, for `aarch64` by default or for `x86_64` with `sh tools/build-headless.sh x86_64-unknown-linux-gnu`. It needs `rustup` (it adds the Rust target) and `mise` (it asks for zig 0.14.1 with `mise x zig@0.14.1`) on your `PATH`, and `python3`. Install `rustup` and `mise` yourself: the script uses them and does not install them. It is linked against glibc 2.39 (Ubuntu 24.04), so an older distribution may not run it.
 
 There are no published releases or hosted installer yet, so a hub is installed from a checkout.
 
@@ -51,11 +51,18 @@ Build the binary, make a key that Aria alone uses, and run `hub init` from the r
 
 ```sh
 sh tools/build-headless.sh
-ssh-keygen -t ed25519 -f ~/.ssh/aria-hub -N ''
+ssh-keygen -t ed25519 -f ~/.ssh/aria-hub
 aria hub init ana@hub.example --client-key ~/.ssh/aria-hub.pub
 ```
 
-Use a dedicated key, not the one you log in with. `hub init` logs in to the server the way you normally do, and adds the public key you give it to `~/.ssh/authorized_keys` with a restriction that lets it run only Aria's bridge (see [The security model](#the-security-model)). If that key is already in `authorized_keys` without the restriction, `hub init` reports it and leaves it alone.
+`ssh-keygen` asks for a passphrase. Give one (see [Protect the key](#protect-the-key)). Use a dedicated key, not the one you log in with: that one is a shell on the server, and this one is meant to be only a terminal. `hub init` logs in to the server the way you normally do, and adds the public key you give it to `~/.ssh/authorized_keys` with a restriction that lets it run only Aria's bridge (see [The security model](#the-security-model)). If that key is already in `authorized_keys` without the restriction, `hub init` reports it and leaves it alone.
+
+**On Ubuntu 24.04 the sandbox may not start, and then `hub init` does not install the key.** `bwrap` can be installed and still be blocked by AppArmor. `hub init` finds out with a real probe, prints the fix and never applies it; until the sandbox works it skips the client key (exit 1), so `aria connect` has no key to use, and scheduled tasks cannot run shell commands. An administrator can fix it on the server in one of two ways:
+
+- `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, and the same line in a file under `/etc/sysctl.d/` to keep it after a reboot. It is one line, but it lifts the restriction for every program on the machine, not only for `bwrap`.
+- Give `bwrap` its own AppArmor profile that allows user namespaces. It leaves the restriction on for everything else, but it is an administrator's work: Aria ships no profile.
+
+Then restart the service so each session's Pi checks again (`systemctl --user restart aria-serve.service`), and run `hub init` again. [The sandbox on a server](#the-sandbox-on-a-server) has the details.
 
 `hub init` opens more than a dozen ssh connections. If your login key has a passphrase, use `ssh-agent` so it does not ask each time.
 
@@ -94,7 +101,7 @@ A successful run ends with `The hub is ready. Connect from this computer with: a
 | Flag | What it does |
 |---|---|
 | `--binary <path>` | The headless binary to install. Default: `target/aarch64-unknown-linux-gnu/release/aria` in the checkout. Use it for an `x86_64` server. |
-| `--projects <dir>` | The folder where the hub's sessions work. Default: `Projects` in the server's home. It is written into the `settings.json` that is sent, so it has an effect only when that file is sent. |
+| `--projects <dir>` | The folder where the hub's sessions work. Default: `Projects` in the server's home. It is written into the `settings.json` that is sent, so it has an effect only when that file is sent. `hub init` does not create it: the service makes it (with its parents) when a session starts, if the hub's user may. |
 | `--client-key <pubkey file>` | The public key to allow, restricted to Aria's bridge. The file holds one bare public key line (`ssh-ed25519 AAAA... comment`), with no options and no quotes. |
 | `--settings` | Replace the server's `settings.json` with this computer's. |
 | `--credentials` | Replace the server's `auth.json`, `mcp.json` and `mcp-auth.json` with this computer's. |
@@ -133,6 +140,15 @@ Host aria-hub
 
 Add it. It makes `aria connect aria-hub` use the dedicated key and no other. To reach the hub over a private network, put that network's address or name in `HostName`.
 
+### Protect the key
+
+The client key is what stands between a stranger and your hub's sessions, and a stolen one is worth a shell ([what a stolen client key can do](#what-a-stolen-client-key-can-do)).
+
+- **Give it a passphrase and keep it in `ssh-agent`** (`ssh-add ~/.ssh/aria-hub`), so that `aria connect` does not have to ask: a passphrase prompt can run into its 60-second limit. An empty passphrase (`-N ''`) trades the protection away: anyone who copies the file (a backup, a stolen laptop, a program running as you) has a working key and nothing more to guess. All it buys you is that nothing ever asks.
+- **Or use a hardware key** (`ssh-keygen -t ed25519-sk`), which keeps the private half on the device. `hub init --client-key` accepts those key types; nothing in the repository tries one through `aria connect`, so check that it connects before you rely on it.
+- **Tighten the line by hand.** `hub init` writes `restrict,command="…/aria client-stdio" <key>` into `authorized_keys` and never touches it again; Aria does not manage it. You can add other `authorized_keys` options, for example `from="…"` to name the addresses the key may be used from, in the same comma-separated list: `restrict,command="…/aria client-stdio",from="203.0.113.0/24" ssh-ed25519 AAAA...`. Put them after the `command=` option, never before it: `hub init` recognises its own line by `restrict,command=` at the start, and when you run `hub init --client-key` again, a line that starts with anything else (`from="…",restrict,…` for one) is reported as unrestricted (exit 1, the key is not touched). A `from=` list must name the address sshd sees, which over a VPN is the VPN's.
+- **Keep sshd reachable only over a private network** ([the public ssh port](#the-public-ssh-port)): a stolen key then works only for someone who is on that network.
+
 ## Connect to the hub
 
 ```sh
@@ -143,13 +159,34 @@ aria connect aria-hub
 
 What differs from a local terminal:
 
-- The list's last row is `+ new on <host>`. A new session works in the hub's projects folder itself. Your current folder is on another computer, so the client never chooses a folder for a session on the hub. Two consequences: when that folder is not a git repository, a command in the sandbox can write the whole projects folder, every repository in it; and Aria keeps no code checkpoints there, so `/undo` can only rewind the conversation (it says `Code is not kept in the projects folder.`).
+- The list's last row is `+ new on <host>`. A new session works in the hub's projects folder itself. Your current folder is on another computer, so the client never chooses a folder for a session on the hub. Two consequences: when that folder is not a git repository, a command in the sandbox can write the whole projects folder, every repository in it; and Aria keeps no code checkpoints there.
+- **`/undo` (and `Esc Esc`) rewinds the conversation only.** Rewind offers only "Restore conversation" (and "Never mind") and says `Code is not kept in the projects folder.` To take back a file edit on the hub, log in with your own ssh and use git there: `!git restore` is refused over `aria connect`.
+- **`/model` lists only the model already in use.** The client decides which providers to list from the sign-ins of the computer it runs on, and over `aria connect` it has none. The hub itself accepts a model change from a client, but this terminal has no list to choose from, so it cannot switch models there yet.
+- **`/exit` closes the session on the hub for good**: its engine stops, the background jobs it owns end and its checkpoints go. To leave and come back, use `Ctrl+C` or `Ctrl+D`, or close the terminal.
 - The footer shows no git branch, because git runs on your computer and the session's folder is on the hub.
-- `@` lists files on the hub.
+- `@` lists files under the hub's projects folder (its `sandbox.projectsDir`), whatever session you are in.
 - A dead connection is noticed by ssh after about 45 seconds. The terminal then tries once to reconnect, with the screen frozen for up to 60 seconds, and otherwise exits.
 - Aria does not notify you when a run settles on a hub. Each session in the list shows `working`, `waiting for you` or `done` and how long ago.
 
 A terminal on the hub itself (a login as the hub's user, then `aria`) is a local terminal, not a remote one. The limits below apply to `aria connect`.
+
+## Connect from another computer
+
+The computer you set the hub up from is not the only one that can attach. A second computer needs:
+
+- **An `aria` binary for its system.** `aria connect` is part of every build, the headless one included, so on a Linux computer the binary from `sh tools/build-headless.sh` works as a client; on a Mac use the build you make for the dock (a Mac has no build without a window). The client needs no running service and no setup: it reads `~/.aria/settings.json` for the language and `display.verbose` when there is one. It also needs `ssh`. The two sides must speak the same protocol number, so update the client and the hub together.
+- **A key the hub allows.** The safer way is a second key, not a copy of the first. On the second computer run `ssh-keygen -t ed25519 -f ~/.ssh/aria-hub` (with a passphrase), bring the `.pub` file to the computer you ran `hub init` from, and run `aria hub init ana@hub.example --client-key <that .pub>` there. It adds a second restricted line and leaves the first, so you can revoke one without the other. Copying the first private key also works, but then the key lives in two places and revoking it locks out both.
+- **The ssh entry**, in `~/.ssh/config` on the second computer. `hub init` prints it when it installs a key, but it names the key's path on the computer where you ran `hub init`: write the path the key has on this one.
+
+```text
+Host aria-hub
+    HostName hub.example
+    User ana
+    IdentityFile /home/ana/.ssh/aria-hub
+    IdentitiesOnly yes
+```
+
+Then run `ssh aria-hub` once by hand to accept the server's host key. The restricted key can only run Aria's bridge, which waits for a client, so press `Ctrl+D` once the question is answered. After that, `aria connect aria-hub` ([Troubleshooting](#connecting-aria-connect) has its messages).
 
 ## Sign in from a terminal
 
@@ -164,16 +201,16 @@ The panel shows how many characters you pasted, never the text, because the addr
 
 API keys have no sign-in. They reach the hub with `hub init` (the first time, or `--credentials` to replace them), or by editing `~/.aria/auth.json` on the hub.
 
+**A Claude plan needs more than the sign-in.** Its models run through Claude Code, so Claude Code has to be installed on the server (the installer links it into `~/.aria/bin` when it finds `claude` on the `PATH`), and through a Pi package (`pi-claude-agent-sdk`) that the dock's `/connect` installs. Neither `hub init` nor the headless installer installs it, and a terminal cannot ask for it (the hub refuses that request from every client). Sending your Claude sign-in with `hub init --credentials` does not change that: the bundle carries `auth.json` and your settings, not the package, so a hub whose main model is a Claude plan one has no such model. Today an OpenCode Go or Anthropic API key is the way to give a hub a model. [The agent](agent.md#connecting-a-provider) explains the Claude route.
+
 ## Scheduled tasks on the hub
 
-The hub runs scheduled tasks while your computers are off, in the same way the dock does ([automation](automation.md)). A task whose time passed while the service was down runs once when it is back, and only if that time was today.
+The hub runs scheduled tasks while your computers are off, in the same way the dock does ([automation](automation.md)): a task whose time passed while the service was down runs once when it is back, and only if that time was today. `/schedules` in the terminal lists the tasks and lets you pause, resume and delete them; creating a task stays the job of the model's `schedule` tool in a conversation. What actually runs there is narrower than on a desktop:
 
-`/schedules` in the terminal lists the tasks and lets you pause, resume and delete them. Creating a task stays the job of the model's `schedule` tool in a conversation.
-
-Two limits matter on a hub:
-
-- A task that can write (a connector it may change, at the `allow` access level, or extra writable folders) waits for your approval, and the terminal leaves that approval to the dock. It shows such a task as `waiting for approval in the dock`. A hub has no dock, so these tasks stay paused as far as the terminal goes. Read-only tasks run. The service itself does not tell the terminal's resume from anyone else's: a client that sends the resume message approves the task (see [what a stolen key can do](#the-security-model)).
-- A scheduled task never asks questions. On a hub whose sandbox does not work, every command needs permission, so a scheduled task cannot run shell commands there at all.
+- **Only read-only tasks run.** A task that can write (a connector it may change, at the `allow` access level, or extra writable folders) waits for an Approve that only the dock offers. "Read-only" describes what the task was granted: inside the hub's projects folder a run has the sandbox's usual write access, as on a desktop ([what a run may do](automation.md#what-a-run-may-do-grants)). A hub has no dock, and the terminal shows such a task as `waiting for approval in the dock` with no way to approve it. The service itself does not tell the terminal's resume from anyone else's, so a client that sends the resume message approves the task: that is a route for a stolen key, not a feature ([below](#what-a-stolen-client-key-can-do)).
+- **A scheduled run cannot ask to leave the sandbox**, so a command the box blocks is refused. Where the sandbox does not work (see [the sandbox on a server](#the-sandbox-on-a-server)), every command counts as leaving it, and a scheduled task cannot run shell commands at all.
+- **The time is the hub's clock and time zone.** "Every day at 7:30" is 7:30 there. Many servers are set to UTC; `timedatectl` shows the zone. Set it before you ask for tasks, and restart `aria-serve.service` afterwards so the service reads it.
+- **Nothing is sent to you.** A hub sends no notification, and the terminal's session list does not show scheduled runs, so the outcome is not on screen. `/schedules` shows when each task runs next, not how it went. To read a result, ask Aria in an ordinary session what your scheduled tasks did: the model can list them with the first line of each last result (140 characters at most). The whole answer is in the task's own conversation on the hub, which a terminal cannot open.
 
 ## Settings and credentials on the hub
 
@@ -198,15 +235,9 @@ Running it again is safe. It uploads the new tree and binary, runs the installer
 
 The sandbox runs the model's commands inside `bwrap` so they can write only to the project. It needs unprivileged user namespaces. Ubuntu 24.04 restricts them with AppArmor, so `bwrap` can be installed and still fail.
 
-`hub init` runs a real probe on the server, `bwrap --unshare-user --ro-bind / / true`, and tells a missing `bwrap` from a blocked one. For a blocked one it prints the usual fix and never applies it:
+`hub init` runs a real probe on the server, `bwrap --unshare-user --ro-bind / / true`, and tells a missing `bwrap` from a blocked one. For a blocked one it prints the two usual fixes and never applies either: the `sysctl` line, which is system-wide, or an AppArmor profile for `bwrap` alone. Both, with their trade-offs, are under [Set up a hub](#set-up-a-hub). After fixing it, restart the service so each session's Pi checks again, and run `hub init` again to install the key.
 
-```sh
-sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-```
-
-(Put `kernel.apparmor_restrict_unprivileged_userns=0` in a file under `/etc/sysctl.d/` to keep it after a reboot, or give `bwrap` its own AppArmor profile.) After fixing it, restart the service so each session's Pi checks again, and run `hub init` again to install the key.
-
-Where the sandbox does not work, every command asks first, as on a Mac. The question goes to whichever client is attached, so anyone holding the client key can approve it. That is shell access to the hub's user in practice, which is why `hub init` does not install the client key in that state unless you pass `--allow-no-sandbox`. A working sandbox narrows this less than it may seem: the model can also ask to run a command outside the box, and the same client answers that card. Treat the key as a login either way.
+Where the sandbox does not work, every command asks first, as on a Mac. The question goes to whichever client is attached, so anyone holding the client key can approve it. That is why `hub init` does not install the client key in that state unless you pass `--allow-no-sandbox`. A working sandbox narrows this less than it may seem, because the model can also ask to run a command outside the box and the same client answers that card: see [what a stolen client key can do](#what-a-stolen-client-key-can-do).
 
 ## What a remote terminal may and may not do
 
@@ -217,8 +248,8 @@ The hub's bridge marks every connection that comes through `aria connect` as rem
 | List, open and close sessions | A new session never gets a folder from the client. |
 | In a session the hub has: send a message, stop a run, load the history | A made-up session id is refused. |
 | Answer questions and approvals | Including the card that lets a command out of the sandbox or writes outside the project, an install, and a connector write. |
-| List the slash commands, list models and change the session's model, list files for `@` | |
-| Undo to an earlier message (`/undo`) | Sessions opened over `aria connect` work in the projects folder, where no code checkpoints are kept: only the conversation goes back. |
+| List the slash commands, list models and change the session's model, list files for `@` | The hub accepts a model change, but the terminal over `aria connect` lists only the model in use, so it cannot switch there yet. `@` lists the hub's projects folder |
+| Undo to an earlier message (`/undo`) | The conversation only: sessions opened over `aria connect` work in the projects folder, where no code checkpoints are kept. |
 | `/context` | The only Pi command it may send is `get_session_stats`. |
 | List, pause, resume and delete scheduled tasks | |
 | Start a sign-in to Claude or Notion and paste its address | |
@@ -235,23 +266,36 @@ The terminal shows the first two refusals as `not available on a connected hub`.
 
 ## The security model
 
-**Credentials on the hub.** Your model keys and sign-ins sit in plain files, mode 600, in the hub user's `~/.aria`, with the keyring off. Whoever has the server's disk, root, or a shell as that user has them, and so does a command that runs outside the sandbox (inside it, these files are hidden). Disk encryption is the server host's business. Treat the server as holding every key you sent it.
+### Credentials on the hub
 
-**Transport.** ssh and nothing else. The service listens on unix sockets in a folder only its user can enter (`aria/` in the user's runtime directory, usually `/run/user/<uid>`). During a sign-in it also listens briefly on `127.0.0.1` of the hub, which other users of that server could reach, so a hub is for a server you do not share.
+Your model keys and sign-ins sit in plain files, mode 600, in the hub user's `~/.aria`, with the keyring off. Whoever has the server's disk, root, or a shell as that user has them, and so does a command that runs outside the sandbox (inside it, these files are hidden). Disk encryption is the server host's business. Treat the server as holding every key you sent it.
 
-**The restricted key.** The line `hub init` adds is `restrict,command="/home/ana/.local/bin/aria client-stdio" ssh-ed25519 AAAA...`. The key gets no shell, no terminal, no port forwarding and no agent forwarding. Whatever command the client asks ssh to run, sshd runs only the bridge. The bridge writes its own `hello` marked remote and forwards only JSON lines, so the limits above hold for `aria connect` whichever key it uses. They protect nothing for an unrestricted key, which is a shell. To revoke the key, delete that line from `authorized_keys`: new connections with it are refused at once, and one already open stays open until it closes.
+### Transport
 
-**What a stolen client key can do.** It gets no shell, but it is a terminal at the keyboard, and a terminal can answer every card. As far as the code shows, that is close to a shell as the hub's user, and the sandbox does not change it:
+ssh and nothing else. The service listens on unix sockets in a folder only its user can enter (`aria/` in the user's runtime directory, usually `/run/user/<uid>`). During a sign-in it also listens briefly on `127.0.0.1` of the hub, which other users of that server could reach, so a hub is for a server you do not share.
 
-- It can chat with the model, which spends your model quota and reads what the sandbox lets it read (the rest of the disk, except credentials).
-- The model can ask to run a command outside the sandbox, to write a file outside the project, or to install a skill, a Pi package or an MCP server (a local server is a command of its own, outside the box). Each is a card, and the key can answer yes, including "no sandbox for the rest of the session". Jev's review on the card is advice, not a gate. Without a working sandbox every command is such a card.
-- It can ask the model to create a scheduled task that may write a folder it names, and then send the resume message that approves it. The task runs with that folder writable and no card. The terminal never sends that resume, but the service does not stop it. The folder cannot be one that holds credentials or Aria's own folder, and can be any other folder that exists.
-- It can change a session's model, close sessions, pause or delete scheduled tasks, and start a sign-in, which points the hub's Claude or Notion account at an account of the attacker's. Commands typed in a session, such as `/autocompact` and `/effort`, still change their own setting in `settings.json`.
-- It cannot save a secret, run a `!command`, read or change your keys or settings through the protocol, or choose a folder for a session.
+### The restricted key
 
-Setting `sandbox.askToLeave` to `false` in the hub's `settings.json` makes a command that needs to leave the box refused instead of asked. It does not close the other cards or the scheduled-task route above. Nothing in Aria narrows a stolen key further today, so treat the key as a login: keep it in one place, and revoke it (see the restricted key above) if it may have leaked.
+The line `hub init` adds is `restrict,command="/home/ana/.local/bin/aria client-stdio" ssh-ed25519 AAAA...`. The key gets no shell, no terminal, no port forwarding and no agent forwarding. Whatever command the client asks ssh to run, sshd runs only the bridge. The bridge writes its own `hello` marked remote and forwards only JSON lines, so the limits above hold for `aria connect` whichever key it uses. They protect nothing for an unrestricted key, which is a shell. To revoke the key, delete that line from `authorized_keys`: new connections with it are refused at once, and one already open stays open until it closes. To cut an open one, end its `aria client-stdio` process on the hub; the service and its sessions go on. How to protect the key before it leaks is in [Protect the key](#protect-the-key).
 
-**The public ssh port.** Aria does not change how sshd is reachable. After the install, `hub init` checks whether sshd listens on a public address, meaning anything except loopback, a private range, link-local, or Tailscale's range. If it does, it says so once, tells you the port stays open until you close it, and reads `sshd_config` (without `sudo`) to say whether password logins look on or off. It warns and goes on. Until you close the port, the protection is key-only login and the restricted key.
+### What a stolen client key can do
+
+**Treat a stolen client key as a shell as the hub's user.** sshd gives the key no shell, but whoever holds it is a terminal at the keyboard of every session on the hub, and a terminal can answer every permission card. The attacker needs only to ask the model for something and to say yes:
+
+- **It reads what the hub's user can read, your model keys and sign-ins included.** The model can ask to run a command outside the sandbox, and the key can answer yes, including "no sandbox for the rest of the session". That command runs as the hub's user with no box around it, so it sees `~/.aria` (where a hub keeps your keys as plain files) and every other file that user can read. The precondition is a card, and the attacker controls both ends of it: the model's request and the answer. Where the sandbox does not work, every command is such a card. Jev's review on the card is advice, not a gate.
+- **It uses the hub as a base on the network.** The sandbox shares the network, so even a command inside it reaches whatever the hub can reach and can send out what it reads. It also spends your model quota.
+- **It can install.** The model can ask to install a skill, a Pi package or an MCP server (a local server is a command of its own, outside the box). Each is a card, and the key can answer yes.
+- **It can write outside the project and plant a scheduled task.** It can ask the model to write a file outside the project (a card), or to create a scheduled task that may write a folder it names, and then send the resume message that approves it: the task runs with that folder writable and no card. The terminal never sends that resume, but the service does not stop it. The folder has to exist and not be on the short list of refused ones ([the list](automation.md#what-a-run-may-do-grants)); anything else is accepted.
+- **It can change a session's model, close sessions, pause or delete scheduled tasks, and start a sign-in**, which points the hub's Claude or Notion account at an account of the attacker's. Commands typed in a session, such as `/autocompact` and `/effort`, still change their own setting in `settings.json`.
+- **It cannot** save a secret, run a `!command`, read or change your keys or settings through the protocol, or choose a folder for a session.
+
+The key is useful only to someone who can reach the server's ssh port. On a hub that is reachable only over a private network, a stolen key is useless to anyone outside that network ([the public ssh port](#the-public-ssh-port)).
+
+Setting `sandbox.askToLeave` to `false` in the hub's `settings.json` makes a command that needs to leave the box refused instead of asked. It does not close the other cards or the scheduled-task route above, and on a hub where the sandbox does not work it makes the hub a chat that runs no command at all, since every command then counts as leaving. Nothing in Aria narrows a stolen key further today. Keep the key on as few computers as you can (a second computer gets its own, see [Connect from another computer](#connect-from-another-computer)), protect it ([Protect the key](#protect-the-key)), and revoke it (see the restricted key above) if it may have leaked.
+
+### The public ssh port
+
+Aria does not change how sshd is reachable. After the install, `hub init` checks whether sshd listens on a public address, meaning anything except loopback, a private range, link-local, or Tailscale's range. If it does, it says so once, tells you the port stays open until you close it, and reads `sshd_config` (without `sudo`) to say whether password logins look on or off. It warns and goes on. Until you close the port, the protection is key-only login and the restricted key.
 
 The safe end state is a hub whose ssh is reachable only over a private network, such as Tailscale: every device you use joins the network, the server's firewall closes the public ssh port, and sshd listens on the private address. That is your administrator's work. Aria never touches sshd, the firewall or Tailscale. You can point `HostName` in the ssh entry at the private address today, so the traffic already goes through it.
 
@@ -302,7 +346,7 @@ The unit restarts the service five seconds after a failure. `aria quit` exits 0,
 | `warning: the sandbox cannot start on the hub ...` | See [The sandbox on a server](#the-sandbox-on-a-server). |
 | `step 6 (key) skipped: the sandbox does not work on the hub ...` (exit 1) | Fix the sandbox and run it again, or pass `--allow-no-sandbox`. |
 | `step 6 (key) failed: that key is already in authorized_keys WITHOUT the restriction ...` (exit 1) | Use a dedicated key, or edit that line to start with the `restrict,command=` text it shows. |
-| `warning: sshd on <host> listens on port N on a public address ...` | See [The security model](#the-security-model). |
+| `warning: sshd on <host> listens on port N on a public address ...` | See [The public ssh port](#the-public-ssh-port). |
 | `warning: could not check whether sshd is open to the internet ...` | `ss` is missing or failed on the hub. Check it yourself. |
 | `sshd_config: password logins look on; set PasswordAuthentication no.` | Turn password logins off in sshd, as the administrator. |
 
@@ -336,14 +380,14 @@ The unit restarts the service five seconds after a failure. `aria quit` exits 0,
 - **Machines.** Linking other computers to a hub, so that a session works in a folder on your laptop and every session shows in one list, is designed and not built. So are the shared credentials and memory it needs. Today a hub's sessions work in the hub's own folders: chat, research, memory, schedules, and code in repositories you clone there over ssh with the server's own git credentials. Aria never handles git credentials.
 - **A web client** and **the dock as a client of a hub**, and **notifications that find the device you are using**.
 - **`aria update` for a hub**, releases and a hosted installer. A hub is updated by running `hub init` again.
-- **A run that survives a dropped client** is checked by hand, not by the acceptance script.
+- **A run that survives a dropped client** is checked by hand, not by the acceptance script, and the repository does not record that the hand check was done.
 
 The full list is in [pending](../pending.md), and the design is in [the hub and machines spec](../superpowers/specs/2026-10-23-hub-and-machines-design.md). How the pieces fit is in [the architecture](../architecture.md).
 
 ## See also
 
 - [The terminal](terminal.md): sessions, keys and commands, which are the same over `aria connect`.
-- [Safety](safety.md): the sandbox, access levels, secrets and undo.
+- [Safety](safety.md): the sandbox, access levels, secrets, undo, and what leaves your computer.
 - [Automation](automation.md): scheduled tasks and background work.
 - [Commands](../reference/commands.md): every `aria` command.
 - [Data and paths](../reference/data-and-paths.md): where everything lives.

@@ -4,22 +4,43 @@ Aria is a personal assistant that lives on your desktop: a dock opens over whate
 
 ## What you need
 
-- **Omarchy**: Hyprland 0.56 or newer with the Lua configuration (the classic format is refused), inside a running Hyprland session, on an Arch-based system with `pacman`.
+- **Omarchy**: Hyprland 0.56 or newer with the Lua configuration (the classic format is refused), inside a running Hyprland session, on an Arch-based system with `pacman`. To check the configuration, run `hyprctl eval "return 1"` in a terminal: Aria asks Hyprland the same thing, and only the answer `ok` counts as the Lua configuration. With the classic one the dock starts but shows "Aria needs Hyprland 0.56 or newer with the Lua configuration. Yours uses the classic format." and registers no shortcut. Aria does not convert the configuration; moving to Lua is Hyprland's own procedure.
 - **macOS**: macOS 12 or newer, Apple silicon or Intel. No `sudo`, no Accessibility permission and no system configuration are needed.
 - **Node 22.19 or newer**, with `npm`, on your `PATH`. Aria's engine (Pi) runs on it. The installer stops and says so when Node is missing or too old.
-- **A provider account** for the first run: an OpenCode Go key, an Anthropic API key, or a Claude Pro or Max plan. See [the first run](#the-first-run).
+- **A provider account** for the first run: an OpenCode Go key (from your OpenCode Go account), an Anthropic API key, or a Claude Pro or Max plan. See [the first run](#the-first-run).
 
 A computer with no desktop can run Aria as a hub that terminals connect to; that is a different install, described in [running Aria on a server](hub.md).
 
 ## Install
 
-Nothing is published yet: there are no release binaries and no hosted installer (see [what is pending](../pending.md)). The intended path is the one-line install below, and today you build the binary yourself and install it with `--local`, as shown in [From a clone](#from-a-clone).
+Nothing is published yet: there are no release binaries and no hosted installer (see [what is pending](../pending.md)). Today you build the binary yourself and install it from the clone you built it in.
+
+### From a clone
+
+You need Rust and the build libraries listed in [development](../development.md#build); `bun` is only for the tests. On Omarchy the libraries that page names come to this line (the repository does not check them):
+
+```sh
+sudo pacman -S --needed cmake clang gtk3 webkit2gtk-4.1 gtk-layer-shell alsa-lib vulkan-headers shaderc
+```
+
+On macOS you need `cmake` (Homebrew has it). Then, from the clone:
+
+```sh
+cargo build --release
+sh install/install.sh --local target/release/aria
+```
+
+Run the installer from the clone: it reads `pi-version`, `pi-packages`, `engram-version` and `agent-browser-version` from the files next to it (and `node-version` too, but only on a server that needs its own Node). It installs the binary you built instead of downloading one, and running it again updates. When it ends it says "Aria is installed. Press Super+A to set it up." on Omarchy, or "Press Option + Space" on macOS.
+
+### When a release exists
+
+The intended path is one line that downloads the binary and the pin files and installs them. It cannot work until releases and a hosted `install.sh` are published (its address is a placeholder in the script), so do not use it today:
 
 ```sh
 curl -fsSL https://<your site>/install.sh | sh
 ```
 
-The installer detects the system. Run it again to update.
+The installer detects the system, and running it again updates.
 
 ### What the installer puts where
 
@@ -41,7 +62,7 @@ Omarchy only:
 macOS only:
 
 - A LaunchAgent, `~/Library/LaunchAgents/com.aria.dock.plist`, with its output in `~/.aria/logs/aria.log`.
-- The binary is signed again ad hoc as `com.aria.dock`, so macOS keeps one identity for it. macOS still asks for microphone access once per version, because an ad hoc signature is a new app to it on every update.
+- The binary is signed again ad hoc as `com.aria.dock`, so macOS keeps one identity for it. macOS may ask for microphone access again after an update, because an ad hoc signature can look like a new app to it. Whether it does has not been tried live yet ([pending](../pending.md)).
 
 What it never touches: `~/.config/hypr/`. On Omarchy the dock registers its shortcut with Hyprland itself, every time it starts, and nothing is written to disk for it. On macOS the shortcut is registered through Carbon, which needs no permission.
 
@@ -58,19 +79,6 @@ Give these to `sh install.sh`. With `curl | sh`, pass them after `sh -s --`, for
 | `--uninstall` | Removes Aria. See [Uninstalling](#uninstalling). |
 | `--headless` | Installs `aria serve` as a user service on a server with no desktop (Linux). With `--with-browser` it adds the agent browser too. See [the hub guide](hub.md). |
 | `--help` | Prints the usage. |
-
-### From a clone
-
-You need Rust and the build libraries listed in [development](../development.md); `bun` is only for the tests. Then:
-
-```sh
-cargo build --release
-sh install/install.sh --local target/release/aria
-```
-
-Run the installer from the clone: it reads `pi-version`, `pi-packages`, `engram-version` and `agent-browser-version` from the files next to it (and `node-version` too, but only on a server that needs its own Node).
-
-When it ends it says "Aria is installed. Press Super+A to set it up." on Omarchy, or "Press Option + Space" on macOS.
 
 ## The first run
 
@@ -141,7 +149,7 @@ The interface is in English or Spanish and follows the conversation language you
 
 Press the shortcut to open the dock. The cursor is in the message box at once, so type and press `Enter`. A new session says "Ask for something, or type / to see the commands."
 
-At the top of the column, under the tabs, a line shows the folder Aria works in. It is your projects folder, `~/Projects` by default (`sandbox.projectsDir`), and it is created if it does not exist. Aria reads and writes there, and its commands run in a sandbox that writes only inside that folder and the extra folders you allowed. A session opened from a terminal works in the folder where you ran `aria` instead. On Omarchy the sandbox is bubblewrap; on macOS every command asks first. See [safety](safety.md).
+At the top of the column, under the tabs, a line shows the folder Aria works in. It is your projects folder, `~/Projects` by default (`sandbox.projectsDir`), and it is created if it does not exist. Aria reads and writes there, and its commands run in a sandbox that writes only inside the project (the git repository the session works in, or that folder when there is none), `/tmp`, the tool caches and the extra folders you allowed. In the dock the project is the projects folder itself, so a session there can write every project under it, and Aria keeps no undo copy of that folder. A session opened from a terminal works in the folder where you ran `aria` instead, which is the safer way to work on one project: see [Let Aria work on one project safely](safety.md#let-aria-work-on-one-project-safely). On Omarchy the sandbox is bubblewrap; on macOS every command asks first. See [safety](safety.md).
 
 A first request can be as plain as:
 
@@ -163,7 +171,7 @@ An update never cuts a run. The dock restarts only when it is hidden and no sess
 
 The restart is immediate in three cases: the unit or LaunchAgent file changed, you passed `--restart-now`, or the running dock is too old to understand the request. The tabs and their conversations come back after any restart.
 
-On macOS, expect the microphone permission prompt once after each update.
+On macOS, the microphone permission prompt may come back after an update; that has not been tried live yet ([pending](../pending.md)).
 
 ## Uninstalling
 
@@ -177,7 +185,7 @@ It does not touch the system keyring, and it leaves `~/.agent-browser/browsers` 
 
 ## Limits
 
-- No release is published, so the `curl | sh` line has nothing to download from yet; use `--local`. The installer's Linux download name knows only x86_64. See [what is pending](../pending.md).
+- No release is published, so the `curl | sh` line has nothing to download from yet; build and use `--local`. The installer's Linux download name knows only x86_64. See [what is pending](../pending.md).
 - Aria is built for Omarchy and macOS. Another Linux desktop is not supported for the dock.
 - On macOS, the whole panel takes clicks (a click on the dark area closes the dock instead of reaching the app below), a desktop notification does not open the dock when clicked, and commands have no sandbox, so each one asks.
 

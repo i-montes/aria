@@ -10,7 +10,7 @@ All three are dock features. They need the window, so a terminal client and a hu
 
 You press the microphone button in the composer (or `Alt+D`), speak, and press it again. Aria writes what you said in the input, in your cursor's place. It never sends it by itself: you read it, fix it if you like, and send it as any other message.
 
-The transcription is done by Whisper (the `large-v3-turbo` model, quantized to `q5_0`) running on your computer. The audio is not sent anywhere: it is recorded in memory, transcribed locally and dropped. The only network traffic dictation causes is the one-time download of the model.
+The transcription is done by Whisper (the `large-v3-turbo` model, quantized to `q5_0`) running on your computer. The audio is not sent anywhere: it is recorded in memory, transcribed locally and dropped. The only network traffic dictation causes is the one-time download of the model. The words are another matter: once you send the text it is a message like any other, so it goes to your model provider and stays in the saved conversation as plain text. [What leaves your computer](safety.md#what-leaves-your-computer) lists every call Aria makes.
 
 ### How to use it
 
@@ -42,7 +42,7 @@ Whisper is told to listen in Aria's conversation language, the `assistant.langua
 |---|---|
 | File | `~/.aria/models/ggml-large-v3-turbo-q5_0.bin` |
 | Size | 574,041,195 bytes (574 MB) |
-| Source | whisper.cpp's repository on Hugging Face (the address is in `crates/aria/src/dictation/model.rs`) |
+| Source | whisper.cpp's repository on `huggingface.co` (the exact address is in `crates/aria/src/dictation/model.rs`) |
 
 The model is not part of the install. Aria downloads it to a `.part` file, checks its size and its SHA-256 (pinned in the code) and only then renames it, so a cut or corrupt download never looks like a model. If the check fails the `.part` is deleted and you see "The downloaded voice model was not right; it was removed. Try again." If the connection fails you see "The voice model could not be downloaded. Check the connection and try again." Pressing the microphone again restarts the download. To free the 574 MB, delete the file; Aria asks again the next time you dictate.
 
@@ -50,7 +50,7 @@ The model is not part of the install. Aria downloads it to a `.part` file, check
 
 The model is loaded into memory when you start recording (while you speak, so it is ready when you stop) and unloaded after five minutes without dictating. While loaded it holds several hundred MB; after the unload dictation uses no memory at all. The first dictation after an unload spends a moment loading before the text appears.
 
-- **macOS**: Whisper runs on the GPU through Metal.
+- **macOS**: Whisper is built with Metal, so it runs on the GPU.
 - **Omarchy (Linux)**: Whisper is built with Vulkan, so it runs on the GPU when there is a driver. The installer's comment says it runs on the CPU when there is none; Aria's own code does not check that. The Omarchy installer adds `alsa-lib` (the microphone) and `vulkan-icd-loader`. On the CPU it uses half the logical cores, between four and eight; a short phrase takes seconds instead of a fraction of a second.
 
 A recording is cut at five minutes: past that it stops by itself and transcribes what it has.
@@ -61,7 +61,7 @@ Whisper makes up words when it hears silence. Aria guards against it: it keeps o
 
 ### Microphone permission and errors
 
-On **macOS** the system asks for microphone access the first time you dictate; the reason it shows is built into the `aria` binary. Aria is not signed with a stable identity, so macOS may ask again after an update (the installer signs it ad hoc, and the system treats a new build as a new app). If you said no, dictation shows "Aria may not use the microphone", and the cue Aria uses is that the recording is exact silence. Allow it in System Settings, Privacy & Security, Microphone.
+On **macOS** the system asks for microphone access the first time you dictate; the reason it shows is built into the `aria` binary. Aria is not signed with a stable identity, so macOS may ask again after an update (the installer signs it ad hoc, and the system may treat a new build as a new app). Neither the first prompt from Aria itself nor a second one after an update has been tried live yet ([pending](../pending.md)), so what you see may differ. If you said no, dictation shows "Aria may not use the microphone", and the cue Aria uses is that the recording is exact silence. Allow it in System Settings, Privacy & Security, Microphone.
 
 On **Omarchy** there is no prompt. If the default input device is wrong, change it in your sound settings.
 
@@ -195,3 +195,4 @@ The dock does not accept the dictation or trace messages from a terminal, so eve
 - [The agent](agent.md): models, subagents and what the trace's steps are.
 - [Running Aria on a server](hub.md): what a hub does without a window.
 - [Settings](../settings.md): `assistant.language`, which sets the dictation language.
+- [Safety](safety.md#what-leaves-your-computer): what leaves your computer, dictation included.

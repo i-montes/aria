@@ -45,7 +45,7 @@ Contents:
   - `json_file` — read without guessing, write atomically, keep keys we don't know.
   - `settings` — the `Settings` model and its defaults, load and save ([reference](settings.md)).
   - `auth` — `auth.json`, in Pi's exact format so the bundled Pi can read it later.
-  - `providers` — one module per provider; the rest of Aria only reads what a module declares ([how to add one](adding-a-provider.md)).
+  - `providers` — one module per provider; the settings, the key check and the defaults read what a module declares, but the setup page, the two model pickers, the `/connect` card and the quota reader still name providers themselves ([the list of places](adding-a-provider.md)).
   - `validate` — one cheap request per provider (and for Tavily) to tell a valid key from a rejected one.
   - `mcp` — the MCP services the setup configures (Notion, Tavily) and Aria's own Engram server (memory), in Pi's `mcp.json` and `mcp-auth.json` formats.
   - `mcp_import` — the MCP servers other apps already have (Claude Code's user servers in `~/.claude.json`, Claude Desktop, Cursor, VS Code): found by reading their files, never writing them; each becomes an entry in Pi's format (stdio or http; SSE is listed but not importable, Pi cannot reach it; values are translated so Pi reads them as the other app did: `${env:X}` becomes `${X}` in `env` and headers, a lone `$` is escaped there, `${userHome}` becomes the home folder, and what Pi would read differently is kept and listed as a warning), with a name Pi accepts and `-2`, `-3`… when it is taken, and only the names of its secrets reach the page. Importing adds the picked ones to Aria's `mcp.json` (mode `600`), keeping everything else in it.
@@ -53,9 +53,9 @@ Contents:
   - `testing` (feature `testing`) — a fake Notion-like server so the OAuth flow can be tested without the network.
   - `bridge` — the messages between the dock and the page (below).
   - `pi` — the pinned Pi (`pi-version`): where it is installed, whether Node can run it, the `pi` shim for Pi's own children.
-  - `agent` — Pi's directory, `~/.aria/agent/`, prepared before every Pi start: its `settings.json` (default model, packages: the superpowers one filtered to the skills of the settings, `systematic-debugging` by default, and the Ponytail one with its Pi extension and its skills `ponytail` and `ponytail-review`), the `slice` skill and Aria's other own skills, links to the credential files, the owner's extensions, one sessions folder (`sessions/aria`), the Claude provider package.
+  - `agent` — Pi's directory, `~/.aria/agent/`, prepared before every Pi start: its `settings.json` (default model, packages: the superpowers one filtered to the skills of the settings, `systematic-debugging` by default, and the Ponytail one with its Pi extension and its skills `ponytail` and `ponytail-review`), the `slice` skill and Aria's other own skills, links to the credential files, the maintainer's extensions, one sessions folder (`sessions/aria`), the Claude provider package.
   - `agent_config` — `aria.json`, the one file the extensions read Aria's settings from (`extensions/lib/config.ts`; without it they keep the values in their code). It carries each connector's access level as `connectors`, which the `connectors` extension reads: an MCP tool call that writes asks first on the chat's permission card, is refused (Read only) or runs (Allow); see [the extensions](../extensions/README.md).
-  - `persona` — `SYSTEM.md` and the experts, rendered from the owner's text where a setting varies them.
+  - `persona` — `SYSTEM.md` and the experts, rendered from the maintainer's text where a setting varies them.
   - `sessions` — the dock's tabs (`sessions.json`): ids, titles, the active one, and each tab's `segments`: the Pi session ids it has run on, oldest first (none stored means the tab's own id). Pi runs on the last one. The page's `sessionsSave` never changes them: the dock keeps each tab's stored segments.
   - `history` — a tab's earlier messages (what its compactions took out of Pi's context), read from its segment files a page of 40 at a time.
   - `files` — the `@` file picker's `.gitignore`-aware walk.
@@ -214,7 +214,7 @@ A hub is Aria's service on a computer with no desktop (a server), reached from o
   checks the protocol itself, then writes its own `hello` with `remote: true` to the hub and relays only lines it parsed
   as JSON objects, never a `hello`: the hub trusts the mark because every remote line goes through this bridge. Lines
   are read up to 8 MiB. Exit codes: 0 the client closed, 1 the hub is down, 3 another protocol, 4 a line over the cap.
-  Nothing of Aria listens on a port: the transport is ssh and nothing else.
+  Nothing of Aria listens on a port other computers can reach: the transport is ssh and nothing else (the one listener is a sign-in's, below).
 - **The hello and the remote set** — the first line of each side carries `aria_core::bridge::PROTOCOL` and the binary's
   version; another number is refused (`protocol-mismatch`, the client says to update the older side; there is
   no `aria update`, and a hub is updated by running `hub init` again), and messages inside one number are additive only. A remote client may do what a terminal does (sessions, chat,
@@ -241,19 +241,19 @@ A hub is Aria's service on a computer with no desktop (a server), reached from o
   computer). A host that starts with `-` is refused. Exit codes: 1 when the hub or ssh cannot be reached, 2 not a host,
   3 another protocol. Closing the client, or losing the connection, stops nothing on the hub.
 - **`hub init` and `hub-import`** — `aria hub init <user@host> [--binary <path>] [--projects <dir>] [--client-key <pubkey
-  file>] [--settings] [--credentials] [--allow-no-sandbox] [--yes]` (`hub_admin.rs`, English only, run on the owner's computer) probes the host over ssh and prints its plan (with the binary's path and when it was built: a stale cross-build is easy
+  file>] [--settings] [--credentials] [--allow-no-sandbox] [--yes]` (`hub_admin.rs`, English only, run on your computer) probes the host over ssh and prints its plan (with the binary's path and when it was built: a stale cross-build is easy
   to ship; it is shown, never refused); only
   after a yes it uploads the tree and the binary, runs `install/install.sh --headless` there (the user unit
   `install/aria-serve.service`, `loginctl enable-linger`), sends the settings and credentials as one bundle to
   `aria hub-import` on the hub (mode `600` files, the first copy each replaces kept as `.bak` and never overwritten; keys
-  come out of the owner's keyring as plain values because the hub runs with the keyring off), restarts the service and, with `--client-key`, adds the key to
+  come out of your keyring as plain values because the hub runs with the keyring off), restarts the service and, with `--client-key`, adds the key to
   `authorized_keys` as `restrict,command="~/.local/bin/aria client-stdio"`. Before the key it runs a real bubblewrap
   probe (Ubuntu 24.04 restricts user namespaces, so bwrap can be installed and still fail; a missing bwrap and a blocked
   one are told apart, the fix is printed and never applied): if the sandbox does not work the key is not installed,
   step 6 is reported as skipped and the run ends with status 1, unless `--allow-no-sandbox` is given (the warning is
   printed either way: until a sandbox works every command asks, and whoever holds the client key can approve). When the
   key goes in, it prints the `~/.ssh/config` entry (`Host aria-hub`, the host and user typed, the key's file without
-  `.pub`, `IdentitiesOnly yes`) that makes `aria connect aria-hub` use it: the owner's login key is already in
+  `.pub`, `IdentitiesOnly yes`) that makes `aria connect aria-hub` use it: your login key is already in
   `authorized_keys` unrestricted, and a key found there that way is reported ("use a dedicated key"), never edited. It warns,
   once and without blocking, when sshd answers on a public address. Running it again is safe on a working hub: it asks
   whether the unit is active and which bundle files exist there, sends only the files the hub lacks (`--settings`
@@ -264,7 +264,7 @@ A hub is Aria's service on a computer with no desktop (a server), reached from o
   active check) set `XDG_RUNTIME_DIR=/run/user/$(id -u)` and the user bus address first when a non-login ssh left them
   unset, and the installer does the same for its own `systemctl --user` in `--headless` mode; a `systemctl --user` that
   still fails is told to need `dbus-user-session` and linger. After step 5 a read-only `loginctl show-user "$USER" -p
-  Linger` decides whether it says "The hub is ready": without linger the hub stops when its owner logs out, and it prints
+  Linger` decides whether it says "The hub is ready": without linger the hub stops when its user logs out, and it prints
   `sudo loginctl enable-linger <user>` (never run). `install.sh --headless` leaves agent-browser and its Chrome out (a
   large download, not for every arm64 server) unless `--with-browser` is given, and the unit restarts after 5 seconds
   (`RestartSec=5`).
@@ -375,7 +375,7 @@ while it is visible; a click sends `toggle`. On macOS `ARIA_FACE=<word>` forces 
 
 `crates/aria/src/dictation/` is the same on both platforms: `recorder.rs` reads the default microphone with `cpal`,
 `audio.rs` turns it into 16 kHz mono as it arrives, `whisper.rs` runs whisper.cpp through `whisper-rs` (Metal on macOS,
-Vulkan on Linux, falling back to the CPU where no driver is) with the `large-v3-turbo` q5_0 model, and `worker.rs` is the dock's one dictation on its own thread: it records, loads the
+Vulkan on Linux; the installer's note says it falls back to the CPU where no driver is, and Aria's own code does not check) with the `large-v3-turbo` q5_0 model, and `worker.rs` is the dock's one dictation on its own thread: it records, loads the
 model while the person speaks, transcribes when they stop, gives the text to the tab that asked, and unloads the model
 after five idle minutes. `model.rs` downloads the model (only when the person agrees) through a `.part` file checked by
 size and SHA-256. The page's `dictationStart/Stop/Cancel/Download` reach it through `chat::Sessions`; its

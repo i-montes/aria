@@ -10,7 +10,7 @@ Everything about Aria, by what you want to do. If you have not installed it yet,
 | install Aria, or update or remove it | [Getting started](guide/getting-started.md) |
 | use the dock: tabs, the composer, panels, keys | [The dock](guide/dock.md) |
 | use Aria from a terminal | [Aria in a terminal](guide/terminal.md) |
-| run Aria on a server and use it from anywhere | [Running Aria on a server](guide/hub.md) |
+| run Aria on a server and use it from another computer | [Running Aria on a server](guide/hub.md), and [from a second computer](guide/hub.md#connect-from-another-computer) |
 | choose a provider or model, understand quota, effort, the router and the experts | [The agent](guide/agent.md) |
 | plan big work with slice | [The agent](guide/agent.md#slice-plan-first-then-build) |
 | use subagents, or watch them work | [The agent](guide/agent.md#subagents) |
@@ -21,7 +21,9 @@ Everything about Aria, by what you want to do. If you have not installed it yet,
 | understand the sandbox and its permission cards | [Safety](guide/safety.md#the-sandbox) |
 | set what a connector may change | [Safety](guide/safety.md#connectors-what-each-may-change) |
 | know where my keys and secrets are | [Safety](guide/safety.md#your-secrets) and [Data and paths](reference/data-and-paths.md#the-keyring) |
+| let Aria tidy one project, with a way back | [Safety](guide/safety.md#let-aria-work-on-one-project-safely) |
 | undo what Aria did to my files | [Safety](guide/safety.md#checkpoints-and-undo), and [the terminal](guide/terminal.md#undo-and-the-changes-line) for the keys (the dock has no undo) |
+| know what leaves my computer, and where my text goes | [Safety](guide/safety.md#what-leaves-your-computer) |
 | connect Notion or Tavily, import MCP servers, attach files | [Integrations](guide/integrations.md) |
 | dictate, see Aria's face, or watch a turn step by step | [Voice, face and trace](guide/voice-and-face.md) |
 | look up a command, a slash command or a shortcut | [Commands and keys](reference/commands.md) |
@@ -36,8 +38,10 @@ Everything about Aria, by what you want to do. If you have not installed it yet,
 **New user.** [Getting started](guide/getting-started.md), then [the dock](guide/dock.md), then
 [the agent](guide/agent.md). Read [Safety](guide/safety.md) before you let Aria run commands on files you care about.
 
-**Terminal user.** [Aria in a terminal](guide/terminal.md), [Commands and keys](reference/commands.md), and
-[Running Aria on a server](guide/hub.md) if the machine has no desktop.
+**Terminal user.** First get the client onto the computer: [Getting started](guide/getting-started.md) for the full
+install, or, to use a hub from a computer with no dock, [Connect from another computer](guide/hub.md#connect-from-another-computer)
+(a binary, a key, an ssh entry). Then [Aria in a terminal](guide/terminal.md) and [Commands and keys](reference/commands.md);
+[Running Aria on a server](guide/hub.md) is the rest of the hub's story.
 
 **Setting up a server.** [Running Aria on a server](guide/hub.md) end to end (especially "The security model"), then
 [Safety](guide/safety.md#on-a-hub), [Automation](guide/automation.md#on-a-hub) and
@@ -75,7 +79,7 @@ you will touch in [superpowers/specs](superpowers/specs/), and [What is pending]
 | [Development](development.md) | Build, run a scratch copy, the test map, the repository, the project's rules, releases |
 | [Architecture](architecture.md) | The crates, the dock and its page, the messages between them, the terminal and hub, background work, schedules |
 | [Adding a provider](adding-a-provider.md) | Every place a new provider touches |
-| [Parity](parity.md) | The checks that Aria still matches the owner's own Pi setup |
+| [Parity](parity.md) | The checks that Aria still matches the maintainer's own Pi setup |
 | [Extensions](../extensions/README.md) | The Pi extensions Aria ships and what each does |
 | [Pending](pending.md) | What is missing, grouped by area, and the known gaps |
 | [Ideas](ideas.md) | Things not started |
@@ -84,14 +88,4 @@ you will touch in [superpowers/specs](superpowers/specs/), and [What is pending]
 
 ## Words used here
 
-- **Service**: the process that owns your sessions, their engines, background work and scheduled tasks. The dock and
-  the terminal are windows onto it.
-- **Hub**: a service running on a server with no window.
-- **Session**: one conversation with its own engine. The dock shows it as a tab.
-- **Pi**: the agent engine Aria runs, one per session.
-- **Extension**: code that runs inside Pi to add behaviour (the sandbox, the router, schedules).
-- **Expert**: a persona the agent can delegate a task to.
-- **Router, Jev**: the router reads each message; Jev is the classifier it uses. Jev never chats.
-- **slice**, **Ponytail**: slice is Aria's own method for big work (plan, then build); Ponytail is a Pi package Aria installs, a rule of the smallest complete change.
-- **Connector**: an MCP service such as Notion that gives the agent extra tools.
-- **Engram**: Aria's memory.
+The terms (service, hub, session, Pi, expert, router, Jev, slice, Ponytail, connector, Engram) are defined in [the README](../README.md#words-used-here).

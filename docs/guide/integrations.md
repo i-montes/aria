@@ -151,7 +151,7 @@ Without it, an agent on the hub that is asked to check a page says it could not.
 
 ## What is deliberately not there
 
-The setup offers Notion and Tavily; those are the only two connectors Aria signs in to for you. Other services you add as MCP servers (by hand, by import or by link) work like any connector and get an access row. The owner's Figma, OpenPencil and `rea` integrations from the original setup are out of scope: the setup does not offer them and the terminal's `/signin` takes only `anthropic` and `notion` (see [the parity matrix](../parity.md)). Beyond that:
+The setup offers Notion and Tavily; those are the only two connectors Aria signs in to for you. Other services you add as MCP servers (by hand, by import or by link) work like any connector and get an access row. The Figma, OpenPencil and `rea` integrations of the Pi setup Aria was built to match are out of scope: the setup does not offer them and the terminal's `/signin` takes only `anthropic` and `notion` (see [the parity matrix](../parity.md)). Beyond that:
 
 - Turning a service off in the settings does not remove its entry from `mcp.json`; edit the file to remove one.
 - Aria has no MCP reconnect of its own: a connector that failed to start waits for its next use or a Pi restart.
