@@ -2,9 +2,9 @@
 // at most 5 minutes each; the result goes to Aria's terminal footer (status `aria-verify`) and, when a check fails, to
 // the model once (flow.ts). `/verify off|on` for this session. Subagents do not check.
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
-import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { boxWorks } from '../sandbox/probe.ts'
 import { wrapCommand } from '../sandbox/policy.ts'
 import { checksFor, runCheck } from './checks.ts'
 import { Verifier } from './flow.ts'
@@ -13,23 +13,14 @@ const LIMIT_MS = 5 * 60 * 1000
 
 const read = (path: string) => (existsSync(path) ? readFileSync(path, 'utf8') : undefined)
 
-const hasBwrap = () => {
-  try {
-    execFileSync('bwrap', ['--version'], { stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
-}
-
 export default function verify(pi: ExtensionAPI) {
   let ctxNow: any = null
   let subagent = false
   const folder = () => ctxNow?.cwd ?? process.cwd()
   const verifier = new Verifier({
     checks: () => {
-      // On Linux the commands run boxed; without bwrap they do not run at all.
-      if (process.platform === 'linux' && !hasBwrap()) return []
+      // On Linux the commands run boxed; without a box that works they do not run at all.
+      if (process.platform === 'linux' && !boxWorks()) return []
       const at = folder()
       return checksFor(process.platform, {
         verifyJson: read(join(at, '.aria', 'verify.json')),

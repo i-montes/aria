@@ -185,11 +185,20 @@ A hub is Aria's service on a computer with no desktop (a server), reached from o
 - **The hello and the remote set** — the first line of each side carries `aria_core::bridge::PROTOCOL` and the binary's
   version; another number is refused (`protocol-mismatch`, the client says which side is old and to run `aria update`
   there), and messages inside one number are additive only. A remote client may do what a terminal does (sessions, chat,
-  approvals, the schedules' list, pause and delete, signing in to Claude or Notion) and **not** `secretSave` or a
-  `!command` (`ChatBash`): both are answered `not-for-remote`, and a later `hello` cannot lift the mark. A stolen client
-  key therefore gets no shell and cannot write a key, but it is a terminal at the keyboard: it can chat with a model
-  that runs commands inside the sandbox and answer its prompts, and it can re-bind the hub's Claude or Notion account
-  (accepted, since it can already use them). Revoking it is removing its line from `authorized_keys`.
+  approvals, the schedules' list, pause and delete, signing in to Claude or Notion) with four limits the hub enforces
+  (`clients.rs`; one test, `the_whole_surface_a_client_may_reach_is_pinned`, states everything a local and a remote client
+  may reach): no `secretSave` and no `!command` (`ChatBash`), both answered `not-for-remote` (a later `hello` cannot lift
+  the mark); no folder for a new session (`sessionNew` reaches the chat without its `workdir`, because a session's folder
+  is where its boxed commands may write); of Pi's own commands only `get_session_stats`, with none of the arguments
+  (`export_html` writes to a path the client names), the rest answered `not-for-remote`; and only sessions the hub has (a
+  made-up id would start a Pi of its own: `unknown-session`). A stolen client key therefore gets no shell and cannot write
+  a file or a key, but it is a terminal at the keyboard: it can chat with a model that runs commands inside the sandbox
+  and answer its prompts, and it can re-bind the hub's Claude or Notion account (accepted, since it can already use
+  them). Where the sandbox does not work on the hub (no `bwrap`, or one the system blocks: the extension runs a real
+  `bwrap --unshare-user --ro-bind / / true` and uses the box only when it exits 0) every command asks first, as on a Mac,
+  and the prompt goes to whichever client is attached, so that key then answers it too: `hub init` does not install the
+  client key unless the sandbox works or `--allow-no-sandbox` is given. Revoking a key is removing its line from
+  `authorized_keys`.
 - **`aria connect [user@]host`** (`connect.rs`) — the terminal client over `ssh -T -o ServerAliveInterval=15 -o
   ServerAliveCountMax=3 <host> ~/.local/bin/aria client-stdio`; `ARIA_SSH` names another program for ssh (the tests and
   `tools/hub/accept.sh` use it). The client is the same one; over connect the list's last row is `+ new on <host>` and the
@@ -202,10 +211,13 @@ A hub is Aria's service on a computer with no desktop (a server), reached from o
   `install/aria-serve.service`, `loginctl enable-linger`), sends the settings and credentials as one bundle to
   `aria hub-import` on the hub (mode `600` files, the old ones kept as `.bak`; keys come out of the owner's keyring as
   plain values because the hub runs with the keyring off), restarts the service and, with `--client-key`, adds the key to
-  `authorized_keys` as `restrict,command="~/.local/bin/aria client-stdio"`. It ends with a real bubblewrap probe
-  (Ubuntu 24.04 restricts user namespaces, so bwrap can be installed and still fail: it says so and prints the fix,
-  never applies it) and warns, once and without blocking, when sshd answers on a public address. It never edits
-  `sshd_config` or a firewall, and creates no accounts.
+  `authorized_keys` as `restrict,command="~/.local/bin/aria client-stdio"`. Before the key it runs a real bubblewrap
+  probe (Ubuntu 24.04 restricts user namespaces, so bwrap can be installed and still fail; a missing bwrap and a blocked
+  one are told apart, the fix is printed and never applied): if the sandbox does not work the key is not installed,
+  step 6 is reported as skipped and the run ends with status 1, unless `--allow-no-sandbox` is given (the warning is
+  printed either way: until a sandbox works every command asks, and whoever holds the client key can approve). It warns,
+  once and without blocking, when sshd answers on a public address. It never edits `sshd_config` or a firewall, and
+  creates no accounts.
 - **From a terminal** — `/schedules` lists the scheduled tasks and pauses, resumes and deletes them (creating one stays
   the `schedule` extension's tool); `/signin anthropic|notion` shows the sign-in's address and takes the address of the
   failed redirect pasted back (`oauthCode`), because the browser that opens the page is not on the hub.

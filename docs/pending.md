@@ -63,8 +63,12 @@ checked by `tools/hub/accept.sh` (no display, no provider). Left:
   only over a private network (Tailscale). Until then the protection is key-only login and the restricted keys
   `aria hub init --client-key` writes; `hub init` warns once and never touches `sshd_config` or the firewall.
 - **bwrap on Ubuntu 24.04**: unprivileged user namespaces are restricted by AppArmor there, so the sandbox can be
-  installed and still fail. `hub init` probes it and prints the fix; Aria never applies it. Until it works every command
-  on the hub asks first, as on a Mac.
+  installed and still fail. `hub init` probes it and prints the fix (it tells a missing bwrap from a blocked one); Aria
+  never applies it. The sandbox extension probes for real too (`bwrap --unshare-user --ro-bind / / true`): where the box
+  does not work every command asks first, as on a Mac, and on a hub the prompt goes to whichever client is attached, so
+  a holder of the client key can approve it. That is why `hub init` does not install the client key without a working
+  sandbox unless `--allow-no-sandbox` is given. Until the sandbox works, treat the client key as shell access to the hub
+  user.
 - **`aria update` on a hub**: nothing updates a hub yet except running `hub init` again with a new binary. A release
   must also publish `node-version` (next to the other pins), which the hub's installer reads once releases exist.
 - **A run that survives a dropped client** needs a model provider, so the acceptance script does not fake it: the owner
@@ -117,7 +121,7 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
   it back), and a letter on a non-US layout (Carbon codes are key positions). A failed `InstallEventHandler` (its own
   banner, `hotkey-handler-failed`, retried every 10 s) cannot be provoked on purpose.
 - `crates/aria/src/dock/mac.rs` repeats the page queue, the open/close generations and the notice timing of `dock/gtk.rs`; they can be shared now that the Mac build is at hand.
-- The owner's `sandbox` extension uses `bwrap` (Linux). On macOS there is no box yet: every command asks first with the permission card (`extensions/sandbox/route.ts`). A Seatbelt (`sandbox-exec`) profile with the same limits is the macOS sandbox still to design; some of its tests assume Linux paths.
+- The owner's `sandbox` extension uses `bwrap` (Linux). Where the box does not work (macOS, which has none yet; or a Linux host with no `bwrap` or one the system blocks) every command asks first with the permission card, which says there is no sandbox on the machine (`extensions/sandbox/route.ts`). A Seatbelt (`sandbox-exec`) profile with the same limits is the macOS sandbox still to design; some of its tests assume Linux paths.
 - No `.app` bundle, signing or notarization, so the standard "open at login" UI and notification actions wait.
 - The panel opens on the screen under the pointer and joins all spaces; multi-monitor and full-screen behavior needs manual testing on the owner's layout.
 - `~/.local/bin` is not on the default macOS `PATH`, so the CLI is `~/.local/bin/aria toggle` (the hotkey does not need it).

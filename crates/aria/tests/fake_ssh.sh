@@ -10,7 +10,7 @@
 #                              until the installer has run
 #   ARIA_FAKE_SSH_MISSING      names `command -v` does not find (default none): xz bwrap node npm tailscale
 #   ARIA_FAKE_SSH_NODE         the answer of `node --version` (default v18.19.1)
-#   ARIA_FAKE_SSH_BWRAP_FAIL   1: the sandbox probe fails
+#   ARIA_FAKE_SSH_BWRAP_FAIL   1: the sandbox probe fails (bwrap cannot make a user namespace); missing: there is no bwrap
 #   ARIA_FAKE_SSH_IMPORT_FAIL  1: `aria hub-import` fails and complains on stderr, quoting the start of what it read
 #   ARIA_FAKE_SSH_PASSWORDS    yes: sshd_config allows password logins (default no)
 # ARIA_FAKE_SSH_ROOT is the hub's computer: the upload is unpacked, and the key is added to authorized_keys, under
@@ -69,10 +69,10 @@ case "$cmd" in
     echo settings.json ;;
   *systemctl*) ;;
   *bwrap*)
-    if [ "${ARIA_FAKE_SSH_BWRAP_FAIL:-0}" = 1 ]; then
-      echo "bwrap: setting up uid map: Permission denied" >&2
-      exit 1
-    fi ;;
+    case "${ARIA_FAKE_SSH_BWRAP_FAIL:-0}" in
+      1) echo "bwrap: setting up uid map: Permission denied" >&2; exit 1 ;;
+      missing) echo "sh: 1: bwrap: not found" >&2; exit 127 ;;
+    esac ;;
   *authorized_keys*) HOME="$root/home" sh -c "$cmd" < "$stdin_file" ;;
   *sshd_config*)
     if [ "${ARIA_FAKE_SSH_PASSWORDS:-no}" = yes ]; then echo "PasswordAuthentication yes"; else echo "PasswordAuthentication no"; fi ;;

@@ -24,7 +24,6 @@ describe('the line background_run sends to the dock', () => {
   test('refusals stay refusals', () => {
     expect(backgroundLine('refuse-nobody', 'bun dev', '/p')).toBeNull()
     expect(backgroundLine('refuse-not-allowed', 'bun dev', '/p')).toBeNull()
-    expect(backgroundLine('refuse-no-bwrap', 'bun dev', '/p')).toBeNull()
   })
 })
 
@@ -33,7 +32,6 @@ describe('the refusals bash and background_run share', () => {
     expect(refusalText('refuse-nobody', true)).toMatch(/nobody here to ask/)
     expect(refusalText('refuse-nobody', false)).toMatch(/no sandbox on this system/)
     expect(refusalText('refuse-not-allowed', true)).toMatch(/not allowed/)
-    expect(refusalText('refuse-no-bwrap', true)).toMatch(/bwrap is missing/)
     for (const r of ['plain', 'ask', 'boxed'] as const) expect(refusalText(r, true)).toBeNull()
     expect(SAID_NO).toBe('The user said no: the command did not run.')
   })

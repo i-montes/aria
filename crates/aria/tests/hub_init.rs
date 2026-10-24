@@ -285,9 +285,11 @@ fn a_client_key_is_installed_restricted_and_once() {
     };
     assert_eq!(mode("hub/home/.ssh"), 0o700);
     assert_eq!(mode("hub/home/.ssh/authorized_keys"), 0o600);
-    // The key is installed after the version check and before the sandbox probe.
+    // The key is installed after the version check, and after the sandbox probe (it is not installed without one).
     let steps = writes(&world.log());
     assert!(position(&steps, "aria --version") < position(&steps, "authorized_keys"));
+    let all = commands(&world.log());
+    assert!(position(&all, "bwrap --unshare-user") < position(&all, "authorized_keys"), "{all:?}");
     // A second run does not add it again, and another key already there is kept.
     let again = world.init_yes(&["--client-key", key_arg], &[]);
     assert!(again.status.success());
@@ -569,4 +571,59 @@ fn an_ss_that_fails_is_said_not_taken_for_a_private_hub() {
     assert_eq!(commands(&world.log()).iter().filter(|c| *c == "ss -ltnH -n").count(), 1);
     let private = text(&world.init_yes(&[], &[("ARIA_FAKE_SSH_PUBLIC", "0")]).stdout);
     assert!(!private.contains("stays open") && !private.contains(could_not), "{private}");
+}
+
+const NO_PROMPT_WARNING: &str = "anyone holding the client key can approve those prompts";
+
+#[test]
+fn without_a_working_sandbox_the_key_is_not_installed_unless_allowed() {
+    for (variant, fix) in
+        [("missing", "sudo apt-get install -y bubblewrap"), ("1", "kernel.apparmor_restrict_unprivileged_userns")]
+    {
+        let world = World::new();
+        let key = key_file(&world);
+        let output = world.init_yes(&["--client-key", &key], &[("ARIA_FAKE_SSH_BWRAP_FAIL", variant)]);
+        let (out, err) = (text(&output.stdout), text(&output.stderr));
+        assert_eq!(output.status.code(), Some(1), "{variant}: {out}{err}");
+        assert!(err.contains("step 6") && err.contains("skipped"), "{variant}: {err}");
+        assert!(err.contains("--allow-no-sandbox"), "{variant}: {err}");
+        assert!(out.contains(fix), "{variant}: {out}");
+        assert!(out.contains("warning: the sandbox cannot start"), "{variant}: {out}");
+        assert!(out.contains(NO_PROMPT_WARNING) && out.contains("shell access to the hub user"), "{variant}: {out}");
+        assert!(!out.contains("The hub is ready"), "{out}");
+        assert_eq!(world.authorized_keys(), "", "{variant}: the key was not installed");
+        assert!(!commands(&world.log()).iter().any(|c| c.contains("client-stdio")), "{variant}");
+        // The other steps ran.
+        assert!(writes(&world.log()).iter().any(|c| c.contains("systemctl")), "{variant}");
+
+        // With the flag the key is installed and the same warning is printed.
+        let output =
+            world.init_yes(&["--client-key", &key, "--allow-no-sandbox"], &[("ARIA_FAKE_SSH_BWRAP_FAIL", variant)]);
+        let (out, err) = (text(&output.stdout), text(&output.stderr));
+        assert_eq!(output.status.code(), Some(0), "{variant}: {out}{err}");
+        assert!(out.contains(NO_PROMPT_WARNING), "{variant}: {out}");
+        assert_eq!(world.authorized_keys(), format!("{}\n", restricted(&world)), "{variant}");
+    }
+}
+
+#[test]
+fn a_missing_bwrap_and_a_blocked_one_are_told_apart() {
+    let world = World::new();
+    let missing = text(&world.init_yes(&[], &[("ARIA_FAKE_SSH_BWRAP_FAIL", "missing")]).stdout);
+    assert!(missing.contains("not found") && missing.contains("sudo apt-get install -y bubblewrap"), "{missing}");
+    assert!(!missing.contains("apparmor"), "{missing}");
+    let blocked = text(&world.init_yes(&[], &[("ARIA_FAKE_SSH_BWRAP_FAIL", "1")]).stdout);
+    assert!(blocked.contains("kernel.apparmor_restrict_unprivileged_userns"), "{blocked}");
+    assert!(!blocked.contains("apt-get install -y bubblewrap"), "{blocked}");
+    // No key asked for: nothing is skipped, and the run still succeeds, as before.
+    assert!(world.init_yes(&[], &[("ARIA_FAKE_SSH_BWRAP_FAIL", "missing")]).status.success());
+}
+
+#[test]
+fn with_a_working_sandbox_the_key_goes_in_with_no_flag() {
+    let world = World::new();
+    let output = world.init_yes(&["--client-key", &key_file(&world)], &[]);
+    assert_eq!(output.status.code(), Some(0), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(world.authorized_keys(), format!("{}\n", restricted(&world)));
+    assert!(!text(&output.stdout).contains("warning: the sandbox cannot start"));
 }

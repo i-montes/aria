@@ -279,7 +279,8 @@ pub fn private_address(ip: IpAddr) -> bool {
 // ---------------------------------------------------------------------------------------------------------------------
 
 const USAGE: &str =
-    "usage: aria hub init <user@host> [--binary <path>] [--projects <dir>] [--client-key <pubkey file>] [--yes]";
+    "usage: aria hub init <user@host> [--binary <path>] [--projects <dir>] [--client-key <pubkey file>] \
+     [--allow-no-sandbox] [--yes]";
 
 /// What `aria hub init` uploads from the checkout: the installer, the service unit and the pins the installer reads
 /// (`install/install.sh` reads `../<pin>`, so the tree keeps its shape under `~/.aria/hub-src`).
@@ -341,6 +342,8 @@ pub struct RawInit {
     pub binary: Option<PathBuf>,
     pub projects: Option<String>,
     pub client_key: Option<PathBuf>,
+    /// Install the client key even when the sandbox does not work on the hub.
+    pub allow_no_sandbox: bool,
     pub yes: bool,
 }
 
@@ -352,6 +355,7 @@ pub struct InitArgs {
     pub projects: Option<String>,
     /// The bare public key line, validated.
     pub client_key: Option<String>,
+    pub allow_no_sandbox: bool,
     pub yes: bool,
 }
 
@@ -403,13 +407,21 @@ pub fn hub_command(args: &[String]) -> i32 {
 }
 
 pub fn parse_init_args(args: &[String]) -> Result<RawInit, String> {
-    let mut raw = RawInit { host: String::new(), binary: None, projects: None, client_key: None, yes: false };
+    let mut raw = RawInit {
+        host: String::new(),
+        binary: None,
+        projects: None,
+        client_key: None,
+        allow_no_sandbox: false,
+        yes: false,
+    };
     let mut host = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         let mut value = |name: &str| rest.next().cloned().ok_or_else(|| format!("{name} needs a value"));
         match arg.as_str() {
             "--yes" | "-y" => raw.yes = true,
+            "--allow-no-sandbox" => raw.allow_no_sandbox = true,
             "--binary" => raw.binary = Some(PathBuf::from(value("--binary")?)),
             "--projects" => raw.projects = Some(value("--projects")?),
             "--client-key" => raw.client_key = Some(PathBuf::from(value("--client-key")?)),
@@ -589,14 +601,15 @@ pub fn plan(probe: &Probe, args: &InitArgs) -> Vec<String> {
     ];
     if let Some(key) = &args.client_key {
         lines.push(format!(
-            "6. Allow your key, restricted to Aria's bridge, once: add {} to ~/.ssh/authorized_keys",
+            "6. Allow your key, restricted to Aria's bridge, once: add {} to ~/.ssh/authorized_keys. The sandbox on the hub is \
+             tried first: if it does not work, this step is skipped (the key is not installed, and the run ends with an \
+             error) unless you pass --allow-no-sandbox, because without a sandbox every command asks first and anyone \
+             holding the client key can approve those prompts",
             authorized_line(&probe.home, key)
         ));
     }
     lines.push(
-        "Then, read-only: try the sandbox on the hub and look at whether its ssh port can be reached from beyond \
-         its private networks."
-            .to_string(),
+        "Then, read-only: look at whether its ssh port can be reached from beyond its private networks.".to_string(),
     );
     if needs_xz(probe) {
         lines.push(
@@ -761,7 +774,14 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
         }
     };
     let binary_arch = read_binary_arch(&binary)?;
-    let args = InitArgs { host: raw.host, binary, projects: raw.projects, client_key, yes: raw.yes };
+    let args = InitArgs {
+        host: raw.host,
+        binary,
+        projects: raw.projects,
+        client_key,
+        allow_no_sandbox: raw.allow_no_sandbox,
+        yes: raw.yes,
+    };
     let host = args.host.as_str();
 
     // Read-only probes: nothing on the hub changes until a yes.
@@ -917,42 +937,55 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
     }
     println!("      the hub runs {}", first_line(&output.stdout));
 
+    // The sandbox is tried before the key goes in: a key on a hub whose commands all ask is shell access for whoever holds it.
+    let sandbox = probe_sandbox(host);
+    for text in sandbox_warning(&sandbox) {
+        println!("{text}");
+    }
     let mut code = 0;
     // Whether the hub now has the key, restricted: only then is it said to be what protects the hub.
     let mut key = KeyState::None;
     if let Some(line) = &args.client_key {
-        println!("step 6 of {total}: allowing your key, restricted to Aria's bridge");
-        let sent = format!("{line}\n");
         key = KeyState::Unconfirmed;
-        match remote(host, REMOTE_ALLOW_KEY, Some(sent.as_bytes())) {
-            Ok(output) if output.status.success() => {
-                println!("      {}", first_line(&output.stdout));
-                key = KeyState::Restricted;
-            }
-            Ok(output) if output.status.code() == Some(KEY_UNRESTRICTED) => {
-                eprintln!(
-                    "aria hub init: step 6 (key) failed: that key is already in authorized_keys WITHOUT the restriction: \
-                     edit it yourself to start with `{} `",
-                    authorized_line(&probe.home, "").trim_end()
-                );
-                code = 1;
-            }
-            Ok(output) => {
-                eprintln!(
-                    "aria hub init: step 6 (key) failed: {} {}",
-                    describe(output.status),
-                    first_line(&output.stderr)
-                );
-                code = 1;
-            }
-            Err(error) => {
-                eprintln!("aria hub init: step 6 (key) failed: {}", describe_error(&error));
-                code = 1;
+        if sandbox != Sandbox::Works && !args.allow_no_sandbox {
+            eprintln!(
+                "aria hub init: step 6 (key) skipped: the sandbox does not work on the hub, so the client key was not \
+                 installed (anyone holding it could approve every command). Fix the sandbox and run init again, or pass \
+                 --allow-no-sandbox to install the key anyway"
+            );
+            code = 1;
+        } else {
+            println!("step 6 of {total}: allowing your key, restricted to Aria's bridge");
+            let sent = format!("{line}\n");
+            match remote(host, REMOTE_ALLOW_KEY, Some(sent.as_bytes())) {
+                Ok(output) if output.status.success() => {
+                    println!("      {}", first_line(&output.stdout));
+                    key = KeyState::Restricted;
+                }
+                Ok(output) if output.status.code() == Some(KEY_UNRESTRICTED) => {
+                    eprintln!(
+                        "aria hub init: step 6 (key) failed: that key is already in authorized_keys WITHOUT the \
+                         restriction: edit it yourself to start with `{} `",
+                        authorized_line(&probe.home, "").trim_end()
+                    );
+                    code = 1;
+                }
+                Ok(output) => {
+                    eprintln!(
+                        "aria hub init: step 6 (key) failed: {} {}",
+                        describe(output.status),
+                        first_line(&output.stderr)
+                    );
+                    code = 1;
+                }
+                Err(error) => {
+                    eprintln!("aria hub init: step 6 (key) failed: {}", describe_error(&error));
+                    code = 1;
+                }
             }
         }
     }
 
-    check_sandbox(host);
     check_public_ssh(host, probe, &listeners, key);
     if code == 0 {
         println!("The hub is ready. Connect from this computer with: aria connect {host}");
@@ -960,30 +993,61 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
     Ok(code)
 }
 
-/// Tries the sandbox on the hub (read-only). A failure is said, and the fix is only printed, never run.
-fn check_sandbox(host: &str) {
-    let problem = match remote(host, REMOTE_BWRAP, None) {
-        Ok(output) if output.status.success() => return,
+/// What trying the sandbox on the hub showed.
+#[derive(Debug, Clone, PartialEq)]
+enum Sandbox {
+    Works,
+    /// `bwrap: not found`: it is not installed.
+    Missing,
+    /// Installed, but it could not start (usually AppArmor or a sysctl refusing the user namespace); what it said.
+    Blocked(String),
+}
+
+/// Tries the sandbox on the hub (read-only).
+fn probe_sandbox(host: &str) -> Sandbox {
+    match remote(host, REMOTE_BWRAP, None) {
+        Ok(output) if output.status.success() => Sandbox::Works,
         Ok(output) => {
             let said = first_line(&output.stderr);
-            if said.is_empty() {
-                describe(output.status)
+            if output.status.code() == Some(127) || said.ends_with("bwrap: not found") {
+                Sandbox::Missing
+            } else if said.is_empty() {
+                Sandbox::Blocked(describe(output.status))
             } else {
-                said
+                Sandbox::Blocked(said)
             }
         }
-        Err(error) => describe_error(&error),
+        Err(error) => Sandbox::Blocked(describe_error(&error)),
+    }
+}
+
+/// What is said when the sandbox does not work on the hub; the fix is only printed, never run. Nothing for a working one.
+fn sandbox_warning(sandbox: &Sandbox) -> Vec<String> {
+    let mut lines = match sandbox {
+        Sandbox::Works => return Vec::new(),
+        Sandbox::Missing => vec![
+            "warning: the sandbox cannot start on the hub: bubblewrap is not installed (bwrap: not found).".to_string(),
+            "  Install it on the hub:".to_string(),
+            "      sudo apt-get install -y bubblewrap".to_string(),
+        ],
+        Sandbox::Blocked(problem) => vec![
+            format!("warning: the sandbox cannot start on the hub ({problem})."),
+            "  bwrap is installed but cannot create a user namespace. On Ubuntu 24.04 this is usually AppArmor restricting"
+                .to_string(),
+            "  unprivileged user namespaces. An administrator can fix it:".to_string(),
+            "      sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0".to_string(),
+            "  (write kernel.apparmor_restrict_unprivileged_userns=0 in a file under /etc/sysctl.d/ to keep it after a"
+                .to_string(),
+            "  reboot), or give bwrap its own AppArmor profile that allows user namespaces. Aria did not run any of this."
+                .to_string(),
+        ],
     };
-    println!("warning: the sandbox cannot start on the hub ({problem}).");
-    println!("  Until it works, Aria asks you before every command it wants to run there.");
-    println!("  On Ubuntu 24.04 this is usually AppArmor restricting unprivileged user namespaces. An administrator can fix it:");
-    println!("      sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0");
-    println!(
-        "  (write kernel.apparmor_restrict_unprivileged_userns=0 in a file under /etc/sysctl.d/ to keep it after a"
+    lines.push(
+        "  Until a sandbox works, Aria asks you before every command it wants to run there, and anyone holding the client \
+         key can approve those prompts: treat that key as shell access to the hub user."
+            .to_string(),
     );
-    println!(
-        "  reboot), or give bwrap its own AppArmor profile that allows user namespaces. Aria did not run any of this."
-    );
+    lines
 }
 
 /// What the hub's `authorized_keys` holds of the owner's `--client-key` after step 6.
@@ -1508,6 +1572,7 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
             projects: None,
             client_key: None,
             yes: false,
+            allow_no_sandbox: false,
         }
     }
 
@@ -1646,6 +1711,12 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
             "{text}"
         );
         assert!(numbered[5].contains("ana@laptop"), "{text}");
+        assert!(
+            numbered[5].contains("sandbox")
+                && numbered[5].contains("skipped")
+                && numbered[5].contains("--allow-no-sandbox"),
+            "the plan says the key waits for a working sandbox: {text}"
+        );
     }
 
     #[test]
@@ -1755,9 +1826,11 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
             "/srv/work",
             "--client-key",
             "/k.pub",
+            "--allow-no-sandbox",
             "--yes",
         ])
         .unwrap();
+        assert!(all.allow_no_sandbox);
         assert_eq!(all.host, "ana@hub.example");
         assert_eq!(all.binary, Some(PathBuf::from("/b/aria")));
         assert_eq!(all.projects.as_deref(), Some("/srv/work"));
@@ -1765,6 +1838,7 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
         assert!(all.yes);
         let few = args(&["--yes", "hub.example"]).unwrap();
         assert!(few.yes && few.binary.is_none() && few.projects.is_none() && few.client_key.is_none());
+        assert!(!few.allow_no_sandbox);
         assert!(args(&[]).is_err(), "a host is needed");
         assert!(args(&["a", "b"]).is_err(), "one host");
         assert!(args(&["a", "--binary"]).is_err(), "an option needs its value");

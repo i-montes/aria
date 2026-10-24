@@ -1,19 +1,21 @@
-// Where a bash command runs. macOS has no bwrap, so there is no box to run a command in: every command is treated as
-// one that leaves the sandbox, and the user is asked first. On Linux a missing bwrap is a broken install, and commands
-// are refused as they always were (only one the user explicitly allows outside the sandbox runs).
+// Where a bash command runs. Without a box that works (macOS has no bwrap; on Linux bwrap may be missing or blocked by
+// the system, see probe.ts) there is nothing to run a command in: every command is treated as one that leaves the
+// sandbox, and the user is asked first. `hasBwrap` means "the box works here".
 import { wrapCommand } from './policy.ts'
 
-export type BashRoute = 'plain' | 'ask' | 'refuse-nobody' | 'refuse-not-allowed' | 'refuse-no-bwrap' | 'boxed'
+export type BashRoute = 'plain' | 'ask' | 'refuse-nobody' | 'refuse-not-allowed' | 'boxed'
+
+/** What the card and the status say when there is no box. */
+export const NO_BOX_NOTE = 'No sandbox is available on this machine: this command runs with full access.'
 
 /** `mayLeave` false (Aria's settings: "ask before leaving the sandbox" off): leaving is refused, never asked. */
-export function bashRoute(o: { covered: boolean; outside: boolean; hasBwrap: boolean; canAsk: boolean; platform: string; mayLeave?: boolean }): BashRoute {
+export function bashRoute(o: { covered: boolean; outside: boolean; hasBwrap: boolean; canAsk: boolean; mayLeave?: boolean }): BashRoute {
   if (o.covered) return 'plain'
-  const noBox = !o.hasBwrap && o.platform === 'darwin'
-  if (o.outside || noBox) {
+  if (o.outside || !o.hasBwrap) {
     if (o.mayLeave === false) return 'refuse-not-allowed'
     return o.canAsk ? 'ask' : 'refuse-nobody'
   }
-  return o.hasBwrap ? 'boxed' : 'refuse-no-bwrap'
+  return 'boxed'
 }
 
 /** What bash (and background_run) returns for a route that refuses; null for a route that runs. */
@@ -24,7 +26,6 @@ export function refusalText(route: BashRoute, hasBwrap: boolean): string | null 
       : "There is no sandbox on this system, so every command needs the user's permission, and there is nobody here to ask."
   }
   if (route === 'refuse-not-allowed') return "Leaving the sandbox is not allowed (the user turned it off in Aria's settings): the command did not run. Do it inside the project, or tell the user what is needed."
-  if (route === 'refuse-no-bwrap') return 'The sandbox cannot run: bwrap is missing (sudo pacman -S bubblewrap). No commands run without it.'
   return null
 }
 

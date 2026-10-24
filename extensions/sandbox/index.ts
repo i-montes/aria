@@ -11,7 +11,6 @@
 // background_run (a command that never ends, run by Aria's dock) takes the same route as bash.
 //
 // PI_SANDBOX=0 turns it off.
-import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { createBashToolDefinition } from '@earendil-works/pi-coding-agent'
@@ -20,25 +19,14 @@ import { commandPreview, covers, coversPath, emptyGrants, grantDir, grantUnits }
 import { parseReview, REVIEW_TIMEOUT_MS, reviewLine, reviewRequest } from './review.ts'
 import { classifyWithJev } from '../lib/jev.ts'
 import { canAsk, sandboxCard } from './card.ts'
-import { backgroundLine, bashRoute, refusalText, SAID_NO } from './route.ts'
+import { boxWorks } from './probe.ts'
+import { backgroundLine, bashRoute, NO_BOX_NOTE, refusalText, SAID_NO } from './route.ts'
 import { startProcess } from '../background/client.ts'
 import { object, prepareRun, RUN_DESCRIPTION, RUN_PROPERTIES } from '../background/run.ts'
 import { ariaConfig } from '../lib/config.ts'
 import { handOver, takeOver } from '../lib/rotation.ts'
 import { secretEnv } from '../lib/secrets.ts'
 import { BLOCK_NOTE, containsSecret, isSecret, isWritable, looksBlocked, projectRoot, resolvePath, secretDirs, secretFiles, subagentProblem, wrapCommand, writableRoots, isAriaOwn } from './policy.ts'
-
-const hasBwrap = (() => {
-  try {
-    execFileSync('bwrap', ['--version'], { stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
-})()
-
-/** macOS: no bwrap exists, so every command asks (see route.ts). */
-const NO_BOX = !hasBwrap && process.platform === 'darwin'
 
 const textOf = (r: any) => (r?.content ?? []).map((c: any) => c?.text ?? '').join('\n')
 const withNote = (r: any) => ({ ...r, content: [...(r.content ?? []), { type: 'text', text: BLOCK_NOTE }] })
@@ -54,8 +42,12 @@ const GRANTS = 'sandbox.grants'
 
 const OUTSIDE = 'Only after a command failed because of the sandbox: run it outside it. The user is asked first, unless they already allowed it for this session.'
 
-export default function sandbox(pi: ExtensionAPI) {
+/** `hasBwrap`: the box works on this machine (the probe in probe.ts; tests pass it). When it does not (macOS, or Linux with
+ * no bwrap or one the system blocks) every command asks first, as on a Mac. */
+export default function sandbox(pi: ExtensionAPI, box?: unknown) {
   if (process.env.PI_SANDBOX === '0') return
+  const hasBwrap = typeof box === 'boolean' ? box : boxWorks()
+  const NO_BOX = !hasBwrap
   const cwd = process.cwd()
   // Each command gets the person's secrets it names ($ARIA_SECRET_X), read from the keyring as it starts.
   const plain = createBashToolDefinition(cwd, {
@@ -68,10 +60,8 @@ export default function sandbox(pi: ExtensionAPI) {
 
   const showStatus = (ctx: any) => {
     const allowed = [...grants.programs, ...(grants.exact.size ? [`${grants.exact.size} exact command(s)`] : []), ...[...grants.dirs].map(tilde)]
-    const status = !hasBwrap
-      ? NO_BOX
-        ? '⚠ no sandbox on this system: every command asks first'
-        : '⚠ sandbox without bwrap'
+    const status = NO_BOX
+      ? '⚠ no sandbox on this system: every command asks first'
       : grants.all
         ? '🔓 no sandbox (this session)'
         : allowed.length
@@ -108,7 +98,7 @@ export default function sandbox(pi: ExtensionAPI) {
     // In Aria's dock the question is the chat's permission card; in the terminal, the same text as always.
     const title =
       ctx.mode === 'rpc'
-        ? sandboxCard('sandbox', { summary: description, detail: commandPreview(command), jev: verdict.replace(/^Jev: /, '') }, options)
+        ? sandboxCard('sandbox', { summary: description, detail: NO_BOX ? `${NO_BOX_NOTE}\n${commandPreview(command)}` : commandPreview(command), jev: verdict.replace(/^Jev: /, '') }, options)
         : [NO_BOX ? 'Run this command? (no sandbox on this system)' : 'Run outside the sandbox?', description || '(no description given)', verdict, `› ${commandPreview(command)}`].join('\n')
     const pick = await ctx.ui.select(title, options, { signal: ctx.signal })
     if (pick === forUnits && g) g.units.forEach((u) => grants.programs.add(u))
@@ -122,7 +112,7 @@ export default function sandbox(pi: ExtensionAPI) {
   /** Where a command runs (bash and background_run alike). Allowed for the session: straight outside, without failing
    * inside first. Without bwrap every command asks. */
   const routeOf = (command: string, outsideSandbox: unknown, ctx: any) =>
-    bashRoute({ covered: covers(grants, command), outside: !!outsideSandbox, hasBwrap, canAsk: canAsk(ctx), platform: process.platform, mayLeave: ariaConfig().sandbox.askToLeave })
+    bashRoute({ covered: covers(grants, command), outside: !!outsideSandbox, hasBwrap, canAsk: canAsk(ctx), mayLeave: ariaConfig().sandbox.askToLeave })
 
   pi.registerTool({
     ...boxed,
@@ -242,7 +232,7 @@ export default function sandbox(pi: ExtensionAPI) {
           `Writable: ${writableRoots(here).join(', ')}`,
           `Hidden: ${[...secretDirs(), ...secretFiles()].join(', ')}`,
           `Allowed outside this session: ${allowed}`,
-          hasBwrap ? 'bwrap: ok' : NO_BOX ? 'bwrap: not available on this system (every command asks first)' : 'bwrap: not installed (commands are refused)',
+          hasBwrap ? 'bwrap: ok' : 'bwrap: not usable on this system (missing, or blocked from making a user namespace): every command asks first',
         ].join('\n'),
         'info',
       )
