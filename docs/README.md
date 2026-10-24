@@ -88,4 +88,10 @@ you will touch in [superpowers/specs](superpowers/specs/), and [What is pending]
 
 ## Words used here
 
-The terms (service, hub, session, Pi, expert, router, Jev, slice, Ponytail, connector, Engram) are defined in [the README](../README.md#words-used-here).
+- **Service**: the process that owns your sessions and their work; the dock and the terminal are windows onto it.
+- **Hub**: a service on a server with no window, reached over ssh. **Session**: one conversation, a tab in the dock.
+- **Pi**: the agent engine Aria runs, one per session. An **extension** adds behaviour inside it.
+- **Expert**: a persona the agent can delegate a task to. **Engram**: Aria's memory.
+- **Router**, **Jev**: the router reads each message; Jev is the small classifier it asks. Jev never chats.
+- **slice**: Aria's method for big work (plan, then build). **Ponytail**: a Pi package, a rule of the smallest change.
+- **Connector**, **MCP**: a service such as Notion that gives the agent extra tools, and the protocol it speaks.

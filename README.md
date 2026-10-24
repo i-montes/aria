@@ -1,194 +1,86 @@
+<div align="center">
+
 # Aria
 
-A personal assistant that works on your own computer, with your own files, in your language.
+**A personal assistant that lives on your desktop.**
+Press <kbd>Super</kbd> + <kbd>A</kbd> (<kbd>Option</kbd> + <kbd>Space</kbd> on a Mac) and it opens over whatever you are doing:
+it reads your files, runs commands, plans and delegates, inside limits you can see.
 
-Press **Super + A** (**Option + Space** on a Mac) and a dock opens over whatever you are doing. Ask for something and
-Aria reads, edits, runs commands, plans and delegates, inside limits you can see. Or type `aria` in a terminal and get
-the same sessions there. Or run Aria on a server and attach to it from another computer, so its background work goes on while your
-laptop is off.
+[![Latest release](https://img.shields.io/github/v/release/i-montes/aria?color=B9A8FF&label=release)](https://github.com/i-montes/aria/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-B9A8FF)](LICENSE)
+![Platforms: Omarchy, macOS, Linux server](https://img.shields.io/badge/runs_on-Omarchy_%C2%B7_macOS_%C2%B7_Linux_server-26262c)
 
-> **Status.** Aria runs on **Omarchy** (Hyprland 0.56 or newer with the Lua configuration) and **macOS 12+**, and its
-> service also runs on a headless Linux server. Nothing is published yet: no release binaries and no hosted installer,
-> so you build it and install it from a clone ([how](#install)). What changed in each version is in
-> [RELEASES.md](RELEASES.md); what is still missing, including known gaps, is in [docs/pending.md](docs/pending.md).
+<img src="docs/assets/aria-dock.png" alt="Aria's dock: session tabs, a conversation with its tool calls, the task list and the message box" width="380">
 
-## Three ways to use it
-
-| | What it is | Start with |
-|---|---|---|
-| **The dock** | A column on the right of the screen you open with a shortcut, with your sessions as tabs. Omarchy and macOS. | [The dock](docs/guide/dock.md) |
-| **The terminal** | `aria` in a terminal: the same sessions, as a list and a conversation. Leaving it stops nothing. | [Aria in a terminal](docs/guide/terminal.md) |
-| **A hub** | The service on an always-on Linux server, reached from a terminal over ssh. Background work, and scheduled tasks that only read, keep going while your computer is off. | [Running Aria on a server](docs/guide/hub.md) |
-
-All three are windows onto one thing: the **service**, which owns your sessions. Closing the dock or a terminal never
-stops work in progress.
-
-## Words used here
-
-- **Service**: the process that owns your sessions and their work; the dock and the terminal are windows onto it.
-- **Hub**: a service on a server with no window, reached over ssh. **Session**: one conversation, a tab in the dock.
-- **Pi**: the agent engine Aria runs, one per session. An **extension** adds behaviour inside it.
-- **Expert**: a persona the agent can delegate a task to. **Engram**: Aria's memory.
-- **Router**, **Jev**: the router reads each message; Jev is the small classifier it asks. Jev never chats.
-- **slice**: Aria's method for big work (plan, then build). **Ponytail**: a Pi package, a rule of the smallest change.
-- **Connector**, **MCP**: a service such as Notion that gives the agent extra tools, and the protocol it speaks.
-
-## What it does
-
-**Talk and work**
-- A chat backed by [Pi](https://github.com/earendil-works/pi), pinned to one version, working in your projects folder
-  (a session you open from a terminal works in the folder you opened it from). Each session is a tab with its own
-  engine, up to eight, and a tab in the background keeps working and tells you when it needs you.
-- Providers: OpenCode Go, Anthropic with an API key, or your Claude plan. The quota windows show where the provider
-  reports them (not for an API key).
-- In the dock, while it works, you can send a message that goes in at the next step, or one that waits for the run to
-  end.
-- A long conversation continues in a fresh session after a compaction; the dock lets you page back through the earlier
-  one, a terminal does not yet.
-  → [The agent](docs/guide/agent.md), [the dock](docs/guide/dock.md)
-
-**Plan and delegate**
-- A router that reads each message and, when you have an OpenCode Go or TypeSafe key, sets the effort, hints and an
-  expert for delegated work; experts for backend, frontend, research, review and security; subagents, which you can
-  watch in the dock.
-- **slice**, Aria's own method for big work: a round of questions, a plan of phases and tasks you approve, then a
-  phase built in the background, test first, never pushed. **Ponytail**, a rule the agent follows: the smallest complete
-  change.
-- Skills, including one that installs a skill or a connector from a link you paste.
-  → [The agent](docs/guide/agent.md)
-
-**Work without you watching**
-- Scheduled tasks you ask for in plain words ("every day at 7:30 give me my Notion tasks"), each in its own tab, with
-  only the permissions you gave it. A hub runs only read-only tasks: a task that may write needs an Approve that only the
-  dock offers.
-- Dev servers and long jobs in the background, owned by the service; a second writing subagent in the same repository
-  gets its own git worktree.
-- Desktop notifications only when nobody is looking (none on a hub); a watchdog for a stuck run; updates that wait
-  until the dock is hidden and nothing is running.
-  → [Automation](docs/guide/automation.md)
-
-**Stay safe**
-- Every command runs in a sandbox (bubblewrap on Linux; macOS has none yet, and neither does a Linux machine where
-  bubblewrap fails, so there every command asks first), and a card asks before anything leaves it.
-- Each connector is read-only, ask-first or allowed.
-- Your keys live in the system keyring where there is one (not on a hub), and Aria keeps your secrets out of what the
-  model reads, within limits the guide spells out. Before each turn it keeps a copy of the session's folder (where it
-  can); undo, for files and conversation, is in the terminal and not in the projects folder, which is where the dock's
-  sessions work. To let Aria tidy one project with a way back, follow
-  [the recipe](docs/guide/safety.md#let-aria-work-on-one-project-safely): commit, then open the session from inside it.
-- [What leaves your computer](docs/guide/safety.md#what-leaves-your-computer): the calls Aria makes, to whom and when.
-  → [Safety](docs/guide/safety.md)
-
-**Connect**
-- Notion and Tavily, set up in the dock; the MCP servers your other apps already have, imported; files attached to a
-  message (dock only); memory with its own Engram; a headless browser the agents use to check the pages they build
-  (not installed on a hub unless you ask).
-  → [Integrations](docs/guide/integrations.md)
-
-**See and hear**
-- In the dock only, not in a terminal or on a hub: dictation with Whisper on your computer, so your voice never leaves
-  it (the text you send does go to your model provider: see
-  [what leaves your computer](docs/guide/safety.md#what-leaves-your-computer)); Aria's face in the Omarchy bar or beside
-  the Mac's notch; a live trace of every step of a turn (`/debug`).
-  → [Voice, face and trace](docs/guide/voice-and-face.md)
+</div>
 
 ## Install
 
-You need Node 22.19 or newer and, to build, Rust, plus the libraries listed in
-[development](docs/development.md#build). Build, then install the binary you built:
-
 ```sh
-cargo build --release
-sh install/install.sh --local target/release/aria
+curl -fsSL https://github.com/i-montes/aria/releases/latest/download/install.sh | sh
 ```
 
-The installer puts the `aria` binary in `~/.local/bin`, creates `~/.aria/`, installs the pinned engine, Engram (the
-memory) and the agent browser (a large download), and a login service (a systemd user unit on Omarchy, a LaunchAgent on
-macOS). On Omarchy it asks for `sudo` only if system libraries are missing, and it never edits `~/.config/hypr/`: Aria
-registers its shortcut with Hyprland itself. Add `--dry-run` to see what it would do without changing anything. Run it
-again to update; an update waits until the dock is hidden and nothing is running.
-[Getting started](docs/guide/getting-started.md) has the details, the first-run setup and how to uninstall.
+Then press <kbd>Super</kbd> + <kbd>A</kbd> (<kbd>Option</kbd> + <kbd>Space</kbd> on a Mac) and the setup walks you through connecting a provider.
 
-For a server (Linux with systemd; Aria must already be set up on your computer, because `hub init` sends your settings
-and keys), build the headless binary, make a key for Aria alone and let `aria hub init` set the server up from the
-checkout. It prints its plan and asks before it changes anything:
+| System | You need |
+|---|---|
+| **Omarchy** | Hyprland 0.56 or newer with the Lua configuration, and Node 22.19 or newer |
+| **macOS** | macOS 12 or newer, and Node 22.19 or newer. A release may not include the Mac binary; if it does not, [build it from a clone](docs/guide/getting-started.md#from-a-clone) |
+| **Linux server** | Not this command: a server with no window is set up from a clone of the repository, see [running Aria on a server](docs/guide/hub.md) |
 
-```sh
-sh tools/build-headless.sh
-ssh-keygen -t ed25519 -f ~/.ssh/aria-hub
-aria hub init ana@hub.example --client-key ~/.ssh/aria-hub.pub
-aria connect aria-hub    # after you add the ssh entry that hub init prints
+It never edits your Hyprland configuration. It asks for `sudo` only to install missing system packages on Omarchy, and never on a Mac. An update normally waits until the dock is hidden and nothing is running.
+A specific version, a build of your own, updating and uninstalling are in [getting started](docs/guide/getting-started.md).
+
+## Three ways to use it
+
+```mermaid
+flowchart LR
+    dock["Dock<br/>Super + A"] --> svc
+    term["Terminal<br/>aria"] --> svc
+    svc[("The service<br/>your sessions, agents,<br/>schedules and jobs")]
+    remote["Terminal on another computer<br/>aria connect"] -- ssh --> hub[("A hub<br/>the same service<br/>on a server")]
 ```
 
-`build-headless.sh` needs `rustup` and `mise` (it asks `mise` for zig) installed on your computer. Give the key a
-passphrase and keep it in `ssh-agent`. On Ubuntu 24.04 the server's sandbox may be blocked by AppArmor: until an
-administrator fixes that, `hub init` skips the client key and exits 1
-([the two fixes](docs/guide/hub.md#set-up-a-hub)). Nothing of Aria's listens on a port other computers can reach (a
-sign-in listens briefly on the server's own loopback address); terminals come in through ssh.
+| Way in | What it is |
+|---|---|
+| **The dock** | A column on the right of your screen, with your sessions as tabs. [Guide](docs/guide/dock.md) |
+| **The terminal** | `aria` shows the same sessions as a list and a conversation. Closing it stops nothing. [Guide](docs/guide/terminal.md) |
+| **A hub** | The service on an always-on server. Connect from another computer over ssh; background work and read-only scheduled tasks go on while your laptop is off. [Guide](docs/guide/hub.md) |
 
-The dedicated key and the ssh entry are part of it: read [the hub guide](docs/guide/hub.md) before you run it, in
-particular what a stolen client key could do and why the server's ssh should be reachable only over a private network.
-To connect from a second computer, see [Connect from another computer](docs/guide/hub.md#connect-from-another-computer).
+The dock and the terminal are windows onto one **service** that owns your sessions. Closing either never stops work in progress.
+
+## What you get
+
+| | What it does |
+|---|---|
+| **Chat** | Up to eight sessions as tabs; the ones you are not looking at keep working. Models from OpenCode Go, Anthropic with an API key, or your Claude plan. [The agent](docs/guide/agent.md) |
+| **Plan and delegate** | Experts for backend, frontend, research, review and security, subagents you can watch, and **slice** for big work: a few questions, a plan you approve, then a phase built test first. [The agent](docs/guide/agent.md#slice-plan-first-then-build) |
+| **Work without you** | Scheduled tasks you ask for in plain words, dev servers and long jobs in the background, notifications only when nobody is looking. [Automation](docs/guide/automation.md) |
+| **Stay in control** | On Linux commands run in a sandbox (a Mac has none yet, so each command asks first), and a card asks before one leaves it. Keys are kept in the system keyring, and the model sees only the names of your secrets. [Safety](docs/guide/safety.md) |
+| **Connect** | Notion, Tavily, the MCP servers your other apps already have, attachments, memory, and a headless browser to check the pages it builds. [Integrations](docs/guide/integrations.md) |
+| **See and hear** | Dictation with Whisper on your own computer, a face that shows what Aria is doing, and a live trace of each turn (`/debug`). [Voice, face and trace](docs/guide/voice-and-face.md) |
 
 ## Documentation
 
-| | |
-|---|---|
-| **Guides** | |
-| [Getting started](docs/guide/getting-started.md) | Install, first run, a first conversation, updating, uninstalling |
-| [The dock](docs/guide/dock.md) | The window: opening it, tabs, the composer, panels, settings, keys |
-| [Aria in a terminal](docs/guide/terminal.md) | Sessions, keys, commands, undo, context, the footer |
-| [Running Aria on a server](docs/guide/hub.md) | Setup, connecting, the security model, limits, troubleshooting |
-| [The agent](docs/guide/agent.md) | Providers, models, the router, experts, subagents, slice, skills |
-| [Automation](docs/guide/automation.md) | Scheduled tasks, background work, notifications, updates |
-| [Safety](docs/guide/safety.md) | The sandbox, connector access, secrets and the keyring, undo |
-| [Integrations](docs/guide/integrations.md) | Notion, Tavily, MCP servers, attachments, memory, the browser check |
-| [Voice, face and trace](docs/guide/voice-and-face.md) | Dictation, Aria's face, `/debug` |
-| **Reference** | |
-| [Commands and keys](docs/reference/commands.md) | Every `aria` command, slash command and shortcut |
-| [Data and paths](docs/reference/data-and-paths.md) | Where everything lives, what is secret, what is safe to delete |
-| [Settings](docs/settings.md) | Every setting, its default and its meaning |
-| **For contributors** | |
-| [Development](docs/development.md) | Build, run, test, layout, releases, contributing a provider or a platform |
-| [Architecture](docs/architecture.md) | How the pieces fit |
-| [What is pending](docs/pending.md) | What is missing and what is known to be wrong |
-| [Design documents](docs/superpowers/specs/) | One per feature: the decisions and why |
+| Use it | Look it up | Build it |
+|---|---|---|
+| [Getting started](docs/guide/getting-started.md) | [Commands and keys](docs/reference/commands.md) | [Development](docs/development.md) |
+| [The dock](docs/guide/dock.md) | [Settings](docs/settings.md) | [Architecture](docs/architecture.md) |
+| [Aria in a terminal](docs/guide/terminal.md) | [Data and paths](docs/reference/data-and-paths.md) | [Adding a provider](docs/adding-a-provider.md) |
+| [Running Aria on a server](docs/guide/hub.md) | [What is pending](docs/pending.md) | [Design documents](docs/superpowers/specs/) |
 
-The full index, with a reading order for each kind of reader, is [docs/README.md](docs/README.md).
+The whole index, by question, is [docs/README.md](docs/README.md). What changed in each version is in [RELEASES.md](RELEASES.md).
 
-## Repository layout
-
-```
-crates/aria-core/      what does not depend on the system: paths, settings, credentials, providers, keyring,
-                       sign-ins, the messages between the dock and its page
-crates/aria-engine/    Pi's RPC protocol and the supervised Pi child process
-crates/aria-hyprland/  the hotkey and the focused monitor on Omarchy
-crates/aria-mac/       the hotkey, the screen and the notch wing on macOS
-crates/aria/           the `aria` binary: the service, the dock window, the terminal client, the hub commands
-extensions/            Aria's Pi extensions (see extensions/README.md)
-agent-files/           the persona, the experts and Aria's own skills
-ui/                    the dock's web page: plain HTML, CSS and JS modules, embedded in the binary
-install/               the installer and the service units
-tools/                 release, checks, the UI sandbox, the parity checks, the hub's build and acceptance scripts
-design/                the visual reference and its components
-docs/                  guides, reference, architecture, pending work, and the design documents
-```
-
-## Development
+## Build and contribute
 
 ```sh
-cargo test --workspace              # Rust: the five crates
-bun test ui                         # the dock page's logic and strings
-bun test extensions                 # Aria's Pi extensions
-sh tools/parity/suites.sh           # the offline suites (not the pre-push hook's test: see development)
-sh tools/check-macos.sh             # type-checks the macOS build from Linux
+cargo build --release
+sh install/install.sh --local target/release/aria   # install the binary you built
+cargo test --workspace && bun test ui && bun test extensions
 ```
 
-[Development](docs/development.md) has the whole test map, how to run a build without touching your own data, the
-project's rules (everything in English, both platforms stay working, conventional commits decide the version) and how a
-release is made. A provider is one module ([adding a provider](docs/adding-a-provider.md)); a platform needs a global
-hotkey, the focused monitor and a floating panel that takes the keyboard.
+[Development](docs/development.md) has the build libraries, the whole test map and the project's rules: everything in English, both platforms stay working, and conventional commits decide the version.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE)
