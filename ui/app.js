@@ -6,6 +6,7 @@ import { chatTexts } from './chat/texts.js'
 import { createChatView } from './chat/view.js'
 import { createOnboarding } from './onboarding/view.js'
 import { keyName } from './onboarding/shortcut.js'
+import { isAgentsKey, isDictateKey } from './keys.js'
 import { QUIT_WINDOW_MS, isQuitKey, quitPress } from './quit.js'
 
 let i18n = createI18n({})
@@ -272,12 +273,12 @@ document.addEventListener('keydown', (event) => {
     return
   }
   // Alt+D: dictate, or stop and write it (by the key's place: Option+D types a character on a Mac).
-  if (event.altKey && event.code === 'KeyD' && state.mode === 'chat') {
+  if (isDictateKey(event) && state.mode === 'chat') {
     event.preventDefault()
     return chat.toggleDictation()
   }
-  // Alt+A: the subagents view and back (the design's shortcut).
-  if (event.altKey && event.key.toLowerCase() === 'a' && state.mode === 'chat') {
+  // Alt+A: the subagents view and back (the design's shortcut; by the key's place too).
+  if (isAgentsKey(event) && state.mode === 'chat') {
     event.preventDefault()
     return chat.toggleAgents()
   }

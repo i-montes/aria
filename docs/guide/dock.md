@@ -189,7 +189,7 @@ On Omarchy it is a critical notification that stays until you dismiss it or look
 | `@` | Opens the file picker |
 | `/` | Opens the command picker (at the start of the box) |
 | `↑` `↓`, `Tab`, `Enter` | Move through a picker; `Tab` or `Enter` picks |
-| `Alt+A` | The subagents and background list, and back |
+| `Alt+A` (`Option+A`) | The subagents and background list, and back |
 | `Alt+D` (`Option+D`) | Starts or stops dictation |
 | `Enter` / `Esc` in a tab title | Saves / cancels a rename |
 | `↑` `↓` | On the setup and settings screens, move between controls |
@@ -200,7 +200,6 @@ Every key and command, by surface, is in [the command reference](../reference/co
 ## Limits
 
 - The dock has no undo or rewind of an instruction, and no `/context` or checks footer; the terminal has them. See [Aria in the terminal](terminal.md).
-- `Alt+A` matches the letter the key types. On a Mac `Option+A` types `å` on a US layout, so the shortcut may not fire there.
 - On macOS the shortcut's fallbacks and retries are tested on Linux and type-checked there, and had not been run on a Mac when this was written.
 - The memory panel is empty until it is fed. A subagent's session has no message box. On macOS the dock takes the whole panel's clicks, and a notification's click does not open it. See [what is pending](../pending.md).
 

@@ -100,8 +100,6 @@ Aria decides what goes to the background; it does not ask. A command that does n
 - **The Background list**, `Alt+A` (again to go back). It shows running and queued jobs, grouped by session when several have work, then the last 20 finished ones with how each ended. A process has **Open** (when it printed a local address), **Output** (its last lines, refreshed while open) and **Stop**. A subagent has **Session** (its steps) or **Result** (its final answer once done) and **Stop**.
 - **Notes in the conversation.** When a job ends, fails or is cut, a one-line note appears in the thread. If it ended by itself, Aria also starts a turn to tell you what happened and, for a subagent, to summarise its result.
 
-On macOS, `Option+A` types a character, and the dock tests the typed letter, so the shortcut may not work there; click a pill or the `+N` pill instead.
-
 ### In a terminal
 
 The terminal has no pills, no list and no stop button for background work. Aria still knows what is running and tells you when a job ends. Ask it in the conversation ("what is running in the background?", "stop the dev server"); it can list jobs, read a process's output and stop a job.

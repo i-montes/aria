@@ -96,7 +96,7 @@ On macOS the dock is an `NSPanel` (borderless, nonactivating, status level, all 
 
 `ui/` is plain HTML, CSS and ES modules, embedded in the binary and served as `aria://app/…`.
 
-- `app.js` — the bridge, the corner notice, the problem banner, keyboard navigation. `quit.js` is the macOS Cmd+Q rule (a second press within two seconds quits).
+- `app.js` — the bridge, the corner notice, the problem banner, keyboard navigation. `quit.js` is the macOS Cmd+Q rule (a second press within two seconds quits); `keys.js` reads Alt+A and Alt+D by the key's place, so they work with the characters Option types on a Mac.
 - `onboarding/steps.js` — the onboarding as data and pure functions; **the working state is the settings object itself**. `onboarding/shortcut.js` is the page's copy of the shortcut rules in `aria-core/src/shortcut.rs` (change both together).
 - `onboarding/components.js` — form widgets that return HTML (every dynamic value escaped).
 - `onboarding/view.js` — the screens and one delegated event handler: the first-run setup (welcome, steps, review) and, once it is done, the settings screen, which groups the same steps by topic (an overview of sections, one page per section, a bar to save or discard).

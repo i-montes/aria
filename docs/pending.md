@@ -23,7 +23,6 @@ Panels and cards:
 - The `@` picker never lists folders: `crates/aria-core/src/files.rs` returns files only, while `ui/chat/parts/files.js` and
   `insertFile` in `ui/chat/view.js` are built for a trailing-slash folder entry.
 - Clicking the "needs your answer" desktop notification opens the dock on the active tab, not on the waiting one.
-- `Alt+A` matches `event.key` (`ui/app.js`); on a Mac `Option+A` types `å`, so it may not fire (`Alt+D` uses `event.code`).
 - The "update is waiting" notice (`Sessions::tell_update_waits`) is shown in the conversation of each session that has
   background work, but in English only, and it reaches only the tabs whose Pi is running.
 - A session's images (screenshots the model read) are not sent to the page, which never shows them: a session full of
@@ -350,7 +349,7 @@ The dock, setup, chat, session tabs and installer run on macOS (`Option + Space`
   the app below.
 - Desktop notifications come from `osascript`; clicking one does not open the dock (an unbundled app has no notification
   action). The chat still posts one when a prompt is hidden.
-- There is no sandbox (every command asks) and no checks after edits; `Alt+A` may not fire (see the dock).
+- There is no sandbox (every command asks) and no checks after edits.
 - Checked on the Mac (2026-10-21): the dock runs, `cargo test --workspace` passes, and so does
   `install/install-mac.test.sh`. Still open:
   - A missing page file is served as an empty 200 (`dock/mac.rs`, logged as "missing page asset"); GTK answers NotFound.
