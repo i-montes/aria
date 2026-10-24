@@ -292,6 +292,30 @@ fn the_sandbox_probe_does_what_the_real_call_does_so_a_server_that_cannot_mount_
 }
 
 #[test]
+fn the_keyring_is_announced_before_it_is_read_and_projects_without_settings_is_said_to_do_nothing() {
+    let world = World::new();
+    owner_has_all_files(&world);
+    let output = world.init_yes(&[], &[]);
+    let out = text(&output.stdout);
+    let said = "reading your credentials from this computer's keyring; nothing is sent yet";
+    assert!(out.contains(said), "{out}");
+    assert!(out.find(said).unwrap() < out.find("Aria will do this, in order").unwrap(), "before the plan: {out}");
+    // A rerun that keeps the hub's settings: --projects does nothing, and the plan says so instead of naming a folder.
+    let world = World::new();
+    owner_has_all_files(&world);
+    seed_hub_files(&world);
+    let output = world.init_yes(&["--projects", "/srv/work"], &[("ARIA_FAKE_SSH_ACTIVE", "1")]);
+    let out = text(&output.stdout);
+    assert!(out.contains("--projects has no effect without --settings"), "{out}");
+    assert!(!out.contains("projects folder will be"), "{out}");
+    assert_eq!(last_bundle(&world), Vec::<String>::new());
+    let with = world.init_yes(&["--projects", "/srv/work", "--settings"], &[("ARIA_FAKE_SSH_ACTIVE", "1")]);
+    let out = text(&with.stdout);
+    assert!(out.contains("sandbox projects folder will be /srv/work"), "{out}");
+    assert!(!out.contains("no effect"), "{out}");
+}
+
+#[test]
 fn a_client_key_is_installed_restricted_and_once() {
     let world = World::new();
     let key_file = world.path("laptop.pub");
@@ -547,6 +571,39 @@ fn a_key_already_there_without_the_restriction_is_reported_not_duplicated() {
         assert!(!out.contains("The hub is ready"), "{out}");
         assert!(out.contains("stays open"), "the public sshd is still warned of: {out}");
     }
+}
+
+#[test]
+fn a_key_there_with_another_forced_command_is_reported_like_an_unrestricted_one() {
+    let world = World::new();
+    let home = world.path("hub/home").display().to_string();
+    for existing in [
+        format!("restrict,command=\"sh\" {KEY}"),
+        format!("restrict,command=\"{home}/.local/bin/aria client-stdio --extra\" {KEY}"),
+        format!("restrict,command=\"/home/other/.local/bin/aria client-stdio\" {KEY}"),
+        format!("restrict,command=\"{home}/.local/bin/aria client-stdio\"{KEY}"),
+    ] {
+        seed_authorized_keys(&world, &format!("{existing}\n"));
+        let output = world.init_yes(&["--client-key", &key_file(&world)], &[]);
+        let (out, err) = (text(&output.stdout), text(&output.stderr));
+        assert_eq!(output.status.code(), Some(1), "{existing}: {out}{err}");
+        assert!(err.contains("step 6") && err.contains("different command"), "{existing}: {err}");
+        assert!(!err.contains("WITHOUT the restriction"), "the message says the command differs: {err}");
+        assert!(err.contains("restrict,command=\"/home/ana/.local/bin/aria client-stdio\""), "{err}");
+        assert_eq!(world.authorized_keys(), format!("{existing}\n"), "the file is not touched");
+        assert!(!out.contains("restricted client key (it can only run"), "no claim of protection: {out}");
+    }
+}
+
+#[test]
+fn the_owners_own_options_after_the_forced_command_keep_the_line_allowed() {
+    let world = World::new();
+    let line = format!("{},from=\"203.0.113.0/24\" {KEY}", restricted(&world).trim_end_matches(&format!(" {KEY}")));
+    seed_authorized_keys(&world, &format!("{line}\n"));
+    let output = world.init_yes(&["--client-key", &key_file(&world)], &[]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert!(text(&output.stdout).contains("already allowed"), "{}", text(&output.stdout));
+    assert_eq!(world.authorized_keys(), format!("{line}\n"));
 }
 
 #[test]

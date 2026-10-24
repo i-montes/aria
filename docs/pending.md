@@ -118,10 +118,9 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
 - **A lost connection blocks the terminal**: reconnecting over ssh waits up to 60 s for the hub's hello with the screen
   frozen, and the note shown when the connection is lost is the local dock's ("Aria's dock stopped. Run `aria` again to
   start it."), not one that names the hub or says to run `aria connect` again.
-- **`hub init`'s plan line** says the hub's projects folder "will be <dir>" even when `settings.json` is not sent (then
-  `--projects` has no effect). It audits only the key it adds, not the existing `authorized_keys` lines as the design
-  says, and reads `has_tailscale` without using it (`hub_admin.rs`). `hub init` does not create the hub's projects folder;
-  the service makes it when a session starts (`working_folder` in `chat.rs`).
+- **`hub init` audits only the key it adds**, not the existing `authorized_keys` lines as the design says, and reads
+  `has_tailscale` without using it (`hub_admin.rs`). It does not create the hub's projects folder; the service makes it
+  when a session starts (`working_folder` in `chat.rs`).
 - **Smaller things worth doing**, from the review of the first milestone:
   - `aria client-stdio`: replies still in flight are lost when the client's stdin reaches EOF.
   - `aria serve`'s loop wakes about 62 times a second when idle (it should sleep until something happens).

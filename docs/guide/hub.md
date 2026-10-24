@@ -101,7 +101,7 @@ A successful run ends with `The hub is ready. Connect from this computer with: a
 | Flag | What it does |
 |---|---|
 | `--binary <path>` | The headless binary to install. Default: `target/aarch64-unknown-linux-gnu/release/aria` in the checkout. Use it for an `x86_64` server. |
-| `--projects <dir>` | The folder where the hub's sessions work. Default: `Projects` in the server's home. It is written into the `settings.json` that is sent, so it has an effect only when that file is sent. `hub init` does not create it: the service makes it (with its parents) when a session starts, if the hub's user may. |
+| `--projects <dir>` | The folder where the hub's sessions work. Default: `Projects` in the server's home. It is written into the `settings.json` that is sent, so it has an effect only when that file is sent: the plan names the folder only then, and otherwise says `--projects has no effect without --settings`. `hub init` does not create it: the service makes it (with its parents) when a session starts, if the hub's user may. |
 | `--client-key <pubkey file>` | The public key to allow, restricted to Aria's bridge. The file holds one bare public key line (`ssh-ed25519 AAAA... comment`), with no options and no quotes. |
 | `--settings` | Replace the server's `settings.json` with this computer's. |
 | `--credentials` | Replace the server's `auth.json`, `mcp.json` and `mcp-auth.json` with this computer's. |
@@ -112,7 +112,7 @@ A successful run ends with `The hub is ready. Connect from this computer with: a
 
 - It stops before changing anything when the binary is not a Linux binary for the server's architecture, when the checkout is not where it runs, and when the installer would need `xz` that the server lacks (it prints `sudo apt-get install -y xz-utils` for you to run).
 - It does not install the client key on a server whose sandbox does not work, unless you pass `--allow-no-sandbox`.
-- It does not restrict a key that is already in `authorized_keys` without the restriction. Use a dedicated key, or edit that line yourself.
+- It does not restrict a key that is already in `authorized_keys` without the restriction, or change one whose line forces a different command. Use a dedicated key, or edit that line yourself.
 - It never edits `sshd_config`, the firewall or Tailscale, and never creates a user.
 - It never runs the fixes it prints (a `sudo` command, an AppArmor change).
 
@@ -146,7 +146,7 @@ The client key is what stands between a stranger and your hub's sessions, and a 
 
 - **Give it a passphrase and keep it in `ssh-agent`** (`ssh-add ~/.ssh/aria-hub`), so that `aria connect` does not have to ask: a passphrase prompt can run into its 60-second limit. An empty passphrase (`-N ''`) trades the protection away: anyone who copies the file (a backup, a stolen laptop, a program running as you) has a working key and nothing more to guess. All it buys you is that nothing ever asks.
 - **Or use a hardware key** (`ssh-keygen -t ed25519-sk`), which keeps the private half on the device. `hub init --client-key` accepts those key types; nothing in the repository tries one through `aria connect`, so check that it connects before you rely on it.
-- **Tighten the line by hand.** `hub init` writes `restrict,command="…/aria client-stdio" <key>` into `authorized_keys` and never touches it again; Aria does not manage it. You can add other `authorized_keys` options, for example `from="…"` to name the addresses the key may be used from, in the same comma-separated list: `restrict,command="…/aria client-stdio",from="203.0.113.0/24" ssh-ed25519 AAAA...`. Put them after the `command=` option, never before it: `hub init` recognises its own line by `restrict,command=` at the start, and when you run `hub init --client-key` again, a line that starts with anything else (`from="…",restrict,…` for one) is reported as unrestricted (exit 1, the key is not touched). A `from=` list must name the address sshd sees, which over a VPN is the VPN's.
+- **Tighten the line by hand.** `hub init` writes `restrict,command="…/aria client-stdio" <key>` into `authorized_keys` and never touches it again; Aria does not manage it. You can add other `authorized_keys` options, for example `from="…"` to name the addresses the key may be used from, in the same comma-separated list: `restrict,command="…/aria client-stdio",from="203.0.113.0/24" ssh-ed25519 AAAA...`. Put them after the `command=` option, never before it: `hub init` recognises its own line by `restrict,command="<the hub's home>/.local/bin/aria client-stdio"` at the start, followed by a space or a comma, and when you run `hub init --client-key` again, a line that starts with anything else (`from="…",restrict,…` for one) is reported as unrestricted, and one that forces another command is reported as a different command (both exit 1, the key is not touched). A `from=` list must name the address sshd sees, which over a VPN is the VPN's.
 - **Keep sshd reachable only over a private network** ([the public ssh port](#the-public-ssh-port)): a stolen key then works only for someone who is on that network.
 
 ## Connect to the hub
@@ -214,7 +214,7 @@ The hub runs scheduled tasks while your computers are off, in the same way the d
 
 ## Settings and credentials on the hub
 
-`hub init` writes `settings.json`, `auth.json`, `mcp.json` and `mcp-auth.json` into the hub's `~/.aria` as plain files, mode 600. The first copy of a file it replaces is kept once as `<name>.bak`. Keys that live in your computer's keyring are read out and written as their values, because the hub runs with the keyring off (`credentials.keyring` is false in the settings it sends). Secrets you saved by name (the ones a command reads as `ARIA_SECRET_<NAME>`) are not part of the bundle.
+`hub init` writes `settings.json`, `auth.json`, `mcp.json` and `mcp-auth.json` into the hub's `~/.aria` as plain files, mode 600. The first copy of a file it replaces is kept once as `<name>.bak`. Keys that live in your computer's keyring are read out (`hub init` prints `reading your credentials from this computer's keyring; nothing is sent yet` first, since a locked keyring may ask you to unlock it) and written as their values, because the hub runs with the keyring off (`credentials.keyring` is false in the settings it sends). Secrets you saved by name (the ones a command reads as `ARIA_SECRET_<NAME>`) are not part of the bundle.
 
 Running `hub init` again keeps what the hub already has. Its own Pi may have refreshed a token, and a copy from your computer would overwrite it. Add `--settings` or `--credentials` to replace them on purpose. If a sign-in stops working after you copy it to a second place, sign in again with `/signin` on the hub.
 
@@ -346,6 +346,7 @@ The unit restarts the service five seconds after a failure. `aria quit` exits 0,
 | `warning: the sandbox cannot start on the hub ...` | See [The sandbox on a server](#the-sandbox-on-a-server). |
 | `step 6 (key) skipped: the sandbox does not work on the hub ...` (exit 1) | Fix the sandbox and run it again, or pass `--allow-no-sandbox`. |
 | `step 6 (key) failed: that key is already in authorized_keys WITHOUT the restriction ...` (exit 1) | Use a dedicated key, or edit that line to start with the `restrict,command=` text it shows. |
+| `step 6 (key) failed: that key is already in authorized_keys with a different command than Aria's bridge ...` (exit 1) | The line forces another command (or another path to `aria`). Edit it to start with the `restrict,command=` text it shows, or remove it and run `hub init` again. |
 | `warning: sshd on <host> listens on port N on a public address ...` | See [The public ssh port](#the-public-ssh-port). |
 | `warning: could not check whether sshd is open to the internet ...` | `ss` is missing or failed on the hub. Check it yourself. |
 | `sshd_config: password logins look on; set PasswordAuthentication no.` | Turn password logins off in sshd, as the administrator. |

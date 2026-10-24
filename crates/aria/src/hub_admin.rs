@@ -341,8 +341,11 @@ fn systemctl_hint(user: &str) -> String {
 
 /// Reads one validated key line from stdin and adds it to `authorized_keys` as the restricted line, once. sshd uses the
 /// first line a key matches, so the blob is looked for in the lines that are not comments: none holds it, the line is
-/// added (after a newline, when the file lacks one at its end); the first one starts with `restrict,command=`, it is
-/// already allowed; any other is the same key with no restriction, which is reported (exit 3) and left for its owner.
+/// added (after a newline, when the file lacks one at its end); the first one starts with exactly
+/// `restrict,command="$HOME/.local/bin/aria client-stdio"` followed by a space or a comma (the owner's own options, such as
+/// `from="…"`, come after the command), it is already allowed; one that starts with `restrict,command=`
+/// and forces another command is reported as such, and any other is the same key with no restriction (both exit 3, and
+/// are left for their owner).
 /// Nothing is interpolated: the key arrives on stdin and the home is the remote shell's own `$HOME`. Plain POSIX, with
 /// no single quote in it.
 const REMOTE_ALLOW_KEY: &str = concat!(
@@ -352,11 +355,13 @@ const REMOTE_ALLOW_KEY: &str = concat!(
     r#"&& first=$(grep -v "^[[:space:]]*#" "$f" | grep -F " $blob" | head -n 1) "#,
     r#"&& case "$first" in "") if [ -s "$f" ] && [ -n "$(tail -c 1 "$f")" ]; then echo >> "$f"; fi; "#,
     r#"printf "restrict,command=\"%s/.local/bin/aria client-stdio\" %s\n" "$HOME" "$key" >> "$f" && echo "allowed" ;; "#,
-    r#""restrict,command="*) echo "already allowed" ;; "#,
+    r#""restrict,command=\"$HOME/.local/bin/aria client-stdio\" "*|"restrict,command=\"$HOME/.local/bin/aria client-stdio\","*) "#,
+    r#"echo "already allowed" ;; "#,
+    r#""restrict,command="*) echo "different command"; exit 3 ;; "#,
     r#"*) echo "unrestricted"; exit 3 ;; esac"#,
 );
 
-/// The exit status `REMOTE_ALLOW_KEY` ends with when the key is there without the restriction.
+/// The exit status `REMOTE_ALLOW_KEY` ends with when the key is there without the restriction, or with another command.
 const KEY_UNRESTRICTED: i32 = 3;
 
 /// The key types a bare public key line starts with.
@@ -704,8 +709,14 @@ pub fn plan(probe: &Probe, args: &InitArgs) -> Vec<String> {
              and its Chrome, a large download, stay out of a server unless you run install.sh with --with-browser on the hub)"
         ),
         format!(
-            "3. Send your settings and credentials (the ones you have) as one line on the stdin of {REMOTE_IMPORT}; the \
-             hub's sandbox projects folder will be {projects}. {}",
+            "3. Send your settings and credentials (the ones you have) as one line on the stdin of {REMOTE_IMPORT}. {}{}",
+            if files_to_send(probe, args).contains(&"settings.json") {
+                format!("The hub's sandbox projects folder will be {projects}. ")
+            } else if args.projects.is_some() {
+                "--projects has no effect without --settings: the hub keeps its own settings.json. ".to_string()
+            } else {
+                String::new()
+            },
             send_detail(probe, args)
         ),
         if probe.service_active {
@@ -992,6 +1003,8 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
         node_version,
     };
 
+    // The export reads this computer's keyring, which a locked one may stop to ask about: say so first.
+    println!("reading your credentials from this computer's keyring; nothing is sent yet");
     let mut bundle = export_bundle(&AriaPaths::from_env(), &probe.home, args.projects.as_deref())
         .map_err(|why| failed(format!("cannot build the settings to send: {why}")))?;
     // What the hub already has is its own, unless a flag says to replace it.
@@ -1175,12 +1188,21 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
                     }
                 }
                 Ok(output) if output.status.code() == Some(KEY_UNRESTRICTED) => {
-                    eprintln!(
-                        "aria hub init: step 6 (key) failed: that key is already in authorized_keys WITHOUT the \
-                         restriction: use a dedicated key, not your login key (see the README), or edit that line \
-                         yourself to start with `{} `",
-                        authorized_line(&probe.home, "").trim_end()
-                    );
+                    if first_line(&output.stdout) == "different command" {
+                        eprintln!(
+                            "aria hub init: step 6 (key) failed: that key is already in authorized_keys with a different \
+                             command than Aria's bridge: edit that line yourself to start with `{} ` (or remove it \
+                             and run init again)",
+                            authorized_line(&probe.home, "").trim_end()
+                        );
+                    } else {
+                        eprintln!(
+                            "aria hub init: step 6 (key) failed: that key is already in authorized_keys WITHOUT the \
+                             restriction: use a dedicated key, not your login key (see the README), or edit that line \
+                             yourself to start with `{} `",
+                            authorized_line(&probe.home, "").trim_end()
+                        );
+                    }
                     code = 1;
                 }
                 Ok(output) => {
@@ -1971,6 +1993,32 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
                 && numbered[5].contains("--allow-no-sandbox"),
             "the plan says the key waits for a working sandbox: {text}"
         );
+    }
+
+    #[test]
+    fn the_plan_names_the_projects_folder_only_when_settings_are_sent() {
+        // A first init sends settings.json: the folder is named.
+        let text = plan(&probe(), &init_args()).join("\n");
+        assert!(text.contains("sandbox projects folder will be /home/ana/Projects"), "{text}");
+        let mut chosen = init_args();
+        chosen.projects = Some("/srv/work".into());
+        let text = plan(&probe(), &chosen).join("\n");
+        assert!(text.contains("sandbox projects folder will be /srv/work"), "{text}");
+        assert!(!text.contains("no effect"), "{text}");
+        // A rerun that keeps the hub's settings.json does not claim a folder.
+        let mut host = probe();
+        host.existing = BUNDLE_FILES.iter().map(|name| name.to_string()).collect();
+        let text = plan(&host, &init_args()).join("\n");
+        assert!(!text.contains("projects folder will be"), "{text}");
+        assert!(!text.contains("no effect"), "no --projects given, nothing to say: {text}");
+        // With --projects and no --settings it says plainly that the flag does nothing.
+        let text = plan(&host, &chosen).join("\n");
+        assert!(!text.contains("projects folder will be"), "{text}");
+        assert!(text.contains("--projects has no effect without --settings"), "{text}");
+        // With --settings it is sent again and the folder is named.
+        chosen.settings = true;
+        let text = plan(&host, &chosen).join("\n");
+        assert!(text.contains("sandbox projects folder will be /srv/work") && !text.contains("no effect"), "{text}");
     }
 
     #[test]
