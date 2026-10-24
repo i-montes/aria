@@ -608,10 +608,10 @@ fn only_tightening_options_after_the_forced_command_keep_the_line_allowed() {
     let command = restricted(&world).trim_end_matches(&format!(" {KEY}")).to_string();
     for options in [
         ",from=\"203.0.113.0/24\"",
-        ",from=\"203.0.113.1,198.51.100.0/24\",no-pty",
+        ",from=\"203.0.113.1,198.51.100.0/24\"",
         ",expiry-time=\"20990101\"",
-        ",no-agent-forwarding,no-X11-forwarding".to_lowercase().as_str(),
-        ",no-touch-required,from=\"10.0.0.0/8\"",
+        ",verify-required",
+        ",verify-required,from=\"10.0.0.0/8\",expiry-time=\"20990101\"",
     ] {
         let line = format!("{command}{options} {KEY}");
         seed_authorized_keys(&world, &format!("{line}\n"));
@@ -634,6 +634,11 @@ fn other_options_after_the_forced_command_are_reported_not_accepted() {
         ",environment=\"A=b\"",
         ",from=\"10.0.0.0/8\",pty",
         ",no-pty,port-forwarding",
+        ",no-pty",
+        ",no-touch-required",
+        ",from=\"10.0.0.0/8\",no-agent-forwarding",
+        ",from=\"10.0.0.0/8 192.0.2.0/24\"",
+        ",verify-required,pty",
         ",from=\"10.0.0.0/8\"x",
         ",",
     ] {
@@ -642,7 +647,10 @@ fn other_options_after_the_forced_command_are_reported_not_accepted() {
         let output = world.init_yes(&["--client-key", &key_file(&world)], &[]);
         let (out, err) = (text(&output.stdout), text(&output.stderr));
         assert_eq!(output.status.code(), Some(1), "{options}: {out}{err}");
-        assert!(err.contains("other options"), "{options}: {err}");
+        assert!(err.contains("other options") || err.contains("options after it"), "{options}: {err}");
+        assert!(err.contains("only from=") && err.contains("expiry-time=") && err.contains("verify-required"), "{err}");
+        assert!(err.contains("containing a space is not recognised"), "{err}");
+        assert!(!err.contains("switch ssh features back on"), "{err}");
         assert!(!err.contains("already allowed") && !out.contains("already allowed"), "{options}: {out}{err}");
         assert_eq!(world.authorized_keys(), format!("{line}\n"), "{options}: untouched");
     }

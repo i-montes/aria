@@ -342,8 +342,9 @@ fn systemctl_hint(user: &str) -> String {
 /// Reads one validated key line from stdin and adds it to `authorized_keys` as the restricted line, once. sshd uses the
 /// first line a key matches, so the blob is looked for in the lines that are not comments: none holds it, the line is
 /// added (after a newline, when the file lacks one at its end); the first one starts with exactly
-/// `restrict,command="$HOME/.local/bin/aria client-stdio"` and then a space, or a comma and only options the owner may
-/// add to tighten it (`from="…"`, `expiry-time="…"`, `no-…`, up to the first space), it is already allowed; one that
+/// `restrict,command="$HOME/.local/bin/aria client-stdio"` and then a space, or a comma and only the options Aria can
+/// verify are harmless (exactly `from="…"` with no space in the value, `expiry-time="…"` and `verify-required`), it is
+/// already allowed; one that
 /// forces another command is reported as such, one with other options after the command (`pty`, `port-forwarding`,
 /// `permitopen`, a later `command=`) as having other options, and any other is the same key with no restriction (all
 /// exit 3, and are left for their owner). Nothing is interpolated: the key arrives on stdin and the home is the remote
@@ -358,7 +359,7 @@ const REMOTE_ALLOW_KEY: &str = concat!(
     r#"printf "%s %s\n" "$pre" "$key" >> "$f" && echo "allowed" ;; "#,
     r#""$pre"*) rest=${first#"$pre"}; case "$rest" in " "*) echo "already allowed" ;; "#,
     r#"","*) opts=${rest#,}; opts=${opts%% *}; "#,
-    r#"if printf "%s\n" "$opts" | grep -Eq "^(from=\"[^\"]*\"|expiry-time=\"[^\"]*\"|no-[a-z0-9-]+)(,(from=\"[^\"]*\"|expiry-time=\"[^\"]*\"|no-[a-z0-9-]+))*\$"; "#,
+    r#"if printf "%s\n" "$opts" | grep -Eq "^(from=\"[^\"]*\"|expiry-time=\"[^\"]*\"|verify-required)(,(from=\"[^\"]*\"|expiry-time=\"[^\"]*\"|verify-required))*\$"; "#,
     r#"then echo "already allowed"; else echo "other options"; exit 3; fi ;; "#,
     r#"*) echo "different command"; exit 3 ;; esac ;; "#,
     r#""restrict,command="*) echo "different command"; exit 3 ;; "#,
@@ -1204,8 +1205,9 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
                     if said == "other options" {
                         eprintln!(
                             "aria hub init: step 6 (key) failed: that key is already in authorized_keys with Aria's \
-                             bridge as its command, but the line has other options after it than from=, expiry-time= \
-                             and no-… (they can switch ssh features back on): edit that line yourself to start with \
+                             bridge as its command, but the line has options after it that Aria does not accept: only \
+                             from=\"…\", expiry-time=\"…\" and verify-required are, and a from= value containing a space is \
+                             not recognised, so Aria cannot verify the rest. Edit that line yourself to start with \
                              `{} ` (or remove it and run init again)",
                             authorized_line(&probe.home, "").trim_end()
                         );
