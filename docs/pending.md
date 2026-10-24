@@ -65,7 +65,6 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
   messages are not in a client's surface, `crates/aria/src/clients.rs`).
 - Commands the terminal does not know (`/compact`, `/session`, `/copy`, `/export`, `/reload` are the dock's own) go to the
   session as typed. The terminal does not page back to earlier history (`term/` has no `chatEarlier`).
-- `@` lists files under the settings' projects folder, not the session's own folder (`chat.rs`, `ListFiles`).
 - `/model` over `aria connect` lists only the model in use: `run_remote` passes no connected providers
   (`term/mod.rs`, `connected: Vec::new()`). The hub does accept a client's `setModel`; only this client has no list to pick from.
 - The editor has no Home, End, Delete or word keys, and Up and Down are only history; `Ctrl+Enter` on an empty editor

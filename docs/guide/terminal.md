@@ -81,7 +81,7 @@ The editor sits between the rules, up to six lines tall (a longer message shows 
 
 - **Writing.** `Enter` sends. `Alt+Enter` or `Shift+Enter` starts a new line, and so does pasting text with line breaks (a paste never sends). `←` and `→` move the cursor; `Backspace` erases. There is no `Home`, `End`, `Delete` or word-wise key.
 - **History.** `↑` on an empty editor brings back the messages you sent, `↓` goes forward again. A draft is never replaced by the history. It is kept while this terminal runs, not after you leave.
-- **`@` picks a file.** Type `@` and part of a path: a list of matching files opens above the editor (relative paths, shallowest first, `.gitignore` respected, up to 50; see [Limits](#limits) for which folder it searches). `↑` and `↓` move, `Enter` or `Tab` or a click puts `@path` in the message, and `Esc` closes the list. The message then names the file for the model.
+- **`@` picks a file.** Type `@` and part of a path: a list of matching files opens above the editor (relative paths, shallowest first, `.gitignore` respected, up to 50; in the session's own folder, or the projects folder when the session has none). `↑` and `↓` move, `Enter` or `Tab` or a click puts `@path` in the message, and `Esc` closes the list. The message then names the file for the model.
 - **`!command` runs a command.** A message that starts with `!` runs the command in the session instead of going to the model. Its output shows as a step and joins the conversation, so the model knows about it. Not over ssh.
 - **`/` opens the commands.** A message that starts with `/` opens a list: the terminal's own commands first, then the session's. `Enter` on one runs it at once; `Tab` or a click only writes it in the editor, so you can add its argument. Whatever the list does not recognise goes to the session as typed: `/verify off` does, because the list closes once there is a space. A single word that matches nothing keeps the list open and `Enter` does nothing; press `Esc` and then `Enter` to send it.
 
@@ -200,7 +200,7 @@ The palette is the dock's: a near-black ground, light text, grey for what matter
 - `/model` lists only the model already in use, because the client picks the providers to list from the sign-ins of its own computer, and over ssh it has none. The hub accepts a model change, but this terminal has no list to choose from, so it cannot switch models there yet.
 - `/undo` and `Esc Esc` go back in the conversation only: the session works in the hub's projects folder, where no code checkpoints are kept. To take back a file edit, log in to the hub with your own ssh and use git; `!git restore` is refused here.
 - `/exit` closes the session on the hub, with its background jobs and its undo history. To leave and come back, use `Ctrl+C` or `Ctrl+D`.
-- `@` lists files under the hub's projects folder.
+- `@` lists files in the session's folder, which for a session opened over `aria connect` is the hub's projects folder.
 - `/signin` and `/schedules` do work, which is what makes `/signin` useful there.
 - The first time you connect to a host, run `ssh host` once by hand to accept its key; `aria connect` gives up after 60 seconds. `ARIA_SSH` names another program to use instead of `ssh`.
 
@@ -221,7 +221,6 @@ The client, the keys and the checkpoints are the same on both platforms. What di
 - No syntax highlighting in code blocks.
 - The task strip shows a subagent's name, not its model.
 - The dock's own page shows a slice's phase marks as tasks, but not the model's own task list, and it does not show the changes line, `/context` or the checks, nor read `display.verbose`. See [pending](../pending.md).
-- The `@` list searches the projects folder of the service's [settings](../settings.md) (`sandbox.projectsDir`; over `aria connect`, the hub's), not the folder of the session you are in, so for a session started elsewhere its paths may not match that session's files.
 - Over ssh, a lost connection freezes the screen for up to 60 seconds while it reconnects, and the note it ends with names the local dock, not the hub.
 
 ## How it works

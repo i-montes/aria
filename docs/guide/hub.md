@@ -164,7 +164,7 @@ What differs from a local terminal:
 - **`/model` lists only the model already in use.** The client decides which providers to list from the sign-ins of the computer it runs on, and over `aria connect` it has none. The hub itself accepts a model change from a client, but this terminal has no list to choose from, so it cannot switch models there yet.
 - **`/exit` closes the session on the hub for good**: its engine stops, the background jobs it owns end and its checkpoints go. To leave and come back, use `Ctrl+C` or `Ctrl+D`, or close the terminal.
 - The footer shows no git branch, because git runs on your computer and the session's folder is on the hub.
-- `@` lists files under the hub's projects folder (its `sandbox.projectsDir`), whatever session you are in.
+- `@` lists files in the session's folder; a session opened over `aria connect` has none, so it lists the hub's projects folder (its `sandbox.projectsDir`).
 - A dead connection is noticed by ssh after about 45 seconds. The terminal then tries once to reconnect, with the screen frozen for up to 60 seconds, and otherwise exits.
 - Aria does not notify you when a run settles on a hub. Each session in the list shows `working`, `waiting for you` or `done` and how long ago.
 
@@ -248,7 +248,7 @@ The hub's bridge marks every connection that comes through `aria connect` as rem
 | List, open and close sessions | A new session never gets a folder from the client. |
 | In a session the hub has: send a message, stop a run, load the history | A made-up session id is refused. |
 | Answer questions and approvals | Including the card that lets a command out of the sandbox or writes outside the project, an install, and a connector write. |
-| List the slash commands, list models and change the session's model, list files for `@` | The hub accepts a model change, but the terminal over `aria connect` lists only the model in use, so it cannot switch there yet. `@` lists the hub's projects folder |
+| List the slash commands, list models and change the session's model, list files for `@` | The hub accepts a model change, but the terminal over `aria connect` lists only the model in use, so it cannot switch there yet. `@` lists the session's folder, the hub's projects folder for a session opened over `aria connect` |
 | Undo to an earlier message (`/undo`) | The conversation only: sessions opened over `aria connect` work in the projects folder, where no code checkpoints are kept. |
 | `/context` | The only Pi command it may send is `get_session_stats`. |
 | List, pause, resume and delete scheduled tasks | |

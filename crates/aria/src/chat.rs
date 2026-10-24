@@ -652,7 +652,7 @@ impl Chat {
             PageMessage::ListFiles { id, query } => {
                 let chat = self.clone();
                 std::thread::spawn(move || {
-                    let root = agent::workdir(chat.settings().as_ref());
+                    let root = chat.folder();
                     chat.emit(DockMessage::Files { id, files: files::list_files(&root, &query, FILE_LIMIT) });
                 });
             }
@@ -4106,6 +4106,22 @@ mod tests {
         h.chat.handle(PageMessage::ListFiles { id: 5, query: "main".into() });
         match wait_for(&h, "files", |m| matches!(m, DockMessage::Files { id: 5, .. })) {
             DockMessage::Files { files, .. } => assert_eq!(files, vec!["proj/main.rs"]),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn list_files_reads_the_sessions_own_folder() {
+        let h = harness();
+        std::fs::create_dir_all(&h.workdir).unwrap();
+        std::fs::write(h.workdir.join("projects-only.rs"), "x").unwrap();
+        let own = h._dir.path().join("checkout-widget");
+        std::fs::create_dir_all(own.join("src")).unwrap();
+        std::fs::write(own.join("src/cart.rs"), "x").unwrap();
+        with_own_folder(&h, &own);
+        h.chat.handle(PageMessage::ListFiles { id: 6, query: "".into() });
+        match wait_for(&h, "files", |m| matches!(m, DockMessage::Files { id: 6, .. })) {
+            DockMessage::Files { files, .. } => assert_eq!(files, vec!["src/cart.rs"]),
             _ => unreachable!(),
         }
     }
