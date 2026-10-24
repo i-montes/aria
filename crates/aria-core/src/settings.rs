@@ -42,7 +42,8 @@ pub struct Settings {
 }
 
 /// How much a conversation shows: with `verbose` (the default) the thinking and every tool's output; without it, one
-/// line per turn. The terminal reads it (`/verbose`, Ctrl+O); the dock does not yet.
+/// line per step (what it did and on what, without the output). The terminal reads it
+/// (`/verbose`, Ctrl+O); the dock does not yet.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Display {
