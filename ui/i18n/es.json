@@ -326,6 +326,8 @@
   "ob.integrations.access.allow": "Permitir",
   "ob.error.mcp-file-broken": "Aria no pudo escribir ~/.aria/mcp.json ni mcp-auth.json.",
   "ob.error.unknown-service": "Ese servicio no es compatible.",
+  "ob.error.no-sign-in": "Ningún inicio de sesión espera esa dirección.",
+  "ob.error.bad-redirect": "Esa dirección no es a la que te llevó el inicio de sesión.",
   "chat.placeholder": "Escríbele a Aria",
   "chat.send": "Enviar",
   "chat.stop": "Detener",

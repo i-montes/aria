@@ -326,6 +326,8 @@
   "ob.integrations.access.allow": "Allow",
   "ob.error.mcp-file-broken": "Aria could not write ~/.aria/mcp.json or mcp-auth.json.",
   "ob.error.unknown-service": "That service is not supported.",
+  "ob.error.no-sign-in": "No sign-in is waiting for that address.",
+  "ob.error.bad-redirect": "That address is not the one the sign-in sent you to.",
   "chat.placeholder": "Message Aria",
   "chat.send": "Send",
   "chat.stop": "Stop",
