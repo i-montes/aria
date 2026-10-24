@@ -241,6 +241,9 @@ The sandbox:
   `gitdir` in `extensions/sandbox/policy.ts`, and give the dock's git an empty attributes source.
 - Pi's write and edit can never touch `aria.json`, the settings file or the attachments folder, whatever was granted; a
   bash command the person let run outside the sandbox still can.
+- A scheduled task's writable grants are judged when its Pi starts (`runnable_writable`), but the sandbox extension binds each
+  granted root by path on every command, so a boxed run could rename an ancestor of a granted root and replace it with a
+  link; only the extension's secret and Aria-home filter guards that. The start-time check does not re-run `too_wide`.
 - The checks after edits (`extensions/verify`) run nothing on macOS, not even `.aria/verify.json`, and on Linux nothing
   where the box does not work (`extensions/verify/checks.ts`, `index.ts`).
 - The dock takes checkpoints for every session but has no way to show or use them; undo and the changes line are

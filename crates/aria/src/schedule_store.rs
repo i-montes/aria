@@ -93,13 +93,17 @@ impl ScheduleStore {
             if let Some(why) = too_wide(&path, &self.paths.root) {
                 return Err(format!("{dir}: {why}"));
             }
-            // Where a link points is judged too: a link in the projects folder cannot reach a dot folder.
-            if !kept.contains(dir) {
-                if let Some(why) = schedules::writable_problem(&path.display().to_string(), &projects, &home) {
+            // Where a link points is judged too: a link in the projects folder cannot reach a dot folder. A kept folder
+            // is judged by its real path when that is not the path it was stored under (it was swapped for a link):
+            // the store never takes a grant that now leads out of bounds. One stored before the rule, still where it was,
+            // stays (a run drops it).
+            let real_path = path.display().to_string();
+            if !kept.contains(dir) || real_path != *dir {
+                if let Some(why) = schedules::writable_problem(&real_path, &projects, &home) {
                     return Err(why);
                 }
             }
-            real.push(path.display().to_string());
+            real.push(real_path);
         }
         task.grants.writable = real;
         Ok(())
@@ -673,6 +677,27 @@ mod tests {
         let task = create_writing(&store, &projects.join("inside")).unwrap();
         assert_eq!(task.grants.writable, vec![projects.join("real").canonicalize().unwrap().display().to_string()]);
         assert!(store.list(0).len() == 1, "only the good one was stored");
+    }
+
+    #[test]
+    fn an_unchanged_grant_swapped_for_a_link_out_is_refused_when_the_task_is_changed_again() {
+        let (_dir, store) = store();
+        let work = outside_tmp();
+        let projects = work.path().join("work");
+        std::fs::create_dir_all(projects.join("out")).unwrap();
+        with_projects(&store, &projects);
+        let task = create_writing(&store, &projects.join("out")).unwrap();
+        let out = task.grants.writable[0].clone();
+        // The same folder submitted again, untouched: fine.
+        assert!(store.update(&json!({"id": task.id, "writable": [&out]})).is_ok());
+        // After the approval the folder becomes a link out; the task is changed again with the grant as it was.
+        std::fs::remove_dir(&out).unwrap();
+        std::os::unix::fs::symlink("/usr", &out).unwrap();
+        let why = store.update(&json!({"id": task.id, "writable": [&out]})).unwrap_err();
+        assert!(why.contains("projects folder"), "{why}");
+        let why = store.update(&json!({"id": task.id, "title": "other"})).unwrap_err();
+        assert!(why.contains("projects folder"), "a change that leaves the grant alone is refused too: {why}");
+        assert_eq!(store.get(&task.id).unwrap().grants.writable, vec![out], "the store still holds the old entry");
     }
 
     #[test]

@@ -233,6 +233,7 @@ It does not make the agent safe to leave alone with a machine you cannot afford 
 - On a hub, whoever holds the client key can answer every card ([what a stolen key can do](hub.md#what-a-stolen-client-key-can-do)).
 - Settings under `git.*` (ask before committing, pushing or touching someone else's changes) are instructions in the persona. The sandbox does not enforce them.
 - The dock draws no undo, no changes line and no pass or fail line for the checks; the terminal does.
+- A scheduled task's writable grants are checked when its Pi starts, while the sandbox extension re-binds each granted root by path on every command, so a boxed run could rename an ancestor of a granted root and put a link in its place; the extension's filter for secret folders and Aria's home is the only guard then. The check at the start does not re-run the list of wide and secret folders either.
 - The full list is in [pending](../pending.md).
 
 ## See also
