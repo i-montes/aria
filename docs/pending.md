@@ -253,8 +253,10 @@ Secrets and the keyring:
   ([design](superpowers/specs/2026-10-21-keyring-design.md)).
 - `secret_import` (`crates/aria/src/jobs_socket.rs`) is a tool the model can call with no card; only the persona
   (`agent-files/SYSTEM.md`) tells it to offer first. It reads only files inside the session's project or the projects
-  folder, judged on the real path (never a home dot folder or Aria's own folder). It trusts the `cwd` the extension
-  sends; a project that is the home folder exposes its non-hidden files (macOS `~/Library`).
+  folder, judged on the file it opened (a regular file of at most 1 MiB; never a home dot folder or Aria's own folder). It
+  trusts the `cwd` the extension sends, which only the sandbox protects: outside the box (macOS, or after an approved
+  command) a process could forge it on the jobs socket. A project that is the home folder exposes its non-hidden files
+  (macOS `~/Library`).
 - `aria keyring off` writes back the `key:`, `mcp:` and `file:` accounts only; the person's own secrets (`user:<name>`)
   stay in the keyring, and a later save refuses with `keyring-off`.
 - Claude Code's own credentials (the Claude sign-in through `claude-bridge`) stay where Claude Code keeps them.

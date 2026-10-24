@@ -306,14 +306,13 @@ fn answer(session: &Session, op: Option<&str>, request: &Value) -> Result<Fields
         Some("secret_import") => {
             let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
             let projects = aria_core::agent::workdir(aria_core::settings::load(&session.paths).ok().flatten().as_ref());
-            let path = secret_file(
+            let text = read_secret(
                 request["path"].as_str().ok_or("path is missing")?,
                 request["cwd"].as_str(),
                 &projects,
                 &home,
                 &session.paths.root,
             )?;
-            let text = std::fs::read_to_string(&path).map_err(|e| format!("could not read {}: {e}", path.display()))?;
             let value = secrets::extract(&text, request["key"].as_str())?;
             let purpose = request["purpose"].as_str().unwrap_or_default();
             let entry = secrets::store(
@@ -339,17 +338,47 @@ fn answer(session: &Session, op: Option<&str>, request: &Value) -> Result<Fields
 /// The only thing `secret_import` says when a file is out of bounds: it never tells whether the file or the key exists.
 const SECRET_FILE_REFUSED: &str = "Aria keeps a secret only from a file inside this session's project or the projects folder, and never from Aria's own folder or a hidden folder of your home folder.";
 
-/// The file `secret_import` may read: `raw` (absolute, `~/…` or relative to `cwd`, the session's project root) with no `..`
-/// in it, inside `cwd` or the projects folder, and not inside Aria's own folder or a dot entry of the home folder
-/// (`~/.ssh`, `~/.aws`, `~/.config`, `~/.aria`, any `~/.<name>`), judged where it is written and, when it exists, where
-/// it really is, which must also be inside the real `cwd` or projects folder (a link cannot lead out). Every refusal is the same sentence, and nothing is read before the check.
-fn secret_file(
+/// The most `secret_import` reads from a file.
+const SECRET_FILE_MAX: u64 = 1024 * 1024;
+
+/// Where `secret_import` may read, as the check by name and the check of the opened file both need it.
+struct Area {
+    /// Aria's own folder, as written and as it really is.
+    aria_roots: Vec<PathBuf>,
+    /// The home folder, as written and as it really is.
+    homes: Vec<PathBuf>,
+    /// The session's project and the projects folder, as they really are.
+    real_roots: Vec<PathBuf>,
+}
+
+impl Area {
+    /// Aria's own folder, or a dot entry of the home folder (`~/.ssh`, `~/.aws`, `~/.config`, `~/.aria`, `~/.<name>`).
+    fn forbidden(&self, path: &Path) -> bool {
+        self.aria_roots.iter().any(|root| path.starts_with(root))
+            || self.homes.iter().any(|home| {
+                path.strip_prefix(home)
+                    .ok()
+                    .and_then(|rest| rest.components().next())
+                    .is_some_and(|first| first.as_os_str().to_string_lossy().starts_with('.'))
+            })
+    }
+
+    /// Whether a file that is really at `real` may be read: inside the real project or projects folder, not forbidden.
+    fn allows_real(&self, real: &Path) -> bool {
+        !self.forbidden(real) && self.real_roots.iter().any(|root| real.starts_with(root))
+    }
+}
+
+/// What `secret_import` may read, judged by the name first: `raw` (absolute, `~/…` or relative to `cwd`, the session's
+/// project root) with no `..` in it, inside `cwd` or the projects folder, and not forbidden as written. Returns the path
+/// and the `Area` to judge the opened file by. Every refusal is the same sentence.
+fn secret_target(
     raw: &str,
     cwd: Option<&str>,
     projects: &Path,
     home: &Path,
     aria_root: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<(PathBuf, Area), String> {
     use std::path::Component;
     let refused = || SECRET_FILE_REFUSED.to_string();
     // Absolute, `.` dropped, `..` refused.
@@ -379,33 +408,76 @@ fn secret_file(
     if !roots.iter().any(|root| path.starts_with(root)) {
         return Err(refused());
     }
-    let homes: Vec<PathBuf> = clean(home).into_iter().chain(std::fs::canonicalize(home).ok()).collect();
-    let aria_roots: Vec<PathBuf> = clean(aria_root).into_iter().chain(std::fs::canonicalize(aria_root).ok()).collect();
-    let forbidden = |path: &Path| {
-        aria_roots.iter().any(|root| path.starts_with(root))
-            || homes.iter().any(|home| {
-                path.strip_prefix(home)
-                    .ok()
-                    .and_then(|rest| rest.components().next())
-                    .is_some_and(|first| first.as_os_str().to_string_lossy().starts_with('.'))
-            })
-    };
-    if forbidden(&path) {
-        return Err(refused());
-    }
-    // A file that exists is judged where it really is: inside the real `cwd` or projects folder, and not forbidden. A link
-    // in the project cannot lead out of them (to `/proc/self/environ`, `~/Documents`, `/etc`) or into a dot entry.
-    if let Ok(real) = std::fs::canonicalize(&path) {
-        let real_roots: Vec<PathBuf> = roots
+    let area = Area {
+        homes: clean(home).into_iter().chain(std::fs::canonicalize(home).ok()).collect(),
+        aria_roots: clean(aria_root).into_iter().chain(std::fs::canonicalize(aria_root).ok()).collect(),
+        real_roots: roots
             .iter()
             .filter_map(|root| std::fs::canonicalize(root).ok())
             .filter(|root| root != Path::new("/"))
-            .collect();
-        if forbidden(&real) || !real_roots.iter().any(|root| real.starts_with(root)) {
-            return Err(refused());
-        }
+            .collect(),
+    };
+    if area.forbidden(&path) {
+        return Err(refused());
     }
-    Ok(path)
+    Ok((path, area))
+}
+
+/// Where an open file really is, from its descriptor (not from any name, which can be swapped).
+#[cfg(target_os = "linux")]
+fn fd_path(file: &std::fs::File) -> Option<PathBuf> {
+    use std::os::fd::AsRawFd;
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn fd_path(file: &std::fs::File) -> Option<PathBuf> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let mut buffer = [0u8; libc::PATH_MAX as usize];
+    // SAFETY: F_GETPATH writes a NUL-terminated path of at most PATH_MAX bytes into the buffer it is given.
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) } == -1 {
+        return None;
+    }
+    let length = buffer.iter().position(|&byte| byte == 0)?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(&buffer[..length])))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn fd_path(_file: &std::fs::File) -> Option<PathBuf> {
+    None
+}
+
+/// The text of the file `secret_import` may read. The name is judged (`secret_target`), then the file is opened ONCE,
+/// read-only and without blocking (a FIFO cannot hold the service), and what was opened is judged: a regular file of at
+/// most 1 MiB whose real path, taken from the descriptor, is inside the real project or projects folder and not
+/// forbidden. It is read from that same descriptor, so a link swapped after the check changes nothing. A path that does
+/// not open (a dangling link, a missing file) is refused like the rest, with the same sentence: nothing says whether a
+/// file or a key exists.
+fn read_secret(raw: &str, cwd: Option<&str>, projects: &Path, home: &Path, aria_root: &Path) -> Result<String, String> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let refused = || SECRET_FILE_REFUSED.to_string();
+    let (path, area) = secret_target(raw, cwd, projects, home, aria_root)?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(&path)
+        .map_err(|_| refused())?;
+    let meta = file.metadata().map_err(|_| refused())?;
+    if !meta.is_file() || meta.len() > SECRET_FILE_MAX {
+        return Err(refused());
+    }
+    if !fd_path(&file).is_some_and(|real| area.allows_real(&real)) {
+        return Err(refused());
+    }
+    let mut text = String::new();
+    // A file that grows while it is read stops at the cap too.
+    file.take(SECRET_FILE_MAX + 1).read_to_string(&mut text).map_err(|_| refused())?;
+    if text.len() as u64 > SECRET_FILE_MAX {
+        return Err(refused());
+    }
+    Ok(text)
 }
 
 fn now_ms() -> i64 {
@@ -670,14 +742,13 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
         assert!(!missing.to_string().contains("sk-proj"), "nor in an error: {missing}");
     }
 
+    /// The check by name only (the files of these tests do not exist).
+    fn target(raw: &str, cwd: Option<&str>, projects: &Path, home: &Path, aria_root: &Path) -> Result<PathBuf, String> {
+        super::secret_target(raw, cwd, projects, home, aria_root).map(|(path, _)| path)
+    }
+
     fn secret_file(raw: &str, cwd: Option<&str>) -> Result<PathBuf, String> {
-        super::secret_file(
-            raw,
-            cwd,
-            Path::new("/home/ana/Projects"),
-            Path::new("/home/ana"),
-            Path::new("/home/ana/.aria"),
-        )
+        target(raw, cwd, Path::new("/home/ana/Projects"), Path::new("/home/ana"), Path::new("/home/ana/.aria"))
     }
 
     #[test]
@@ -693,38 +764,98 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
         assert!(secret_file("/srv/code/app/.env", Some("/srv/code/app")).is_ok());
     }
 
+    /// A project with a real file, files outside it and Aria's own folder, and the links the tests use.
+    struct Links {
+        base: tempfile::TempDir,
+        project: PathBuf,
+        aria: PathBuf,
+    }
+
+    impl Links {
+        fn new() -> Links {
+            use std::os::unix::fs::symlink;
+            let base = tempfile::tempdir().unwrap();
+            let (project, outside, aria) =
+                (base.path().join("proj"), base.path().join("docs"), base.path().join("aria"));
+            for dir in [&project, &outside, &aria] {
+                std::fs::create_dir_all(dir).unwrap();
+            }
+            std::fs::write(project.join("real.env"), "TOKEN=1\n").unwrap();
+            std::fs::write(outside.join("notes.txt"), "TOKEN=2\n").unwrap();
+            std::fs::write(aria.join("auth.json"), "TOKEN=3\n").unwrap();
+            symlink(outside.join("notes.txt"), project.join("to-notes")).unwrap();
+            symlink(&outside, project.join("to-docs")).unwrap();
+            symlink("/etc/hosts", project.join("to-etc")).unwrap(); // a file both Linux and macOS have
+            symlink(aria.join("auth.json"), project.join("to-aria")).unwrap();
+            symlink(project.join("real.env"), project.join("inside")).unwrap();
+            symlink(project.join("nowhere"), project.join("dangling")).unwrap();
+            #[cfg(target_os = "linux")]
+            symlink("/proc/self/environ", project.join("to-environ")).unwrap();
+            Links { base, project, aria }
+        }
+
+        fn read(&self, raw: &str) -> Result<String, String> {
+            super::read_secret(
+                raw,
+                Some(&self.project.display().to_string()),
+                &self.base.path().join("projects"),
+                Path::new("/home/ana"),
+                &self.aria,
+            )
+        }
+    }
+
     #[test]
     fn a_link_in_the_project_cannot_lead_out_of_the_allowed_area() {
-        use std::os::unix::fs::symlink;
-        let base = tempfile::tempdir().unwrap();
-        let (project, outside, aria) = (base.path().join("proj"), base.path().join("docs"), base.path().join("aria"));
-        for dir in [&project, &outside, &aria] {
-            std::fs::create_dir_all(dir).unwrap();
-        }
-        std::fs::write(project.join("real.env"), "TOKEN=1\n").unwrap();
-        std::fs::write(outside.join("notes.txt"), "TOKEN=2\n").unwrap();
-        std::fs::write(aria.join("auth.json"), "TOKEN=3\n").unwrap();
-        symlink(outside.join("notes.txt"), project.join("to-notes")).unwrap();
-        symlink(&outside, project.join("to-docs")).unwrap();
-        symlink("/etc/hostname", project.join("to-etc")).unwrap();
-        symlink(aria.join("auth.json"), project.join("to-aria")).unwrap();
-        symlink(project.join("real.env"), project.join("inside")).unwrap();
-        #[cfg(target_os = "linux")]
-        symlink("/proc/self/environ", project.join("to-environ")).unwrap();
-        let cwd = project.display().to_string();
-        let check = |raw: &str| {
-            super::secret_file(raw, Some(&cwd), &base.path().join("projects"), Path::new("/home/ana"), &aria)
-        };
-        assert!(check("real.env").is_ok());
-        assert!(check("inside").is_ok(), "a link to a file in the project is fine");
+        let links = Links::new();
+        assert_eq!(links.read("real.env").unwrap(), "TOKEN=1\n");
+        assert_eq!(links.read("inside").unwrap(), "TOKEN=1\n", "a link to a file in the project is fine");
         let mut said = std::collections::HashSet::new();
-        for raw in ["to-notes", "to-docs/notes.txt", "to-etc", "to-aria", "to-environ"] {
-            if raw == "to-environ" && !cfg!(target_os = "linux") {
-                continue;
-            }
-            said.insert(check(raw).unwrap_err());
+        let mut refused = vec!["to-notes", "to-docs/notes.txt", "to-etc", "to-aria", "dangling", "nope-not-there"];
+        if cfg!(target_os = "linux") {
+            refused.push("to-environ");
         }
-        assert_eq!(said.len(), 1, "one sentence for all: {said:?}");
+        for raw in refused {
+            said.insert(links.read(raw).unwrap_err());
+        }
+        assert_eq!(said.len(), 1, "one sentence for all, a dangling link and a missing file included: {said:?}");
+    }
+
+    #[test]
+    fn a_fifo_in_the_project_is_refused_without_blocking() {
+        use std::os::unix::ffi::OsStrExt;
+        let links = Links::new();
+        let fifo = links.project.join("pipe");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(links.read("pipe"));
+        });
+        let answer = receiver.recv_timeout(Duration::from_secs(5)).expect("the service did not block on a FIFO");
+        assert_eq!(answer.unwrap_err(), super::SECRET_FILE_REFUSED);
+    }
+
+    #[test]
+    fn a_directory_and_a_file_over_one_mebibyte_are_refused() {
+        let links = Links::new();
+        std::fs::create_dir(links.project.join("dir")).unwrap();
+        assert_eq!(links.read("dir").unwrap_err(), super::SECRET_FILE_REFUSED);
+        std::fs::write(links.project.join("big.env"), vec![b'a'; super::SECRET_FILE_MAX as usize + 1]).unwrap();
+        assert_eq!(links.read("big.env").unwrap_err(), super::SECRET_FILE_REFUSED);
+        std::fs::write(links.project.join("edge.env"), vec![b'a'; super::SECRET_FILE_MAX as usize]).unwrap();
+        assert!(links.read("edge.env").is_ok(), "exactly the cap is read");
+    }
+
+    /// The real path comes from the descriptor of what was opened, whatever name opened it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn the_real_path_of_an_opened_file_comes_from_its_descriptor() {
+        let links = Links::new();
+        let file = std::fs::File::open(links.project.join("inside")).unwrap();
+        assert_eq!(super::fd_path(&file).unwrap(), links.project.join("real.env").canonicalize().unwrap());
+        let file = std::fs::File::open(links.project.join("to-docs/notes.txt")).unwrap();
+        assert_eq!(super::fd_path(&file).unwrap(), links.base.path().join("docs/notes.txt").canonicalize().unwrap());
     }
 
     #[test]
@@ -766,7 +897,7 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
     #[test]
     fn a_dot_folder_of_the_home_is_refused_even_inside_a_project_that_is_the_home_folder() {
         let at_home = |raw: &str| {
-            super::secret_file(
+            target(
                 raw,
                 Some("/home/ana"),
                 Path::new("/home/ana/Projects"),
@@ -779,7 +910,7 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
             assert!(at_home(raw).is_err(), "{raw}");
         }
         // Aria's own folder when it is not under a dot folder.
-        let moved = super::secret_file(
+        let moved = target(
             "/srv/aria-home/auth.json",
             Some("/srv"),
             Path::new("/home/ana/Projects"),
