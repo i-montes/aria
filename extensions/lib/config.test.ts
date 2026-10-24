@@ -13,6 +13,7 @@ const TODAY = {
   effort: { mode: 'auto', fixedLevel: null, maxOnFree: true },
   compaction: { percent: 40 },
   style: 'very-short',
+  assistant: { language: '' },
   sandbox: { extraWritable: [], askToLeave: true, jevReview: true },
   subagents: { saveSessions: false, turnLimit: null, planExecute: true },
   connectors: {},
@@ -45,6 +46,14 @@ describe("the extensions' settings (aria.json)", () => {
     expect(config.subagents.turnLimit).toBe(12)
     expect(config.sandbox.extraWritable).toEqual(['/srv'])
     expect(config.compaction.percent).toBe(40)
+  })
+
+  test('the conversation language is read by name, and empty when absent or not a string', () => {
+    expect(ariaConfig().assistant.language).toBe('')
+    write({ assistant: { language: 'Spanish' } })
+    expect(ariaConfig().assistant.language).toBe('Spanish')
+    write({ assistant: { language: 3 } })
+    expect(ariaConfig().assistant.language).toBe('')
   })
 
   test('connectors default to empty', () => {

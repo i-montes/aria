@@ -72,7 +72,7 @@ fn blocks(template: &str, on: &dyn Fn(&str) -> bool) -> String {
 
 /// The conversation language as the persona names it: the setup's codes by name, anything else (typed by the user,
 /// such as "French") as it was written.
-fn language_name(language: &str) -> String {
+pub(crate) fn language_name(language: &str) -> String {
     match language.trim() {
         "es" => "Spanish".into(),
         "en" => "English".into(),

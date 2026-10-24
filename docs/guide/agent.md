@@ -230,7 +230,7 @@ The old files stay on disk. A terminal shows a divider at the compaction but doe
 
 When a decision is yours and the model cannot settle it from your request, the code or a sensible default, it asks with
 `ask_user`: one card with one to four independent questions, each with two to four options, its recommended option
-first, and always room to write your own answer. A card also has "Talk about this" and you can skip or dismiss it. Your
+first, and always room to write your own answer. The model writes them in your conversation language. A card also has "Talk about this" and you can skip or dismiss it. Your
 answers go back to the model as the tool's result, not as a new message, so the router does not classify them. In a
 terminal the same questions are a form in the editor's place. Subagents never get the tool: a subagent picks the most
 reasonable option and says so, or reports that it is blocked.

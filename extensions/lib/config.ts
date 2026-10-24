@@ -19,6 +19,8 @@ export interface AriaConfig {
   effort: { mode: string; fixedLevel: string | null; maxOnFree: boolean }
   compaction: { percent: number }
   style: string
+  /** The conversation language by name ("Spanish"); empty when this Pi has no Aria config. */
+  assistant: { language: string }
   sandbox: { extraWritable: string[]; askToLeave: boolean; jevReview: boolean }
   subagents: { saveSessions: boolean; turnLimit: number | null; planExecute: boolean }
   /** The access level per connector (MCP server name); a connector not listed is 'ask' ('read' when `noAsk`). */
@@ -39,6 +41,7 @@ export const DEFAULTS: AriaConfig = {
   effort: { mode: 'auto', fixedLevel: null, maxOnFree: true },
   compaction: { percent: 40 },
   style: 'very-short',
+  assistant: { language: '' },
   sandbox: { extraWritable: [], askToLeave: true, jevReview: true },
   subagents: { saveSessions: false, turnLimit: null, planExecute: true },
   connectors: {},

@@ -81,7 +81,7 @@ deleted. To get Aria's version back, delete the file and its line in `.aria-file
 | `extensions/` | Aria's Pi extensions (router, sandbox, quota fallback, connectors and the rest). | Yes: your version is kept | No: a deleted extension stays deleted while `.aria-files` lists it, and the sandbox and the connector gate are extensions |
 | `skills/` | Aria's own skills (`install-from-link`, `slice`, `verify-in-browser`) and the skills you ask Aria to install. | Yes | Your installed skills would be lost, and a deleted skill of Aria's stays deleted while `.aria-files` lists it |
 | `settings.json` | Pi's own settings: the package list, the default model, the compaction reserves. Aria merges its keys into it and keeps the others. | Yes, for keys Aria does not set | No: it lists the installed packages |
-| `aria.json` | What the extensions read from your settings (models, quota, effort, compaction, router, sandbox, subagents, connectors). No secrets. | No: regenerated at every session start, and locked against the model | Yes: rewritten |
+| `aria.json` | What the extensions read from your settings (models, quota, effort, compaction, router, the conversation language, sandbox, subagents, connectors). No secrets. | No: regenerated at every session start, and locked against the model | Yes: rewritten |
 | `auth.json`, `mcp.json`, `mcp-auth.json` | Links to the credential files above. A real file you put here is left alone. | No | Yes: relinked |
 | `npm/`, `git/` | The pinned packages (`pi-packages`) the installer installed with Pi. | No | No: run the installer again to bring them back |
 | `sessions/aria/` | Every conversation, one `<timestamp>_<session id>.jsonl` per segment. | No | No: these are your conversations |

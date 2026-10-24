@@ -14,7 +14,7 @@ settings that reach these extensions are in [settings](../docs/settings.md); wha
 | `sandbox` | every bash command runs in bwrap (Linux): writes only in the project, `/tmp` and caches; asks before leaving it, with Jev's review; where there is no box that works (macOS, or bwrap missing or blocked) every command asks first; also `background_run` (a never-ending command for Aria's dock), on the same route as bash; `/sandbox` shows the rules and `/sandbox reset` forgets the session's grants |
 | `quota-fallback` | when an OpenCode Go model's 5-hour or weekly quota is almost spent, asks to switch to the free model (countdown), and switches back after the window resets; only for OpenCode Go models; `PI_QUOTA_FALLBACK=0` turns it off |
 | `autocompact` | compacts the context at a set percent (`/autocompact <0-100>`; alone it shows the share) |
-| `ask-user` | the `ask_user` tool: 1–4 questions with options, each with a free-text answer too; subagents do not get it, and its description tells the model to write in Spanish |
+| `ask-user` | the `ask_user` tool: 1–4 questions with options, each with a free-text answer too; subagents do not get it, and its description tells the model to write in the conversation's language (named from `assistant.language` in `aria.json`) |
 | `subagent-mode` | subagents (`pi --mode json` children) get a lean prompt (`SUBAGENT.md`), may read memory but not write it, end with their lessons, and stop at `subagents.turnLimit` turns when one is set; `PI_SUBAGENT_LEAN=0` turns it off |
 | `subagent-watch` | children stream what they do to a socket so it can be watched (and traced: `child.ts` sends times, call ids and usage for `/debug`); the overlay it adds (`alt+a`, `/agents`) opens only in Pi's own terminal UI, and in Aria the dock reads the same socket for its subagents panel |
 | `clock` | Aria's own: each user message gets a hidden `[now]` line with the local date, time, weekday and time zone |
@@ -70,7 +70,7 @@ Tests: `bun test extensions`.
   - `jev-router/route.ts`, `index.ts`: focused work that changes things gets `methodNote`: for code in a project with tests, the outcome and its test first, seen failing, then passing; anything else is done and checked once (never naming a method).
   - `jev-router/route.ts`, `index.ts`: Jev also asks whether the work is sizable; sizable work that changes things gets
     `plan=offer`, the assistant offers once to plan it first and, accepted, starts plan mode with `start_plan`.
-  - `ask-user/index.ts`: the tool's description asks for one batch of up to 4 independent questions per call, even when
+  - `ask-user/texts.ts` (the words the model sees): the tool's description asks for one batch of up to 4 independent questions per call, even when
     a skill asks one at a time (the dock shows them as one card; the maintainer asked for it).
   - `ask-user/questions.ts`: `questionCard`, `parseCardAnswers` and `TALK_LABEL`. `ask-user/dock.ts` (new) asks with
     the card through `ui.input` with the abort signal; `index.ts` calls it in RPC.

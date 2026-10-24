@@ -25,6 +25,8 @@ pub fn extension_config_with_home(settings: &Settings, home: &Path) -> Value {
         "effort": { "mode": settings.effort.mode, "fixedLevel": settings.effort.fixed_level, "maxOnFree": settings.effort.max_on_free },
         "compaction": { "percent": settings.compaction.percent },
         "style": settings.assistant.style,
+        // The conversation language by name, as the persona says it ("Spanish"); `ask_user` writes its questions in it.
+        "assistant": { "language": crate::persona::language_name(&settings.assistant.language) },
         "sandbox": {
             "extraWritable": settings.sandbox.extra_writable.iter().filter_map(|dir| absolute(dir, home)).collect::<Vec<_>>(),
             "askToLeave": settings.sandbox.ask_to_leave,
@@ -81,6 +83,7 @@ mod tests {
             "effort": { "mode": "auto", "fixedLevel": null, "maxOnFree": true },
             "compaction": { "percent": 40 },
             "style": "very-short",
+            "assistant": { "language": "English" },
             "sandbox": { "extraWritable": [], "askToLeave": true, "jevReview": true },
             "subagents": { "saveSessions": false, "turnLimit": null, "planExecute": true },
             "connectors": {}
@@ -90,6 +93,16 @@ mod tests {
     #[test]
     fn the_golden_settings_give_todays_values() {
         assert_eq!(extension_config_with_home(&golden(), Path::new("/home/u")), todays());
+    }
+
+    #[test]
+    fn the_config_names_the_conversation_language_as_the_persona_does() {
+        for (code, name) in [("es", "Spanish"), ("en", "English"), ("pt", "Portuguese"), ("French", "French"), ("", "Spanish")] {
+            let mut settings = golden();
+            settings.assistant.language = code.into();
+            let config = extension_config_with_home(&settings, Path::new("/home/u"));
+            assert_eq!(config["assistant"]["language"], name, "{code:?}");
+        }
     }
 
     #[test]

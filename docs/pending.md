@@ -157,8 +157,8 @@ Router, language and compaction:
 
 - The router eval is 93/94: one expert case ("performance opportunities in the bundle") sits on the line between
   `reviewer` and `frontend` (0.48 against 0.52) and flips between runs; the experts are the maintainer's, word for word.
-- The `ask_user` tool's description tells the model to write questions in Spanish (`extensions/ask-user/index.ts`), and
-  the router's "no expert" value is `ninguno` (`extensions/jev-router/route.ts`), whatever `assistant.language` is.
+- The router's "no expert" value is `ninguno` (`extensions/jev-router/route.ts`), whatever `assistant.language` is; it is an
+  internal token, never shown.
 - A slice job that ends while the main agent is in the middle of a turn gets no `[slice]` hint and no tasks-feed finish:
   Pi queues the `aria-background` message as a follow-up and `before_agent_start` does not fire for it. The design
   accepts it; the later fix is to emit the hint from a `message_end` hook for `aria-background`.
