@@ -99,6 +99,12 @@ pub struct Service {
     ticks: u32,
 }
 
+/// Which sessions the service has: the ones in `sessions.json`, read when asked (a session a client opens is written there
+/// by the chat's worker, and a tab the page saves too).
+fn known_sessions(paths: AriaPaths) -> Arc<dyn Fn(&str) -> bool + Send + Sync> {
+    Arc::new(move |id| aria_core::sessions::load(&paths).sessions.iter().any(|entry| entry.id == id))
+}
+
 impl Service {
     /// Opens Aria's home (the keys move into the keyring and the sealed files are written live before anything below
     /// reads a credential), starts the sessions' worker and listens for terminals.
@@ -171,7 +177,7 @@ impl Service {
                     })
                 });
             });
-            clients::Hub::new(chat_sender.clone(), handle)
+            clients::Hub::new(chat_sender.clone(), handle, known_sessions(paths.clone()))
         };
         // The chat owns Pi. Its messages go through one worker thread, in order, so a send is never overtaken by the
         // abort that follows it.
@@ -429,6 +435,18 @@ mod tests {
             Home { paths, vault: Arc::default(), first_run: true, run_dir, hidden_dir: None, clients_socket: None },
             options,
         )
+    }
+
+    #[test]
+    fn a_session_is_known_while_sessions_json_has_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = AriaPaths::new(dir.path().join(".aria"));
+        paths.ensure_root().unwrap();
+        let known = known_sessions(paths.clone());
+        assert!(!known("aa"), "no file, no sessions");
+        let entry = aria_core::sessions::add(&paths, "aa", "", None).unwrap();
+        assert!(known(&entry.id));
+        assert!(!known("zz"));
     }
 
     #[test]

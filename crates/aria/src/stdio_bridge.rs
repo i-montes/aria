@@ -202,6 +202,7 @@ mod tests {
             std::sync::Arc::new(move |m| {
                 let _ = handled_tx.lock().unwrap().send(m);
             }),
+            std::sync::Arc::new(|_| true),
         );
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("run").join("clients.sock");

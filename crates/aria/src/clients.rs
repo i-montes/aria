@@ -12,7 +12,7 @@
 //!   hub answers with its own `hello` (no `remote`), and a different `protocol` is answered `protocol-mismatch` and the
 //!   connection closed. `remote: true` marks a client that came in from another machine: it can never send `secretSave`
 //!   or a `!command` (`not-for-remote`), and a later `hello` cannot lift the mark. It never chooses a session's folder
-//!   either: its `sessionNew` reaches the chat with no `workdir`, and of Pi's own commands (`piCommand`) it may send only
+//!   either: it talks only to sessions the hub knows (`unknown-session`, so a made-up id never starts a Pi), its `sessionNew` reaches the chat with no `workdir`, and of Pi's own commands (`piCommand`) it may send only
 //!   `get_session_stats`, with none of the arguments it names (`REMOTE_PI_COMMANDS`). The test `the_whole_surface_a_client_may_reach_is_pinned`
 //!   states everything a local and a remote client may reach, for every message the page can send.
 //! - Sign-ins: a client (local or remote) may start Claude's or Notion's (`startOauth`, `startMcpOauth`) and paste the
@@ -98,11 +98,15 @@ const REMOTE_PI_COMMANDS: [(&str, &[&str]); 1] = [("get_session_stats", &[])];
 
 /// What a remote client's message becomes on its way to the chat: the same message with what it may not choose taken
 /// out, or the code it is refused with. `message` is already one `allowed` lets through.
-fn for_remote(message: PageMessage) -> Result<PageMessage, &'static str> {
+fn for_remote(message: PageMessage, known: &(dyn Fn(&str) -> bool + Send + Sync)) -> Result<PageMessage, &'static str> {
     match message {
         // Ruling 6 of the spec: no client folder over connect (a session's folder is where its commands may write).
         PageMessage::SessionNew { id, .. } => Ok(PageMessage::SessionNew { id, workdir: None }),
         PageMessage::Session { session, message } => {
+            // Any id would start a Pi of its own: only the sessions the service has are talked to (`sessionNew` makes one).
+            if !known(&session) {
+                return Err("unknown-session");
+            }
             let message = match *message {
                 PageMessage::PiCommand { id, command, args } => {
                     let Some((_, keys)) = REMOTE_PI_COMMANDS.iter().find(|(name, _)| *name == command) else {
@@ -175,6 +179,8 @@ impl Watchers {
 pub struct Hub {
     chat: Arc<Mutex<mpsc::Sender<PageMessage>>>,
     handlers: Arc<dyn Fn(PageMessage) + Send + Sync>,
+    /// Is this a session the service has? A remote client may talk only to sessions that exist.
+    known_session: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     clients: Watchers,
     next: Arc<AtomicU64>,
     /// The ids given to clients' requests. A reply whose id is not here is the page's.
@@ -206,10 +212,15 @@ fn id_slot(value: &mut Value) -> Option<&mut Value> {
 }
 
 impl Hub {
-    pub fn new(chat: mpsc::Sender<PageMessage>, handlers: Arc<dyn Fn(PageMessage) + Send + Sync>) -> Hub {
+    pub fn new(
+        chat: mpsc::Sender<PageMessage>,
+        handlers: Arc<dyn Fn(PageMessage) + Send + Sync>,
+        known_session: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    ) -> Hub {
         Hub {
             chat: Arc::new(Mutex::new(chat)),
             handlers,
+            known_session,
             clients: Watchers::default(),
             next: Arc::new(AtomicU64::new(1)),
             asked: Arc::default(),
@@ -368,12 +379,14 @@ impl Hub {
         });
         match message {
             Some(message) if remote && refused_for_remote(&message) => refuse("not-for-remote"),
-            Some(message) if allowed(&message) => match if remote { for_remote(message) } else { Ok(message) } {
-                Ok(message) => {
-                    let _ = self.chat.lock().unwrap().send(message);
+            Some(message) if allowed(&message) => {
+                match if remote { for_remote(message, &*self.known_session) } else { Ok(message) } {
+                    Ok(message) => {
+                        let _ = self.chat.lock().unwrap().send(message);
+                    }
+                    Err(code) => refuse(code),
                 }
-                Err(code) => refuse(code),
-            },
+            }
             Some(message) if for_handlers(&message) => (self.handlers)(message),
             _ => refuse("not-for-clients"),
         }
@@ -465,6 +478,10 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
+        fixture_knowing(Arc::new(|_| true))
+    }
+
+    fn fixture_knowing(known: Arc<dyn Fn(&str) -> bool + Send + Sync>) -> Fixture {
         let (chat_tx, chat) = mpsc::channel();
         let (handled_tx, handled) = mpsc::channel();
         let handled_tx = std::sync::Mutex::new(handled_tx);
@@ -473,6 +490,7 @@ mod tests {
             std::sync::Arc::new(move |m| {
                 let _ = handled_tx.lock().unwrap().send(m);
             }),
+            known,
         );
         Fixture { hub, chat, handled }
     }
@@ -1030,6 +1048,35 @@ mod tests {
             assert_eq!(fate(&f, &mut local, line(&message, true)), row.3, "{name}, in a session, local");
             assert_eq!(fate(&f, &mut remote, line(&message, true)), row.4, "{name}, in a session, remote");
         }
+    }
+
+    #[test]
+    fn a_remote_client_talks_only_to_sessions_that_exist() {
+        let known = Arc::new(Mutex::new(vec![s("aa")]));
+        let seen = known.clone();
+        let f = fixture_knowing(Arc::new(move |id| seen.lock().unwrap().iter().any(|k| k == id)));
+        let mut remote = connect(&f);
+        remote.send(hello(PROTOCOL, Some(true)));
+        remote.next();
+        // a made-up id would start a Pi of its own: refused before it reaches the chat, with the request's id
+        remote.send(json!({"type": "session", "session": "zz", "message": {"type": "listModels", "id": 5}}));
+        assert_eq!(remote.next(), json!({"type": "error", "id": 5, "code": "unknown-session"}));
+        remote.send(json!({"type": "session", "session": "zz", "message": {"type": "chatSend", "text": "hi"}}));
+        assert_eq!(remote.next(), json!({"type": "error", "id": 0, "code": "unknown-session"}));
+        assert!(f.chat.try_recv().is_err());
+        // a known one passes
+        remote.send(json!({"type": "session", "session": "aa", "message": {"type": "chatAbort"}}));
+        assert!(matches!(f.chat.recv_timeout(Duration::from_secs(5)).unwrap(), PageMessage::Session { .. }));
+        // and one the client opened is known afterwards (the service reads sessions.json, where `sessionNew` writes it)
+        remote.send(json!({"type": "sessionNew", "id": 6}));
+        assert!(matches!(f.chat.recv_timeout(Duration::from_secs(5)).unwrap(), PageMessage::SessionNew { .. }));
+        known.lock().unwrap().push(s("bb"));
+        remote.send(json!({"type": "session", "session": "bb", "message": {"type": "chatAbort"}}));
+        assert!(matches!(f.chat.recv_timeout(Duration::from_secs(5)).unwrap(), PageMessage::Session { .. }));
+        // a local terminal and the page are not asked
+        let mut local = connect(&f);
+        local.send(json!({"type": "session", "session": "zz", "message": {"type": "chatAbort"}}));
+        assert!(matches!(f.chat.recv_timeout(Duration::from_secs(5)).unwrap(), PageMessage::Session { .. }));
     }
 
     #[test]
