@@ -304,7 +304,15 @@ fn answer(session: &Session, op: Option<&str>, request: &Value) -> Result<Fields
         }
         // The value never comes back: only the name it was kept under and the variable a command reads it from.
         Some("secret_import") => {
-            let path = resolve_path(request["path"].as_str().ok_or("path is missing")?, request["cwd"].as_str());
+            let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+            let projects = aria_core::agent::workdir(aria_core::settings::load(&session.paths).ok().flatten().as_ref());
+            let path = secret_file(
+                request["path"].as_str().ok_or("path is missing")?,
+                request["cwd"].as_str(),
+                &projects,
+                &home,
+                &session.paths.root,
+            )?;
             let text = std::fs::read_to_string(&path).map_err(|e| format!("could not read {}: {e}", path.display()))?;
             let value = secrets::extract(&text, request["key"].as_str())?;
             let purpose = request["purpose"].as_str().unwrap_or_default();
@@ -328,17 +336,64 @@ fn answer(session: &Session, op: Option<&str>, request: &Value) -> Result<Fields
     }
 }
 
-/// A path the model or the person named: `~` is the home, a relative one is from Pi's working folder.
-fn resolve_path(raw: &str, cwd: Option<&str>) -> PathBuf {
-    let raw = raw.trim();
-    if let Some(rest) = raw.strip_prefix("~/") {
-        return PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(rest);
+/// The only thing `secret_import` says when a file is out of bounds: it never tells whether the file or the key exists.
+const SECRET_FILE_REFUSED: &str = "Aria keeps a secret only from a file inside this session's project or the projects folder, and never from Aria's own folder or a hidden folder of your home folder.";
+
+/// The file `secret_import` may read: `raw` (absolute, `~/…` or relative to `cwd`, the session's project root) with no `..`
+/// in it, inside `cwd` or the projects folder, and not inside Aria's own folder or a dot entry of the home folder
+/// (`~/.ssh`, `~/.aws`, `~/.config`, `~/.aria`, any `~/.<name>`), judged where it is written and, when it exists, where
+/// it really is (a link cannot lead there). Every refusal is the same sentence, and nothing is read before the check.
+fn secret_file(
+    raw: &str,
+    cwd: Option<&str>,
+    projects: &Path,
+    home: &Path,
+    aria_root: &Path,
+) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let refused = || SECRET_FILE_REFUSED.to_string();
+    // Absolute, `.` dropped, `..` refused.
+    let clean = |path: &Path| -> Option<PathBuf> {
+        let mut out = PathBuf::new();
+        for part in path.components() {
+            match part {
+                Component::RootDir => out.push("/"),
+                Component::Normal(name) => out.push(name),
+                Component::CurDir => {}
+                Component::ParentDir | Component::Prefix(_) => return None,
+            }
+        }
+        out.is_absolute().then_some(out)
+    };
+    if raw.trim().is_empty() {
+        return Err(refused());
     }
-    let path = PathBuf::from(raw);
-    match cwd {
-        Some(cwd) if path.is_relative() => Path::new(cwd).join(path),
-        _ => path,
+    let cwd = cwd.and_then(|cwd| clean(Path::new(cwd)));
+    let path = match raw.trim().strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None if Path::new(raw.trim()).is_relative() => cwd.as_ref().ok_or_else(refused)?.join(raw.trim()),
+        None => PathBuf::from(raw.trim()),
+    };
+    let path = clean(&path).ok_or_else(refused)?;
+    let roots: Vec<PathBuf> = cwd.into_iter().chain(clean(projects)).filter(|root| root != Path::new("/")).collect();
+    if !roots.iter().any(|root| path.starts_with(root)) {
+        return Err(refused());
     }
+    let homes: Vec<PathBuf> = clean(home).into_iter().chain(std::fs::canonicalize(home).ok()).collect();
+    let aria_roots: Vec<PathBuf> = clean(aria_root).into_iter().chain(std::fs::canonicalize(aria_root).ok()).collect();
+    let forbidden = |path: &Path| {
+        aria_roots.iter().any(|root| path.starts_with(root))
+            || homes.iter().any(|home| {
+                path.strip_prefix(home)
+                    .ok()
+                    .and_then(|rest| rest.components().next())
+                    .is_some_and(|first| first.as_os_str().to_string_lossy().starts_with('.'))
+            })
+    };
+    if forbidden(&path) || std::fs::canonicalize(&path).is_ok_and(|real| forbidden(&real)) {
+        return Err(refused());
+    }
+    Ok(path)
 }
 
 fn now_ms() -> i64 {
@@ -601,6 +656,142 @@ echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"te
         let missing = c.ask(json!({"id": 3, "op": "secret_import", "path": ".env", "cwd": work.display().to_string(), "key": "NOPE", "name": "x"}));
         assert_eq!(missing["ok"], false);
         assert!(!missing.to_string().contains("sk-proj"), "nor in an error: {missing}");
+    }
+
+    fn secret_file(raw: &str, cwd: Option<&str>) -> Result<PathBuf, String> {
+        super::secret_file(
+            raw,
+            cwd,
+            Path::new("/home/ana/Projects"),
+            Path::new("/home/ana"),
+            Path::new("/home/ana/.aria"),
+        )
+    }
+
+    #[test]
+    fn a_secret_is_read_only_from_the_project_or_the_projects_folder() {
+        let cwd = Some("/home/ana/Projects/acme/checkout-widget");
+        assert_eq!(secret_file(".env", cwd).unwrap(), PathBuf::from("/home/ana/Projects/acme/checkout-widget/.env"));
+        assert!(secret_file("/home/ana/Projects/acme/checkout-widget/config/.env.local", cwd).is_ok());
+        assert!(secret_file("/home/ana/Projects/other/.env", cwd).is_ok(), "the projects folder");
+        assert!(secret_file("~/Projects/other/.env", None).is_ok(), "`~` is expanded before the check");
+        assert!(secret_file("/home/ana/Projects/./other/.env", None).is_ok());
+        // A project outside the projects folder: its own root counts.
+        assert!(secret_file(".env", Some("/srv/code/app")).is_ok());
+        assert!(secret_file("/srv/code/app/.env", Some("/srv/code/app")).is_ok());
+    }
+
+    #[test]
+    fn any_other_file_is_refused_with_one_sentence_whatever_it_is() {
+        let cwd = Some("/home/ana/Projects/acme/checkout-widget");
+        let mut said = std::collections::HashSet::new();
+        for raw in [
+            "/etc/passwd",
+            "/home/ana/.aws/credentials",
+            "~/.aws/credentials",
+            "/home/ana/.ssh/id_ed25519",
+            "/home/ana/.gnupg/pubring.kbx",
+            "/home/ana/.config/gh/hosts.yml",
+            "/home/ana/.local/share/keyrings/login.keyring",
+            "/home/ana/.kube/config",
+            "/home/ana/.aria/auth.json",
+            "/home/ana/.anything/x",
+            "/home/ana/.env",
+            "/home/ana/Documents/notes.txt",
+            "../../../.ssh/id_ed25519",
+            "/home/ana/Projects/acme/../../.aws/credentials",
+            "/home/ana/Projects/../.ssh/id_ed25519",
+            "/home/ana/Projectsx/.env",
+            "/tmp/.env",
+            "",
+        ] {
+            let why = secret_file(raw, cwd).unwrap_err();
+            said.insert(why);
+        }
+        assert_eq!(said.len(), 1, "the same sentence for every refusal: {said:?}");
+        let sentence = said.into_iter().next().unwrap();
+        for word in ["exist", "found", "could not read", "no such", "key"] {
+            assert!(!sentence.to_lowercase().contains(word), "{sentence}");
+        }
+        assert!(sentence.contains("project"), "{sentence}");
+        assert!(secret_file("relative/.env", None).is_err(), "a relative path with no working folder");
+    }
+
+    #[test]
+    fn a_dot_folder_of_the_home_is_refused_even_inside_a_project_that_is_the_home_folder() {
+        let at_home = |raw: &str| {
+            super::secret_file(
+                raw,
+                Some("/home/ana"),
+                Path::new("/home/ana/Projects"),
+                Path::new("/home/ana"),
+                Path::new("/home/ana/.aria"),
+            )
+        };
+        assert!(at_home("notes/.env").is_ok());
+        for raw in [".ssh/id_ed25519", ".aws/credentials", ".config/gh/hosts.yml", ".aria/auth.json", ".env"] {
+            assert!(at_home(raw).is_err(), "{raw}");
+        }
+        // Aria's own folder when it is not under a dot folder.
+        let moved = super::secret_file(
+            "/srv/aria-home/auth.json",
+            Some("/srv"),
+            Path::new("/home/ana/Projects"),
+            Path::new("/home/ana"),
+            Path::new("/srv/aria-home"),
+        );
+        assert!(moved.is_err());
+    }
+
+    #[test]
+    fn the_service_refuses_a_secret_outside_the_project_and_says_nothing_about_it() {
+        use aria_core::keyring::Backend;
+        let s = setup(false);
+        let work = s.dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(s.dir.path().join("home/auth.json"), "SECRET_TOKEN=abc-not-for-the-model\n").unwrap();
+        std::os::unix::fs::symlink(s.dir.path().join("home/auth.json"), work.join("link")).unwrap();
+        let socket = bind(&s, "s1");
+        let mut c = Client::connect(&socket);
+        let cwd = work.display().to_string();
+        let home = std::env::var("HOME").unwrap();
+        let mut errors = std::collections::HashSet::new();
+        for (n, path) in [
+            format!("{home}/.aws/credentials"),
+            "/etc/passwd".to_string(),
+            "/etc/definitely-not-there".to_string(),
+            "../home/auth.json".to_string(),
+            "link".to_string(), // a link in the project to Aria's own folder
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let answer = c.ask(json!({"id": n + 1, "op": "secret_import", "path": path, "cwd": cwd, "key": "SECRET_TOKEN", "name": "x"}));
+            assert_eq!(answer["ok"], false, "{path}: {answer}");
+            assert!(!answer.to_string().contains("abc-not-for-the-model"), "{answer}");
+            errors.insert(answer["error"].as_str().unwrap().to_string());
+        }
+        assert_eq!(errors.len(), 1, "one sentence for all: {errors:?}");
+        assert!(s.keyring.get("user:x").unwrap().is_none(), "nothing was kept");
+    }
+
+    #[test]
+    fn a_secret_in_the_projects_folder_is_kept_when_the_session_works_elsewhere() {
+        let s = setup(false);
+        let projects = s.dir.path().join("projects");
+        std::fs::create_dir_all(projects.join("app")).unwrap();
+        std::fs::write(projects.join("app/.env"), "TOKEN=tok-1234567890abcdef\n").unwrap();
+        let mut settings = aria_core::settings::Settings::defaults("en");
+        settings.sandbox.projects_dir = projects.display().to_string();
+        aria_core::settings::save(&s.paths, &settings).unwrap();
+        let socket = bind(&s, "s1");
+        let mut c = Client::connect(&socket);
+        let elsewhere = s.dir.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let saved = c
+            .ask(json!({"id": 1, "op": "secret_import", "path": projects.join("app/.env").display().to_string(),
+            "cwd": elsewhere.display().to_string(), "key": "TOKEN", "name": "app-token"}));
+        assert_eq!(saved["ok"], true, "{saved}");
     }
 
     #[test]

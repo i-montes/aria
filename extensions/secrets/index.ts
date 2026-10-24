@@ -54,10 +54,11 @@ export default function secrets(pi: ExtensionAPI) {
     description: [
       'Keep a secret that sits in a file (a `.env`, a config) in the system keyring, without you seeing it: Aria reads the file and keeps the value of `key` (the variable or field that holds it; leave it out when the file has one key-shaped value).',
       'Use it when the person asks, or after offering it when an output of yours had a masked secret. Tell them afterwards that the file still holds it (they may want it removed).',
+      'Only a file inside this project or the projects folder works (no `..`, and nothing in a hidden folder of the home folder or in Aria\'s own folder); anything else is refused with one sentence that does not say whether the file exists.',
     ].join('\n'),
     parameters: object(
       {
-        path: str('The file, absolute or relative to the working folder.'),
+        path: str('The file inside this project or the projects folder, absolute or relative to the working folder.'),
         key: str('The variable or field that holds it (`OPENAI_API_KEY`).'),
         name: str('The name to keep it under (`openai-key`).'),
         purpose: str('What it is for, in one line.'),

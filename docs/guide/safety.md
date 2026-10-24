@@ -105,7 +105,7 @@ Passwords, API keys and tokens you hand to Aria go to the keyring. The model onl
 
 **A key you paste in the chat is caught.** In the dock's composer, before a message goes out, Aria looks for key shapes: OpenAI and Anthropic keys, GitHub, GitLab and Slack tokens, AWS access keys, Google API keys, JWTs, and assignments with a secret-sounding name such as `DB_PASSWORD=…`. If it finds one it holds the message and offers "Keep it safe" (the value goes to the keyring and the message goes out with `[secret saved as <name>: use $ARIA_SECRET_…]` in its place), "Send as is", or "Edit". The terminal has no such check.
 
-**A key in a file is masked, and Aria offers to keep it.** Every tool output is masked before the model reads it: the values of your stored secrets (replaced by `[secret <name>]`), anything shaped like a key, and the value in an assignment whose name ends in `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `PWD`, `CREDENTIAL(S)` or `AUTH`. The model gets a note saying what was masked and where, and the persona tells it to offer `secret_import`: Aria's service reads the file you name, takes the value of the variable (or the one key-shaped value if you give none) and keeps it in the keyring. The file still holds the key; Aria tells you so, and removing it is up to you.
+**A key in a file is masked, and Aria offers to keep it.** Every tool output is masked before the model reads it: the values of your stored secrets (replaced by `[secret <name>]`), anything shaped like a key, and the value in an assignment whose name ends in `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `PWD`, `CREDENTIAL(S)` or `AUTH`. The model gets a note saying what was masked and where, and the persona tells it to offer `secret_import`: Aria's service reads the file you name (only one inside the session's project or the projects folder: see below), takes the value of the variable (or the one key-shaped value if you give none) and keeps it in the keyring. The file still holds the key; Aria tells you so, and removing it is up to you.
 
 **Commands use it as a variable.** A command that contains `$ARIA_SECRET_<NAME>` (`github-token` becomes `ARIA_SECRET_GITHUB_TOKEN`) gets that variable in its environment when it starts, read from the keyring at that moment. The model writes the variable's name, never the value.
 
@@ -113,7 +113,7 @@ Settings → Integrations lists your secrets by name, purpose and variable, with
 
 Know the limits of the masking. It matches the stored value as written and the shapes above; a command that transforms a value before printing it (encodes it, splits it) is not caught. A command given a secret can send it anywhere the network reaches. The point is that the key is not in the conversation, not that a command you let run cannot misuse it.
 
-There is also a gap in the hiding of credentials. `secret_import` reads the file the model names, wherever it is, and keeps one value from it in the keyring, with no card and no sandbox path rule (only the persona tells the model to offer it first). A model that something it read has misled can point it at a file the sandbox hides (for example `~/.aws/credentials` or `~/.config/gh/hosts.yml`, with the name of the variable that holds the value) and then send the value out with a command that names `$ARIA_SECRET_<NAME>`. Where the keyring is off, as on a hub, `secret_import` keeps nothing and fails.
+`secret_import` reads only a file inside the session's project or the projects folder, with no `..` in the path, and never one inside Aria's own folder or a hidden entry of your home folder (`~/.ssh`, `~/.aws`, `~/.config`, `~/.local`, `~/.aria`, any `~/.<name>`), judged where the path is written and, when the file exists, where it really is, so a link cannot lead there. Anything else is refused with one sentence that does not say whether the file or the key exists. There is still no card: inside the project, a model that something it read has misled can keep a value from a file there (a `.env`) and send it out with a command that names `$ARIA_SECRET_<NAME>`. Where the keyring is off, as on a hub, `secret_import` keeps nothing and fails.
 
 Without a keyring nothing can be kept: the card answers that the keyring is off, and on a hub there is none (see [the hub](#on-a-hub)).
 
@@ -229,7 +229,7 @@ It does not make the agent safe to leave alone with a machine you cannot afford 
 - A command you allow outside the box is not protected by it, including against changes to `aria.json`, the settings file or the attachments folder.
 - Old attachments are never removed.
 - Masking works on values as they are written.
-- `secret_import` can keep a value from any file the service can read, with no card (see [your secrets](#your-secrets)).
+- `secret_import` can keep a value from any file inside the project or the projects folder, with no card (see [your secrets](#your-secrets)).
 - On a hub, whoever holds the client key can answer every card ([what a stolen key can do](hub.md#what-a-stolen-client-key-can-do)).
 - Settings under `git.*` (ask before committing, pushing or touching someone else's changes) are instructions in the persona. The sandbox does not enforce them.
 - The dock draws no undo, no changes line and no pass or fail line for the checks; the terminal does.
