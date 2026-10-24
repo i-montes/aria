@@ -342,21 +342,25 @@ fn systemctl_hint(user: &str) -> String {
 /// Reads one validated key line from stdin and adds it to `authorized_keys` as the restricted line, once. sshd uses the
 /// first line a key matches, so the blob is looked for in the lines that are not comments: none holds it, the line is
 /// added (after a newline, when the file lacks one at its end); the first one starts with exactly
-/// `restrict,command="$HOME/.local/bin/aria client-stdio"` followed by a space or a comma (the owner's own options, such as
-/// `from="…"`, come after the command), it is already allowed; one that starts with `restrict,command=`
-/// and forces another command is reported as such, and any other is the same key with no restriction (both exit 3, and
-/// are left for their owner).
-/// Nothing is interpolated: the key arrives on stdin and the home is the remote shell's own `$HOME`. Plain POSIX, with
-/// no single quote in it.
+/// `restrict,command="$HOME/.local/bin/aria client-stdio"` and then a space, or a comma and only options the owner may
+/// add to tighten it (`from="…"`, `expiry-time="…"`, `no-…`, up to the first space), it is already allowed; one that
+/// forces another command is reported as such, one with other options after the command (`pty`, `port-forwarding`,
+/// `permitopen`, a later `command=`) as having other options, and any other is the same key with no restriction (all
+/// exit 3, and are left for their owner). Nothing is interpolated: the key arrives on stdin and the home is the remote
+/// shell's own `$HOME`. Plain POSIX, with no single quote in it.
 const REMOTE_ALLOW_KEY: &str = concat!(
     r#"umask 077; f="$HOME/.ssh/authorized_keys"; mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh" "#,
     r#"&& touch "$f" && chmod 600 "$f" && IFS= read -r key "#,
     r#"&& blob=$(printf "%s\n" "$key" | cut -d" " -f2) "#,
+    r#"&& pre="restrict,command=\"$HOME/.local/bin/aria client-stdio\"" "#,
     r#"&& first=$(grep -v "^[[:space:]]*#" "$f" | grep -F " $blob" | head -n 1) "#,
     r#"&& case "$first" in "") if [ -s "$f" ] && [ -n "$(tail -c 1 "$f")" ]; then echo >> "$f"; fi; "#,
-    r#"printf "restrict,command=\"%s/.local/bin/aria client-stdio\" %s\n" "$HOME" "$key" >> "$f" && echo "allowed" ;; "#,
-    r#""restrict,command=\"$HOME/.local/bin/aria client-stdio\" "*|"restrict,command=\"$HOME/.local/bin/aria client-stdio\","*) "#,
-    r#"echo "already allowed" ;; "#,
+    r#"printf "%s %s\n" "$pre" "$key" >> "$f" && echo "allowed" ;; "#,
+    r#""$pre"*) rest=${first#"$pre"}; case "$rest" in " "*) echo "already allowed" ;; "#,
+    r#"","*) opts=${rest#,}; opts=${opts%% *}; "#,
+    r#"if printf "%s\n" "$opts" | grep -Eq "^(from=\"[^\"]*\"|expiry-time=\"[^\"]*\"|no-[a-z0-9-]+)(,(from=\"[^\"]*\"|expiry-time=\"[^\"]*\"|no-[a-z0-9-]+))*\$"; "#,
+    r#"then echo "already allowed"; else echo "other options"; exit 3; fi ;; "#,
+    r#"*) echo "different command"; exit 3 ;; esac ;; "#,
     r#""restrict,command="*) echo "different command"; exit 3 ;; "#,
     r#"*) echo "unrestricted"; exit 3 ;; esac"#,
 );
@@ -1188,7 +1192,16 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
                     }
                 }
                 Ok(output) if output.status.code() == Some(KEY_UNRESTRICTED) => {
-                    if first_line(&output.stdout) == "different command" {
+                    let said = first_line(&output.stdout);
+                    if said == "other options" {
+                        eprintln!(
+                            "aria hub init: step 6 (key) failed: that key is already in authorized_keys with Aria's \
+                             bridge as its command, but the line has other options after it than from=, expiry-time= \
+                             and no-… (they can switch ssh features back on): edit that line yourself to start with \
+                             `{} ` (or remove it and run init again)",
+                            authorized_line(&probe.home, "").trim_end()
+                        );
+                    } else if said == "different command" {
                         eprintln!(
                             "aria hub init: step 6 (key) failed: that key is already in authorized_keys with a different \
                              command than Aria's bridge: edit that line yourself to start with `{} ` (or remove it \

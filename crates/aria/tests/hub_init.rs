@@ -596,14 +596,49 @@ fn a_key_there_with_another_forced_command_is_reported_like_an_unrestricted_one(
 }
 
 #[test]
-fn the_owners_own_options_after_the_forced_command_keep_the_line_allowed() {
+fn only_tightening_options_after_the_forced_command_keep_the_line_allowed() {
     let world = World::new();
-    let line = format!("{},from=\"203.0.113.0/24\" {KEY}", restricted(&world).trim_end_matches(&format!(" {KEY}")));
-    seed_authorized_keys(&world, &format!("{line}\n"));
-    let output = world.init_yes(&["--client-key", &key_file(&world)], &[]);
-    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
-    assert!(text(&output.stdout).contains("already allowed"), "{}", text(&output.stdout));
-    assert_eq!(world.authorized_keys(), format!("{line}\n"));
+    let command = restricted(&world).trim_end_matches(&format!(" {KEY}")).to_string();
+    for options in [
+        ",from=\"203.0.113.0/24\"",
+        ",from=\"203.0.113.1,198.51.100.0/24\",no-pty",
+        ",expiry-time=\"20990101\"",
+        ",no-agent-forwarding,no-X11-forwarding".to_lowercase().as_str(),
+        ",no-touch-required,from=\"10.0.0.0/8\"",
+    ] {
+        let line = format!("{command}{options} {KEY}");
+        seed_authorized_keys(&world, &format!("{line}\n"));
+        let output = world.init_yes(&["--client-key", &key_file(&world)], &[]);
+        assert!(output.status.success(), "{options}: {}{}", text(&output.stdout), text(&output.stderr));
+        assert!(text(&output.stdout).contains("already allowed"), "{options}: {}", text(&output.stdout));
+        assert_eq!(world.authorized_keys(), format!("{line}\n"), "{options}");
+    }
+}
+
+#[test]
+fn other_options_after_the_forced_command_are_reported_not_accepted() {
+    let world = World::new();
+    let command = restricted(&world).trim_end_matches(&format!(" {KEY}")).to_string();
+    for options in [
+        ",pty",
+        ",port-forwarding",
+        ",permitopen=\"10.0.0.1:22\"",
+        ",command=\"sh\"",
+        ",environment=\"A=b\"",
+        ",from=\"10.0.0.0/8\",pty",
+        ",no-pty,port-forwarding",
+        ",from=\"10.0.0.0/8\"x",
+        ",",
+    ] {
+        let line = format!("{command}{options} {KEY}");
+        seed_authorized_keys(&world, &format!("{line}\n"));
+        let output = world.init_yes(&["--client-key", &key_file(&world)], &[]);
+        let (out, err) = (text(&output.stdout), text(&output.stderr));
+        assert_eq!(output.status.code(), Some(1), "{options}: {out}{err}");
+        assert!(err.contains("other options"), "{options}: {err}");
+        assert!(!err.contains("already allowed") && !out.contains("already allowed"), "{options}: {out}{err}");
+        assert_eq!(world.authorized_keys(), format!("{line}\n"), "{options}: untouched");
+    }
 }
 
 #[test]
