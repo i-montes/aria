@@ -11,6 +11,7 @@
 #   (c) killing the client leaves the hub and the session, and a second connect lists it
 #   (d) /schedules over connect says there are no scheduled tasks
 #   (e) a client with another protocol is refused (exit 3)   (f) a secretSave through the bridge is `not-for-remote`
+#   (f2) a session the hub does not have is `unknown-session`
 #   (g) `aria quit` stops the hub (exit 0, nothing answers on the socket: the file of a stopped service stays, as with a dock)
 # (c) covers the session and the service surviving the client. A RUN started over connect that goes on after the client
 # dies needs a model provider, which a scratch home does not have: the owner checks that by hand (the spec's M1 "done
@@ -81,6 +82,15 @@ else
   fail "a secretSave through client-stdio is answered not-for-remote ($out)"
 fi
 if [ -e "$hub_home/.aria/secrets.json" ]; then fail "the refused secret left a file"; fi
+
+# (f2) nor does a session the hub does not have
+out=$( (printf '{"type":"hello","protocol":1,"version":"0.0.0"}\n{"type":"session","session":"made-up","message":{"type":"listModels","id":8}}\n'; sleep 2) |
+  ARIA_SHIM_PIDFILE= "$here/ssh-shim.sh" host aria client-stdio 2>&1)
+if printf '%s' "$out" | grep -q '"code":"unknown-session"' && printf '%s' "$out" | grep -q '"id":8'; then
+  pass "a session the hub does not have is answered unknown-session"
+else
+  fail "a session the hub does not have is answered unknown-session ($out)"
+fi
 
 # (g) aria quit
 out=$(hub_env "$aria" quit 2>&1)
