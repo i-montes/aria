@@ -12,7 +12,9 @@
 //!   hub answers with its own `hello` (no `remote`), and a different `protocol` is answered `protocol-mismatch` and the
 //!   connection closed. `remote: true` marks a client that came in from another machine: it can never send `secretSave`
 //!   or a `!command` (`not-for-remote`), and a later `hello` cannot lift the mark. It never chooses a session's folder
-//!   either: its `sessionNew` reaches the chat with no `workdir`.
+//!   either: its `sessionNew` reaches the chat with no `workdir`, and of Pi's own commands (`piCommand`) it may send only
+//!   `get_session_stats`, with none of the arguments it names (`REMOTE_PI_COMMANDS`). The test `the_whole_surface_a_client_may_reach_is_pinned`
+//!   states everything a local and a remote client may reach, for every message the page can send.
 //! - Sign-ins: a client (local or remote) may start Claude's or Notion's (`startOauth`, `startMcpOauth`) and paste the
 //!   address its browser could not load (`oauthCode`); they go to the handlers, not the chat. A sign-in answers twice
 //!   (`oauthUrl`, then `oauthResult` or `error`), so its id stays until the last of them. Security: a remote client can
@@ -89,13 +91,40 @@ fn refused_for_remote(message: &PageMessage) -> bool {
     }
 }
 
+/// The Pi commands a remote client may send, each with the argument keys it may carry: only what the terminal sends
+/// (`/context` is `get_session_stats` with no arguments). Anything else is `not-for-remote`: `export_html` writes to a
+/// path the client names, `compact` is a model call over the whole context.
+const REMOTE_PI_COMMANDS: [(&str, &[&str]); 1] = [("get_session_stats", &[])];
+
 /// What a remote client's message becomes on its way to the chat: the same message with what it may not choose taken
-/// out. `message` is already one `allowed` lets through.
-fn for_remote(message: PageMessage) -> PageMessage {
+/// out, or the code it is refused with. `message` is already one `allowed` lets through.
+fn for_remote(message: PageMessage) -> Result<PageMessage, &'static str> {
     match message {
         // Ruling 6 of the spec: no client folder over connect (a session's folder is where its commands may write).
-        PageMessage::SessionNew { id, .. } => PageMessage::SessionNew { id, workdir: None },
-        other => other,
+        PageMessage::SessionNew { id, .. } => Ok(PageMessage::SessionNew { id, workdir: None }),
+        PageMessage::Session { session, message } => {
+            let message = match *message {
+                PageMessage::PiCommand { id, command, args } => {
+                    let Some((_, keys)) = REMOTE_PI_COMMANDS.iter().find(|(name, _)| *name == command) else {
+                        return Err("not-for-remote");
+                    };
+                    let kept: serde_json::Map<String, Value> = args
+                        .as_object()
+                        .map(|object| {
+                            object
+                                .iter()
+                                .filter(|(key, _)| keys.contains(&key.as_str()))
+                                .map(|(key, value)| (key.clone(), value.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    PageMessage::PiCommand { id, command, args: Value::Object(kept) }
+                }
+                other => other,
+            };
+            Ok(PageMessage::Session { session, message: Box::new(message) })
+        }
+        other => Ok(other),
     }
 }
 
@@ -339,10 +368,12 @@ impl Hub {
         });
         match message {
             Some(message) if remote && refused_for_remote(&message) => refuse("not-for-remote"),
-            Some(message) if allowed(&message) => {
-                let message = if remote { for_remote(message) } else { message };
-                let _ = self.chat.lock().unwrap().send(message);
-            }
+            Some(message) if allowed(&message) => match if remote { for_remote(message) } else { Ok(message) } {
+                Ok(message) => {
+                    let _ = self.chat.lock().unwrap().send(message);
+                }
+                Err(code) => refuse(code),
+            },
             Some(message) if for_handlers(&message) => (self.handlers)(message),
             _ => refuse("not-for-clients"),
         }
@@ -685,6 +716,320 @@ mod tests {
         let mut local = connect(&f);
         local.send(json!({"type": "sessionNew", "id": 2, "workdir": "/home/ana/Projects/checkout-widget"}));
         assert_eq!(new_session_workdir(&f).as_deref(), Some("/home/ana/Projects/checkout-widget"));
+    }
+
+    fn pi_command(id: u64, command: &str, args: Value) -> Value {
+        json!({"type": "session", "session": "aa", "message": {"type": "piCommand", "id": id, "command": command, "args": args}})
+    }
+
+    #[test]
+    fn a_remote_clients_pi_commands_are_only_the_ones_the_terminal_sends() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(hello(PROTOCOL, Some(true)));
+        a.next();
+        // `export_html` writes wherever `outputPath` says; `compact` is a model call: neither is the terminal's
+        for (id, command, args) in [
+            (1, "export_html", json!({"outputPath": "/home/ana/.ssh/authorized_keys"})),
+            (2, "compact", json!({"customInstructions": "x"})),
+            (3, "set_model", json!({})),
+        ] {
+            a.send(pi_command(id, command, args));
+            assert_eq!(a.next(), json!({"type": "error", "id": id, "code": "not-for-remote"}), "{command}");
+        }
+        assert!(f.chat.try_recv().is_err(), "none of them reached the chat");
+        // the one it sends goes through with only the arguments the terminal puts in it
+        a.send(pi_command(4, "get_session_stats", json!({"outputPath": "/home/ana/x", "extra": 1})));
+        match f.chat.recv_timeout(Duration::from_secs(5)).unwrap() {
+            PageMessage::Session { message, .. } => match *message {
+                PageMessage::PiCommand { command, args, .. } => {
+                    assert_eq!(command, "get_session_stats");
+                    assert_eq!(args, json!({}), "no argument the terminal does not send");
+                }
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_local_clients_pi_commands_are_not_filtered() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(pi_command(1, "export_html", json!({"outputPath": "/home/ana/page.html"})));
+        match f.chat.recv_timeout(Duration::from_secs(5)).unwrap() {
+            PageMessage::Session { message, .. } => match *message {
+                PageMessage::PiCommand { command, args, .. } => {
+                    assert_eq!(command, "export_html");
+                    assert_eq!(args["outputPath"], "/home/ana/page.html");
+                }
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        }
+    }
+
+    // ---- The whole surface a client may reach, pinned in one place. ----
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Fate {
+        /// Reaches the chat's worker.
+        Chat,
+        /// Reaches the handlers.
+        Handlers,
+        Refused(&'static str),
+    }
+    use Fate::{Chat as C, Handlers as H, Refused as R};
+    const NC: Fate = R("not-for-clients");
+    const NR: Fate = R("not-for-remote");
+
+    /// Every `PageMessage` variant, with a name. The match has no wildcard: a new variant stops this from compiling until
+    /// it is named here, and `every_variant_is_built_and_in_the_table` then asks for its constructor and its row.
+    fn label(message: &PageMessage) -> &'static str {
+        match message {
+            PageMessage::Ready => "ready",
+            PageMessage::Opened => "opened",
+            PageMessage::CloseRequest => "closeRequest",
+            PageMessage::QuitRequest => "quitRequest",
+            PageMessage::LoadSettings { .. } => "loadSettings",
+            PageMessage::SaveSettings { .. } => "saveSettings",
+            PageMessage::SaveKey { .. } => "saveKey",
+            PageMessage::SecretSave { .. } => "secretSave",
+            PageMessage::SecretsList { .. } => "secretsList",
+            PageMessage::SecretDelete { .. } => "secretDelete",
+            PageMessage::CheckKey { .. } => "checkKey",
+            PageMessage::CredentialDelete { .. } => "credentialDelete",
+            PageMessage::StartOAuth { .. } => "startOauth",
+            PageMessage::StartMcpOAuth { .. } => "startMcpOauth",
+            PageMessage::OAuthCode { .. } => "oauthCode",
+            PageMessage::OpenUrl { .. } => "openUrl",
+            PageMessage::ChatSend { .. } => "chatSend",
+            PageMessage::ChatAbort => "chatAbort",
+            PageMessage::ChatLoad { .. } => "chatLoad",
+            PageMessage::ChatEarlier { .. } => "chatEarlier",
+            PageMessage::ChatClearQueue { .. } => "chatClearQueue",
+            PageMessage::UiAnswer { .. } => "uiAnswer",
+            PageMessage::ListCommands { .. } => "listCommands",
+            PageMessage::ListModels { .. } => "listModels",
+            PageMessage::SetModel { .. } => "setModel",
+            PageMessage::ListFiles { .. } => "listFiles",
+            PageMessage::PiCommand { .. } => "piCommand",
+            PageMessage::ChatBash { .. } => "chatBash",
+            PageMessage::ChatCheckpoints { .. } => "chatCheckpoints",
+            PageMessage::ChatUndo { .. } => "chatUndo",
+            PageMessage::InstallClaudeBridge { .. } => "installClaudeBridge",
+            PageMessage::EnginesRestart => "enginesRestart",
+            PageMessage::McpScan { .. } => "mcpScan",
+            PageMessage::McpImport { .. } => "mcpImport",
+            PageMessage::ChatShown { .. } => "chatShown",
+            PageMessage::Session { .. } => "session",
+            PageMessage::SessionsLoad { .. } => "sessionsLoad",
+            PageMessage::SessionsSave { .. } => "sessionsSave",
+            PageMessage::SessionClose { .. } => "sessionClose",
+            PageMessage::SessionNew { .. } => "sessionNew",
+            PageMessage::SchedulesList { .. } => "schedulesList",
+            PageMessage::ScheduleUpdate { .. } => "scheduleUpdate",
+            PageMessage::ScheduleDelete { .. } => "scheduleDelete",
+            PageMessage::JobStop { .. } => "jobStop",
+            PageMessage::JobOutput { .. } => "jobOutput",
+            PageMessage::JobDismiss { .. } => "jobDismiss",
+            PageMessage::TraceSet { .. } => "traceSet",
+            PageMessage::DictationStart => "dictationStart",
+            PageMessage::DictationStop => "dictationStop",
+            PageMessage::DictationCancel => "dictationCancel",
+            PageMessage::DictationDownload => "dictationDownload",
+            PageMessage::Wide { .. } => "wide",
+        }
+    }
+
+    fn s(text: &str) -> String {
+        text.to_string()
+    }
+
+    fn every_variant() -> Vec<PageMessage> {
+        use PageMessage as P;
+        vec![
+            P::Ready,
+            P::Opened,
+            P::CloseRequest,
+            P::QuitRequest,
+            P::LoadSettings { id: 77 },
+            P::SaveSettings { id: 77, settings: json!({}) },
+            P::SaveKey { id: 77, provider: s("opencode-go"), key: s("k") },
+            P::SecretSave { id: 77, name: s("GH_TOKEN"), value: s("v"), purpose: s("") },
+            P::SecretsList { id: 77 },
+            P::SecretDelete { id: 77, name: s("GH_TOKEN") },
+            P::CheckKey { id: 77, provider: s("opencode-go") },
+            P::CredentialDelete { id: 77, provider: s("opencode-go") },
+            P::StartOAuth { id: 77 },
+            P::StartMcpOAuth { id: 77, service: s("notion") },
+            P::OAuthCode { id: 77, service: s("notion"), redirect: s("code=a&state=s") },
+            P::OpenUrl { url: s("https://example.com") },
+            P::ChatSend { text: s("hi"), behavior: None, attachments: vec![] },
+            P::ChatAbort,
+            P::ChatLoad { fresh: false },
+            P::ChatEarlier { cursor: None },
+            P::ChatClearQueue { steer: vec![], keep: vec![] },
+            P::UiAnswer { id: s("d1"), value: None, confirmed: Some(true), cancelled: None },
+            P::ListCommands { id: 77 },
+            P::ListModels { id: 77 },
+            P::SetModel { id: 77, model: s("acme/model") },
+            P::ListFiles { id: 77, query: s("src") },
+            P::PiCommand { id: 77, command: s("get_session_stats"), args: json!({}) },
+            P::ChatBash { id: 77, command: s("id") },
+            P::ChatCheckpoints { id: 77 },
+            P::ChatUndo { id: 77, entry: s("e1"), checkpoint: None, files: false, conversation: true },
+            P::InstallClaudeBridge { id: 77 },
+            P::EnginesRestart,
+            P::McpScan { id: 77 },
+            P::McpImport { id: 77, ids: vec![] },
+            P::ChatShown { shown: true },
+            P::Session { session: s("aa"), message: Box::new(P::ChatAbort) },
+            P::SessionsLoad { id: 77 },
+            P::SessionsSave { sessions: vec![], active: None },
+            P::SessionClose { session: s("aa") },
+            P::SessionNew { id: 77, workdir: None },
+            P::SchedulesList { id: 77 },
+            P::ScheduleUpdate { id: 77, schedule: s("s-1"), enabled: false },
+            P::ScheduleDelete { id: 77, schedule: s("s-1") },
+            P::JobStop { job: s("j1") },
+            P::JobOutput { id: 77, job: s("j1"), lines: None },
+            P::JobDismiss { job: s("j1") },
+            P::TraceSet { on: true },
+            P::DictationStart,
+            P::DictationStop,
+            P::DictationCancel,
+            P::DictationDownload,
+            P::Wide { on: true },
+        ]
+    }
+
+    /// Each variant's fate, sent by itself and wrapped in `session { aa }`, from a local client and from a remote one:
+    /// `(variant, bare local, bare remote, wrapped local, wrapped remote)`. This is the whole surface.
+    #[rustfmt::skip]
+    const SURFACE: [(&str, Fate, Fate, Fate, Fate); 52] = [
+        ("ready",               NC, NC, NC, NC),
+        ("opened",              NC, NC, NC, NC),
+        ("closeRequest",        NC, NC, NC, NC),
+        ("quitRequest",         NC, NC, NC, NC),
+        ("loadSettings",        NC, NC, NC, NC),
+        ("saveSettings",        NC, NC, NC, NC),
+        ("saveKey",             NC, NC, NC, NC),
+        ("secretSave",          H,  NR, NC, NC),
+        ("secretsList",         NC, NC, NC, NC),
+        ("secretDelete",        NC, NC, NC, NC),
+        ("checkKey",            NC, NC, NC, NC),
+        ("credentialDelete",    NC, NC, NC, NC),
+        ("startOauth",          H,  H,  NC, NC),
+        ("startMcpOauth",       H,  H,  NC, NC),
+        ("oauthCode",           H,  H,  NC, NC),
+        ("openUrl",             NC, NC, NC, NC),
+        ("chatSend",            NC, NC, C,  C),
+        ("chatAbort",           NC, NC, C,  C),
+        ("chatLoad",            NC, NC, C,  C),
+        ("chatEarlier",         NC, NC, NC, NC),
+        ("chatClearQueue",      NC, NC, NC, NC),
+        ("uiAnswer",            NC, NC, C,  C),
+        ("listCommands",        NC, NC, C,  C),
+        ("listModels",          NC, NC, C,  C),
+        ("setModel",            NC, NC, C,  C),
+        ("listFiles",           NC, NC, C,  C),
+        ("piCommand",           NC, NC, C,  C),
+        ("chatBash",            NC, NC, C,  NR),
+        ("chatCheckpoints",     NC, NC, C,  C),
+        ("chatUndo",            NC, NC, C,  C),
+        ("installClaudeBridge", NC, NC, NC, NC),
+        ("enginesRestart",      NC, NC, NC, NC),
+        ("mcpScan",             NC, NC, NC, NC),
+        ("mcpImport",           NC, NC, NC, NC),
+        ("chatShown",           NC, NC, NC, NC),
+        ("session",             C,  C,  NC, NC),
+        ("sessionsLoad",        C,  C,  NC, NC),
+        ("sessionsSave",        NC, NC, NC, NC),
+        ("sessionClose",        C,  C,  NC, NC),
+        ("sessionNew",          C,  C,  NC, NC),
+        ("schedulesList",       C,  C,  NC, NC),
+        ("scheduleUpdate",      C,  C,  NC, NC),
+        ("scheduleDelete",      C,  C,  NC, NC),
+        ("jobStop",             NC, NC, NC, NC),
+        ("jobOutput",           NC, NC, NC, NC),
+        ("jobDismiss",          NC, NC, NC, NC),
+        ("traceSet",            NC, NC, NC, NC),
+        ("dictationStart",      NC, NC, NC, NC),
+        ("dictationStop",       NC, NC, NC, NC),
+        ("dictationCancel",     NC, NC, NC, NC),
+        ("dictationDownload",   NC, NC, NC, NC),
+        ("wide",                NC, NC, NC, NC),
+    ];
+
+    #[test]
+    fn every_variant_is_built_and_in_the_table() {
+        let built: Vec<&str> = every_variant().iter().map(label).collect();
+        let rows: Vec<&str> = SURFACE.iter().map(|row| row.0).collect();
+        assert_eq!(built, rows, "one constructor and one row for each PageMessage variant, in the same order");
+    }
+
+    /// What became of one line a client sent: it ends with a request that is always refused (`id` 999), so everything the
+    /// line caused (an error to the client, a message for the chat or the handlers) happened before the end is seen.
+    fn fate(f: &Fixture, peer: &mut Peer, line: Value) -> Fate {
+        peer.send(line);
+        peer.send(json!({"type": "saveSettings", "id": 999, "settings": {}}));
+        let mut refused = None;
+        loop {
+            let got = peer.next();
+            if got["id"] == 999 {
+                break;
+            }
+            assert!(refused.is_none(), "one line, one answer: {got}");
+            refused = Some(got["code"].as_str().map(|code| match code {
+                "not-for-clients" => NC,
+                "not-for-remote" => NR,
+                "unknown-session" => R("unknown-session"),
+                other => panic!("an unexpected refusal {other}"),
+            }));
+        }
+        let chat = f.chat.try_recv().is_ok();
+        let handled = f.handled.try_recv().is_ok();
+        assert!(f.chat.try_recv().is_err() && f.handled.try_recv().is_err(), "one line reaches one place");
+        match (refused.flatten(), chat, handled) {
+            (Some(refusal), false, false) => refusal,
+            (None, true, false) => C,
+            (None, false, true) => H,
+            other => panic!("neither refused nor delivered once: {other:?}"),
+        }
+    }
+
+    /// The line a client sends for `message`, bare or inside `session { aa }`. `ChatBash` is never read from JSON: a
+    /// client's `!command` is a `piCommand` `bash`.
+    fn line(message: &PageMessage, wrapped: bool) -> Value {
+        let value = match message {
+            PageMessage::ChatBash { id, command } if wrapped => {
+                json!({"type": "piCommand", "id": id, "command": "bash", "args": {"command": command}})
+            }
+            other => serde_json::to_value(other).unwrap_or_else(|_| json!({"type": "chatBash", "id": 77})),
+        };
+        if wrapped {
+            json!({"type": "session", "session": "aa", "message": value})
+        } else {
+            value
+        }
+    }
+
+    #[test]
+    fn the_whole_surface_a_client_may_reach_is_pinned() {
+        let f = fixture();
+        let mut local = connect(&f);
+        let mut remote = connect(&f);
+        remote.send(hello(PROTOCOL, Some(true)));
+        remote.next();
+        for message in every_variant() {
+            let name = label(&message);
+            let row = SURFACE.iter().find(|row| row.0 == name).expect(name);
+            assert_eq!(fate(&f, &mut local, line(&message, false)), row.1, "{name}, bare, local");
+            assert_eq!(fate(&f, &mut remote, line(&message, false)), row.2, "{name}, bare, remote");
+            assert_eq!(fate(&f, &mut local, line(&message, true)), row.3, "{name}, in a session, local");
+            assert_eq!(fate(&f, &mut remote, line(&message, true)), row.4, "{name}, in a session, remote");
+        }
     }
 
     #[test]
