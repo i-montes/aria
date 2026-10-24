@@ -3,7 +3,8 @@
 //! dock's `schedules` reply; nothing here talks to the dock.
 //!
 //! A task the model made or widened to write (`awaiting`) is approved in the dock, never here: it is shown as waiting
-//! and Enter does nothing on it.
+//! and Enter does nothing on it. The service refuses the same (a plain resume leaves a waiting task waiting), so this
+//! is defence in depth.
 
 use crate::term::texts::t;
 use crate::term::theme::Palette;

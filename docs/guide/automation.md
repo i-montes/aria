@@ -45,7 +45,7 @@ A scheduled run has no one to ask, so its permissions are fixed when the task is
 - **Writable folders** outside the projects folder: none by default. A folder must exist, and Aria refuses these: the whole disk, your home folder and any folder that contains it, Aria's own folder, and anything inside one of these folders of your home: `.ssh`, `.gnupg`, `.aws`, `.config/gh`, `.docker`, `.codex`, `.kube`, `.config/gcloud`, `.config/opencode`, `.local/share/opencode`, `.pi`, `Library/LaunchAgents`, `Library/Keychains`, `.local/share/keyrings`, `.config/autostart`, `.config/systemd` and `.config/hypr`. It is a fixed list, not a rule: any other folder that exists is accepted, `~/.config` itself and `~/.local/bin` included, so grant a task only a folder you would accept seeing changed. Folders are kept by their real path.
 - The run cannot ask you a question, cannot ask to leave the sandbox, cannot ask for a secret and cannot get a plan approved. The answer says what was refused. Inside the projects folder the run has the sandbox's usual write access.
 
-A task that can write, meaning any connector set to `allow` or any writable folder, is saved **paused and waiting for your approval**. The dock opens `/schedules` on it, and you press **Approve**. Changing a task so that it writes somewhere new, or rewording the prompt of a task that writes, makes it wait again. The model cannot approve, and the terminal's panel does not offer it (below), but the service does not block it: it takes a resume message from any client as your approval (on a [hub](hub.md#what-a-stolen-client-key-can-do) that is what a stolen client key could send). A read-only task starts at once.
+A task that can write, meaning any connector set to `allow` or any writable folder, is saved **paused and waiting for your approval**. The dock opens `/schedules` on it, and you press **Approve**. Changing a task so that it writes somewhere new, or rewording the prompt of a task that writes, makes it wait again. The model cannot approve, and neither can a terminal: approving is its own message, sent only by the dock page's Approve button, and the service refuses it from every client (a plain resume of a waiting task leaves it waiting). A read-only task starts at once.
 
 ### When a task runs, and what a missed run does
 
@@ -76,7 +76,7 @@ In a terminal, `/schedules` opens a list in the editor's place:
 | `d`, then `y` | Delete the task; any other key cancels |
 | `Esc` | Close the list |
 
-A task that waits for approval shows "waiting for approval in the dock". The terminal's panel does not approve tasks, but the service does not enforce that: a resume message from any client counts as your approval.
+A task that waits for approval shows "waiting for approval in the dock". The terminal's panel does not approve tasks, and the service does not take an approval from a terminal either.
 
 ### On a hub
 

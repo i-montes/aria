@@ -188,15 +188,33 @@ impl ScheduleStore {
         Ok(task)
     }
 
-    /// The person's own switch (`/schedules`): resuming a task that waits approves it.
-    pub fn set_enabled_by_person(&self, id: &str, enabled: bool) -> Result<Task, String> {
+    /// A plain pause or resume (`/schedules` in the dock or a terminal). A task that waits for approval stays
+    /// waiting and disabled when asked to resume: only `approve` clears the wait.
+    pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<Task, String> {
+        self.change(id, |task| {
+            if enabled && task.awaiting {
+                return Err(format!("task {id} waits for the person's approval in the dock"));
+            }
+            task.enabled = enabled;
+            Ok(())
+        })
+    }
+
+    /// The dock page's Approve button: the only way the wait ends (it enables the task). Called for nothing a client
+    /// can send.
+    pub fn approve(&self, id: &str) -> Result<Task, String> {
+        self.change(id, |task| {
+            task.enabled = true;
+            task.awaiting = false;
+            Ok(())
+        })
+    }
+
+    fn change(&self, id: &str, edit: impl FnOnce(&mut Task) -> Result<(), String>) -> Result<Task, String> {
         let mut tasks = self.tasks.lock().unwrap();
         let at = tasks.iter().position(|t| t.id == id).ok_or_else(|| format!("there is no task {id}"))?;
         let mut next = tasks.clone();
-        next[at].enabled = enabled;
-        if enabled {
-            next[at].awaiting = false;
-        }
+        edit(&mut next[at])?;
         let task = next[at].clone();
         self.save(&next)?;
         *tasks = next;
@@ -442,7 +460,7 @@ mod tests {
         assert!(moved.enabled && !moved.awaiting, "a read-only change applies");
         let widened = store.update(&json!({"id": task.id, "connectors": {"notion": "allow"}})).unwrap();
         assert!(widened.awaiting && !widened.enabled);
-        store.set_enabled_by_person(&task.id, true).unwrap();
+        store.approve(&task.id).unwrap();
         let reworded = store.update(&json!({"id": task.id, "prompt": "write everything"})).unwrap();
         assert!(reworded.awaiting, "a writing task's new prompt needs the person again");
     }
@@ -454,11 +472,38 @@ mod tests {
             .create(&json!({"title": "t", "prompt": "p", "at": "07:30", "connectors": {"notion": "allow"}}), 0)
             .unwrap();
         assert!(store.update(&json!({"id": task.id, "enabled": true})).unwrap_err().contains("approve"));
-        let approved = store.set_enabled_by_person(&task.id, true).unwrap();
+        let approved = store.approve(&task.id).unwrap();
         assert!(approved.enabled && !approved.awaiting);
         let paused = store.update(&json!({"id": task.id, "enabled": false})).unwrap();
         assert!(!paused.enabled && !paused.awaiting, "the model may pause");
         assert!(store.update(&json!({"id": task.id, "enabled": true})).is_ok(), "and resume what the person approved");
+    }
+
+    #[test]
+    fn a_plain_switch_never_approves_a_waiting_task() {
+        let (_dir, store) = store();
+        let waiting = store
+            .create(&json!({"title": "t", "prompt": "p", "at": "07:30", "connectors": {"notion": "allow"}}), 0)
+            .unwrap();
+        assert!(waiting.awaiting && !waiting.enabled);
+        let refused = store.set_enabled(&waiting.id, true).unwrap_err();
+        assert!(refused.contains("approv"), "{refused}");
+        let still = store.get(&waiting.id).unwrap();
+        assert!(still.awaiting && !still.enabled, "it stays waiting and disabled");
+        assert!(store.set_enabled(&waiting.id, false).is_ok(), "pausing a waiting task is harmless");
+        assert!(store.get(&waiting.id).unwrap().awaiting, "and does not approve it");
+        let approved = store.approve(&waiting.id).unwrap();
+        assert!(approved.enabled && !approved.awaiting, "only approve clears the wait");
+    }
+
+    #[test]
+    fn a_plain_switch_pauses_and_resumes_a_task_that_is_not_waiting() {
+        let (_dir, store) = store();
+        let task = store.create(&json!({"title": "t", "prompt": "p", "at": "07:30"}), 0).unwrap();
+        assert!(!store.set_enabled(&task.id, false).unwrap().enabled);
+        assert!(store.set_enabled(&task.id, true).unwrap().enabled);
+        assert!(store.set_enabled("s-none", true).is_err());
+        assert!(store.approve("s-none").is_err());
     }
 
     #[test]

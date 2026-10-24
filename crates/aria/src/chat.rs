@@ -2811,10 +2811,17 @@ impl Sessions {
             }
             PageMessage::JobDismiss { job } => self.ctx.jobs.dismiss(&job),
             PageMessage::SchedulesList { id } => self.schedules_answer(id),
-            // The person's switch: resuming a task that waits for them approves it.
+            // A plain switch: pause or resume. A task that waits for approval stays waiting.
             PageMessage::ScheduleUpdate { id, schedule, enabled } => {
-                if let Err(error) = self.ctx.schedules.set_enabled_by_person(&schedule, enabled) {
+                if let Err(error) = self.ctx.schedules.set_enabled(&schedule, enabled) {
                     crate::note(&format!("a scheduled task could not be changed: {error}"));
+                }
+                self.schedules_answer(id);
+            }
+            // The page's Approve button: the only thing that approves a waiting task (no client may send it).
+            PageMessage::ScheduleApprove { id, schedule } => {
+                if let Err(error) = self.ctx.schedules.approve(&schedule) {
+                    crate::note(&format!("a scheduled task could not be approved: {error}"));
                 }
                 self.schedules_answer(id);
             }
@@ -4967,8 +4974,18 @@ mod tests {
         };
         assert_eq!(shown, task.id);
         s.sessions.handle(PageMessage::ScheduleUpdate { id: 3, schedule: task.id.clone(), enabled: true });
+        let still = s.sessions.ctx.schedules.get(&task.id).unwrap();
+        assert!(still.awaiting && !still.enabled, "a plain switch does not approve it");
+        let answered = loop {
+            if let DockMessage::Schedules { id, tasks } = s.messages.recv_timeout(Duration::from_secs(5)).unwrap() {
+                break (id, tasks);
+            }
+        };
+        assert_eq!(answered.0, 3, "the failure is answered with the fresh list");
+        assert_eq!(answered.1[0]["awaiting"], true);
+        s.sessions.handle(PageMessage::ScheduleApprove { id: 4, schedule: task.id.clone() });
         let approved = s.sessions.ctx.schedules.get(&task.id).unwrap();
-        assert!(approved.enabled && !approved.awaiting, "the person's switch approves it");
+        assert!(approved.enabled && !approved.awaiting, "the page's approval does");
     }
 
     fn recorded(s: &SessionsHarness, id: &str) -> aria_core::schedules::RunResult {

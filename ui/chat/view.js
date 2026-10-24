@@ -13,7 +13,7 @@ import { PROVIDERS, renderConnect } from './parts/connect.js'
 import { renderFilePicker, filterFiles } from './parts/files.js'
 import { indexItems, indexLayout, renderIndex } from './parts/index.js'
 import { renderMemory, initialMemoryUi, reduceMemoryUi } from './parts/memory.js'
-import { renderSchedules } from './parts/schedules.js'
+import { renderSchedules, scheduleRequest } from './parts/schedules.js'
 import { renderSecret } from './parts/secret.js'
 import { findSecrets, suggestName, validName, withSecretsSaved } from './secrets.js'
 import { renderModelPicker, orderedModels, providerLabel, connectedModels, withoutPayPerUse } from './parts/models.js'
@@ -1981,10 +1981,10 @@ export function createChatView({ root, traceRoot = null, t, send, request, onSet
         return openView('agents')
       case 'panel-back': return openView('chat')
       case 'memory-back': return openView('chat')
+      case 'schedule-approve':
       case 'schedule-toggle':
-        return request({ type: 'scheduleUpdate', schedule: el.dataset.schedule, enabled: el.dataset.enabled === 'true' }).then(refreshSchedules)
       case 'schedule-delete':
-        return request({ type: 'scheduleDelete', schedule: el.dataset.schedule }).then(refreshSchedules)
+        return request(scheduleRequest(action, el.dataset)).then(refreshSchedules)
       case 'toast-open':
         toast = null
         return switchTo(session)

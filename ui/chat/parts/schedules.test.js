@@ -1,6 +1,6 @@
 // Run: bun test ui/chat/parts/schedules.test.js
 import { describe, expect, test } from 'bun:test'
-import { TEXTS, renderSchedules, whenLabel } from './schedules.js'
+import { TEXTS, renderSchedules, scheduleRequest, whenLabel } from './schedules.js'
 
 const t = (key, vars) => (vars ? `${key} ${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(' ')}` : key)
 const task = (extra = {}) => ({
@@ -38,8 +38,18 @@ describe('the scheduled tasks panel', () => {
     const html = renderSchedules({ tasks: [task({ enabled: false, awaiting: true, next: null, grants: { connectors: { notion: 'allow' }, writable: [] } })], now: 0 }, {}, t)
     expect(html).toContain('chat.schedules.awaiting')
     expect(html).toContain('chat.schedules.approve')
-    expect(html).toContain('data-enabled="true"')
+    expect(html).toContain('data-chat="schedule-approve"')
+    expect(html).not.toContain('data-chat="schedule-toggle"')
     expect(html).toContain('notion')
+  })
+
+  test("the buttons send the message each one means: only Approve approves", () => {
+    const dataset = { schedule: 's-1', enabled: 'true' }
+    expect(scheduleRequest('schedule-approve', dataset)).toEqual({ type: 'scheduleApprove', schedule: 's-1' })
+    expect(scheduleRequest('schedule-toggle', dataset)).toEqual({ type: 'scheduleUpdate', schedule: 's-1', enabled: true })
+    expect(scheduleRequest('schedule-toggle', { schedule: 's-1', enabled: 'false' })).toEqual({ type: 'scheduleUpdate', schedule: 's-1', enabled: false })
+    expect(scheduleRequest('schedule-delete', dataset)).toEqual({ type: 'scheduleDelete', schedule: 's-1' })
+    expect(scheduleRequest('chat-send', dataset)).toBeNull()
   })
 
   test('a failed run says so', () => {

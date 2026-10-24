@@ -114,9 +114,7 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
 - **The writable-folder check for a scheduled task is a list**: `too_wide` in `schedule_store.rs` refuses the disk, the home
   folder, Aria's own folder and seventeen named folders of the home. Any other folder that exists passes, including
   `~/.config` and `~/.local/bin`.
-- **The service does not enforce "approve in the dock"**: `chat.rs` calls `set_enabled_by_person` for any
-  `ScheduleUpdate`, so a remote client (or a stolen client key) that sends the resume message approves a writing task.
-  Likewise `/autocompact <n>` from a client writes the hub's `settings.json`, though the design says clients cannot
+- **`/autocompact <n>` from a client** writes the hub's `settings.json`, though the design says clients cannot
   change settings.
 - **The footer's git status is local**: a remote session shows no branch, because git runs on the computer of the
   terminal and the folder is on the hub (a broker for it is not built).
@@ -132,7 +130,7 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
   - `aria serve`'s loop wakes about 62 times a second when idle (it should sleep until something happens).
   - `~/.aria/hub-src` (what `hub init` uploads) is never cleaned up; `hub_admin.rs` is large (`hub_init` can be its own
     module); one `hub init` opens a separate ssh connection for each question and step, more than a dozen on a first run (no `ControlMaster`).
-  - A schedule's `replace()` can overwrite a live "awaiting" mark, and the dock approves any `enabled: true` it is sent.
+  - A schedule's `replace()` can overwrite a live "awaiting" mark.
   - Esc in `/signin` leaves the dock's sign-in alive until its timeout.
   - `tools/hub/accept.sh` keeps the maintainer's environment, and a failed check hides the ones after it.
   - `hub init` sends the whole `settings.json` with only `sandbox.projectsDir` rewritten: other path-like keys

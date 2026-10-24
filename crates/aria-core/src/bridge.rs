@@ -178,9 +178,14 @@ pub enum PageMessage {
     /// The scheduled tasks, for the `/schedules` panel; replies `schedules`.
     #[serde(rename = "schedulesList")]
     SchedulesList { id: u64 },
-    /// Pause or resume a scheduled task; replies `schedules`.
+    /// Pause or resume a scheduled task; replies `schedules`. A task that waits for approval stays waiting: only
+    /// `scheduleApprove` clears that.
     #[serde(rename = "scheduleUpdate")]
     ScheduleUpdate { id: u64, schedule: String, enabled: bool },
+    /// The dock page's Approve button: the only message that approves a task the model made or widened to write
+    /// (it starts enabled). No client (terminal or remote) may send it; replies `schedules`.
+    #[serde(rename = "scheduleApprove")]
+    ScheduleApprove { id: u64, schedule: String },
     /// Delete a scheduled task and its tab; replies `schedules`.
     #[serde(rename = "scheduleDelete")]
     ScheduleDelete { id: u64, schedule: String },
@@ -724,6 +729,22 @@ mod tests {
         assert_eq!(
             value(DockMessage::JobOutput { id: 4, lines: vec!["ready on :3000".into()] }),
             json!({"type": "jobOutput", "id": 4, "lines": ["ready on :3000"]})
+        );
+    }
+
+    #[test]
+    fn schedule_messages_round_trip() {
+        assert_eq!(
+            page(r#"{"type":"scheduleUpdate","id":2,"schedule":"s-1","enabled":true}"#),
+            PageMessage::ScheduleUpdate { id: 2, schedule: "s-1".into(), enabled: true }
+        );
+        assert_eq!(
+            page(r#"{"type":"scheduleApprove","id":3,"schedule":"s-1"}"#),
+            PageMessage::ScheduleApprove { id: 3, schedule: "s-1".into() }
+        );
+        assert_eq!(
+            serde_json::to_value(PageMessage::ScheduleApprove { id: 3, schedule: "s-1".into() }).unwrap(),
+            json!({"type": "scheduleApprove", "id": 3, "schedule": "s-1"})
         );
     }
 

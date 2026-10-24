@@ -105,10 +105,25 @@ function row(task, now, t) {
     <div class="p-sched-head"><span class="p-sched-title">${esc(task.title)}</span><span class="p-sched-when">${esc(whenLabel(task.when, t))}</span></div>
     <div class="p-sched-meta">${status ? `<span>${esc(status)}</span>` : ''}<span class="p-sched-last">${esc(last)}</span></div>
     <div class="p-sched-actions">
-      <button type="button" class="p-sched-btn${task.awaiting ? ' is-approve' : ''}" data-chat="schedule-toggle" data-schedule="${esc(task.id)}" data-enabled="${resume}">${esc(t(task.awaiting ? 'chat.schedules.approve' : resume ? 'chat.schedules.resume' : 'chat.schedules.pause'))}</button>
+      ${task.awaiting
+        ? `<button type="button" class="p-sched-btn is-approve" data-chat="schedule-approve" data-schedule="${esc(task.id)}">${esc(t('chat.schedules.approve'))}</button>`
+        : `<button type="button" class="p-sched-btn" data-chat="schedule-toggle" data-schedule="${esc(task.id)}" data-enabled="${resume}">${esc(t(resume ? 'chat.schedules.resume' : 'chat.schedules.pause'))}</button>`}
       <button type="button" class="p-sched-btn is-danger" data-chat="schedule-delete" data-schedule="${esc(task.id)}">${esc(t('chat.schedules.delete'))}</button>
     </div>
   </li>`
+}
+
+/**
+ * The message a button of the panel sends (null for any other button). Approving is its own message: the service
+ * clears a task's wait for that one only, so a plain switch can never approve.
+ */
+export function scheduleRequest(action, dataset) {
+  switch (action) {
+    case 'schedule-approve': return { type: 'scheduleApprove', schedule: dataset.schedule }
+    case 'schedule-toggle': return { type: 'scheduleUpdate', schedule: dataset.schedule, enabled: dataset.enabled === 'true' }
+    case 'schedule-delete': return { type: 'scheduleDelete', schedule: dataset.schedule }
+    default: return null
+  }
 }
 
 export function renderSchedules({ tasks = [], now = Date.now() } = {}, ui = {}, t = (k) => k) {

@@ -167,6 +167,7 @@ pub fn is_chat(message: &PageMessage) -> bool {
             | PageMessage::SessionNew { .. }
             | PageMessage::SchedulesList { .. }
             | PageMessage::ScheduleUpdate { .. }
+            | PageMessage::ScheduleApprove { .. }
             | PageMessage::ScheduleDelete { .. }
             | PageMessage::EnginesRestart
             | PageMessage::ChatShown { .. }
@@ -273,6 +274,7 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
         | PageMessage::ChatUndo { .. }
         | PageMessage::SchedulesList { .. }
         | PageMessage::ScheduleUpdate { .. }
+        | PageMessage::ScheduleApprove { .. }
         | PageMessage::ScheduleDelete { .. }
         | PageMessage::JobStop { .. }
         | PageMessage::JobOutput { .. }

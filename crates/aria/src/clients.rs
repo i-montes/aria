@@ -847,6 +847,7 @@ mod tests {
             PageMessage::SessionNew { .. } => "sessionNew",
             PageMessage::SchedulesList { .. } => "schedulesList",
             PageMessage::ScheduleUpdate { .. } => "scheduleUpdate",
+            PageMessage::ScheduleApprove { .. } => "scheduleApprove",
             PageMessage::ScheduleDelete { .. } => "scheduleDelete",
             PageMessage::JobStop { .. } => "jobStop",
             PageMessage::JobOutput { .. } => "jobOutput",
@@ -909,6 +910,7 @@ mod tests {
             P::SessionNew { id: 77, workdir: None },
             P::SchedulesList { id: 77 },
             P::ScheduleUpdate { id: 77, schedule: s("s-1"), enabled: false },
+            P::ScheduleApprove { id: 77, schedule: s("s-1") },
             P::ScheduleDelete { id: 77, schedule: s("s-1") },
             P::JobStop { job: s("j1") },
             P::JobOutput { id: 77, job: s("j1"), lines: None },
@@ -925,7 +927,7 @@ mod tests {
     /// Each variant's fate, sent by itself and wrapped in `session { aa }`, from a local client and from a remote one:
     /// `(variant, bare local, bare remote, wrapped local, wrapped remote)`. This is the whole surface.
     #[rustfmt::skip]
-    const SURFACE: [(&str, Fate, Fate, Fate, Fate); 52] = [
+    const SURFACE: [(&str, Fate, Fate, Fate, Fate); 53] = [
         ("ready",               NC, NC, NC, NC),
         ("opened",              NC, NC, NC, NC),
         ("closeRequest",        NC, NC, NC, NC),
@@ -968,6 +970,7 @@ mod tests {
         ("sessionNew",          C,  C,  NC, NC),
         ("schedulesList",       C,  C,  NC, NC),
         ("scheduleUpdate",      C,  C,  NC, NC),
+        ("scheduleApprove",     NC, NC, NC, NC),
         ("scheduleDelete",      C,  C,  NC, NC),
         ("jobStop",             NC, NC, NC, NC),
         ("jobOutput",           NC, NC, NC, NC),

@@ -55,6 +55,7 @@ const sandbox = `<script>
       // Scheduled tasks: one daily task the panel lists, pauses, resumes and deletes.
       else if (m.type === 'schedulesList') r({ type: 'schedules', tasks: window.sim.schedules })
       else if (m.type === 'scheduleUpdate') { window.sim.schedules = window.sim.schedules.map((x) => (x.id === m.schedule ? { ...x, enabled: m.enabled, next: m.enabled ? x.next : null } : x)); r({ type: 'schedules', tasks: window.sim.schedules }) }
+      else if (m.type === 'scheduleApprove') { window.sim.schedules = window.sim.schedules.map((x) => (x.id === m.schedule ? { ...x, enabled: true, awaiting: false } : x)); r({ type: 'schedules', tasks: window.sim.schedules }) }
       else if (m.type === 'scheduleDelete') { window.sim.schedules = window.sim.schedules.filter((x) => x.id !== m.schedule); r({ type: 'schedules', tasks: window.sim.schedules }) }
       else if (m.type === 'saveSettings') { settings = m.settings; r({ type: 'saved' }); setTimeout(platform, 30) }
       else if (m.type === 'checkKey') r({ type: 'keyResult', ok: true, error: null })
