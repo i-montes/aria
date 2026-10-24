@@ -38,15 +38,24 @@ struct Question {
     multi: bool,
 }
 
+/// The footer a choice shows: nothing (a plain select), the number-or-click line (a permission card whose values are its
+/// long labels) or the letters (a permission card whose values are `allow`, `always` and `deny`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Hint {
+    None,
+    Number,
+    Letters,
+}
+
 #[derive(Debug, Clone)]
 enum Kind {
     Question(Vec<Question>),
-    /// A permission or quota card, or a plain select: (value, label) options; `keys` when y/a/n answer it.
+    /// A permission or quota card, or a plain select: (value, label) options; `hint` says which keys answer it.
     Choice {
         title: String,
         detail: String,
         options: Vec<(String, String)>,
-        keys: bool,
+        hint: Hint,
     },
     Confirm {
         title: String,
@@ -128,8 +137,16 @@ impl DialogBox {
                     .map(|v| text(v))
                     .find(|s| !s.is_empty())
                     .unwrap_or_default();
-                let keys = matches!(card["kind"].as_str(), Some("sandbox" | "write" | "connector"));
-                Kind::Choice { title, detail: text(&card["detail"]), options, keys }
+                let permission = matches!(card["kind"].as_str(), Some("sandbox" | "write" | "connector"));
+                // y, a and n pick the options whose values are allow, always and deny; every producer today sends
+                // its long labels as values, so only the number or a click answers those.
+                let letters = ["allow", "always", "deny"].iter().any(|v| options.iter().any(|(value, _)| value == v));
+                let hint = match (permission, letters) {
+                    (false, _) => Hint::None,
+                    (true, true) => Hint::Letters,
+                    (true, false) => Hint::Number,
+                };
+                Kind::Choice { title, detail: text(&card["detail"]), options, hint }
             }
             None => match dialog.method.as_str() {
                 "confirm" => Kind::Confirm { title: text(&request["title"]), message: text(&request["message"]) },
@@ -138,7 +155,7 @@ impl DialogBox {
                     title: text(&request["title"]),
                     detail: String::new(),
                     options: accepted.iter().map(|o| (o.clone(), o.clone())).collect(),
-                    keys: false,
+                    hint: Hint::None,
                 },
             },
         };
@@ -253,9 +270,9 @@ impl DialogBox {
                     _ => None,
                 }
             }
-            Kind::Choice { options, keys, .. } => match key {
+            Kind::Choice { options, hint, .. } => match key {
                 Key::Char(c) if ('1'..='9').contains(&c) => self.pick(c as usize - '1' as usize),
-                Key::Char(c) if keys => {
+                Key::Char(c) if hint == Hint::Letters => {
                     let wanted = match c {
                         'y' => "allow",
                         'a' => "always",
@@ -356,7 +373,7 @@ impl DialogBox {
                     ])
                 });
             }
-            Kind::Choice { title: heading, detail, options, keys } => {
+            Kind::Choice { title: heading, detail, options, hint } => {
                 out.push(title(heading));
                 if !detail.is_empty() {
                     out.push(Line::from(Span::styled(format!("  {}", cut(detail)), grey)));
@@ -364,9 +381,14 @@ impl DialogBox {
                 for (k, (_, label)) in options.iter().enumerate() {
                     out.push(option(k + 1, label, false));
                 }
-                if *keys {
+                let footer = match hint {
+                    Hint::None => None,
+                    Hint::Number => Some("term.permission.number"),
+                    Hint::Letters => Some("term.permission.keys"),
+                };
+                if let Some(id) = footer {
                     out.push(Line::from(Span::styled(
-                        format!("  {}", t(lang, "term.permission.keys", &json!({}))),
+                        format!("  {}", t(lang, id, &json!({}))),
                         Style::default().fg(p.faint),
                     )));
                 }
@@ -482,6 +504,39 @@ mod tests {
                 cancelled: Some(true)
             }))
         );
+    }
+
+    fn shown(d: &DialogBox, lang: &str) -> String {
+        d.lines(lang, &crate::term::theme::Palette::truecolor(), 80)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_footer_names_only_the_keys_that_work() {
+        // What the sandbox, write and connector cards send today: the option's own long label is its value.
+        let labels = ["Allow once", "Allow `git` in this project", "Allow everything", "No"];
+        let options: Vec<_> = labels.iter().map(|l| json!({"value": l, "label": l})).collect();
+        let long = card(
+            json!({"aria": 1, "kind": "sandbox", "summary": "Push the branch", "detail": "git push", "options": options}),
+            json!(labels),
+        );
+        assert_eq!(long.clone().key(Key::Char('y')), None, "y does not match these values");
+        let (en, es) = (shown(&long, "en"), shown(&long, "es"));
+        assert!(!en.contains("y once") && !es.contains("y una vez"), "{en}\n{es}");
+        assert!(en.contains("number") && en.contains("click"), "{en}");
+        assert!(es.contains("número") && es.contains("clic"), "{es}");
+        // A card whose values are allow, always and deny does take the letters, and says so.
+        let options = json!([{"value": "allow", "label": "Allow once"}, {"value": "always", "label": "Always"}, {"value": "deny", "label": "No"}]);
+        let letters = card(
+            json!({"aria": 1, "kind": "sandbox", "summary": "Push the branch", "options": options}),
+            json!(["allow", "always", "deny"]),
+        );
+        assert!(shown(&letters, "en").contains("y once"));
+        assert!(shown(&letters, "es").contains("y una vez"));
+        assert!(!shown(&letters, "en").contains("number"));
     }
 
     #[test]

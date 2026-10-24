@@ -238,7 +238,7 @@ Format: one or more modifiers, then one key (a letter, a digit, `Space` or `F1`�
 | `↑` `↓`, `Enter`, `Tab`, `Esc` | The `/` or `@` list, the model picker | Move, choose (`Tab` only completes a command), close |
 | `1`–`9` | A question | Picks that option, while nothing is typed; typing writes a free answer |
 | `Enter`, `Esc` | A question | Next question or send / skip |
-| `1`–`9` | A permission | The option's number (the first is "once"). The card's last line offers `y`, `a`, `n`, but those keys do not match what the sandbox, write and connector cards send yet ([pending](../pending.md)) |
+| `1`–`9` | A permission | The option's number (the first is "once"). The card's last line says so. The sandbox, write and connector cards are answered by number or click only |
 | `y` or `Enter`, `n` | A yes-or-no question | Yes, no |
 | `Enter`, `Backspace`, `Esc` | A text or secret field | Send, erase, cancel |
 | `↑` `↓`, `Enter`, `1`–`9`, `Esc` | The undo list | Move, open, pick a choice by number, back or close |

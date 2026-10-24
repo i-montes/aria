@@ -94,7 +94,7 @@ When Aria needs an answer, a card takes the editor's place. Every client attache
 | Card | How to answer |
 |---|---|
 | A question with options | `1` to `9` picks an option; a single-choice question moves on at once, a multiple-choice one toggles it and `Enter` confirms. Typing writes your own answer, and `Enter` sends it. A card can hold up to four questions, one after the other. `Esc` skips them. Or click an option |
-| A permission (the sandbox, a write that needs approval, a connector) | The option's number (the first is "once") or a click. `Esc` cancels. The card's last line offers `y` once, `a` always, `n` no, but those keys do not match what these cards send yet (see [pending](../pending.md)) |
+| A permission (the sandbox, a write that needs approval, a connector) | The option's number (the first is "once") or a click. `Esc` cancels. The card's last line says so. `y`, `a` and `n` are not offered: they answer only a card whose options are `allow`, `always` and `deny`, and none of these sends those |
 | The quota card (a plan's quota ran out) | The option's number or a click |
 | A yes or no | `y` or `Enter` yes, `n` no, `Esc` cancels |
 | A secret Aria asks for | Type the value, hidden as `•`; `Enter` saves it. The service keeps it; it is never sent to the model. Not over ssh. `Esc` cancels |
@@ -185,7 +185,7 @@ The palette is the dock's: a near-black ground, light text, grey for what matter
 | `PageUp`, `PageDown` | Scroll the conversation half a screen |
 | `q` | On the list: leave |
 | `1`–`9` | In a question or permission card: pick that option. In Rewind's choices: pick that choice |
-| `y`, `n` | In a yes-or-no card: yes, no. A permission card lists `y`, `a`, `n` too, but its options are answered by number or click (see [Questions and permissions](#questions-and-permissions)) |
+| `y`, `n` | In a yes-or-no card: yes, no. A permission card is answered by number or click (see [Questions and permissions](#questions-and-permissions)) |
 | Wheel | Scroll the conversation, three lines per step |
 | Click | Open a row, pick an option or a suggestion, fold the task strip, show or fold `… N more lines` |
 | Drag | Select and copy |

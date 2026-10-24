@@ -233,6 +233,11 @@ const OWN: &[(&str, &str, &str)] = &[
     ("term.secret.placeholder", "the value (hidden)", "el valor (oculto)"),
     ("term.answer.placeholder", "or write your answer", "o escribe tu respuesta"),
     ("term.permission.keys", "y once · a always · n no", "y una vez · a siempre · n no"),
+    (
+        "term.permission.number",
+        "the option's number, or a click",
+        "el número de la opción, o un clic",
+    ),
 ];
 
 /// A file of the page's texts (`ui/i18n/`): the dock's own copy of the page when the build has a window, else just these.
