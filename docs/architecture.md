@@ -159,6 +159,67 @@ every session, and leaving the terminal stops nothing.
   drawn by `/context`), `verify` (the project's checks after edits, the status `aria-verify`), and the router's
   `methodNote` for focused work.
 
+## The hub
+
+A hub is Aria's service on a computer with no desktop (a server), reached from other computers through ssh
+([design](superpowers/specs/2026-10-23-hub-and-machines-design.md), milestone M1).
+
+- **Service and window** — `service.rs` is what the dock does with no window: the sessions and their Pis, the background
+  work, the scheduled tasks, the keys and `clients.sock`. The dock (`run_dock`) is a window around a `Service` and hands
+  it whether it is visible once per tick; `aria serve` (`serve.rs`) is the same `Service` on a plain loop, with no
+  notifier, no face and no hotkey (a run that settles raises nothing: `sessionStatus` tells every client). It binds the
+  dock's control socket, so a dock and a serve on one computer exclude each other, and `aria quit` and
+  `aria update-ready` talk to it the same way. If `clients.sock` cannot be bound it says so and exits 1 (the dock only
+  logs it): a service nobody can reach is not left running as an active unit.
+- **The `gui` feature** — the crate's cargo feature `gui` (on by default) holds GTK, WebKit, layer-shell, Hyprland,
+  dictation and the dock; without it nothing of them is compiled or linked (`cargo build -p aria --no-default-features`,
+  `tools/hub/no-gui-libs.sh` checks the binary against `ldd`), and `aria dock` runs `serve`. macOS keeps its panel
+  under the same feature. `sh tools/build-headless.sh [triple]` cross-builds the headless binary with zig, pinned to glibc
+  2.39 (Ubuntu 24.04); its last line of stdout is the binary's path.
+- **`client-stdio`** — `aria client-stdio` (`stdio_bridge.rs`) is what `ssh <host> aria client-stdio` runs on the hub:
+  its stdin and stdout are the client's lines, its other end is `clients.sock`. It reads the client's own `hello` and
+  checks the protocol itself, then writes its own `hello` with `remote: true` to the hub and relays only lines it parsed
+  as JSON objects, never a `hello`: the hub trusts the mark because every remote line goes through this bridge. Lines
+  are read up to 8 MiB. Exit codes: 0 the client closed, 1 the hub is down, 3 another protocol, 4 a line over the cap.
+  Nothing of Aria listens on a port: the transport is ssh and nothing else.
+- **The hello and the remote set** — the first line of each side carries `aria_core::bridge::PROTOCOL` and the binary's
+  version; another number is refused (`protocol-mismatch`, the client says which side is old and to run `aria update`
+  there), and messages inside one number are additive only. A remote client may do what a terminal does (sessions, chat,
+  approvals, the schedules' list, pause and delete, signing in to Claude or Notion) and **not** `secretSave` or a
+  `!command` (`ChatBash`): both are answered `not-for-remote`, and a later `hello` cannot lift the mark. A stolen client
+  key therefore gets no shell and cannot write a key, but it is a terminal at the keyboard: it can chat with a model
+  that runs commands inside the sandbox and answer its prompts, and it can re-bind the hub's Claude or Notion account
+  (accepted, since it can already use them). Revoking it is removing its line from `authorized_keys`.
+- **`aria connect [user@]host`** (`connect.rs`) — the terminal client over `ssh -T -o ServerAliveInterval=15 -o
+  ServerAliveCountMax=3 <host> ~/.local/bin/aria client-stdio`; `ARIA_SSH` names another program for ssh (the tests and
+  `tools/hub/accept.sh` use it). The client is the same one; over connect the list's last row is `+ new on <host>` and the
+  session is opened with no folder, so it works in the hub's projects folder (the client's folder is on another
+  computer). A host that starts with `-` is refused. Exit codes: 1 when the hub or ssh cannot be reached, 2 not a host,
+  3 another protocol. Closing the client, or losing the connection, stops nothing on the hub.
+- **`hub init` and `hub-import`** — `aria hub init <user@host> [--binary <path>] [--projects <dir>] [--client-key <pubkey
+  file>] [--yes]` (`hub_admin.rs`, English only, run on the owner's computer) probes the host over ssh and prints its plan; only
+  after a yes it uploads the tree and the binary, runs `install/install.sh --headless` there (the user unit
+  `install/aria-serve.service`, `loginctl enable-linger`), sends the settings and credentials as one bundle to
+  `aria hub-import` on the hub (mode `600` files, the old ones kept as `.bak`; keys come out of the owner's keyring as
+  plain values because the hub runs with the keyring off), restarts the service and, with `--client-key`, adds the key to
+  `authorized_keys` as `restrict,command="~/.local/bin/aria client-stdio"`. It ends with a real bubblewrap probe
+  (Ubuntu 24.04 restricts user namespaces, so bwrap can be installed and still fail: it says so and prints the fix,
+  never applies it) and warns, once and without blocking, when sshd answers on a public address. It never edits
+  `sshd_config` or a firewall, and creates no accounts.
+- **From a terminal** — `/schedules` lists the scheduled tasks and pauses, resumes and deletes them (creating one stays
+  the `schedule` extension's tool); `/signin anthropic|notion` shows the sign-in's address and takes the address of the
+  failed redirect pasted back (`oauthCode`), because the browser that opens the page is not on the hub.
+- **The private Node** — Pi needs Node 22.19 or newer and a server's may be older or missing. The installer puts the Node
+  of `node-version` (the version and one SHA-256 per CPU, which is the trust root: the repository) in `~/.aria/node/`, apart
+  from the system's, and the unit puts it first on `PATH`.
+- **Checked** — `tools/hub/accept.sh <headless binary>` starts `aria serve` in scratch homes with no display and
+  drives `aria connect` through a pseudo-terminal, ssh replaced by `tools/hub/ssh-shim.sh`: the list, a session with no
+  folder, a killed client, `/schedules`, a refused protocol, a refused secret, `aria quit`. A run that survives its
+  client needs a model provider and is checked by hand.
+
+What is not there: **machines** (other services linked to a hub, and one list over all of them), **shared memory**
+(Engram is per service) and the **web client**. They are milestones M2 and M3 of the design.
+
 ## The messages
 
 One JSON object per message with a `type`, defined in `crates/aria-core/src/bridge.rs`. Requests that expect an answer carry an `id` that the answer repeats.

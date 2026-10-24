@@ -117,4 +117,5 @@ platform they cover.
 
 - The dock's look (no task strip, no verbose there yet).
 - Code highlighting in the terminal.
-- More than one client per terminal tab, or a remote client: the socket is local, for the owner's user.
+- More than one client per terminal tab. A remote client (a terminal on another computer, over ssh) is in
+  docs/superpowers/specs/2026-10-23-hub-and-machines-design.md; here the socket is local, for the owner's user.

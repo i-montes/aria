@@ -61,12 +61,34 @@ The installer detects the system. It needs **Node 22.19 or newer** (it checks, a
 
 Run it again to update. An update does not cut a run: the running dock restarts into the new version once it is hidden and no session is working (`--restart-now` restarts it at once). To remove Aria: `sh install.sh --uninstall` (it asks before deleting `~/.aria`). The browser `agent-browser` downloaded stays in `~/.agent-browser/browsers`; delete it by hand if you want it gone. Add `--dry-run` to any command to see what would happen without changing anything.
 
+### Run Aria on a server
+
+Aria can live on an always-on server (a hub) and be used from any computer with ssh: its sessions, schedules and
+background work go on while your laptop is off. The server needs no desktop; build the headless binary where you work and
+let `aria hub init` do the rest (it prints its plan and asks before it changes anything):
+
+```sh
+sh tools/build-headless.sh                       # the headless binary, cross-built for the server (aarch64 by default)
+aria hub init ana@hub.example --client-key ~/.ssh/id_ed25519.pub
+aria connect ana@hub.example                     # the terminal, on the hub's sessions
+```
+
+`hub init` copies Aria to the server, installs `aria serve` as a user service, sends your settings and credentials once,
+and, with `--client-key`, allows that key to run only `aria client-stdio` there. Honest note: the server's ssh port stays
+whatever it was, and the safe end state is a hub whose ssh is reachable **only over a private network** (Tailscale), with
+the public port closed. Version 1 works without that step (key-only login and the restricted key carry the weight until
+you can close the port), and `hub init` warns when sshd answers on a public address. Terminals on another computer cannot
+save secrets or run `!commands` on the hub. Details: [the hub in the architecture](docs/architecture.md#the-hub).
+
 ### Commands
 
 | Command | What it does |
 |---|---|
 | `aria` (in a terminal) | Aria in the terminal: the dock's open sessions, and a new one in the folder you are in. It is a window onto the dock's sessions, not a session of its own: Ctrl+C or Ctrl+D leave and the work goes on (`aria` again finds it), Esc stops the running turn, `/exit` closes the session (in the dock too). `@` picks a file, `!command` runs a command in the session, `/model` changes the model, `/verbose` or Ctrl+O switches between everything and one line per step, `/sessions` goes back to the list. The list says what each session is doing (working, waiting for you, done) and how long ago. While Aria works, Enter queues a message for its next gap and Ctrl+Enter stops the turn and sends it; the task list shows above the editor (Ctrl+T folds it). After an instruction that changed files a line says how many; Esc Esc or `/undo` goes back to before a message (files and conversation). `/context` draws what fills the context; the footer says how the project's checks went after the last edits (`/verify off` stops them). Ctrl+L redraws. Starts the dock first if it is not running |
 | `aria dock` | The dock itself: what the login service runs |
+| `aria serve` | The service with no window, for a server (what `install.sh --headless`'s user unit runs); a dock and a serve on one computer exclude each other |
+| `aria connect [user@]host` | The terminal client on another computer's service, over ssh (`~/.local/bin/aria client-stdio` runs there). Nothing of Aria listens on a port |
+| `aria hub init <user@host>` | Sets a server up as a hub over ssh (see above): `--binary`, `--projects`, `--client-key`, `--yes` |
 | `aria toggle` / `aria show` | Opens or closes the dock (the shortcut does the same) / only opens it; starts it first if it is not running |
 | `aria start` / `aria quit` | Starts the dock under its login service / stops it (its background work and engines first). In the dock, Cmd+Q asks first and quits on a second press |
 | `aria bar install` / `remove` | Puts Aria's face in the Omarchy bar, next to the weather, or takes it out (the installer runs both; nothing happens without the Omarchy shell) |
@@ -128,6 +150,7 @@ ui/                    the dock's web page: plain HTML, CSS and JS modules, embe
                        ui/chat/parts/ holds one module per component of the design
 tools/ui-sandbox/      the page without Pi, to see and try every chat state
 tools/parity/          the parity checks against the owner's Pi (the matrix is docs/parity.md)
+tools/hub/             the headless build's checks and the hub's acceptance script
 install/               the installer and the systemd unit
 design/                the visual reference (Aria.html) and its components
 docs/                  how the pieces fit, the settings, how to add a provider, what is still pending (docs/pending.md)
@@ -149,6 +172,7 @@ sh install/install-mac.test.sh  # the installer's macOS branch (skipped on Omarc
 sh tools/check-macos.sh     # type-checks the macOS build from Linux (clippy for aarch64-apple-darwin, zig through mise; nothing runs)
 sh tools/release.test.sh    # the release script, in a scratch repository
 sh tools/hooks/pre-push.test.sh   # the pre-push hook (turn it on with: git config core.hooksPath tools/hooks)
+CARGO_TARGET_DIR=target/headless cargo build -p aria --no-default-features && sh tools/hub/accept.sh target/headless/debug/aria   # the hub with no display: aria serve and aria connect in scratch homes
 ARIA_DEBUG=1 target/release/aria   # logs state changes and the page's console to the terminal
 ARIA_HOME=$(mktemp -d) target/release/aria   # try a first run without touching ~/.aria
 ```

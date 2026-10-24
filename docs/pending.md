@@ -51,6 +51,33 @@ suite passes, the sandbox acceptance is 7/7, Jev's review eval 10/10 and the smo
   are not in it. Importing them would be a new feature.
 - Parity is accepted by the owner using Aria for real work, not by the matrix.
 
+## The hub (milestone M1 of [the design](superpowers/specs/2026-10-23-hub-and-machines-design.md))
+
+A headless `aria serve`, `aria connect`, `aria hub init` and the terminal's `/schedules` and `/signin` are built and
+checked by `tools/hub/accept.sh` (no display, no provider). Left:
+
+- **Machines (M2)**: linking other computers to a hub (`aria machine add`, `aria link`), one list over all of them,
+  "new here", the credentials pushed to each. **A web client (M3)** and **push notifications (M4)**. **Shared memory**:
+  Engram is per service, so a hub has its own.
+- **The public ssh port**: the hub's sshd answers on a public address until the owner can close it and reach the hub
+  only over a private network (Tailscale). Until then the protection is key-only login and the restricted keys
+  `aria hub init --client-key` writes; `hub init` warns once and never touches `sshd_config` or the firewall.
+- **bwrap on Ubuntu 24.04**: unprivileged user namespaces are restricted by AppArmor there, so the sandbox can be
+  installed and still fail. `hub init` probes it and prints the fix; Aria never applies it. Until it works every command
+  on the hub asks first, as on a Mac.
+- **`aria update` on a hub**: nothing updates a hub yet except running `hub init` again with a new binary. A release
+  must also publish `node-version` (next to the other pins), which the hub's installer reads once releases exist.
+- **A run that survives a dropped client** needs a model provider, so the acceptance script does not fake it: the owner
+  checks by hand that a run started over `aria connect` goes on after the client is killed and shows again from a
+  second connect (the design's "done when" for M1).
+- **The footer's git status is local**: a remote session shows no branch there, because git runs on the computer of the
+  terminal and the folder is on the hub (a broker for it is not built).
+- **A lost connection blocks the terminal**: reconnecting over ssh waits up to 60 s for the hub's hello with the screen
+  frozen, and the note it shows when the connection is lost is the local dock's ("Aria's dock stopped. Run `aria` again to start
+  it."), not one that names the hub or says to run `aria connect` again.
+- Review minors that were judged worth doing later are not copied here: they are in the commit history of the
+  `feat/hub` branch (the review ledgers name each by task).
+
 ## The Claude provider
 
 - `/connect` installs the Claude provider (`claude-bridge`) for the sign-in route and needs Claude Code on the machine. Closing the card does not cancel a sign-in still waiting in the browser (it times out after five minutes).
