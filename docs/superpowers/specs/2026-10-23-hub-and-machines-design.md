@@ -79,6 +79,13 @@ end). This is one design with four milestones; each milestone gets its own plan.
   with a model that runs commands inside the sandbox and it can answer a sandbox-escape prompt. Remote clients get a
   narrower set than the local terminal: **no `secretSave`, no `chatBash`** (a `!command` runs outside the model's
   judgment and writing a key is the one thing a stolen key must not do). The approvals stay, or a phone is useless.
+  Built in M1, the remote set is exactly this: chat, answers and the session tools on sessions that already exist
+  (an unknown session id is refused), a new session never gets a folder from the client, the only Pi command is
+  `get_session_stats`, schedules list/pause/resume/delete, and the sign-ins (`startOauth`, `startMcpOauth`,
+  `oauthCode`, which can also cancel a pending sign-in of the same service or re-bind the hub's Claude or Notion
+  account: accepted, because such a key already uses those accounts through the model). On a hub where no sandbox
+  works, every command asks and anyone holding the client key can approve it: that key is then shell access to the hub
+  user, and `hub init` does not install it without `--allow-no-sandbox`.
   Revoking a key (one line in `authorized_keys`) is immediate. The hub's `client-stdio` applies this set, the
   machine's `aria link` applies it again for relayed lines.
 - **Versions.** The first line each side sends is a hello with a protocol number (and the binary's version). A client,
@@ -262,3 +269,18 @@ From the owner, 2026-10-23 ("anchored to an intranet… I'm thinking about secur
     until it is closed, every scanner can reach sshd, so the restricted keys, key-only login and a warning from
     `aria hub init` are the protection. When closed, every device (the phone included) must be on the tailnet. Aria
     never configures the network or the firewall.
+
+Added during the build (the controller's rulings, each found by a review; costs in the branch's ledger):
+
+20. **`oauthCode` is keyed by service**, not by request id (the hub remaps ids); a remote client may start a sign-in.
+21. **A remote client never chooses a session's folder, only runs `get_session_stats` among Pi's commands, and only
+    reaches sessions the hub already has.** Cost: a new terminal command that needs another Pi command must be added to
+    the table in `clients.rs`.
+22. **The sandbox check is a real bwrap probe**; with no working box every command asks, on Linux too. `hub init`
+    installs the client key only after a working probe or with `--allow-no-sandbox`. Cost: on the owner's VPS (no bwrap,
+    Ubuntu 24.04) the key waits for bubblewrap, an AppArmor profile, or the flag.
+23. **Re-running `hub init` keeps what the hub already has** (settings, credentials) unless `--settings` /
+    `--credentials`, restarts the service only the first time, and writes each `.bak` once.
+24. **The headless install skips the browser download** unless `--with-browser`.
+25. **The Node tarball is verified against a SHA-256 pinned in `node-version`**, not against the download host's own
+    checksum file.
