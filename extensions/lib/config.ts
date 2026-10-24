@@ -100,6 +100,14 @@ export function writeAriaSetting(path: string[], value: unknown): boolean {
   }
 }
 
+/** The language name as one short line (whitespace and control characters become one space, at most 40 characters): it is shown to the model in a tool description. */
+const oneLine = (text: string): string =>
+  text
+    .replace(/[\p{Cc}\s]+/gu, ' ')
+    .trim()
+    .slice(0, 40)
+    .trimEnd()
+
 export function ariaConfig(): AriaConfig {
   let found: unknown = {}
   try {
@@ -108,7 +116,9 @@ export function ariaConfig(): AriaConfig {
     // no file (the owner's own Pi) or a broken one: today's values
   }
   // `noAsk` is never read from aria.json: only the dock's grants for a scheduled tab set it.
-  return withGrants({ ...(merge(DEFAULTS, found, '') as AriaConfig), noAsk: false })
+  const config = { ...(merge(DEFAULTS, found, '') as AriaConfig), noAsk: false }
+  config.assistant = { language: oneLine(config.assistant.language) }
+  return withGrants(config)
 }
 
 /**
