@@ -172,7 +172,7 @@ Other things typed in the editor:
 
 | Input | What it does |
 |---|---|
-| `@<text>` | Opens a file list; the pick becomes `@<path> ` in the message |
+| `@<text>` | Opens a list of file names in the session's folder (the projects folder when the session has none); the pick becomes `@<path> ` in the message |
 | `!<command>` | Runs the command in the session, output joins the context. Refused over `aria connect` |
 | any other `/word` | Not handled by the terminal: sent to the session as typed. Extension commands, skills (`/skill:<name>`) and prompt templates run in Pi; it gets no checkpoint |
 

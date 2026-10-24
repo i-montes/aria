@@ -1,6 +1,6 @@
 //! A dialog of the session's Pi, in place of the editor: an `ask_user` question card (options by number 1–9 or a
-//! click, or a written answer; several questions one after the other), a permission card (`y` once, `a` always, `n` no,
-//! or its number, or a click), a plain confirm, select or input, and a secret (typed hidden; its value goes to the dock
+//! click, or a written answer; several questions one after the other), a permission card (its number or a click; `y`
+//! once, `a` always and `n` no only for the options whose values are `allow`, `always` and `deny`), a plain confirm, select or input, and a secret (typed hidden; its value goes to the dock
 //! as `secretSave`, never to Pi). The cards are the ones `ui/chat/parts/cards.js` reads from a dialog's title.
 
 use crate::term::state::Dialog;
@@ -138,8 +138,9 @@ impl DialogBox {
                     .find(|s| !s.is_empty())
                     .unwrap_or_default();
                 let permission = matches!(card["kind"].as_str(), Some("sandbox" | "write" | "connector"));
-                // y, a and n pick the options whose values are allow, always and deny; every producer today sends
-                // its long labels as values, so only the number or a click answers those.
+                // y, a and n pick the options whose values are allow, always and deny. No producer sends those values
+                // today (`extensions/sandbox/card.ts` sends each option's long label), so the letters footer is
+                // reachable only from tests until one does.
                 let letters = ["allow", "always", "deny"].iter().any(|v| options.iter().any(|(value, _)| value == v));
                 let hint = match (permission, letters) {
                     (false, _) => Hint::None,
@@ -383,14 +384,26 @@ impl DialogBox {
                 }
                 let footer = match hint {
                     Hint::None => None,
-                    Hint::Number => Some("term.permission.number"),
-                    Hint::Letters => Some("term.permission.keys"),
+                    Hint::Number => Some(t(lang, "term.permission.number", &json!({}))),
+                    // Exactly the letters whose option exists: the text is "y once · a always · n no" (each part starts
+                    // with its key), so the parts of the missing options are left out.
+                    Hint::Letters => Some(
+                        t(lang, "term.permission.keys", &json!({}))
+                            .split(" · ")
+                            .filter(|part| {
+                                let value = match part.chars().next() {
+                                    Some('y') => "allow",
+                                    Some('a') => "always",
+                                    _ => "deny",
+                                };
+                                options.iter().any(|(v, _)| v == value)
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" · "),
+                    ),
                 };
-                if let Some(id) = footer {
-                    out.push(Line::from(Span::styled(
-                        format!("  {}", t(lang, id, &json!({}))),
-                        Style::default().fg(p.faint),
-                    )));
+                if let Some(footer) = footer {
+                    out.push(Line::from(Span::styled(format!("  {footer}"), Style::default().fg(p.faint))));
                 }
             }
             Kind::Confirm { title: heading, message } => {
@@ -537,6 +550,24 @@ mod tests {
         assert!(shown(&letters, "en").contains("y once"));
         assert!(shown(&letters, "es").contains("y una vez"));
         assert!(!shown(&letters, "en").contains("number"));
+    }
+
+    #[test]
+    fn the_footer_names_exactly_the_letters_whose_option_exists() {
+        let options = json!([{"value": "allow", "label": "Allow"}, {"value": "deny", "label": "No"}]);
+        let make = || {
+            card(
+                json!({"aria": 1, "kind": "write", "summary": "Write it", "options": options}),
+                json!(["allow", "deny"]),
+            )
+        };
+        let (en, es) = (shown(&make(), "en"), shown(&make(), "es"));
+        assert!(en.contains("y once") && en.contains("n no"), "{en}");
+        assert!(!en.contains("a always"), "{en}");
+        assert!(es.contains("y una vez") && es.contains("n no") && !es.contains("a siempre"), "{es}");
+        assert_eq!(make().key(Key::Char('a')), None, "there is no always option to pick");
+        assert_eq!(make().key(Key::Char('y')), Some(answer("allow")));
+        assert_eq!(make().key(Key::Char('n')), Some(answer("deny")));
     }
 
     #[test]

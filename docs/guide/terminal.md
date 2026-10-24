@@ -81,7 +81,7 @@ The editor sits between the rules, up to six lines tall (a longer message shows 
 
 - **Writing.** `Enter` sends. `Alt+Enter` or `Shift+Enter` starts a new line, and so does pasting text with line breaks (a paste never sends). `←` and `→` move the cursor; `Backspace` erases. There is no `Home`, `End`, `Delete` or word-wise key.
 - **History.** `↑` on an empty editor brings back the messages you sent, `↓` goes forward again. A draft is never replaced by the history. It is kept while this terminal runs, not after you leave.
-- **`@` picks a file.** Type `@` and part of a path: a list of matching files opens above the editor (relative paths, shallowest first, `.gitignore` respected, up to 50; in the session's own folder, or the projects folder when the session has none). `↑` and `↓` move, `Enter` or `Tab` or a click puts `@path` in the message, and `Esc` closes the list. The message then names the file for the model.
+- **`@` picks a file.** Type `@` and part of a path: a list of matching files opens above the editor (relative paths, shallowest first, `.gitignore` respected, up to 50; in the session's own folder, or the projects folder when the session has none; names only). `↑` and `↓` move, `Enter` or `Tab` or a click puts `@path` in the message, and `Esc` closes the list. The message then names the file for the model.
 - **`!command` runs a command.** A message that starts with `!` runs the command in the session instead of going to the model. Its output shows as a step and joins the conversation, so the model knows about it. Not over ssh.
 - **`/` opens the commands.** A message that starts with `/` opens a list: the terminal's own commands first, then the session's. `Enter` on one runs it at once; `Tab` or a click only writes it in the editor, so you can add its argument. Whatever the list does not recognise goes to the session as typed: `/verify off` does, because the list closes once there is a space. A word that matches no command is sent as an ordinary message when you press `Enter`, as in the dock.
 
@@ -200,7 +200,7 @@ The palette is the dock's: a near-black ground, light text, grey for what matter
 - `/model` lists only the model already in use, because the client picks the providers to list from the sign-ins of its own computer, and over ssh it has none. The hub accepts a model change, but this terminal has no list to choose from, so it cannot switch models there yet.
 - `/undo` and `Esc Esc` go back in the conversation only: the session works in the hub's projects folder, where no code checkpoints are kept. To take back a file edit, log in to the hub with your own ssh and use git; `!git restore` is refused here.
 - `/exit` closes the session on the hub, with its background jobs and its undo history. To leave and come back, use `Ctrl+C` or `Ctrl+D`.
-- `@` lists files in the session's folder, which for a session opened over `aria connect` is the hub's projects folder.
+- `@` lists file names in the session's folder: the hub's projects folder for a session you opened over `aria connect`, or the folder a session was started in on the hub itself, if you attach to one of those.
 - `/signin` and `/schedules` do work, which is what makes `/signin` useful there.
 - The first time you connect to a host, run `ssh host` once by hand to accept its key; `aria connect` gives up after 60 seconds. `ARIA_SSH` names another program to use instead of `ssh`.
 

@@ -164,7 +164,7 @@ What differs from a local terminal:
 - **`/model` lists only the model already in use.** The client decides which providers to list from the sign-ins of the computer it runs on, and over `aria connect` it has none. The hub itself accepts a model change from a client, but this terminal has no list to choose from, so it cannot switch models there yet.
 - **`/exit` closes the session on the hub for good**: its engine stops, the background jobs it owns end and its checkpoints go. To leave and come back, use `Ctrl+C` or `Ctrl+D`, or close the terminal.
 - The footer shows no git branch, because git runs on your computer and the session's folder is on the hub.
-- `@` lists files in the session's folder; a session opened over `aria connect` has none, so it lists the hub's projects folder (its `sandbox.projectsDir`).
+- `@` lists file names in the session's folder. A session the client opens has no folder of its own, so it lists the hub's projects folder (its `sandbox.projectsDir`). A session that was started on the hub from a terminal in another folder keeps that folder, and the client can attach to it: `@` there lists that folder's file names, which need not lie inside the projects folder. See [what a stolen client key can do](#what-a-stolen-client-key-can-do).
 - A dead connection is noticed by ssh after about 45 seconds. The terminal then tries once to reconnect, with the screen frozen for up to 60 seconds, and otherwise exits.
 - Aria does not notify you when a run settles on a hub. Each session in the list shows `working`, `waiting for you` or `done` and how long ago.
 
@@ -248,7 +248,7 @@ The hub's bridge marks every connection that comes through `aria connect` as rem
 | List, open and close sessions | A new session never gets a folder from the client. |
 | In a session the hub has: send a message, stop a run, load the history | A made-up session id is refused. |
 | Answer questions and approvals | Including the card that lets a command out of the sandbox or writes outside the project, an install, and a connector write. |
-| List the slash commands, list models and change the session's model, list files for `@` | The hub accepts a model change, but the terminal over `aria connect` lists only the model in use, so it cannot switch there yet. `@` lists the session's folder, the hub's projects folder for a session opened over `aria connect` |
+| List the slash commands, list models and change the session's model, list files for `@` | The hub accepts a model change, but the terminal over `aria connect` lists only the model in use, so it cannot switch there yet. `@` lists file names in the session's folder: the hub's projects folder for a session the client opened, or, for a session started on the hub from a terminal in another folder, that folder (names only, never contents) |
 | Undo to an earlier message (`/undo`) | The conversation only: sessions opened over `aria connect` work in the projects folder, where no code checkpoints are kept. |
 | `/context` | The only Pi command it may send is `get_session_stats`. |
 | List, pause, resume and delete scheduled tasks | |
@@ -287,6 +287,7 @@ The line `hub init` adds is `restrict,command="/home/ana/.local/bin/aria client-
 - **It can install.** The model can ask to install a skill, a Pi package or an MCP server (a local server is a command of its own, outside the box). Each is a card, and the key can answer yes.
 - **It can write outside the project and plant a scheduled task.** It can ask the model to write a file outside the project (a card), or to create a scheduled task that may write a folder it names, which must lie inside the projects folder or `/tmp` ([the rule](automation.md#what-a-run-may-do-grants)). Such a task is saved waiting for an Approve that only the dock page can give and no client can send, so on a hub it never runs.
 - **It can change a session's model, close sessions, pause or delete scheduled tasks, and start a sign-in**, which points the hub's Claude or Notion account at an account of the attacker's. Commands typed in a session, such as `/autocompact` and `/effort`, still change their own setting in `settings.json`.
+- **It sees the file names of a session's folder.** `@` lists the names under the folder of any session the hub has. For a session the client opened that is the projects folder; for one started on the hub from a terminal in another folder it is that folder, which may lie outside the projects folder. Only names, never contents, and a client that can attach to that session already reads its history and drives its agent, so this adds little.
 - **It cannot** save a secret, run a `!command`, read or change your keys or settings through the protocol, or choose a folder for a session.
 
 The key is useful only to someone who can reach the server's ssh port. On a hub that is reachable only over a private network, a stolen key is useless to anyone outside that network ([the public ssh port](#the-public-ssh-port)).

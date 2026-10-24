@@ -4127,6 +4127,21 @@ mod tests {
     }
 
     #[test]
+    fn list_files_in_a_deleted_session_folder_is_empty() {
+        let h = harness();
+        std::fs::create_dir_all(&h.workdir).unwrap();
+        std::fs::write(h.workdir.join("projects-only.rs"), "x").unwrap();
+        // The folder the session was opened in is gone (unmounted, deleted): `@` lists nothing; it does not fall back to
+        // the projects folder and does not fail.
+        with_own_folder(&h, &h._dir.path().join("gone"));
+        h.chat.handle(PageMessage::ListFiles { id: 8, query: "".into() });
+        match wait_for(&h, "files", |m| matches!(m, DockMessage::Files { id: 8, .. })) {
+            DockMessage::Files { files, .. } => assert!(files.is_empty(), "{files:?}"),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
     fn two_threads_asking_at_once_start_one_pi() {
         let h = harness();
         let (a, b) = (h.chat.clone(), h.chat.clone());
