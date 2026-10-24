@@ -224,7 +224,14 @@ A hub is Aria's service on a computer with no desktop (a server), reached from o
   replaces `settings.json`, `--credentials` replaces `auth.json`, `mcp.json` and `mcp-auth.json`: the hub's Pi may have
   rotated its tokens, so they are not overwritten by default) and restarts the service only when it was not active (an
   active one takes the new binary when idle and the settings within a second). It never edits `sshd_config` or a
-  firewall, and creates no accounts.
+  firewall, and creates no accounts. The remote commands that use the user manager (the installer, the restart, the
+  active check) set `XDG_RUNTIME_DIR=/run/user/$(id -u)` and the user bus address first when a non-login ssh left them
+  unset, and the installer does the same for its own `systemctl --user` in `--headless` mode; a `systemctl --user` that
+  still fails is told to need `dbus-user-session` and linger. After step 5 a read-only `loginctl show-user "$USER" -p
+  Linger` decides whether it says "The hub is ready": without linger the hub stops when its owner logs out, and it prints
+  `sudo loginctl enable-linger <user>` (never run). `install.sh --headless` leaves agent-browser and its Chrome out (a
+  large download, not for every arm64 server) unless `--with-browser` is given, and the unit restarts after 5 seconds
+  (`RestartSec=5`).
 - **From a terminal** — `/schedules` lists the scheduled tasks and pauses, resumes and deletes them (creating one stays
   the `schedule` extension's tool); `/signin anthropic|notion` shows the sign-in's address and takes the address of the
   failed redirect pasted back (`oauthCode`), because the browser that opens the page is not on the hub.

@@ -100,7 +100,10 @@ whatever it was, and the safe end state is a hub whose ssh is reachable **only o
 the public port closed. Version 1 works without that step (key-only login and the restricted key carry the weight until
 you can close the port), and `hub init` warns when sshd answers on a public address. Running `hub init` again is safe: it
 keeps the service running and the settings and credentials the hub already has (the hub's own Pi may have refreshed
-them); `--settings` and `--credentials` replace them with this computer's. Terminals on another computer cannot
+them); `--settings` and `--credentials` replace them with this computer's. The server gets no browser for the agents
+(agent-browser's Chrome is a large download, and not available on every arm64 server): `sh install.sh --headless
+--with-browser` on it adds one. If the server's user does not linger, `hub init` says the hub stops when you log out of it
+and prints the `sudo loginctl enable-linger` command, and does not call the hub ready. Terminals on another computer cannot
 save secrets or run `!commands` on the hub. Details: [the hub in the architecture](docs/architecture.md#the-hub).
 
 ### Commands

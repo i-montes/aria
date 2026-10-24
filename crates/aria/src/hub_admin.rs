@@ -303,11 +303,13 @@ const UPLOAD_FILES: [&str; 7] = [
 /// Where the upload lands on the hub (the remote shell expands the `~`) and what the installer is run with.
 const HUB_SRC: &str = "~/.aria/hub-src";
 const REMOTE_UPLOAD: &str = "umask 077 && mkdir -p ~/.aria/hub-src && tar -xf - -C ~/.aria/hub-src";
-const REMOTE_INSTALL: &str = "sh ~/.aria/hub-src/install/install.sh --headless --local ~/.aria/hub-src/aria";
+const INSTALL_COMMAND: &str = "sh ~/.aria/hub-src/install/install.sh --headless --local ~/.aria/hub-src/aria";
 const REMOTE_IMPORT: &str = "~/.local/bin/aria hub-import";
 const SERVICE_UNIT: &str = "aria-serve.service";
-const REMOTE_RESTART: &str = "systemctl --user restart aria-serve.service";
-const REMOTE_IS_ACTIVE: &str = "systemctl --user is-active aria-serve.service";
+const RESTART_COMMAND: &str = "systemctl --user restart aria-serve.service";
+const IS_ACTIVE_COMMAND: &str = "systemctl --user is-active aria-serve.service";
+/// Whether the hub's user keeps its user manager (and Aria) running when nobody is logged in.
+const REMOTE_LINGER: &str = r#"loginctl show-user "$USER" -p Linger"#;
 /// Which of the four bundle files the hub has: a `test -f` on each, the names of those that exist.
 const REMOTE_EXISTING: &str =
     "for f in settings.json auth.json mcp.json mcp-auth.json; do test -f ~/.aria/$f && echo $f; done; true";
@@ -316,6 +318,24 @@ const SERVICE_KEEPS_RUNNING: &str =
 const REMOTE_VERSION: &str = "~/.local/bin/aria --version";
 const REMOTE_BWRAP: &str = "bwrap --unshare-user --ro-bind / / true";
 const REMOTE_SSHD_CONFIG: &str = "cat /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config 2>/dev/null";
+
+/// `systemctl --user` needs `XDG_RUNTIME_DIR` (and the user bus beside it), which a non-login ssh command lacks: set to what
+/// a login would have given when they are unset and the user's runtime directory exists. In front of every remote command
+/// that talks to the user manager.
+pub fn user_env(command: &str) -> String {
+    format!(
+        "if [ -z \"$XDG_RUNTIME_DIR\" ] && [ -d \"/run/user/$(id -u)\" ]; then XDG_RUNTIME_DIR=/run/user/$(id -u); export XDG_RUNTIME_DIR; fi; \
+         if [ -z \"$DBUS_SESSION_BUS_ADDRESS\" ] && [ -n \"$XDG_RUNTIME_DIR\" ]; then DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus; export DBUS_SESSION_BUS_ADDRESS; fi; {command}"
+    )
+}
+
+/// What to do when `systemctl --user` fails on the hub, which is nearly always its bus or linger.
+fn systemctl_hint(user: &str) -> String {
+    format!(
+        "If it cannot connect to the bus, the hub needs dbus-user-session (sudo apt-get install -y dbus-user-session) and \
+         linger for its user (sudo loginctl enable-linger {user}) so that the user manager runs without a login"
+    )
+}
 
 /// Reads one validated key line from stdin and adds it to `authorized_keys` as the restricted line, once. sshd uses the
 /// first line a key matches, so the blob is looked for in the lines that are not comments: none holds it, the line is
@@ -657,9 +677,10 @@ pub fn plan(probe: &Probe, args: &InitArgs) -> Vec<String> {
             args.binary.display()
         ),
         format!(
-            "2. Run the installer there: {REMOTE_INSTALL} (it installs bubblewrap and iproute2 with the hub's package \
+            "2. Run the installer there: {INSTALL_COMMAND} (it installs bubblewrap and iproute2 with the hub's package \
              manager or tells you the command, a private Node under ~/.aria/node, the aria-serve.service user unit and \
-             linger)"
+             linger, with XDG_RUNTIME_DIR and the user bus set as a non-login ssh lacks them; no browser: agent-browser \
+             and its Chrome, a large download, stay out of a server unless you run install.sh with --with-browser on the hub)"
         ),
         format!(
             "3. Send your settings and credentials (the ones you have) as one line on the stdin of {REMOTE_IMPORT}; the \
@@ -669,7 +690,7 @@ pub fn plan(probe: &Probe, args: &InitArgs) -> Vec<String> {
         if probe.service_active {
             format!("4. {SERVICE_KEEPS_RUNNING} ({SERVICE_UNIT} is active: it is not restarted)")
         } else {
-            format!("4. Restart the service: {REMOTE_RESTART}")
+            format!("4. Restart the service: {RESTART_COMMAND}")
         },
         format!("5. Check the installed version: {REMOTE_VERSION}"),
     ];
@@ -919,7 +940,8 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
     } else {
         None
     };
-    let service_active = probe_text(host, REMOTE_IS_ACTIVE)?.lines().next().map(str::trim) == Some("active");
+    let service_active =
+        probe_text(host, &user_env(IS_ACTIVE_COMMAND))?.lines().next().map(str::trim) == Some("active");
     let existing: Vec<String> = probe_text(host, REMOTE_EXISTING)?
         .lines()
         .map(str::trim)
@@ -1034,7 +1056,8 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
     }
 
     println!("step 2 of {total}: running the installer on the hub");
-    let status = remote_shown(host, REMOTE_INSTALL).map_err(|error| stopped(2, "installer", describe_error(&error)))?;
+    let status = remote_shown(host, &user_env(INSTALL_COMMAND))
+        .map_err(|error| stopped(2, "installer", describe_error(&error)))?;
     if !status.success() {
         return Err(stopped(2, "installer", describe(status)));
     }
@@ -1060,10 +1083,19 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
         println!("step 4 of {total}: {SERVICE_KEEPS_RUNNING}");
     } else {
         println!("step 4 of {total}: restarting the service");
-        let output =
-            remote(host, REMOTE_RESTART, None).map_err(|error| stopped(4, "restart", describe_error(&error)))?;
+        let output = remote(host, &user_env(RESTART_COMMAND), None)
+            .map_err(|error| stopped(4, "restart", describe_error(&error)))?;
         if !output.status.success() {
-            return Err(stopped(4, "restart", format!("{} {}", describe(output.status), first_line(&output.stderr))));
+            return Err(stopped(
+                4,
+                "restart",
+                format!(
+                    "{} {}. {}",
+                    describe(output.status),
+                    first_line(&output.stderr),
+                    systemctl_hint(&hub_user(host, &probe.ssh_user))
+                ),
+            ));
         }
     }
 
@@ -1073,6 +1105,17 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
         return Err(stopped(5, "version", format!("{} {}", describe(output.status), first_line(&output.stderr))));
     }
     println!("      the hub runs {}", first_line(&output.stdout));
+
+    // Without linger the hub's user manager, and Aria with it, stops when the owner logs out of the hub.
+    let lingers = hub_lingers(host);
+    if !lingers {
+        let user = hub_user(host, &probe.ssh_user);
+        println!(
+            "warning: linger is not on for {user} on the hub (or it could not be checked): the hub stops when you log \
+             out of it, and the service with it. An administrator turns it on:"
+        );
+        println!("      sudo loginctl enable-linger {user}");
+    }
 
     // The sandbox is tried before the key goes in: a key on a hub whose commands all ask is shell access for whoever holds it.
     let sandbox = probe_sandbox(host);
@@ -1130,7 +1173,9 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: &Path, bundle_line: &str) -
     }
 
     check_public_ssh(host, probe, &listeners, key);
-    if code == 0 {
+    if code == 0 && !lingers {
+        println!("The hub is installed, but it is not ready: turn linger on (see the warning above).");
+    } else if code == 0 {
         // With the dedicated key's ssh entry added, `aria-hub` is the way in that uses it.
         let target = if key == KeyState::Restricted { "aria-hub" } else { host };
         println!("The hub is ready. Connect from this computer with: aria connect {target}");
@@ -1146,6 +1191,20 @@ enum Sandbox {
     Missing,
     /// Installed, but it could not start (usually AppArmor or a sysctl refusing the user namespace); what it said.
     Blocked(String),
+}
+
+/// The user the hub's commands run as: the one typed before the `@`, else the one the owner's ssh uses.
+fn hub_user(host: &str, ssh_user: &str) -> String {
+    match host.split_once('@') {
+        Some((user, _)) => user.to_string(),
+        None if !ssh_user.is_empty() => ssh_user.to_string(),
+        None => "<user>".to_string(),
+    }
+}
+
+/// Whether the hub's user lingers (read-only): `Linger=yes`. Anything else, including a `loginctl` that fails, is no.
+fn hub_lingers(host: &str) -> bool {
+    probe_text(host, REMOTE_LINGER).is_ok_and(|said| said.lines().any(|line| line.trim() == "Linger=yes"))
 }
 
 /// Tries the sandbox on the hub (read-only).
@@ -1923,6 +1982,32 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
         assert_eq!(files_to_send(&host, &init_args()), ["settings.json", "mcp.json", "mcp-auth.json"]);
         // an active service is not restarted even on a first import
         assert!(plan(&host, &init_args()).join("\n").contains("keeps running"));
+    }
+
+    #[test]
+    fn the_user_environment_prefix_sets_what_a_non_login_ssh_lacks_and_keeps_what_is_there() {
+        let uid = String::from_utf8(Command::new("id").arg("-u").output().unwrap().stdout).unwrap();
+        let dir = format!("/run/user/{}", uid.trim());
+        let show = "printf '%s %s' \"$XDG_RUNTIME_DIR\" \"$DBUS_SESSION_BUS_ADDRESS\"";
+        let run = |env: &[(&str, &str)]| {
+            let mut sh = Command::new("sh");
+            sh.args(["-c", &user_env(show)]).env_clear().env("PATH", std::env::var("PATH").unwrap());
+            sh.envs(env.iter().copied());
+            String::from_utf8(sh.output().unwrap().stdout).unwrap()
+        };
+        if Path::new(&dir).is_dir() {
+            assert_eq!(run(&[]), format!("{dir} unix:path={dir}/bus"));
+        }
+        assert_eq!(
+            run(&[("XDG_RUNTIME_DIR", "/elsewhere"), ("DBUS_SESSION_BUS_ADDRESS", "unix:path=/mine")]),
+            "/elsewhere unix:path=/mine"
+        );
+    }
+
+    #[test]
+    fn the_plan_leaves_the_browser_out_and_says_how_to_get_it() {
+        let text = plan(&probe(), &init_args()).join("\n");
+        assert!(text.contains("--with-browser") && text.contains("agent-browser"), "{text}");
     }
 
     #[test]

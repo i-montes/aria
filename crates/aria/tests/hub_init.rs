@@ -104,7 +104,7 @@ fn commands(log: &[String]) -> Vec<String> {
 
 /// The remote commands that change something on the hub (every probe reads only).
 fn writes(log: &[String]) -> Vec<String> {
-    const PROBES: [&str; 8] = [
+    const PROBES: [&str; 9] = [
         "uname -m",
         "cat /etc/os-release",
         "echo $HOME",
@@ -113,6 +113,7 @@ fn writes(log: &[String]) -> Vec<String> {
         "node --version",
         "is-active",
         "test -f",
+        "loginctl show-user",
     ];
     commands(log)
         .into_iter()
@@ -772,4 +773,71 @@ fn a_hub_with_only_some_files_gets_the_missing_ones() {
         "auth.json stays as the hub has it"
     );
     assert!(!writes(&world.log()).iter().any(|c| c.contains("restart")), "still no restart: it was active");
+}
+
+const XDG: &str = "XDG_RUNTIME_DIR=/run/user/$(id -u)";
+const BUS: &str = "DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus";
+
+#[test]
+fn the_remote_commands_that_use_the_user_manager_set_its_runtime_directory() {
+    let world = World::new();
+    let output = world.init_yes(&[], &[]);
+    assert_eq!(output.status.code(), Some(0), "{}{}", text(&output.stdout), text(&output.stderr));
+    let all = commands(&world.log());
+    for needle in ["install.sh --headless", "systemctl --user restart", "systemctl --user is-active"] {
+        let command = &all[position(&all, needle)];
+        assert!(command.contains(XDG) && command.contains(BUS), "{needle}: {command}");
+        assert!(
+            command.contains("[ -z \"$XDG_RUNTIME_DIR\" ]") && command.contains("-d \"/run/user/$(id -u)\""),
+            "{command}"
+        );
+    }
+    // the reads that do not need the user manager are left alone
+    for needle in ["uname -m", "echo $HOME", "ss -ltnH -n", "command -v"] {
+        assert!(!all[position(&all, needle)].contains("XDG_RUNTIME_DIR"), "{needle}");
+    }
+}
+
+#[test]
+fn a_failing_systemctl_names_dbus_user_session_and_linger() {
+    let world = World::new();
+    let ssh = failing_ssh(&world, "*systemctl*restart*", 1);
+    let output = world.init_yes(&[], &[("ARIA_SSH", &ssh)]);
+    let err = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{}{err}", text(&output.stdout));
+    assert!(err.contains("step 4") && err.contains("dbus-user-session") && err.contains("linger"), "{err}");
+    assert!(err.contains("sudo loginctl enable-linger ana"), "{err}");
+}
+
+#[test]
+fn the_hub_is_ready_only_when_its_user_lingers() {
+    let world = World::new();
+    let output = world.init_yes(&[], &[]);
+    let out = text(&output.stdout);
+    assert!(out.contains("The hub is ready"), "{out}");
+    assert!(!out.contains("linger is not on"), "{out}");
+    let probe = commands(&world.log()).into_iter().find(|c| c.contains("loginctl")).expect("a linger probe");
+    assert_eq!(probe, "loginctl show-user \"$USER\" -p Linger");
+    // it is asked after the version check
+    let all = commands(&world.log());
+    assert!(position(&all, "aria --version") < position(&all, "loginctl show-user"), "{all:?}");
+    for variant in ["no", "fail"] {
+        let world = World::new();
+        let output = world.init_yes(&[], &[("ARIA_FAKE_SSH_LINGER", variant)]);
+        let (out, err) = (text(&output.stdout), text(&output.stderr));
+        assert_eq!(output.status.code(), Some(0), "{variant}: {out}{err}");
+        assert!(!out.contains("The hub is ready"), "{variant}: {out}");
+        assert!(out.contains("stops when you log out"), "{variant}: {out}");
+        assert!(out.contains("sudo loginctl enable-linger ana"), "{variant}: {out}");
+        for command in commands(&world.log()) {
+            assert!(!command.contains("sudo"), "nothing is run with sudo: {command}");
+        }
+    }
+}
+
+#[test]
+fn the_plan_says_the_browser_is_left_out_of_a_server() {
+    let world = World::new();
+    let out = text(&world.init(&["ana@hub.example", "--binary", "bin/aria-aarch64"], &[]).stdout);
+    assert!(out.contains("--with-browser") && out.contains("agent-browser"), "{out}");
 }

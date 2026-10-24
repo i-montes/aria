@@ -13,6 +13,7 @@
 #   ARIA_FAKE_SSH_BWRAP_FAIL   1: the sandbox probe fails (bwrap cannot make a user namespace); missing: there is no bwrap
 #   ARIA_FAKE_SSH_IMPORT_FAIL  1: `aria hub-import` fails and complains on stderr, quoting the start of what it read
 #   ARIA_FAKE_SSH_PASSWORDS    yes: sshd_config allows password logins (default no)
+#   ARIA_FAKE_SSH_LINGER       no: the user does not linger on the hub; fail: `loginctl` fails (default: yes)
 #   ARIA_FAKE_SSH_ACTIVE       1: aria-serve.service is already active before the run (default: it is not)
 # ARIA_FAKE_SSH_ROOT is the hub's computer: the upload is unpacked, and the key is added to authorized_keys, under
 # $ARIA_FAKE_SSH_ROOT/home, the only place a command is really run.
@@ -61,6 +62,11 @@ case "$cmd" in
     done ;;
   "node --version") echo "${ARIA_FAKE_SSH_NODE:-v18.19.1}" ;;
   *"test -f"*) HOME="$root/home" sh -c "$cmd" ;;
+  *loginctl*)
+    case "${ARIA_FAKE_SSH_LINGER:-yes}" in
+      fail) echo "Failed to connect to bus: No medium found" >&2; exit 1 ;;
+      *) echo "Linger=${ARIA_FAKE_SSH_LINGER:-yes}" ;;
+    esac ;;
   *is-active*)
     if [ "${ARIA_FAKE_SSH_ACTIVE:-0}" = 1 ]; then echo active; else echo inactive; exit 3; fi ;;
   *"tar -xf"*) HOME="$root/home" sh -c "$cmd" < "$stdin_file" ;;

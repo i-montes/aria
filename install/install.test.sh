@@ -172,6 +172,32 @@ printf '%s\n' "$unit" | grep -qx 'ExecStart=%h/.local/bin/aria serve' && pass "t
 printf '%s\n' "$unit" | grep -qx 'Restart=on-failure' && printf '%s\n' "$unit" | grep -qx 'WantedBy=default.target' && ! printf '%s\n' "$unit" | grep -q 'graphical-session' && pass "the serve unit restarts on failure, starts with the user manager and needs no session" || fail "the serve unit has the wrong lifecycle"
 printf '%s\n' "$unit" | grep -q '^Environment=PATH=%h/.aria/node/bin:' && pass "the serve unit's PATH starts with the private Node" || fail "the serve unit's PATH does not start with %h/.aria/node/bin"
 if sh "$installer" --headless --print-unit | diff -u "$here/aria-serve.service" - >/dev/null; then pass "embedded serve unit matches install/aria-serve.service"; else fail "embedded serve unit differs from install/aria-serve.service"; fi
+# the unit waits a few seconds before it restarts after a failure
+printf '%s\n' "$unit" | grep -qx 'RestartSec=5' && pass "the serve unit waits 5 seconds before a restart" || fail "the serve unit has no RestartSec=5"
+# a non-login ssh has no XDG_RUNTIME_DIR and no user bus address: a headless install sets them for systemctl --user
+out=$(PATH="$tmp/new:/usr/bin:/bin" HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --headless --dry-run --local /tmp/fake-aria 2>&1)
+printf '%s\n' "$out" | grep -qF 'XDG_RUNTIME_DIR=/run/user/' && printf '%s\n' "$out" | grep -qF 'DBUS_SESSION_BUS_ADDRESS=unix:path=' && pass "the headless dry run says it sets XDG_RUNTIME_DIR and the user bus address" || fail "the headless dry run does not mention XDG_RUNTIME_DIR and the bus address: $out"
+out=$(PATH="$tmp/new:/usr/bin:/bin" HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria 2>&1)
+printf '%s\n' "$out" | grep -qF 'XDG_RUNTIME_DIR' && fail "a desktop install sets XDG_RUNTIME_DIR: $out" || pass "a desktop install does not touch XDG_RUNTIME_DIR"
+if [ -d "/run/user/$(id -u)" ]; then
+  mkdir -p "$tmp/envctl" && printf '#!/bin/sh\necho "XDG=${XDG_RUNTIME_DIR:-unset} BUS=${DBUS_SESSION_BUS_ADDRESS:-unset}" >> "%s/seen"\nexit 0\n' "$tmp" > "$tmp/envctl/systemctl" && chmod +x "$tmp/envctl/systemctl"
+  env -u XDG_RUNTIME_DIR -u DBUS_SESSION_BUS_ADDRESS PATH="$tmp/envctl:/usr/bin:/bin" HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --headless --restart-dock 0 0 >/dev/null 2>&1 || true
+  grep -qF "XDG=/run/user/$(id -u) BUS=unix:path=/run/user/$(id -u)/bus" "$tmp/seen" && pass "systemctl --user runs with XDG_RUNTIME_DIR and the bus address a non-login ssh lacks" || fail "systemctl --user did not get them: $(cat "$tmp/seen" 2>/dev/null)"
+  rm -f "$tmp/seen"
+  XDG_RUNTIME_DIR=/somewhere/else DBUS_SESSION_BUS_ADDRESS=unix:path=/mine PATH="$tmp/envctl:/usr/bin:/bin" HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --headless --restart-dock 0 0 >/dev/null 2>&1 || true
+  grep -qF "XDG=/somewhere/else BUS=unix:path=/mine" "$tmp/seen" && pass "values already set are kept" || fail "set values were replaced: $(cat "$tmp/seen" 2>/dev/null)"
+else pass "skip: no /run/user/$(id -u) here to check the environment against"; fi
+# systemctl --user that fails on a server says what it needs
+mkdir -p "$tmp/failctl" && printf '#!/bin/sh\necho "Failed to connect to bus: No medium found" >&2\nexit 1\n' > "$tmp/failctl/systemctl" && chmod +x "$tmp/failctl/systemctl"
+if out=$(PATH="$tmp/failctl:/usr/bin:/bin" HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --headless --restart-dock 0 0 2>&1); then fail "a failing systemctl --user did not stop the headless install: $out"
+else printf '%s\n' "$out" | grep -qF 'dbus-user-session' && printf '%s\n' "$out" | grep -qi 'linger' && pass "a failing systemctl --user names dbus-user-session and linger" || fail "the systemctl failure does not name dbus-user-session and linger: $out"; fi
+# the browser (Chrome is a large download, and not for every arm64 server) only on request on a server
+out=$(PATH="$tmp/new:/usr/bin:/bin" HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --headless --dry-run --local /tmp/fake-aria 2>&1)
+printf '%s\n' "$out" | grep -qF -- '--with-browser' && ! printf '%s\n' "$out" | grep -qF 'agent-browser@' && pass "headless skips agent-browser and says --with-browser installs it" || fail "headless does not skip agent-browser: $out"
+out=$(PATH="$tmp/new:/usr/bin:/bin" HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --headless --with-browser --dry-run --local /tmp/fake-aria 2>&1)
+printf '%s\n' "$out" | grep -qF 'agent-browser@' && pass "headless --with-browser installs agent-browser" || fail "headless --with-browser does not install agent-browser: $out"
+out=$(PATH="$tmp/new:/usr/bin:/bin" HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria 2>&1)
+printf '%s\n' "$out" | grep -qF 'agent-browser@' && pass "a desktop install still installs agent-browser" || fail "a desktop install lost agent-browser: $out"
 # a Mac has no systemd user units: --headless is Linux only
 mkdir -p "$tmp/darwin" && printf '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; *) echo Darwin ;; esac\n' > "$tmp/darwin/uname" && chmod +x "$tmp/darwin/uname"
 if PATH="$tmp/darwin:$tmp/new:/usr/bin:/bin" HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --headless --dry-run --local /tmp/fake-aria >"$tmp/out" 2>"$tmp/err"; then fail "--headless was accepted on macOS"

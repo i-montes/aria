@@ -7,6 +7,7 @@
 #   sh install.sh --dry-run [...]                      print what would happen and change nothing
 #   sh install.sh --restart-now [...]                  restart a running dock at once, even mid-run
 #   sh install.sh --headless [...]                     a server with no desktop (Linux): `aria serve` as a user unit
+#   sh install.sh --headless --with-browser [...]      the same, and agent-browser with its Chrome (a large download, left out on a server)
 #
 # An update does not cut a run: the running dock is told a new version is installed and restarts into it once it
 # is hidden and no session has a run going. Only a changed service file, --restart-now, or a dock too old to
@@ -44,6 +45,7 @@ HEADLESS_PACKAGES="bubblewrap iproute2"
 
 DRY_RUN=0
 HEADLESS=0
+WITH_BROWSER=0
 NODE_PRIVATE=0
 NODE_PINS=""
 RESTART_NOW=0
@@ -134,6 +136,7 @@ Description=Aria service
 Environment=PATH=$data_path/node/bin:$data_path/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=$exec_path serve
 Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=default.target
@@ -244,6 +247,29 @@ install_headless_packages() {
     say "Until then every command asks before it runs."
     return 0
   }
+}
+
+# `systemctl --user` talks to the user manager over $XDG_RUNTIME_DIR/bus, and a non-login ssh command (how a hub is set
+# up) has neither XDG_RUNTIME_DIR nor DBUS_SESSION_BUS_ADDRESS. Headless mode only: where they are unset and the user's
+# runtime directory exists they are set to what a login would have given. A value already there is kept.
+user_session_env() {
+  if [ "$DRY_RUN" = 1 ]; then
+    say "would: use XDG_RUNTIME_DIR=/run/user/$(id -u) and DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus for systemctl --user, when they are not set (a non-login ssh sets neither)"
+    return 0
+  fi
+  if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$(id -u)" ]; then
+    XDG_RUNTIME_DIR=/run/user/$(id -u)
+    export XDG_RUNTIME_DIR
+  fi
+  if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+    DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
+    export DBUS_SESSION_BUS_ADDRESS
+  fi
+}
+
+# `systemctl --user` on a server; when it fails the reason is nearly always the user manager's bus or linger.
+server_systemctl() {
+  run systemctl --user "$@" || die "systemctl --user $* failed. A server needs dbus-user-session (sudo apt-get install -y dbus-user-session) and linger on (sudo loginctl enable-linger ${USER:-$(id -un)}) for its user manager and bus to be there without a login; then run this again"
 }
 
 # Without linger the user manager (and Aria with it) stops when the last login ends.
@@ -601,10 +627,11 @@ restart_dock() {
     run launchctl bootstrap "gui/$uid" "$AGENT_DIR/$AGENT"
     say "Aria is installed. Press Option + Space to set it up."
   elif [ "$HEADLESS" = 1 ]; then
-    run systemctl --user daemon-reload
-    run systemctl --user enable --now "$SERVE_UNIT"
+    user_session_env
+    server_systemctl daemon-reload
+    server_systemctl enable --now "$SERVE_UNIT"
     if [ "$1" = 1 ] && soft_restart; then return; fi
-    if [ "$1" = 1 ]; then run systemctl --user restart "$SERVE_UNIT"; fi
+    if [ "$1" = 1 ]; then server_systemctl restart "$SERVE_UNIT"; fi
     say "Aria is installed and running as $SERVE_UNIT. From your computer: aria connect <user>@<this server>"
   else
     run systemctl --user daemon-reload
@@ -638,6 +665,7 @@ do_install() {
   read_pi_version # before anything is installed: a version we cannot read must not leave a half install
   if [ "$HEADLESS" = 1 ]; then install_headless_packages; else install_packages; fi
   was_active=0
+  if [ "$HEADLESS" = 1 ]; then user_session_env; fi
   if [ "$DRY_RUN" != 1 ]; then
     if [ "$PLATFORM" = Darwin ]; then
       launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 && was_active=1
@@ -654,7 +682,11 @@ do_install() {
   install_pi
   install_pi_packages
   install_engram
-  install_agent_browser
+  if [ "$HEADLESS" = 1 ] && [ "$WITH_BROWSER" != 1 ]; then
+    say "Not installing agent-browser on a server (its Chrome is a large download and not available everywhere); pass --with-browser to install it"
+  else
+    install_agent_browser
+  fi
   install_binary
   install_bar_widget
   write_unit
@@ -724,6 +756,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --restart-now) RESTART_NOW=1 ;;
+    --with-browser) WITH_BROWSER=1 ;;
     --headless) HEADLESS=1 ;; # give it before --restart-dock, the hook that runs the moment it is read
     --local)
       [ $# -ge 2 ] || die "--local needs the path of a binary"
