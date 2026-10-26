@@ -1,6 +1,6 @@
 <div align="center">
 
-# Aria
+# Aria (A Really Intelligent Assistant)
 
 **A personal assistant that lives on your desktop.**
 Press <kbd>Super</kbd> + <kbd>A</kbd> (<kbd>Option</kbd> + <kbd>Space</kbd> on a Mac) and it opens over whatever you are doing:
