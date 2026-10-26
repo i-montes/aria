@@ -5,6 +5,12 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.20.2 — 2026-10-26
+
+### Fixed
+
+- the model picker reads the live credentials, filters where you type and hides the input
+
 ## 0.20.1 — 2026-10-23
 
 ### Fixed
