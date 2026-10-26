@@ -572,6 +572,13 @@ impl App {
                 vec![self.session_request(Pending::Commands, |id| PageMessage::ListCommands { id })]
             }
             Trigger::None => {
+                // The models list filters from the editor's text: while its picker is open the editor is the filter
+                // (the message input hides), so every change narrows the list.
+                if let Some((PickerKind::Models, picker)) = self.picker.as_mut() {
+                    let text = self.editor.text().to_string();
+                    picker.set_query(&text);
+                    return Vec::new();
+                }
                 if matches!(self.picker, Some((PickerKind::Files | PickerKind::Commands, _))) {
                     self.picker = None;
                 }
@@ -592,6 +599,9 @@ impl App {
             Outcome::None => Vec::new(),
             Outcome::Closed => {
                 self.picker = None;
+                if matches!(kind, PickerKind::Models) {
+                    self.editor.set("");
+                }
                 Vec::new()
             }
             Outcome::Picked(value) => {
@@ -610,6 +620,8 @@ impl App {
                         Vec::new()
                     }
                     PickerKind::Models => {
+                        // The editor held the filter, never a message.
+                        self.editor.set("");
                         vec![self.session_request(Pending::Models, |id| PageMessage::SetModel { id, model: value })]
                     }
                 }
@@ -841,7 +853,15 @@ impl App {
                 &self.config.lang,
             ));
         }
-        self.dialog.as_ref().map(|dialog| dialog.lines(&self.config.lang, palette, width))
+        if self.dialog.is_some() {
+            return self.dialog.as_ref().map(|dialog| dialog.lines(&self.config.lang, palette, width));
+        }
+        // A picker is open: only its filter input (above the list, floating) takes input, so the editor's place stays
+        // empty — the message input hides until the picker closes.
+        if self.picker.is_some() {
+            return Some(Vec::new());
+        }
+        None
     }
 
     /// The suggestions (`/`, `@`, `/model`), floating above the editor; none while a dialog is open.
@@ -898,6 +918,17 @@ impl App {
             }
             Screen::Session => {
                 let palette = crate::term::theme::Palette::truecolor();
+                // The picker's rows win over the panel below them; its filter input's row picks nothing (`Picker::click`).
+                if let Some(lines) = self.overlay_lines(&palette) {
+                    let top = self.overlay_top;
+                    if row >= top && usize::from(row - top) < lines.len() {
+                        if let Some((kind, picker)) = self.picker.as_ref() {
+                            let (kind, outcome) = (*kind, picker.click(usize::from(row - top)));
+                            effects.extend(self.picked(kind, outcome, false));
+                        }
+                        return effects;
+                    }
+                }
                 if let Some(lines) = self.panel_lines(&palette, 80) {
                     let top = self.panel_top(lines.len());
                     if row >= top {
@@ -908,14 +939,6 @@ impl App {
                         } else {
                             let answer = self.dialog.as_mut().and_then(|dialog| dialog.click(usize::from(row - top)));
                             effects.extend(self.answered(answer));
-                        }
-                    }
-                } else if let Some(lines) = self.overlay_lines(&palette) {
-                    let top = self.overlay_top;
-                    if row >= top && usize::from(row - top) < lines.len() {
-                        if let Some((kind, picker)) = self.picker.as_ref() {
-                            let (kind, outcome) = (*kind, picker.click(usize::from(row - top)));
-                            effects.extend(self.picked(kind, outcome, false));
                         }
                     }
                 }
@@ -1473,18 +1496,44 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_suggestion_picks_it_and_the_editor_stays() {
+    fn a_click_on_a_suggestion_picks_it_and_the_input_comes_back() {
         let mut app = attached();
         let effects = key(&mut app, Key::Char('/'));
         let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
         let PageMessage::ListCommands { id } = **message else { panic!("{message:?}") };
         app.update(in_session(DockMessage::Commands { id, commands: json!([]) }));
         let palette = crate::term::theme::Palette::truecolor();
-        assert!(app.panel_lines(&palette, 80).is_none(), "the editor keeps its place");
+        assert!(app.panel_lines(&palette, 80).is_some_and(|lines| lines.is_empty()), "the message input hides while the picker is open");
         assert!(app.overlay_lines(&palette).is_some());
         app.set_overlay_top(10);
         app.update(Input::Click { row: 10 });
+        assert_eq!(app.editor.text(), "/", "the filter input's row picks nothing");
+        app.update(Input::Click { row: 11 });
         assert_eq!(app.editor.text(), "/exit ");
+        assert!(app.panel_lines(&palette, 80).is_none(), "the input comes back once picked");
+    }
+
+    #[test]
+    fn the_models_list_filters_as_you_type_and_clears_after_picking() {
+        let mut app = attached();
+        typed(&mut app, "/model");
+        let effects = key(&mut app, Key::Enter);
+        let Some(Effect::Send(PageMessage::Session { message, .. })) = effects.first() else { panic!("{effects:?}") };
+        let PageMessage::ListModels { id } = **message else { panic!("{message:?}") };
+        app.update(in_session(DockMessage::Models {
+            id,
+            models: json!([{"provider": "local", "id": "llama", "name": "Llama 3"}]),
+        }));
+        let palette = crate::term::theme::Palette::truecolor();
+        assert!(app.panel_lines(&palette, 80).is_some_and(|lines| lines.is_empty()), "the message input hides");
+        typed(&mut app, "lla");
+        let lines = app.overlay_lines(&palette).expect("the list is open");
+        let row = |line: &ratatui::text::Line<'static>| line.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        assert_eq!(row(&lines[0]), "⌕ lla▌");
+        let effects = key(&mut app, Key::Enter);
+        assert!(matches!(&effects[..], [Effect::Send(PageMessage::Session { message, .. })]
+            if matches!(**message, PageMessage::SetModel { .. })), "{effects:?}");
+        assert_eq!(app.editor.text(), "", "the filter never becomes a message");
     }
 
     #[test]

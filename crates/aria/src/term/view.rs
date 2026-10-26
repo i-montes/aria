@@ -413,12 +413,13 @@ fn conversation_marked(v: &SessionView, width: u16) -> (Vec<Line<'static>>, Vec<
     for entry in entries {
         let mut entry_marks: Vec<(usize, String)> = Vec::new();
         let lines: Vec<Line<'static>> = match entry {
+            // The accent marks you (as the composer's `›` does): a scroll lands mid-block and still knows who is talking.
             Entry::User { text } => wrap(
                 text,
                 width,
                 vec![Span::styled("› ", Style::default().fg(p.accent))],
                 "  ",
-                Style::default().fg(p.text),
+                Style::default().fg(p.accent),
             ),
             Entry::Assistant { text, thinking, .. } => {
                 let mut lines = Vec::new();
@@ -646,9 +647,9 @@ pub fn bottom_height(v: &SessionView, width: u16, height: u16) -> u16 {
     let rows = task_lines(v, width).len()
         + usize::from(v.working_ms.is_some())
         + v.session.queue.len()
-        + 1
+        + usize::from(middle > 0)
         + middle.min(room)
-        + 1
+        + usize::from(middle > 0)
         + 1;
     (rows as u16).min(height)
 }
@@ -710,10 +711,15 @@ pub fn draw_session(frame: &mut Frame, v: &SessionView) -> Drawn {
         bottom.push(working_line(v, ms));
     }
     bottom.extend(queue_lines(v, width));
-    bottom.push(rule.clone());
+    let framed = !middle.is_empty();
+    if framed {
+        bottom.push(rule.clone());
+    }
     let room = usize::from(area.height).saturating_sub(4).max(1);
     bottom.extend(middle.into_iter().take(room));
-    bottom.push(rule);
+    if framed {
+        bottom.push(rule);
+    }
     bottom.push(footer(v, inner.width));
     let bottom_height = (bottom.len() as u16).min(area.height);
     let skip = bottom.len().saturating_sub(usize::from(bottom_height));
@@ -878,6 +884,15 @@ mod tests {
     }
 
     #[test]
+    fn the_user_shines_in_the_accent_and_the_answer_in_text() {
+        let s = worked();
+        let b = render(&view(&s, true), 100, 30);
+        let p = Palette::truecolor();
+        assert_eq!(colour_of(&b, "fix the coupon"), p.accent);
+        assert_eq!(colour_of(&b, "Listo."), p.text);
+    }
+
+    #[test]
     fn verbose_off_lists_each_step_as_the_docks_accordion() {
         let mut s = worked();
         s.apply(
@@ -1003,6 +1018,16 @@ mod tests {
         let mut idle = view(&s, true);
         idle.working_ms = None;
         assert!(!text(&render(&idle, 100, 30)).contains("Leyendo archivos"));
+    }
+
+    #[test]
+    fn the_rules_fall_with_the_hidden_input() {
+        let s = worked();
+        let mut v = view(&s, true);
+        v.input = "/mo";
+        v.panel = Some(Vec::new());
+        let drawn = text(&render(&v, 100, 30));
+        assert!(!drawn.lines().any(|l| l.trim_start().starts_with("──")), "{drawn}");
     }
 
     #[test]

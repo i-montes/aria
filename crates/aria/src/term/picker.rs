@@ -3,7 +3,7 @@
 
 use crate::term::theme::Palette;
 use crate::term::Key;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 use std::cmp::Ordering;
@@ -104,9 +104,12 @@ impl Picker {
         Outcome::None
     }
 
-    /// `row` counts from the first line `lines` draws.
+    /// `row` counts from the first line `lines` draws (the filter input is row 0 and picks nothing).
     pub fn click(&self, row: usize) -> Outcome {
-        match self.rows().into_iter().skip(self.window()).nth(row) {
+        if row == 0 {
+            return Outcome::None;
+        }
+        match self.rows().into_iter().skip(self.window()).nth(row - 1) {
             Some(Row::Item(i)) => Outcome::Picked(self.shown()[i].value.clone()),
             _ => Outcome::None,
         }
@@ -120,7 +123,12 @@ impl Picker {
 
     pub fn lines(&self, palette: &Palette) -> Vec<Line<'static>> {
         let shown = self.shown();
-        self.rows()
+        let filter = Line::from(vec![
+            Span::styled("⌕ ", Style::default().fg(palette.accent)),
+            Span::styled(self.query.clone(), Style::default().fg(palette.text).add_modifier(Modifier::BOLD)),
+            Span::styled("▌", Style::default().fg(palette.accent)),
+        ]);
+        let rows: Vec<Line<'static>> = self.rows()
             .into_iter()
             .skip(self.window())
             .take(ROWS)
@@ -140,7 +148,8 @@ impl Picker {
                     Line::from(spans)
                 }
             })
-            .collect()
+            .collect();
+        std::iter::once(filter).chain(rows).collect()
     }
 }
 
@@ -246,8 +255,20 @@ mod tests {
     #[test]
     fn a_click_picks_the_row_under_it() {
         let p = Picker::new(vec![item("a"), item("b")]);
-        assert_eq!(p.click(1), Outcome::Picked("b".into()));
+        assert_eq!(p.click(0), Outcome::None, "the filter input picks nothing");
+        assert_eq!(p.click(1), Outcome::Picked("a".into()));
+        assert_eq!(p.click(2), Outcome::Picked("b".into()));
         assert_eq!(p.click(9), Outcome::None);
+    }
+
+    #[test]
+    fn the_filter_input_sits_above_the_list() {
+        let mut p = Picker::new(vec![item("a"), item("b")]);
+        p.set_query("b");
+        let lines = p.lines(&Palette::truecolor());
+        let row = |line: &Line<'static>| line.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        assert_eq!(row(&lines[0]), "⌕ b▌");
+        assert!(row(&lines[1]).contains('b'), "the list comes under the filter");
     }
 
     #[test]

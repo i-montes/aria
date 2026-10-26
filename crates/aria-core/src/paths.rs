@@ -38,7 +38,16 @@ impl AriaPaths {
     fn credential(&self, name: &str) -> PathBuf {
         match &self.vault {
             Some(vault) => vault.live.join(name),
-            None => self.root.join(name),
+            // Without an open vault the live copy is still the real file while the dock holds the keyring (the plain one
+            // is sealed away): the terminal reads the same credentials the dock does.
+            None => {
+                let live = crate::vault::live_dir(&self.root).join(name);
+                if live.is_file() {
+                    live
+                } else {
+                    self.root.join(name)
+                }
+            }
         }
     }
 
@@ -115,6 +124,19 @@ mod tests {
         assert_eq!(paths.settings(), PathBuf::from("/tmp/x/settings.json"));
         assert_eq!(paths.auth(), PathBuf::from("/tmp/x/auth.json"));
         std::env::remove_var("ARIA_HOME");
+    }
+
+    #[test]
+    fn the_live_copy_wins_while_the_dock_holds_the_keyring() {
+        let root = std::env::temp_dir().join(format!("aria-paths-test-{}", std::process::id()));
+        let live = crate::vault::live_dir(&root);
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::write(live.join("auth.json"), b"{}").unwrap();
+        let paths = AriaPaths::new(root.clone());
+        assert_eq!(paths.auth(), live.join("auth.json"));
+        std::fs::remove_dir_all(&live).unwrap();
+        assert_eq!(paths.auth(), root.join("auth.json"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
