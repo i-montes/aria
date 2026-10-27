@@ -3,6 +3,7 @@
 //!
 //! The pieces are small and pure; `aria hub init` (below) orchestrates them over ssh.
 
+use crate::hub_ui::{self, HubUi, Note, Outcome, Plan};
 use crate::keyring_cli::secret_value;
 use aria_core::json_file::{merge_preserving, read_json, write_bytes_atomic};
 use aria_core::paths::AriaPaths;
@@ -286,7 +287,7 @@ pub fn private_address(ip: IpAddr) -> bool {
 
 const USAGE: &str =
     "usage: aria hub init <user@host> [--binary <path>] [--projects <dir>] [--client-key <pubkey file>] \
-     [--no-client-key] [--settings] [--credentials] [--allow-no-sandbox] [--yes]";
+     [--no-client-key] [--settings] [--credentials] [--allow-no-sandbox] [--details] [--plain] [--yes]";
 
 /// What `aria hub init` uploads from the checkout: the installer, the service unit and the pins the installer reads
 /// (`install/install.sh` reads `../<pin>`, so the tree keeps its shape under `~/.aria/hub-src`).
@@ -303,7 +304,9 @@ const UPLOAD_FILES: [&str; 7] = [
 /// Where the upload lands on the hub (the remote shell expands the `~`) and what the installer is run with.
 const HUB_SRC: &str = "~/.aria/hub-src";
 const REMOTE_UPLOAD: &str = "umask 077 && mkdir -p ~/.aria/hub-src && tar -xf - -C ~/.aria/hub-src";
-const INSTALL_COMMAND: &str = "sh ~/.aria/hub-src/install/install.sh --headless --local ~/.aria/hub-src/aria";
+/// `ARIA_NESTED=1` tells the installer it runs inside `hub init`'s own screen, so it prints its compact form.
+const INSTALL_COMMAND: &str =
+    "ARIA_NESTED=1 sh ~/.aria/hub-src/install/install.sh --headless --local ~/.aria/hub-src/aria";
 /// What a hub with no checkout behind it is installed with: the installer of this Aria's own release, run on the hub (it
 /// downloads the hub's build of the same version, checked against its checksum). `--yes` is the installer's own: it lets
 /// it write the AppArmor profile for bwrap alone when Ubuntu blocks the sandbox, which the plan says before anything runs.
@@ -311,7 +314,7 @@ const INSTALL_COMMAND: &str = "sh ~/.aria/hub-src/install/install.sh --headless 
 pub fn release_install_command(version: &str) -> String {
     format!(
         "curl -fsSL https://github.com/i-montes/aria/releases/download/v{version}/install.sh \
-         | ARIA_VERSION=v{version} sh -s -- --headless --yes"
+         | ARIA_VERSION=v{version} ARIA_NESTED=1 sh -s -- --headless --yes"
     )
 }
 const REMOTE_IMPORT: &str = "~/.local/bin/aria hub-import";
@@ -326,6 +329,8 @@ const REMOTE_EXISTING: &str =
 const SERVICE_KEEPS_RUNNING: &str =
     "the service keeps running: it takes the new binary when idle and the settings within a second";
 const REMOTE_VERSION: &str = "~/.local/bin/aria --version";
+/// The same read before anything is changed, to say which Aria a working hub already runs; silent when there is none.
+const REMOTE_VERSION_BEFORE: &str = "~/.local/bin/aria --version 2>/dev/null";
 /// What the sandbox extension's probe runs (`extensions/sandbox/probe.ts`), which is the real call's mounts: a server that
 /// cannot mount `/proc` or `/dev` (a container) fails here and not at the first command.
 const REMOTE_BWRAP: &str = "bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc true";
@@ -405,6 +410,10 @@ pub struct RawInit {
     pub settings: bool,
     /// Replace the hub's credentials (`auth.json`, `mcp.json`, `mcp-auth.json`) with this computer's.
     pub credentials: bool,
+    /// Print every command of the plan before the plan in plain words.
+    pub details: bool,
+    /// Use the text screen even where a full-screen one could be.
+    pub plain: bool,
     pub yes: bool,
 }
 
@@ -494,6 +503,8 @@ pub fn parse_init_args(args: &[String]) -> Result<RawInit, String> {
         allow_no_sandbox: false,
         settings: false,
         credentials: false,
+        details: false,
+        plain: false,
         yes: false,
     };
     let mut host = None;
@@ -505,6 +516,8 @@ pub fn parse_init_args(args: &[String]) -> Result<RawInit, String> {
             "--allow-no-sandbox" => raw.allow_no_sandbox = true,
             "--settings" => raw.settings = true,
             "--credentials" => raw.credentials = true,
+            "--details" => raw.details = true,
+            "--plain" => raw.plain = true,
             "--binary" => raw.binary = Some(PathBuf::from(value("--binary")?)),
             "--projects" => raw.projects = Some(value("--projects")?),
             "--client-key" => raw.client_key = Some(PathBuf::from(value("--client-key")?)),
@@ -700,11 +713,6 @@ pub fn password_auth(config: &str) -> Option<bool> {
     None
 }
 
-/// Only an explicit yes counts.
-pub fn answer_is_yes(answer: &str) -> bool {
-    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
-}
-
 /// The bundle files this run sends: each one the hub does not have yet, and the ones it has when the flag for them is
 /// given (`--settings` for `settings.json`, `--credentials` for the other three). What a hub already has is its own: it
 /// holds what its Pi rotated and what its owner changed there.
@@ -843,6 +851,133 @@ fn send_detail(probe: &Probe, sent: &[&str]) -> String {
     parts.join(" ")
 }
 
+// ---- the plan in plain words ----------------------------------------------------------------------------------------
+
+/// The steps a run shows, in the order they run. The plan and the `[k/n]` headers number them the same way: a position in
+/// this list, from 1. The numbers inside the error messages (`step 6 (key) failed`) are the older ones, which the guide quotes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Part {
+    /// The key is made first: its passphrase is the owner's to type, and it must not wait behind an install of minutes.
+    MakeKey,
+    Install,
+    Copy,
+    Allow,
+    Test,
+}
+
+fn parts(args: &InitArgs, sent: &[&str]) -> Vec<Part> {
+    let mut parts = Vec::new();
+    if args.client_key_new {
+        parts.push(Part::MakeKey);
+    }
+    parts.push(Part::Install);
+    if !sent.is_empty() {
+        parts.push(Part::Copy);
+    }
+    if args.client_key.is_some() || args.client_key_new {
+        parts.push(Part::Allow);
+        parts.push(Part::Test);
+    }
+    parts
+}
+
+/// What a bundle file is called to someone who has not read the guide.
+fn friendly(name: &str) -> &'static str {
+    match name {
+        "settings.json" => "settings",
+        "auth.json" => "sign-ins",
+        "mcp.json" => "connectors",
+        _ => "connector sign-ins",
+    }
+}
+
+/// "settings, sign-ins and connectors".
+pub fn friendly_list(names: &[&str]) -> String {
+    let mut words: Vec<&str> = Vec::new();
+    for name in names {
+        let word = friendly(name);
+        if !words.contains(&word) {
+            words.push(word);
+        }
+    }
+    match words.as_slice() {
+        [] => String::new(),
+        [only] => (*only).to_string(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
+}
+
+/// A path as the owner writes it: under their home folder it starts with `~`.
+fn tilde(path: &Path) -> String {
+    match std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+        Some(home) => match path.strip_prefix(&home) {
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => path.display().to_string(),
+        },
+        None => path.display().to_string(),
+    }
+}
+
+/// The plan in plain words: only the steps that will happen, and what to know about them.
+pub fn plan_summary(args: &InitArgs, probe: &Probe, sent: &[&str]) -> Plan {
+    let mut steps = Vec::new();
+    for part in parts(args, sent) {
+        steps.push(match part {
+            Part::MakeKey => "Make a key only for Aria (it asks you for a passphrase)".to_string(),
+            Part::Install => match &args.release {
+                Some(version) => format!("Install Aria {version} on the server"),
+                None => "Install Aria on the server (the build you gave me)".to_string(),
+            },
+            Part::Copy => {
+                let replaced = sent.iter().any(|name| probe.existing.iter().any(|have| have == name));
+                let kept = BUNDLE_FILES
+                    .into_iter()
+                    .any(|name| !sent.contains(&name) && probe.existing.iter().any(|have| have == name));
+                let note = if replaced {
+                    "it replaces the ones it has; the first copy stays as .bak"
+                } else if kept {
+                    "it keeps the ones it has"
+                } else {
+                    "the server has none yet"
+                };
+                format!("Copy your {} ({note})", friendly_list(sent))
+            }
+            Part::Allow if args.client_key_new => "Allow that key on the server, for Aria's terminal only".to_string(),
+            Part::Allow => "Allow your Aria key on the server, for its terminal only".to_string(),
+            Part::Test => "Test the connection".to_string(),
+        });
+    }
+    let mut good_to_know = Vec::new();
+    if !sent.is_empty() {
+        good_to_know.push("Your sign-ins are copied to the server, which keeps and uses them.".to_string());
+    }
+    if args.client_key.is_some() || args.client_key_new {
+        good_to_know.push("The key can open Aria and nothing else: it is not a login.".to_string());
+    }
+    if probe.service_active {
+        good_to_know.push("The server keeps running; it takes the new version when idle.".to_string());
+    }
+    good_to_know.push(if args.release.is_some() {
+        "The server's sudo installs the sandbox tools and turns on linger, and, if Ubuntu blocks the sandbox, adds \
+         a profile for bwrap alone. Nothing else outside its home folder changes."
+            .to_string()
+    } else {
+        "The server's sudo installs the sandbox tools and turns on linger. Nothing else outside its home folder \
+         changes."
+            .to_string()
+    });
+    let blocked = if needs_xz(probe) {
+        vec![Note::text(
+            "The installer would stop on this server: it needs xz to unpack its own Node, and the server has none (and \
+             its Node is missing or older than 22.19). Run this on the server, then run init again:",
+        )
+        .then_command("sudo apt-get install -y xz-utils")]
+    } else {
+        Vec::new()
+    };
+    Plan { host: args.host.clone(), steps, good_to_know, blocked }
+}
+
 // ---- ssh ------------------------------------------------------------------------------------------------------------
 
 /// `ssh -T <host> <command>` with the program `connect` uses (ARIA_SSH or ssh); `command` is a single argument.
@@ -941,71 +1076,6 @@ fn ssh_config(host: &str) -> Result<(u16, String, String), Failure> {
 }
 
 // ---- the run --------------------------------------------------------------------------------------------------------
-
-// ---- the screen -----------------------------------------------------------------------------------------------------
-
-/// What the steps of `aria hub init` look like: numbered, with one sentence of what each is for, as the installer's screen
-/// does. Colour only on a terminal that takes it (`NO_COLOR` and `TERM=dumb` turn it off) and ASCII marks unless the
-/// locale says UTF-8; in a pipe or a log the same sentences come out plain.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Screen {
-    color: bool,
-    utf8: bool,
-}
-
-impl Screen {
-    pub fn detect() -> Screen {
-        use std::io::IsTerminal;
-        let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
-            .iter()
-            .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
-            .unwrap_or_default();
-        Screen::with(
-            std::io::stdout().is_terminal(),
-            std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty()),
-            &std::env::var("TERM").unwrap_or_default(),
-            &locale,
-        )
-    }
-
-    pub fn with(is_terminal: bool, no_color: bool, term: &str, locale: &str) -> Screen {
-        let locale = locale.to_ascii_lowercase();
-        Screen {
-            color: is_terminal && !no_color && !term.is_empty() && term != "dumb",
-            utf8: locale.contains("utf-8") || locale.contains("utf8"),
-        }
-    }
-
-    fn paint(&self, code: &str, text: &str) -> String {
-        if self.color {
-            format!("\x1b[{code}m{text}\x1b[0m")
-        } else {
-            text.to_string()
-        }
-    }
-
-    /// `[k/n] title`, then the sentence of what it is for.
-    pub fn step(&self, k: usize, n: usize, title: &str, why: &str) -> String {
-        let head = format!("{} {}", self.paint("1;36", &format!("[{k}/{n}]")), self.paint("1", title));
-        if why.is_empty() {
-            format!("\n{head}")
-        } else {
-            format!("\n{head}\n      {}", self.paint("2", why))
-        }
-    }
-
-    pub fn ok(&self, text: &str) -> String {
-        format!("  {} {text}", self.paint("32", if self.utf8 { "✓" } else { "ok" }))
-    }
-
-    pub fn failed(&self, text: &str) -> String {
-        format!("  {} {text}", self.paint("31", if self.utf8 { "✗" } else { "x" }))
-    }
-
-    pub fn info(&self, text: &str) -> String {
-        format!("      {}", self.paint("2", text))
-    }
-}
 
 // ---- the client key and the hub's place on this computer ----------------------------------------------------------
 
@@ -1147,7 +1217,8 @@ fn choose_source(
 
 /// `aria hub init`: the exit status of the run.
 fn init(raw: RawInit) -> i32 {
-    match run_init(raw) {
+    let mut ui = hub_ui::ui_for_terminal(raw.plain);
+    match run_init(raw, ui.as_mut()) {
         Ok(code) => code,
         Err(Failure(code, message)) => {
             eprintln!("aria hub init: {message}");
@@ -1156,7 +1227,8 @@ fn init(raw: RawInit) -> i32 {
     }
 }
 
-fn run_init(raw: RawInit) -> Result<i32, Failure> {
+fn run_init(raw: RawInit, ui: &mut dyn HubUi) -> Result<i32, Failure> {
+    let details = raw.details;
     crate::connect::check_host(&raw.host).map_err(|_| usage_error(format!("{}: not a host", raw.host)))?;
     // The key: the one named, else the default (`~/.ssh/aria-hub`, made after the yes when it is not there yet), else none.
     let (client_key, client_key_file, client_key_new) = match (&raw.client_key, raw.no_client_key) {
@@ -1215,6 +1287,8 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
     let host = args.host.as_str();
 
     // Read-only probes: nothing on the hub changes until a yes.
+    ui.title("linking this computer to your server");
+    ui.looking(host);
     let (sshd_port, ssh_host, ssh_user) = ssh_config(host)?;
     let arch = probe_text(host, "uname -m")?;
     if arch != "aarch64" && arch != "x86_64" {
@@ -1245,6 +1319,8 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
     };
     let service_active =
         probe_text(host, &user_env(IS_ACTIVE_COMMAND))?.lines().next().map(str::trim) == Some("active");
+    // Which Aria a working hub runs, to say it; nothing to say for one that has none.
+    let hub_version = if service_active { hub_aria_version(host) } else { None };
     let existing: Vec<String> = probe_text(host, REMOTE_EXISTING)?
         .lines()
         .map(str::trim)
@@ -1268,18 +1344,29 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
         node_version,
     };
 
+    ui.probe_ok(&format!("{}, {}", probe.os, probe.arch));
+    if probe.service_active {
+        ui.probe_ok(&match &hub_version {
+            Some(version) => format!("Aria {version} already runs there"),
+            None => "Aria already runs there".to_string(),
+        });
+    }
+
     // The export reads this computer's keyring, which a locked one may stop to ask about: say so first.
-    println!("reading your credentials from this computer's keyring; nothing is sent yet");
+    ui.probe_info("Reading your sign-ins from this computer's keyring (nothing is sent yet)");
     let mut bundle = export_bundle(&AriaPaths::from_env(), &probe.home, args.projects.as_deref())
         .map_err(|why| failed(format!("cannot build the settings to send: {why}")))?;
     // What the hub already has is its own, unless a flag says to replace it.
     let sending = files_to_send(&probe, &args);
     bundle.files.retain(|name, _| sending.contains(&name.as_str()));
-    for warning in &bundle.warnings {
-        println!("note: {warning}");
-    }
     if !bundle.warnings.is_empty() {
-        println!("      (a computer that never had a keyring has nothing there to send; otherwise unlock it and run init again)");
+        let mut note = Note::default();
+        for warning in &bundle.warnings {
+            note = note.then_text(warning.clone());
+        }
+        ui.probe_note(&note.then_text(
+            "(a computer that never had a keyring has nothing there to send; otherwise unlock it and run init again)",
+        ));
     }
     // Nothing to send (the hub has everything and no flag says to replace it): no bundle line at all.
     let mut line = if bundle.files.is_empty() {
@@ -1296,42 +1383,49 @@ fn run_init(raw: RawInit) -> Result<i32, Failure> {
 
     // What is sent is what the bundle holds: a file this computer lacks is not.
     let sent: Vec<&str> = BUNDLE_FILES.into_iter().filter(|name| bundle.files.contains_key(*name)).collect();
+    if sent.is_empty() {
+        ui.probe_ok("Nothing to copy: the server keeps the settings and sign-ins it has");
+    } else {
+        ui.probe_ok(&format!("Your {} are ready to send", friendly_list(&sent)));
+    }
+    let mut notes = Vec::new();
     if bundle.files.get("auth.json").is_some_and(|auth| claude_plan_only(auth)) {
-        println!(
-            "note: the only sign-in here is your Claude plan, and a hub cannot use a Claude plan (its models run through \
-             Claude Code, which only the dock sets up). The hub will have no model until you give it an Anthropic API key \
-             or an OpenCode Go key: add one to this computer's Aria (the dock's /connect) and run \
-             `aria hub init {} --credentials` again.",
-            args.host
+        notes.push(
+            Note::text(
+                "The only sign-in on this computer is your Claude plan, and a hub cannot use a Claude plan (its models \
+                 run through Claude Code, which only the dock sets up). The server will have no model until you give it \
+                 an Anthropic API key or an OpenCode Go key: add one to this computer's Aria (the dock's /connect) and run:",
+            )
+            .then_command(format!("aria hub init {} --credentials", args.host)),
         );
     }
-    for text in plan_sending(&probe, &args, &sent) {
-        println!("{text}");
+    if details {
+        ui.details(&plan_sending(&probe, &args, &sent));
     }
+    ui.plan(&plan_summary(&args, &probe, &sent));
     if needs_xz(&probe) {
         eprintln!("aria hub init: the installer would stop on this hub (see above); nothing was changed");
         return Ok(1);
     }
-    if !confirmed(args.yes) {
-        println!("nothing was changed");
+    if !args.yes && !ui.confirm() {
+        ui.declined();
         return Ok(0);
     }
-    write_steps(&args, &probe, repo.as_deref(), &line)
+    match write_steps(&args, &probe, repo.as_deref(), &line, &sent, notes, ui) {
+        Err(failure) => {
+            ui.failed("The set-up stopped here.");
+            Err(failure)
+        }
+        done => done,
+    }
 }
 
-/// A yes: `--yes`, or an answer at a terminal. Without a terminal and without `--yes` it is no.
-fn confirmed(yes: bool) -> bool {
-    use std::io::IsTerminal;
-    if yes {
-        return true;
-    }
-    if !std::io::stdin().is_terminal() {
-        return false;
-    }
-    print!("Go ahead? [y/N] ");
-    let _ = std::io::stdout().flush();
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer).is_ok() && answer_is_yes(&answer)
+/// Which Aria a hub that already works runs (`aria 0.21.0` gives `0.21.0`), or None when it cannot be read.
+fn hub_aria_version(host: &str) -> Option<String> {
+    let output = remote(host, REMOTE_VERSION_BEFORE, None).ok().filter(|output| output.status.success())?;
+    let said = first_line(&output.stdout);
+    let version = said.strip_prefix("aria ").unwrap_or(&said).to_string();
+    Some(version).filter(|version| !version.is_empty())
 }
 
 /// What is already on the hub when a step fails, said honestly. `release`: the installer ran on the hub, nothing was uploaded.
@@ -1350,18 +1444,27 @@ fn on_the_hub_after(step: usize, release: bool) -> &'static str {
     }
 }
 
-/// The writes, in order. A failing step 1 to 5 stops the run; the key (6) and the checks (7) report and go on.
-fn write_steps(args: &InitArgs, probe: &Probe, repo: Option<&Path>, bundle_line: &str) -> Result<i32, Failure> {
+/// The writes, in order. A failing install, import, restart or version check stops the run; the key and the checks after
+/// it report and go on. What is shown goes through `ui`; the errors go to stderr as they always did.
+fn write_steps(
+    args: &InitArgs,
+    probe: &Probe,
+    repo: Option<&Path>,
+    bundle_line: &str,
+    sent: &[&str],
+    mut notes: Vec<Note>,
+    ui: &mut dyn HubUi,
+) -> Result<i32, Failure> {
     let host = args.host.as_str();
     let release = args.release.is_some();
     let wants_key = args.client_key.is_some() || args.client_key_new;
-    // The steps are numbered 1 to 6 (upload, installer, send, restart, version, key); a release has one step fewer, because
-    // the installer that runs on the hub downloads its own binary and there is no upload: from the installer on, a step is one
-    // less than its number in that list.
-    let total = if release { 4 } else { 5 } + usize::from(wants_key);
+    // What the owner sees is the list of `parts`. The numbers in the error messages are the older ones, from the longer list
+    // (upload, installer, send, restart, version, key; a release has no upload, so from the installer on a step is one less),
+    // which the guide quotes.
+    let plan_parts = parts(args, sent);
+    let total = plan_parts.len();
+    let number = |part: Part| plan_parts.iter().position(|each| *each == part).map_or(0, |at| at + 1);
     let shown = |step: usize| if release && step >= 2 { step - 1 } else { step };
-    let screen = Screen::detect();
-    // The key's step number in the messages: 6, or 5 on a release (it has no upload).
     let key_step = shown(6);
     let stopped = |step: usize, what: &str, detail: String| {
         failed(format!("step {} ({what}) failed: {detail}. {}", shown(step), on_the_hub_after(step, release)))
@@ -1371,42 +1474,44 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: Option<&Path>, bundle_line:
     let mut client_key = args.client_key.clone();
     if args.client_key_new {
         let file = args.client_key_file.as_deref().ok_or_else(|| failed("no key file"))?;
-        println!(
-            "\nFirst, a key only for Aria, so that this computer can reach the hub with it and nothing else (it is not your \
-             login key: on the hub it can only open Aria's terminal). Choose a passphrase: it is what protects the key if this \
-             computer is stolen."
+        ui.step_start(
+            number(Part::MakeKey),
+            total,
+            "Making a key only for Aria",
+            "It asks for a passphrase: it protects the key if someone copies it. Enter leaves it empty, which is less \
+             safe.",
         );
-        client_key = Some(make_client_key(&keygen_program(), file)?);
-        println!("{}", screen.ok(&format!("the key is {}", private_key_of(file).display())));
+        ui.hand_terminal_over();
+        let made = make_client_key(&keygen_program(), file);
+        ui.take_terminal_back();
+        client_key = Some(made?);
+        ui.step_ok(&format!("The key is {}", tilde(&private_key_of(file))));
     }
 
     if let Some(version) = &args.release {
-        println!(
-            "{}",
-            screen.step(
-                shown(2),
-                total,
-                "Installing Aria on the hub",
-                &format!(
-                    "The hub downloads Aria {version} and sets itself up; it may ask for the hub's password (sudo)."
-                )
-            )
+        ui.step_start(
+            number(Part::Install),
+            total,
+            "Installing Aria on the server",
+            &format!(
+                "The server downloads Aria {version} and sets itself up. It may ask for the server's sudo password."
+            ),
         );
-        let status = remote_tty(host, &user_env(&release_install_command(version)))
-            .map_err(|error| stopped(2, "installer", describe_error(&error)))?;
+        ui.step_info("The server's installer prints its own steps below.");
+        ui.hand_terminal_over();
+        let status = remote_tty(host, &user_env(&release_install_command(version)));
+        ui.take_terminal_back();
+        let status = status.map_err(|error| stopped(2, "installer", describe_error(&error)))?;
         if !status.success() {
             return Err(stopped(2, "installer", describe(status)));
         }
     } else {
         let repo = repo.ok_or_else(|| failed("the Aria checkout is not here"))?;
-        println!(
-            "{}",
-            screen.step(
-                1,
-                total,
-                "Uploading Aria to the hub",
-                &format!("The installer and the binary go to {HUB_SRC}.")
-            )
+        ui.step_start(
+            number(Part::Install),
+            total,
+            "Installing Aria on the server",
+            "Uploads the build you gave me, then runs the installer there.",
         );
         let mut files: Vec<(String, Vec<u8>, u32)> = Vec::new();
         for name in UPLOAD_FILES {
@@ -1423,46 +1528,28 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: Option<&Path>, bundle_line:
         if !output.status.success() {
             return Err(stopped(1, "upload", format!("{} {}", describe(output.status), first_line(&output.stderr))));
         }
-
-        println!(
-            "{}",
-            screen.step(
-                2,
-                total,
-                "Installing Aria on the hub",
-                "The installer runs there: Node, the sandbox tools, the service."
-            )
-        );
-        let status = remote_shown(host, &user_env(INSTALL_COMMAND))
-            .map_err(|error| stopped(2, "installer", describe_error(&error)))?;
+        ui.step_ok("Uploaded the build");
+        ui.step_info("The server's installer prints its own steps below.");
+        ui.hand_terminal_over();
+        let status = remote_shown(host, &user_env(INSTALL_COMMAND));
+        ui.take_terminal_back();
+        let status = status.map_err(|error| stopped(2, "installer", describe_error(&error)))?;
         if !status.success() {
             return Err(stopped(2, "installer", describe(status)));
         }
     }
+    ui.step_ok("Aria is installed on the server");
     // The installer may have put iproute2 on the hub: a `ss` that was missing is asked again before giving up.
     let listeners =
         if probe.listeners.is_empty() { probe_listeners(host).unwrap_or_default() } else { probe.listeners.clone() };
 
-    if bundle_line.is_empty() {
-        println!(
-            "{}",
-            screen.step(
-                shown(3),
-                total,
-                "Sending your settings",
-                "Nothing to send: the hub keeps the settings and credentials it has."
-            )
-        );
-    } else {
-        println!(
-            "{}",
-            screen.step(
-                shown(3),
-                total,
-                "Sending your settings and sign-ins",
-                "So the hub can use the same models without you typing a key twice."
-            )
-        );
+    if !bundle_line.is_empty() {
+        let why = if sent.iter().any(|name| *name != "settings.json") {
+            "So the server can use the same models without you typing a key twice."
+        } else {
+            "So the server works the way this computer does."
+        };
+        ui.step_start(number(Part::Copy), total, &format!("Copying your {}", friendly_list(sent)), why);
         let output = remote(host, REMOTE_IMPORT, Some(bundle_line.as_bytes()))
             .map_err(|error| stopped(3, "import", describe_error(&error)))?;
         if !output.status.success() {
@@ -1470,16 +1557,13 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: Option<&Path>, bundle_line:
             return Err(stopped(3, "import", format!("the hub refused the bundle ({})", describe(output.status))));
         }
         let written: Vec<&str> = std::str::from_utf8(&output.stdout).unwrap_or("").lines().collect();
-        println!("{}", screen.ok(&format!("the hub wrote {}", written.join(", "))));
+        ui.step_ok(&format!("Copied: {}", friendly_list(&written)));
     }
 
+    // What follows belongs to the step that came last: the new binary is running, with the settings just copied.
     if probe.service_active {
-        println!("{}", screen.step(shown(4), total, "Keeping the service running", SERVICE_KEEPS_RUNNING));
+        ui.step_ok("The service keeps running (it takes the new version when idle)");
     } else {
-        println!(
-            "{}",
-            screen.step(shown(4), total, "Restarting the service", "So the hub runs what was just installed.")
-        );
         let output = remote(host, &user_env(RESTART_COMMAND), None)
             .map_err(|error| stopped(4, "restart", describe_error(&error)))?;
         if !output.status.success() {
@@ -1494,33 +1578,36 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: Option<&Path>, bundle_line:
                 ),
             ));
         }
+        ui.step_ok("The service was restarted");
     }
 
-    println!(
-        "{}",
-        screen.step(shown(5), total, "Checking the version", "That the hub runs the Aria that was installed.")
-    );
     let output = remote(host, REMOTE_VERSION, None).map_err(|error| stopped(5, "version", describe_error(&error)))?;
     if !output.status.success() {
         return Err(stopped(5, "version", format!("{} {}", describe(output.status), first_line(&output.stderr))));
     }
-    println!("{}", screen.ok(&format!("the hub runs {}", first_line(&output.stdout))));
+    let said = first_line(&output.stdout);
+    ui.step_ok(&match said.strip_prefix("aria ") {
+        Some(version) => format!("The server runs Aria {version}"),
+        None => format!("The server runs {said}"),
+    });
 
     // Without linger the hub's user manager, and Aria with it, stops when the owner logs out of the hub.
     let lingers = hub_lingers(host);
     if !lingers {
         let user = hub_user(host, &probe.ssh_user);
-        println!(
-            "warning: linger is not on for {user} on the hub (or it could not be checked): the hub stops when you log \
-             out of it, and the service with it. An administrator turns it on:"
+        notes.push(
+            Note::text(format!(
+                "Linger is off for {user} on the server (or it could not be checked): the server stops when you log out \
+                 of it, and Aria with it. An administrator turns it on:"
+            ))
+            .then_command(format!("sudo loginctl enable-linger {user}")),
         );
-        println!("      sudo loginctl enable-linger {user}");
     }
 
     // The sandbox is tried before the key goes in: a key on a hub whose commands all ask is shell access for whoever holds it.
     let sandbox = probe_sandbox(host);
-    for text in sandbox_warning(&sandbox) {
-        println!("{text}");
+    if let Some(note) = sandbox_note(&sandbox) {
+        notes.push(note);
     }
     let mut code = 0;
     // Whether the hub now has the key, restricted: only then is it said to be what protects the hub.
@@ -1531,6 +1618,7 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: Option<&Path>, bundle_line:
     if let Some(line) = &client_key {
         key = KeyState::Unconfirmed;
         if sandbox != Sandbox::Works && !args.allow_no_sandbox {
+            ui.failed("The key was not allowed: the server's sandbox does not work.");
             eprintln!(
                 "aria hub init: step {key_step} (key) skipped: the sandbox does not work on the hub, so the client key was not \
                  installed (anyone holding it could approve every command). Fix the sandbox and run init again, or pass \
@@ -1538,37 +1626,44 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: Option<&Path>, bundle_line:
             );
             code = 1;
         } else {
-            println!(
-                "{}",
-                screen.step(
-                    shown(6),
-                    total,
-                    "Linking this computer to the hub",
-                    "Allows your key, restricted to Aria's terminal, and remembers the hub here."
-                )
+            ui.step_start(
+                number(Part::Allow),
+                total,
+                "Allowing the key on the server",
+                "The key can open Aria's terminal and nothing else. This computer remembers the server.",
             );
             let sent = format!("{line}\n");
             match remote(host, REMOTE_ALLOW_KEY, Some(sent.as_bytes())) {
                 Ok(output) if output.status.success() => {
-                    println!("{}", screen.ok(&first_line(&output.stdout)));
+                    ui.step_ok(&if first_line(&output.stdout) == "already allowed" {
+                        "The key was already allowed on the server, for Aria only".to_string()
+                    } else {
+                        "The key is allowed on the server, for Aria only".to_string()
+                    });
                     key = KeyState::Restricted;
                     if let Some(file) = &args.client_key_file {
                         match remember_hub(host, &private_key_of(file)) {
                             Ok(default) => {
                                 remembered = true;
                                 is_default = default;
+                                ui.step_ok("This computer remembers the server (~/.aria/hubs.json)");
                             }
                             Err(error) => {
-                                println!("warning: this computer could not remember the hub ({error}); `aria connect` needs its host:");
+                                let mut note = Note::text(format!(
+                                    "This computer could not remember the server ({error}), so `aria connect` needs \
+                                     its host. Add this to ~/.ssh/config:"
+                                ));
                                 for text in ssh_snippet(host, &probe.ssh_user, file) {
-                                    println!("{text}");
+                                    note = note.then_command(text);
                                 }
+                                notes.push(note);
                             }
                         }
                     }
                 }
                 Ok(output) if output.status.code() == Some(KEY_UNRESTRICTED) => {
                     let said = first_line(&output.stdout);
+                    ui.failed("The key was not allowed: the server already has it in another form.");
                     if said == "other options" {
                         eprintln!(
                             "aria hub init: step {key_step} (key) failed: that key is already in authorized_keys with Aria's \
@@ -1596,6 +1691,7 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: Option<&Path>, bundle_line:
                     code = 1;
                 }
                 Ok(output) => {
+                    ui.failed("The key was not allowed.");
                     eprintln!(
                         "aria hub init: step {key_step} (key) failed: {} {}",
                         describe(output.status),
@@ -1604,37 +1700,42 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: Option<&Path>, bundle_line:
                     code = 1;
                 }
                 Err(error) => {
+                    ui.failed("The key was not allowed.");
                     eprintln!("aria hub init: step {key_step} (key) failed: {}", describe_error(&error));
                     code = 1;
                 }
             }
         }
     }
+    debug_assert!(wants_key || client_key.is_none());
 
     // "Ready" means a connection worked: the one `aria connect` makes, tried once, and closed.
     let mut connected = false;
     if remembered && code == 0 {
-        println!("{}", screen.info("trying the connection the way `aria connect` makes it…"));
+        ui.step_start(
+            number(Part::Test),
+            total,
+            "Testing the connection",
+            "Opens a connection the way `aria connect` does, then closes it.",
+        );
         match crate::connect::try_open(host, CONNECTION_TRY) {
             Ok(()) => {
                 connected = true;
-                println!("{}", screen.ok("connection tried: it works"));
+                ui.step_ok("It works");
             }
             Err(error) => {
-                eprintln!(
-                    "{}",
-                    screen.failed(&format!("connection tried: it did not work: {}", connection_problem(&error)))
-                );
+                ui.failed(&format!("connection tried: it did not work: {}", connection_problem(&error)));
                 code = 1;
             }
         }
     }
 
-    check_public_ssh(host, probe, &listeners, key);
+    notes.extend(public_ssh_notes(host, probe, &listeners, key));
+    ui.heads_up(&notes);
     if code == 0 && !lingers {
-        println!("The hub is installed, but it is not ready: turn linger on (see the warning above).");
+        ui.done(&Outcome::NotReady { why: "turn linger on (see the note above)".to_string() });
     } else if code == 0 && connected && is_default {
-        println!("The hub is ready. To use it, type: aria connect");
+        ui.done(&Outcome::Ready { connect: "aria connect".to_string() });
     } else if code == 0 {
         // A hub that is not the default is opened by name; one that is not remembered keeps the ssh entry's name.
         let target = if remembered {
@@ -1644,7 +1745,7 @@ fn write_steps(args: &InitArgs, probe: &Probe, repo: Option<&Path>, bundle_line:
         } else {
             host
         };
-        println!("The hub is ready. Connect from this computer with: aria connect {target}");
+        ui.done(&Outcome::Ready { connect: format!("aria connect {target}") });
     }
     Ok(code)
 }
@@ -1711,40 +1812,36 @@ fn mount_failed(said: &str) -> bool {
     said.contains("mount proc") || said.contains("/newroot/proc") || said.contains("/newroot/dev")
 }
 
-fn sandbox_warning(sandbox: &Sandbox) -> Vec<String> {
-    let mut lines = match sandbox {
-        Sandbox::Works => return Vec::new(),
-        Sandbox::Missing => vec![
-            "warning: the sandbox cannot start on the hub: bubblewrap is not installed (bwrap: not found).".to_string(),
-            "  Install it on the hub:".to_string(),
-            "      sudo apt-get install -y bubblewrap".to_string(),
-        ],
-        Sandbox::Blocked(problem) if mount_failed(problem) => vec![
-            format!("warning: the sandbox cannot start on the hub ({problem})."),
-            "  bwrap can make a user namespace here, but the mount of /proc or /dev that its real call makes failed (a"
-                .to_string(),
-            "  container-style server often does this). The AppArmor and sysctl fixes do not help with it: the host has to allow"
-                .to_string(),
-            "  the mount, or the sandbox cannot be used on it. Aria did not run anything to change this.".to_string(),
-        ],
-        Sandbox::Blocked(problem) => vec![
-            format!("warning: the sandbox cannot start on the hub ({problem})."),
-            "  bwrap is installed but cannot create a user namespace. On Ubuntu 24.04 this is usually AppArmor restricting"
-                .to_string(),
-            "  unprivileged user namespaces. An administrator can fix it:".to_string(),
-            "      sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0".to_string(),
-            "  (write kernel.apparmor_restrict_unprivileged_userns=0 in a file under /etc/sysctl.d/ to keep it after a"
-                .to_string(),
-            "  reboot), or give bwrap its own AppArmor profile that allows user namespaces. Aria did not run any of this."
-                .to_string(),
-        ],
+fn sandbox_note(sandbox: &Sandbox) -> Option<Note> {
+    let note = match sandbox {
+        Sandbox::Works => return None,
+        Sandbox::Missing => Note::text("The sandbox cannot start on the server: bubblewrap is not installed (bwrap: not found).")
+            .then_text("Install it on the server:")
+            .then_command("sudo apt-get install -y bubblewrap"),
+        Sandbox::Blocked(problem) if mount_failed(problem) => {
+            Note::text(format!("The sandbox cannot start on the server ({problem})."))
+                .then_text(
+                    "bwrap can make a user namespace here, but the mount of /proc or /dev that its real call makes failed \
+                     (a container-style server often does this). The AppArmor and sysctl fixes do not help with it: the \
+                     host has to allow the mount, or the sandbox cannot be used on it. Aria did not run anything to \
+                     change this.",
+                )
+        }
+        Sandbox::Blocked(problem) => Note::text(format!("The sandbox cannot start on the server ({problem})."))
+            .then_text(
+                "bwrap is installed but cannot create a user namespace. On Ubuntu 24.04 this is usually AppArmor \
+                 restricting unprivileged user namespaces. An administrator can fix it with one line (put it in a file \
+                 under /etc/sysctl.d/ to keep it after a reboot):",
+            )
+            .then_command("sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0")
+            .then_text(
+                "or give bwrap its own AppArmor profile that allows user namespaces. Aria did not run any of this.",
+            ),
     };
-    lines.push(
-        "  Until a sandbox works, Aria asks you before every command it wants to run there, and anyone holding the client \
-         key can approve those prompts: treat that key as shell access to the hub user."
-            .to_string(),
-    );
-    lines
+    Some(note.then_text(
+        "Until a sandbox works, Aria asks you before every command it wants to run there, and anyone holding the client \
+         key can approve those prompts: treat that key as shell access to the hub user.",
+    ))
 }
 
 /// What the hub's `authorized_keys` holds of the owner's `--client-key` after step 6.
@@ -1759,41 +1856,40 @@ enum KeyState {
 
 /// Says once when sshd can be reached from beyond the hub's private networks, or that it could not be checked. Nothing
 /// is changed.
-fn check_public_ssh(host: &str, probe: &Probe, listeners: &[Listener], key: KeyState) {
+fn public_ssh_notes(host: &str, probe: &Probe, listeners: &[Listener], key: KeyState) -> Vec<Note> {
     if listeners.is_empty() {
-        println!(
-            "warning: could not check whether sshd is open to the internet (`ss` failed or is missing); check it yourself."
-        );
-        return;
+        return vec![Note::text(
+            "Could not check whether ssh is open to the internet (`ss` failed or is missing); check it yourself.",
+        )];
     }
     if !public_ssh(listeners, probe.sshd_port) {
-        return;
+        return Vec::new();
     }
-    println!(
-        "warning: sshd on {} listens on port {} on a public address, and that port stays open until you close it \
-         yourself (Aria never edits sshd_config, the firewall or Tailscale).",
+    let mut note = Note::text(format!(
+        "ssh on {} (port {}) is open to the internet, and it stays open until you close it yourself. Aria never edits \
+         sshd_config, the firewall or Tailscale.",
         probe.ssh_host, probe.sshd_port
-    );
-    match key {
-        KeyState::Restricted => println!(
-            "  Meanwhile the restricted client key (it can only run `aria client-stdio`) and key-only login are the protection."
+    ));
+    note = match key {
+        KeyState::Restricted => note.then_text(
+            "Meanwhile the restricted client key (it can only run `aria client-stdio`) and key-only login are the protection.",
         ),
-        KeyState::Unconfirmed => println!(
-            "  Meanwhile the protection is key-only login; your client key is not known to be restricted yet (see the key step above)."
+        KeyState::Unconfirmed => note.then_text(
+            "Meanwhile the protection is key-only login; your client key is not known to be restricted yet (see the key step above).",
         ),
-        KeyState::None => {
-            println!("  Meanwhile the protection is key-only login; add a restricted client key with --client-key.")
-        }
-    }
+        KeyState::None => note
+            .then_text("Meanwhile the protection is key-only login; add a restricted client key with --client-key."),
+    };
     // Best effort, and only what a user can read: no sudo.
     let config = remote(host, REMOTE_SSHD_CONFIG, None)
         .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
         .unwrap_or_default();
-    match password_auth(&config) {
-        Some(false) => println!("  sshd_config: password logins look off."),
-        Some(true) => println!("  sshd_config: password logins look on; set PasswordAuthentication no."),
-        None => {}
-    }
+    note = match password_auth(&config) {
+        Some(false) => note.then_text("sshd_config: password logins look off."),
+        Some(true) => note.then_text("sshd_config: password logins look on; set PasswordAuthentication no."),
+        None => note,
+    };
+    vec![note]
 }
 
 #[cfg(test)]
@@ -2668,16 +2764,6 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
     }
 
     #[test]
-    fn only_a_yes_is_a_yes() {
-        for yes in ["y", "Y", "yes", "YES", " yes \n", "y\r\n"] {
-            assert!(answer_is_yes(yes), "{yes:?}");
-        }
-        for no in ["", "n", "no", "\n", "yep", "ye", "sure", "yes please", "1"] {
-            assert!(!answer_is_yes(no), "{no:?}");
-        }
-    }
-
-    #[test]
     fn init_arguments_are_a_host_and_four_options() {
         let args = |list: &[&str]| parse_init_args(&list.iter().map(|s| s.to_string()).collect::<Vec<_>>());
         let all = args(&[
@@ -2748,7 +2834,7 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
     fn the_release_installer_is_this_versions_own_and_runs_with_yes() {
         let command = release_install_command("0.20.2");
         assert!(command.starts_with("curl -fsSL https://github.com/i-montes/aria/releases/download/v0.20.2/install.sh"));
-        assert!(command.ends_with("| ARIA_VERSION=v0.20.2 sh -s -- --headless --yes"), "{command}");
+        assert!(command.ends_with("| ARIA_VERSION=v0.20.2 ARIA_NESTED=1 sh -s -- --headless --yes"), "{command}");
         assert!(!command.contains("ARIA_REPO"), "{command}");
     }
 
@@ -2792,24 +2878,114 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
     }
 
     #[test]
-    fn the_screen_is_plain_in_a_pipe_and_coloured_on_a_terminal() {
-        let plain = Screen::with(false, false, "xterm-256color", "en_US.UTF-8");
-        assert_eq!(plain.step(2, 6, "Installing", "Why."), "\n[2/6] Installing\n      Why.");
-        assert_eq!(plain.ok("done"), "  ✓ done");
-        let ascii = Screen::with(false, false, "xterm", "C");
-        assert_eq!(ascii.ok("done"), "  ok done");
-        assert_eq!(ascii.failed("bad"), "  x bad");
-        assert!(!plain.step(1, 2, "T", "W").contains('\x1b'));
-        let colour = Screen::with(true, false, "xterm", "en_US.UTF-8");
-        assert!(colour.step(1, 2, "T", "W").contains("\x1b[1;36m[1/2]"));
-        assert!(colour.ok("x").contains("\x1b[32m"));
+    fn the_plan_lists_only_the_steps_that_will_happen() {
+        let key_new = InitArgs {
+            client_key_new: true,
+            client_key_file: Some(PathBuf::from("/home/ana/.ssh/aria-hub.pub")),
+            ..release_args()
+        };
+        let all = ["settings.json", "auth.json"];
+        let plan = plan_summary(&key_new, &probe(), &all);
+        assert_eq!(
+            plan.steps,
+            [
+                "Make a key only for Aria (it asks you for a passphrase)",
+                "Install Aria 0.20.2 on the server",
+                "Copy your settings and sign-ins (the server has none yet)",
+                "Allow that key on the server, for Aria's terminal only",
+                "Test the connection",
+            ]
+        );
+        let existing = InitArgs { client_key: Some("ssh-ed25519 AAAA ana".into()), ..release_args() };
+        let plan = plan_summary(&existing, &probe(), &all);
+        assert_eq!(plan.steps.len(), 4, "{:?}", plan.steps);
+        assert!(plan.steps[2].starts_with("Allow your Aria key"), "{:?}", plan.steps);
+        let keyless = plan_summary(&release_args(), &probe(), &all);
+        assert_eq!(keyless.steps.len(), 2, "no key: no allow and no test: {:?}", keyless.steps);
+        let nothing_to_send = plan_summary(&release_args(), &probe(), &[]);
+        assert_eq!(nothing_to_send.steps, ["Install Aria 0.20.2 on the server"], "{:?}", nothing_to_send.steps);
+        assert!(
+            !nothing_to_send.good_to_know.iter().any(|item| item.contains("sign-ins")),
+            "{:?}",
+            nothing_to_send.good_to_know
+        );
+        let dev = plan_summary(&init_args(), &probe(), &[]);
+        assert_eq!(dev.steps, ["Install Aria on the server (the build you gave me)"], "{:?}", dev.steps);
     }
 
     #[test]
-    fn no_colour_and_a_dumb_terminal_turn_colour_off() {
-        assert!(!Screen::with(true, true, "xterm", "").step(1, 1, "T", "W").contains('\x1b'));
-        assert!(!Screen::with(true, false, "dumb", "").step(1, 1, "T", "W").contains('\x1b'));
-        assert!(!Screen::with(true, false, "", "").step(1, 1, "T", "W").contains('\x1b'));
+    fn the_copy_step_says_what_the_server_has_and_keeps() {
+        let mut with = probe();
+        with.existing = vec!["settings.json".to_string()];
+        let step = |sent: &[&str], probe: &Probe| plan_summary(&release_args(), probe, sent).steps[1].clone();
+        assert_eq!(step(&["auth.json"], &with), "Copy your sign-ins (it keeps the ones it has)");
+        assert_eq!(
+            step(&["settings.json", "auth.json"], &with),
+            "Copy your settings and sign-ins (it replaces the ones it has; the first copy stays as .bak)"
+        );
+        assert_eq!(
+            step(&["mcp.json", "mcp-auth.json"], &probe()),
+            "Copy your connectors and connector sign-ins (the server has none yet)"
+        );
+    }
+
+    #[test]
+    fn what_to_know_follows_what_will_happen() {
+        let know = |args: &InitArgs, probe: &Probe, sent: &[&str]| plan_summary(args, probe, sent).good_to_know;
+        let keyed = InitArgs { client_key: Some("ssh-ed25519 AAAA ana".into()), ..release_args() };
+        let all = know(&keyed, &probe(), &["auth.json"]);
+        assert!(all.iter().any(|item| item.contains("Your sign-ins are copied")), "{all:?}");
+        assert!(all.iter().any(|item| item.contains("it is not a login")), "{all:?}");
+        let bare = know(&release_args(), &probe(), &[]);
+        assert!(!bare.iter().any(|item| item.contains("login") || item.contains("sign-ins")), "{bare:?}");
+        let mut running = probe();
+        running.service_active = true;
+        assert!(know(&release_args(), &running, &[])
+            .iter()
+            .any(|item| item.contains("takes the new version when idle")));
+        assert!(know(&release_args(), &probe(), &[]).iter().any(|item| item.contains("profile for bwrap")));
+        assert!(!know(&init_args(), &probe(), &[]).iter().any(|item| item.contains("profile for bwrap")));
+    }
+
+    #[test]
+    fn a_plan_that_cannot_run_says_the_command_that_unblocks_it() {
+        let mut blocked = probe();
+        blocked.has_xz = false;
+        blocked.node_version = None;
+        let plan = plan_summary(&release_args(), &blocked, &[]);
+        assert_eq!(plan.blocked.len(), 1);
+        assert!(plan.blocked[0]
+            .lines
+            .contains(&crate::hub_ui::NoteLine::Command("sudo apt-get install -y xz-utils".into())));
+        assert!(plan_summary(&release_args(), &probe(), &[]).blocked.is_empty());
+    }
+
+    #[test]
+    fn bundle_files_are_named_in_plain_words() {
+        assert_eq!(friendly_list(&[]), "");
+        assert_eq!(friendly_list(&["settings.json"]), "settings");
+        assert_eq!(friendly_list(&["settings.json", "auth.json"]), "settings and sign-ins");
+        assert_eq!(
+            friendly_list(&["settings.json", "auth.json", "mcp.json", "mcp-auth.json"]),
+            "settings, sign-ins, connectors and connector sign-ins"
+        );
+    }
+
+    #[test]
+    fn a_path_under_home_is_written_with_a_tilde() {
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(tilde(&Path::new(&home).join(".ssh/aria-hub")), "~/.ssh/aria-hub");
+        assert_eq!(tilde(Path::new("/srv/key")), "/srv/key");
+    }
+
+    #[test]
+    fn the_new_flags_are_accepted() {
+        let args = |list: &[&str]| parse_init_args(&list.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+        let both = args(&["ana@hub", "--details", "--plain"]).unwrap();
+        assert!(both.details && both.plain);
+        let neither = args(&["ana@hub"]).unwrap();
+        assert!(!neither.details && !neither.plain);
+        assert!(USAGE.contains("--details") && USAGE.contains("--plain"));
     }
 
     #[test]

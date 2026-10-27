@@ -103,6 +103,18 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+/// The words of a text with every run of white space made one space: a sentence the screen wrapped is one line again.
+fn flat(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// No line the screen prints on stdout is wider than a narrow terminal.
+fn assert_fits(out: &str) {
+    for line in out.lines() {
+        assert!(line.chars().count() <= 78, "{} columns: {line:?}\n{out}", line.chars().count());
+    }
+}
+
 fn commands(log: &[String]) -> Vec<String> {
     log.iter().map(|line| line.split('\t').nth(1).unwrap_or(line).to_string()).collect()
 }
@@ -126,6 +138,7 @@ fn writes(log: &[String]) -> Vec<String> {
         .filter(|command| !command.contains("os-release") && !command.starts_with("cat /etc/ssh"))
         .filter(|command| !command.starts_with("bwrap "))
         .filter(|command| command != "~/.local/bin/aria client-stdio")
+        .filter(|command| !command.ends_with("aria --version 2>/dev/null"))
         .collect()
 }
 
@@ -139,14 +152,19 @@ fn position(commands: &[String], needle: &str) -> usize {
 #[test]
 fn the_plan_is_printed_before_anything_runs() {
     let world = World::new();
-    let output = world.init(&["ana@hub.example", "--binary", "bin/aria-aarch64"], &[]);
+    let output = world.init(&["ana@hub.example", "--binary", "bin/aria-aarch64", "--details"], &[]);
     let out = text(&output.stdout);
     assert!(output.status.success(), "{out}{}", text(&output.stderr));
-    assert!(out.contains("1. "), "{out}");
-    assert!(out.contains("install.sh --headless --local"), "{out}");
-    assert!(out.contains("aria hub-import"), "{out}");
-    assert!(out.contains("aria-serve.service"), "{out}");
+    // The plan in plain words, and with --details every command before it.
+    assert!(out.contains("What I will do on ana@hub.example"), "{out}");
+    assert!(out.contains("1  Install Aria on the server (the build you gave me)"), "{out}");
+    assert!(!out.contains("Press Enter"), "nobody is asked without a terminal: {out}");
+    let details = flat(&out);
+    assert!(details.contains("install.sh --headless --local"), "{out}");
+    assert!(details.contains("aria hub-import"), "{out}");
+    assert!(details.contains("aria-serve.service"), "{out}");
     assert!(out.contains("nothing was changed"), "{out}");
+    assert_fits(&out);
     let log = world.log();
     let probes = commands(&log);
     assert!(probes.contains(&"-G ana@hub.example".to_string()), "{probes:?}");
@@ -167,7 +185,7 @@ fn the_plan_comes_before_the_first_write_in_the_output() {
     let output = world.init_yes(&[], &[]);
     let out = text(&output.stdout);
     assert!(output.status.success(), "{out}{}", text(&output.stderr));
-    let plan = out.find("1. ").expect("a plan");
+    let plan = out.find("What I will do on").expect("a plan");
     let first_step = out.find("[1/").expect("a first step");
     assert!(plan < first_step, "{out}");
 }
@@ -241,7 +259,7 @@ fn a_yes_uploads_installs_and_imports_in_order() {
     let everything =
         format!("{}{}{}", std::fs::read_to_string(world.path("hub/log")).unwrap(), out, text(&output.stderr));
     assert!(!everything.contains("sk-never-in-a-log"));
-    assert!(out.contains("aria 0.0.0-fake"), "the hub's version is shown: {out}");
+    assert!(out.contains("The server runs Aria 0.0.0-fake"), "the hub's version is shown: {out}");
 }
 
 #[test]
@@ -250,16 +268,17 @@ fn a_public_sshd_is_warned_once_and_does_not_block() {
     let output = world.init_yes(&[], &[]);
     let out = text(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
-    let warnings: Vec<&str> = out.lines().filter(|line| line.contains("2222") && line.contains("open")).collect();
-    assert_eq!(warnings.len(), 1, "{out}");
-    assert!(out.contains("restricted"), "{out}");
-    assert!(out.contains("password logins look off"), "{out}");
+    let said = flat(&out);
+    assert_eq!(said.matches("is open to the internet").count(), 1, "{out}");
+    assert!(said.contains("port 2222"), "{out}");
+    assert!(said.contains("password logins look off"), "{out}");
+    assert_fits(&out);
     let passwords = world.init_yes(&[], &[("ARIA_FAKE_SSH_PASSWORDS", "yes")]);
-    assert!(text(&passwords.stdout).contains("password logins look on"), "{}", text(&passwords.stdout));
+    assert!(flat(&text(&passwords.stdout)).contains("password logins look on"), "{}", text(&passwords.stdout));
     // A server that only listens on its private network has nothing to warn of.
     let private = world.init_yes(&[], &[("ARIA_FAKE_SSH_PUBLIC", "0")]);
     assert_eq!(private.status.code(), Some(0));
-    assert!(!text(&private.stdout).contains("stays open"), "{}", text(&private.stdout));
+    assert!(!text(&private.stdout).contains("is open to the internet"), "{}", text(&private.stdout));
 }
 
 #[test]
@@ -268,9 +287,12 @@ fn a_sandbox_that_cannot_work_is_said_with_the_fix_printed_not_applied() {
     let output = world.init_yes(&[], &[("ARIA_FAKE_SSH_BWRAP_FAIL", "1")]);
     let out = text(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
-    assert!(out.contains("kernel.apparmor_restrict_unprivileged_userns"), "{out}");
-    assert!(out.contains("Permission denied"), "what bwrap said: {out}");
-    assert!(out.contains("ask"), "{out}");
+    let said = flat(&out);
+    assert!(said.contains("kernel.apparmor_restrict_unprivileged_userns"), "{out}");
+    assert!(said.contains("Permission denied"), "what bwrap said: {out}");
+    assert!(said.contains("Aria asks you before every command"), "{out}");
+    assert!(out.contains("Heads up"), "the sandbox is a note after the steps: {out}");
+    assert_fits(&out);
     for command in commands(&world.log()) {
         assert!(!command.contains("sysctl") && !command.contains("apparmor") && !command.contains("sudo"), "{command}");
     }
@@ -285,13 +307,14 @@ fn the_sandbox_probe_does_what_the_real_call_does_so_a_server_that_cannot_mount_
     let output = world.init_yes(&[], &[("ARIA_FAKE_SSH_BWRAP_NOPROC", "1")]);
     let out = text(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
-    assert!(out.contains("Can't mount proc"), "what bwrap said: {out}");
+    let said = flat(&out);
+    assert!(said.contains("Can't mount proc"), "what bwrap said: {out}");
     // It says the mount failed, not that the namespace could not be made, and the AppArmor fixes are not offered for it.
-    assert!(out.contains("mount of /proc or /dev"), "{out}");
-    assert!(out.contains("do not help"), "{out}");
+    assert!(said.contains("mount of /proc or /dev"), "{out}");
+    assert!(said.contains("do not help"), "{out}");
     assert!(
-        !out.contains("kernel.apparmor_restrict_unprivileged_userns")
-            && !out.contains("cannot create a user namespace"),
+        !said.contains("kernel.apparmor_restrict_unprivileged_userns")
+            && !said.contains("cannot create a user namespace"),
         "{out}"
     );
     // The probe asks for what the sandbox extension asks for: the disk read-only, /dev and /proc.
@@ -310,20 +333,21 @@ fn the_keyring_is_announced_before_it_is_read_and_projects_without_settings_is_s
     owner_has_all_files(&world);
     let output = world.init_yes(&[], &[]);
     let out = text(&output.stdout);
-    let said = "reading your credentials from this computer's keyring; nothing is sent yet";
+    let said = "Reading your sign-ins from this computer's keyring (nothing is sent yet)";
     assert!(out.contains(said), "{out}");
-    assert!(out.find(said).unwrap() < out.find("Aria will do this, in order").unwrap(), "before the plan: {out}");
+    assert!(out.find(said).unwrap() < out.find("What I will do on").unwrap(), "before the plan: {out}");
     // A rerun that keeps the hub's settings: --projects does nothing, and the plan says so instead of naming a folder.
     let world = World::new();
     owner_has_all_files(&world);
     seed_hub_files(&world);
-    let output = world.init_yes(&["--projects", "/srv/work"], &[("ARIA_FAKE_SSH_ACTIVE", "1")]);
-    let out = text(&output.stdout);
+    let output = world.init_yes(&["--projects", "/srv/work", "--details"], &[("ARIA_FAKE_SSH_ACTIVE", "1")]);
+    let out = flat(&text(&output.stdout));
     assert!(out.contains("--projects has no effect without --settings"), "{out}");
     assert!(!out.contains("projects folder will be"), "{out}");
     assert_eq!(last_bundle(&world), Vec::<String>::new());
-    let with = world.init_yes(&["--projects", "/srv/work", "--settings"], &[("ARIA_FAKE_SSH_ACTIVE", "1")]);
-    let out = text(&with.stdout);
+    let with =
+        world.init_yes(&["--projects", "/srv/work", "--settings", "--details"], &[("ARIA_FAKE_SSH_ACTIVE", "1")]);
+    let out = flat(&text(&with.stdout));
     assert!(out.contains("sandbox projects folder will be /srv/work"), "{out}");
     assert!(!out.contains("no effect"), "{out}");
 }
@@ -334,14 +358,15 @@ fn a_client_key_is_installed_restricted_and_once() {
     let key_file = world.path("laptop.pub");
     std::fs::write(&key_file, format!("{KEY}\n")).unwrap();
     let key_arg = key_file.to_str().unwrap();
-    let output = world.init_yes(&["--client-key", key_arg], &[]);
+    let output = world.init_yes(&["--client-key", key_arg, "--details"], &[]);
     assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
     // The hub's `$HOME` is the fake's scratch home here (it is `/home/ana` in what the plan shows).
     let expected =
         format!("restrict,command=\"{}/.local/bin/aria client-stdio\" {KEY}\n", world.path("hub/home").display());
     assert!(
-        text(&output.stdout).contains(&format!("restrict,command=\"/home/ana/.local/bin/aria client-stdio\" {KEY}")),
-        "the plan shows the line"
+        flat(&text(&output.stdout))
+            .contains(&format!("restrict,command=\"/home/ana/.local/bin/aria client-stdio\" {KEY}")),
+        "the detailed plan shows the line"
     );
     assert_eq!(world.authorized_keys(), expected);
     let mode = |sub: &str| {
@@ -420,7 +445,7 @@ fn without_a_binary_the_cross_build_is_used_or_the_release_is_installed() {
     let installer = commands.iter().find(|command| command.contains("install.sh")).expect("the installer ran");
     assert!(
         installer.contains(&format!("https://github.com/i-montes/aria/releases/download/v{version}/install.sh"))
-            && installer.contains(&format!("ARIA_VERSION=v{version} sh -s -- --headless --yes")),
+            && installer.contains(&format!("ARIA_VERSION=v{version} ARIA_NESTED=1 sh -s -- --headless --yes")),
         "{installer}"
     );
     // With the headless build made in the checkout, the upload is used as before.
@@ -452,10 +477,11 @@ fn the_bundle_warnings_are_printed_before_anything_is_sent() {
     let output = world.init(&["ana@hub.example", "--binary", "bin/aria-aarch64"], &[]);
     let out = text(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
-    let note = out.find("note: mcp-auth.json").expect("the warning is printed");
-    let plan = out.find("1. ").unwrap();
+    let note = out.find("! mcp-auth.json").expect("the warning is printed");
+    let plan = out.find("What I will do on").unwrap();
     assert!(note < plan, "before the plan: {out}");
-    assert!(out.contains("never had a keyring"), "{out}");
+    assert!(flat(&out).contains("never had a keyring"), "{out}");
+    assert_fits(&out);
     assert!(writes(&world.log()).is_empty());
 }
 
@@ -695,15 +721,15 @@ fn a_commented_out_copy_of_the_key_does_not_count() {
 
 #[test]
 fn an_ss_that_fails_is_said_not_taken_for_a_private_hub() {
-    let could_not = "could not check whether sshd is open to the internet";
+    let could_not = "Could not check whether ssh is open to the internet";
     // ss fails before and after the install, or answers nothing: one line says it, the run still succeeds.
     for variant in ["fail", "empty"] {
         let world = World::new();
         let output = world.init_yes(&[], &[("ARIA_FAKE_SSH_SS", variant)]);
         let out = text(&output.stdout);
         assert_eq!(output.status.code(), Some(0), "{variant}: {out}{}", text(&output.stderr));
-        assert_eq!(out.lines().filter(|line| line.contains(could_not)).count(), 1, "{variant}: {out}");
-        assert!(out.contains("check it yourself"), "{out}");
+        assert_eq!(flat(&out).matches(could_not).count(), 1, "{variant}: {out}");
+        assert!(flat(&out).contains("check it yourself"), "{out}");
         assert!(!out.contains("stays open"), "{out}");
         let asked = commands(&world.log()).iter().filter(|c| *c == "ss -ltnH -n").count();
         assert_eq!(asked, 2, "asked again after the installer: {variant}");
@@ -713,13 +739,14 @@ fn an_ss_that_fails_is_said_not_taken_for_a_private_hub() {
     let output = world.init_yes(&[], &[("ARIA_FAKE_SSH_SS", "fail-until-install")]);
     let out = text(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
-    assert!(out.contains("stays open") && !out.contains(could_not), "{out}");
+    let said = flat(&out);
+    assert!(said.contains("stays open until you close it") && !said.contains(could_not), "{out}");
     // The ordinary cases say what they always did, and ask once.
     let world = World::new();
-    let public = text(&world.init_yes(&[], &[]).stdout);
-    assert!(public.contains("stays open") && !public.contains(could_not), "{public}");
+    let public = flat(&text(&world.init_yes(&[], &[]).stdout));
+    assert!(public.contains("stays open until you close it") && !public.contains(could_not), "{public}");
     assert_eq!(commands(&world.log()).iter().filter(|c| *c == "ss -ltnH -n").count(), 1);
-    let private = text(&world.init_yes(&[], &[("ARIA_FAKE_SSH_PUBLIC", "0")]).stdout);
+    let private = flat(&text(&world.init_yes(&[], &[("ARIA_FAKE_SSH_PUBLIC", "0")]).stdout));
     assert!(!private.contains("stays open") && !private.contains(could_not), "{private}");
 }
 
@@ -737,10 +764,12 @@ fn without_a_working_sandbox_the_key_is_not_installed_unless_allowed() {
         assert_eq!(output.status.code(), Some(1), "{variant}: {out}{err}");
         assert!(err.contains("step 6") && err.contains("skipped"), "{variant}: {err}");
         assert!(err.contains("--allow-no-sandbox"), "{variant}: {err}");
-        assert!(out.contains(fix), "{variant}: {out}");
-        assert!(out.contains("warning: the sandbox cannot start"), "{variant}: {out}");
-        assert!(out.contains(NO_PROMPT_WARNING) && out.contains("shell access to the hub user"), "{variant}: {out}");
-        assert!(!out.contains("The hub is ready"), "{out}");
+        let said = flat(&out);
+        assert!(said.contains(fix), "{variant}: {out}");
+        assert!(said.contains("The sandbox cannot start on the server"), "{variant}: {out}");
+        assert!(said.contains(NO_PROMPT_WARNING) && said.contains("shell access to the hub user"), "{variant}: {out}");
+        assert!(!out.contains("Your server is ready"), "{out}");
+        assert_fits(&out);
         assert_eq!(world.authorized_keys(), "", "{variant}: the key was not installed");
         assert!(!commands(&world.log()).iter().any(|c| c.contains("client-stdio")), "{variant}");
         // The other steps ran.
@@ -751,7 +780,7 @@ fn without_a_working_sandbox_the_key_is_not_installed_unless_allowed() {
             world.init_yes(&["--client-key", &key, "--allow-no-sandbox"], &[("ARIA_FAKE_SSH_BWRAP_FAIL", variant)]);
         let (out, err) = (text(&output.stdout), text(&output.stderr));
         assert_eq!(output.status.code(), Some(0), "{variant}: {out}{err}");
-        assert!(out.contains(NO_PROMPT_WARNING), "{variant}: {out}");
+        assert!(flat(&out).contains(NO_PROMPT_WARNING), "{variant}: {out}");
         assert_eq!(world.authorized_keys(), format!("{}\n", restricted(&world)), "{variant}");
     }
 }
@@ -760,9 +789,10 @@ fn without_a_working_sandbox_the_key_is_not_installed_unless_allowed() {
 fn a_missing_bwrap_and_a_blocked_one_are_told_apart() {
     let world = World::new();
     let missing = text(&world.init_yes(&[], &[("ARIA_FAKE_SSH_BWRAP_FAIL", "missing")]).stdout);
+    let missing = flat(&missing);
     assert!(missing.contains("not found") && missing.contains("sudo apt-get install -y bubblewrap"), "{missing}");
     assert!(!missing.contains("apparmor"), "{missing}");
-    let blocked = text(&world.init_yes(&[], &[("ARIA_FAKE_SSH_BWRAP_FAIL", "1")]).stdout);
+    let blocked = flat(&text(&world.init_yes(&[], &[("ARIA_FAKE_SSH_BWRAP_FAIL", "1")]).stdout));
     assert!(blocked.contains("kernel.apparmor_restrict_unprivileged_userns"), "{blocked}");
     assert!(!blocked.contains("apt-get install -y bubblewrap"), "{blocked}");
     // No key asked for: nothing is skipped, and the run still succeeds, as before.
@@ -775,7 +805,7 @@ fn with_a_working_sandbox_the_key_goes_in_with_no_flag() {
     let output = world.init_yes(&["--client-key", &key_file(&world)], &[]);
     assert_eq!(output.status.code(), Some(0), "{}{}", text(&output.stdout), text(&output.stderr));
     assert_eq!(world.authorized_keys(), format!("{}\n", restricted(&world)));
-    assert!(!text(&output.stdout).contains("warning: the sandbox cannot start"));
+    assert!(!text(&output.stdout).contains("The sandbox cannot start"));
 }
 
 #[test]
@@ -796,24 +826,23 @@ fn a_restricted_key_that_went_in_is_remembered_and_needs_no_ssh_config() {
     );
     assert_eq!(mode & 0o777, 0o600);
     assert!(!out.contains("IdentityFile") && !out.contains("Host aria-hub") && !out.contains("~/.ssh/config"), "{out}");
-    assert!(out.contains("connection tried: it works"), "{out}");
-    assert!(out.contains("The hub is ready. To use it, type: aria connect\n"), "{out}");
+    assert!(out.contains("It works"), "{out}");
+    assert!(out.contains("Your server is ready.") && out.contains("To use it, type:  aria connect\n"), "{out}");
+    assert_fits(&out);
     // The connection that was tried used the key and only it.
     let tried: Vec<String> =
         world.log().into_iter().filter(|line| line.contains("client-stdio") && !line.contains("restrict")).collect();
     assert_eq!(tried.len(), 1, "{tried:?}");
     // A key that was already there, restricted, is as good.
     let again = text(&world.init_yes(&["--client-key", &key], &[]).stdout);
-    assert!(again.contains("The hub is ready. To use it, type: aria connect"), "{again}");
+    assert!(again.contains("To use it, type:  aria connect"), "{again}");
+    assert!(again.contains("The key was already allowed on the server"), "{again}");
     // No key asked for, no snippet and no hub remembered.
     let other = World::new();
     let plain = text(&other.init_yes(&[], &[]).stdout);
     assert!(!plain.contains("IdentityFile") && !plain.contains("Host aria-hub"), "{plain}");
     assert!(!other.path("home/.aria/hubs.json").exists());
-    assert!(
-        plain.contains("The hub is ready. Connect from this computer with: aria connect ana@hub.example"),
-        "{plain}"
-    );
+    assert!(plain.contains("To use it, type:  aria connect ana@hub.example"), "{plain}");
 }
 
 #[test]
@@ -826,11 +855,17 @@ fn a_hub_that_cannot_be_remembered_still_comes_with_the_ssh_config() {
     let out = text(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
     let private = key.trim_end_matches(".pub");
-    let snippet = format!(
-        "Host aria-hub\n    HostName hub.example\n    User ana\n    IdentityFile {private}\n    IdentitiesOnly yes\n"
-    );
-    assert!(out.contains("could not remember the hub") && out.contains(&snippet), "{out}");
-    assert!(out.contains("The hub is ready. Connect from this computer with: aria connect aria-hub"), "{out}");
+    assert!(flat(&out).contains("could not remember the server"), "{out}");
+    for line in [
+        "Host aria-hub".to_string(),
+        "HostName hub.example".to_string(),
+        "User ana".to_string(),
+        format!("IdentityFile {private}"),
+        "IdentitiesOnly yes".to_string(),
+    ] {
+        assert!(out.lines().any(|each| each.trim() == line), "{line}: {out}");
+    }
+    assert!(out.contains("To use it, type:  aria connect aria-hub"), "{out}");
 }
 
 /// A stand-in for ssh-keygen that makes the pair the way the real one does (`-f <private>`), or fails when asked to.
@@ -853,9 +888,11 @@ fn the_default_key_is_made_allowed_remembered_and_tried() {
     let (out, err) = (text(&output.stdout), text(&output.stderr));
     assert_eq!(output.status.code(), Some(0), "{out}{err}");
     // Said before the install, in plain words, and made in a folder only its owner reads.
-    let said = out.find("a key only for Aria").expect("the key is explained");
-    assert!(out.find("1. ").unwrap() < said && said < out.find("[1/6]").unwrap(), "{out}");
-    assert!(out.contains("passphrase"), "{out}");
+    let said = out.find("[1/5] Making a key only for Aria").expect("the key is the first step");
+    assert!(out.find("What I will do on").unwrap() < said && said < out.find("[2/5]").unwrap(), "{out}");
+    assert!(flat(&out).contains("It asks for a passphrase"), "{out}");
+    assert!(out.contains("The key is ~/.ssh/aria-hub"), "the path is written with a tilde: {out}");
+    assert_fits(&out);
     assert!(world.path("home/.ssh/aria-hub").is_file() && world.path("home/.ssh/aria-hub.pub").is_file());
     let mode =
         std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(world.path("home/.ssh")).unwrap().permissions());
@@ -864,11 +901,9 @@ fn the_default_key_is_made_allowed_remembered_and_tried() {
     let hubs: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(world.path("home/.aria/hubs.json")).unwrap()).unwrap();
     assert_eq!(hubs["hubs"]["ana@hub.example"]["key"], world.path("home/.ssh/aria-hub").to_str().unwrap());
-    assert!(out.contains("[6/6] Linking this computer to the hub"), "{out}");
-    assert!(
-        out.contains("connection tried: it works") && out.contains("The hub is ready. To use it, type: aria connect"),
-        "{out}"
-    );
+    assert!(out.contains("[4/5] Allowing the key on the server"), "{out}");
+    assert!(out.contains("[5/5] Testing the connection"), "{out}");
+    assert!(out.contains("It works") && out.contains("To use it, type:  aria connect"), "{out}");
     // A second run finds the key and never runs ssh-keygen again (this one would fail).
     let broken = fake_keygen(&world, "exit 9");
     let again = world.init_yes(&["--default-key"], &[("ARIA_SSH_KEYGEN", &broken)]);
@@ -893,7 +928,7 @@ fn a_connection_that_does_not_open_ends_the_run_with_the_reason() {
     let (out, err) = (text(&output.stdout), text(&output.stderr));
     assert_eq!(output.status.code(), Some(1), "{out}{err}");
     assert!(err.contains("connection tried: it did not work"), "{err}");
-    assert!(!out.contains("The hub is ready"), "{out}");
+    assert!(!out.contains("Your server is ready"), "{out}");
 }
 
 #[test]
@@ -902,8 +937,9 @@ fn the_screen_of_a_run_in_a_pipe_has_no_colour_codes_and_ascii_marks() {
     let key = key_file(&world);
     let out = text(&world.init_yes(&["--client-key", &key], &[]).stdout);
     assert!(!out.contains('\x1b'), "{out}");
-    assert!(out.contains("[3/6] Sending your settings and sign-ins"), "{out}");
-    assert!(out.contains("  ok the hub runs aria 0.0.0-fake"), "{out}");
+    assert!(out.contains("[2/4] Copying your settings and sign-ins"), "{out}");
+    assert!(out.contains("  ok The server runs Aria 0.0.0-fake"), "{out}");
+    assert_fits(&out);
 }
 
 #[test]
@@ -914,10 +950,12 @@ fn a_release_hub_has_one_step_fewer_and_names_its_key_step_by_that_number() {
     let out = text(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
     assert!(
-        out.contains("[1/5] Installing Aria on the hub") && out.contains("[5/5] Linking this computer to the hub"),
+        out.contains("[1/4] Installing Aria on the server") && out.contains("[4/4] Testing the connection"),
         "{out}"
     );
-    assert!(!out.contains("[6/"), "{out}");
+    assert!(!out.contains("[5/"), "{out}");
+    assert!(flat(&out).contains("Install Aria") && flat(&out).contains("on the server"), "{out}");
+    assert_fits(&out);
     // The key's failure names the same number.
     let seeded = World::new();
     seed_authorized_keys(&seeded, &format!("{KEY}\n"));
@@ -935,10 +973,13 @@ fn a_hub_whose_only_sign_in_is_a_claude_plan_is_told_it_will_have_no_model() {
     )
     .unwrap();
     let out = text(&world.init_yes(&[], &[]).stdout);
+    let said = flat(&out);
     assert!(
-        out.contains("a hub cannot use a Claude plan") && out.contains("Anthropic API key or an OpenCode Go key"),
+        said.contains("a hub cannot use a Claude plan") && said.contains("Anthropic API key or an OpenCode Go key"),
         "{out}"
     );
+    assert!(said.contains("aria hub init ana@hub.example --credentials"), "{out}");
+    assert_fits(&out);
     // An API key is no reason to warn.
     let other = World::new();
     let out = text(&other.init_yes(&[], &[]).stdout);
@@ -1001,19 +1042,24 @@ fn a_rerun_sends_nothing_and_leaves_the_running_service_alone() {
     let world = World::new();
     owner_has_all_files(&world);
     seed_hub_files(&world);
-    let output = world.init_yes(&[], &[("ARIA_FAKE_SSH_ACTIVE", "1")]);
+    let output = world.init_yes(&["--details"], &[("ARIA_FAKE_SSH_ACTIVE", "1")]);
     let (out, err) = (text(&output.stdout), text(&output.stderr));
     assert_eq!(output.status.code(), Some(0), "{out}{err}");
     let steps = writes(&world.log());
     assert!(!steps.iter().any(|c| c.contains("hub-import")), "no bundle was sent: {steps:?}");
     assert!(!steps.iter().any(|c| c.contains("restart")), "no restart: {steps:?}");
+    let said = flat(&out);
+    assert!(said.contains("The service keeps running (it takes the new version when idle)"), "{out}");
+    assert!(said.contains("Aria 0.0.0-fake already runs there"), "the hub's version is read first: {out}");
     assert!(
-        out.contains("the service keeps running: it takes the new binary when idle and the settings within a second"),
-        "{out}"
+        said.contains("Kept as the hub has them") && said.contains("--credentials") && said.contains("--settings"),
+        "the detailed plan says what is kept: {out}"
     );
+    assert!(!out.contains("Copying your"), "nothing to copy, no copy step: {out}");
     assert!(
-        out.contains("Kept as the hub has them") && out.contains("--credentials") && out.contains("--settings"),
-        "the plan says what is kept: {out}"
+        flat(&text(&world.init_yes(&[], &[("ARIA_FAKE_SSH_ACTIVE", "1")]).stdout))
+            .contains("Nothing to copy: the server keeps the settings and sign-ins it has"),
+        "{out}"
     );
     assert_eq!(last_bundle(&world), Vec::<String>::new());
     // the hub's own files were not touched
@@ -1115,8 +1161,8 @@ fn the_hub_is_ready_only_when_its_user_lingers() {
     let world = World::new();
     let output = world.init_yes(&[], &[]);
     let out = text(&output.stdout);
-    assert!(out.contains("The hub is ready"), "{out}");
-    assert!(!out.contains("linger is not on"), "{out}");
+    assert!(out.contains("Your server is ready"), "{out}");
+    assert!(!out.contains("Linger is off"), "{out}");
     let probe = commands(&world.log()).into_iter().find(|c| c.contains("loginctl")).expect("a linger probe");
     assert_eq!(probe, "loginctl show-user \"$USER\" -p Linger");
     // it is asked after the version check
@@ -1127,9 +1173,11 @@ fn the_hub_is_ready_only_when_its_user_lingers() {
         let output = world.init_yes(&[], &[("ARIA_FAKE_SSH_LINGER", variant)]);
         let (out, err) = (text(&output.stdout), text(&output.stderr));
         assert_eq!(output.status.code(), Some(0), "{variant}: {out}{err}");
-        assert!(!out.contains("The hub is ready"), "{variant}: {out}");
-        assert!(out.contains("stops when you log out"), "{variant}: {out}");
+        assert!(!out.contains("Your server is ready"), "{variant}: {out}");
+        assert!(flat(&out).contains("installed, but not ready"), "{variant}: {out}");
+        assert!(flat(&out).contains("stops when you log out"), "{variant}: {out}");
         assert!(out.contains("sudo loginctl enable-linger ana"), "{variant}: {out}");
+        assert_fits(&out);
         for command in commands(&world.log()) {
             assert!(!command.contains("sudo"), "nothing is run with sudo: {command}");
         }
@@ -1139,7 +1187,7 @@ fn the_hub_is_ready_only_when_its_user_lingers() {
 #[test]
 fn the_plan_says_the_browser_is_left_out_of_a_server() {
     let world = World::new();
-    let out = text(&world.init(&["ana@hub.example", "--binary", "bin/aria-aarch64"], &[]).stdout);
+    let out = flat(&text(&world.init(&["ana@hub.example", "--binary", "bin/aria-aarch64", "--details"], &[]).stdout));
     assert!(out.contains("--with-browser") && out.contains("agent-browser"), "{out}");
 }
 
@@ -1148,8 +1196,8 @@ fn the_plan_says_when_the_binary_was_built() {
     let world = World::new();
     let file = std::fs::File::options().write(true).open(world.path("repo/bin/aria-aarch64")).unwrap();
     file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)).unwrap();
-    let output = world.init(&["ana@hub.example", "--binary", "bin/aria-aarch64"], &[]);
-    let out = text(&output.stdout);
+    let output = world.init(&["ana@hub.example", "--binary", "bin/aria-aarch64", "--details"], &[]);
+    let out = flat(&text(&output.stdout));
     assert!(output.status.success(), "{out}{}", text(&output.stderr));
     assert!(out.contains("bin/aria-aarch64 (built 2023-11-14 22:13 UTC)"), "{out}");
     // the built binary of the default path is shown the same way, and an old one is not refused
@@ -1158,8 +1206,121 @@ fn the_plan_says_when_the_binary_was_built() {
     std::fs::write(built.join("aria"), elf(0xB7)).unwrap();
     let default = std::fs::File::options().write(true).open(built.join("aria")).unwrap();
     default.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000)).unwrap();
-    let output = world.init(&["ana@hub.example"], &[]);
-    let out = text(&output.stdout);
+    let output = world.init(&["ana@hub.example", "--details"], &[]);
+    let out = flat(&text(&output.stdout));
     assert!(output.status.success(), "{out}{}", text(&output.stderr));
     assert!(out.contains("release/aria (built 2001-09-09 01:46 UTC)"), "{out}");
+}
+
+#[test]
+fn every_line_of_a_whole_run_fits_78_columns() {
+    // From a checkout, with a key to allow and every command listed.
+    let world = World::new();
+    let key = key_file(&world);
+    let output = world.init_yes(&["--client-key", &key, "--details"], &[]);
+    assert_eq!(output.status.code(), Some(0), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_fits(&text(&output.stdout));
+    // From the release, with the key made, a public ssh port and a user that does not linger: the most the screen says.
+    let world = World::new();
+    let keygen = fake_keygen(&world, &makes_the_default_key());
+    let output = world.init(
+        &["ana@hub.example", "--yes", "--default-key", "--details"],
+        &[("ARIA_SSH_KEYGEN", &keygen), ("ARIA_FAKE_SSH_LINGER", "no"), ("ARIA_FAKE_SSH_PASSWORDS", "yes")],
+    );
+    let out = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
+    assert_fits(&out);
+    assert!(flat(&out).contains("is open to the internet") && flat(&out).contains("Linger is off"), "{out}");
+    // Runs that go wrong: a sandbox that does not work (with and without a key), a keyring that cannot be read, a refused
+    // bundle, a connection that does not open.
+    for (envs, extra) in [
+        (vec![("ARIA_FAKE_SSH_BWRAP_FAIL", "1")], vec![]),
+        (vec![("ARIA_FAKE_SSH_BWRAP_FAIL", "missing")], vec!["--client-key"]),
+        (vec![("ARIA_FAKE_SSH_BWRAP_NOPROC", "1")], vec!["--client-key"]),
+        (vec![("ARIA_FAKE_SSH_HELLO", "fail")], vec!["--client-key"]),
+        (vec![("ARIA_FAKE_SSH_SS", "fail")], vec![]),
+        (vec![("ARIA_FAKE_SSH_IMPORT_FAIL", "1")], vec![]),
+    ] {
+        let world = World::new();
+        let key = key_file(&world);
+        let mut args: Vec<&str> = extra.clone();
+        if !extra.is_empty() {
+            args.push(&key);
+        }
+        let output = world.init_yes(&args, &envs);
+        assert_fits(&text(&output.stdout));
+        assert_fits(&text(&output.stderr).lines().filter(|line| line.starts_with("  ")).collect::<Vec<_>>().join("\n"));
+    }
+}
+
+#[test]
+fn the_plan_lists_only_the_steps_that_will_happen() {
+    // No key: install and copy, and nothing about a key or a connection.
+    let world = World::new();
+    let out = text(&world.init_yes(&[], &[]).stdout);
+    let plan = &out[out.find("What I will do on").unwrap()..out.find("[1/").unwrap()];
+    assert!(plan.contains("1  Install Aria") && plan.contains("2  Copy your settings and sign-ins"), "{plan}");
+    assert!(
+        !plan.contains("Allow") && !plan.contains("Test the connection") && !plan.contains("key can open"),
+        "{plan}"
+    );
+    assert!(out.contains("[1/2] Installing Aria") && out.contains("[2/2] Copying your"), "{out}");
+    assert!(!out.contains("Allowing the key") && !out.contains("Testing the connection"), "{out}");
+    // A key to allow adds the two steps for it, numbered the same way in the headers.
+    let world = World::new();
+    let key = key_file(&world);
+    let out = text(&world.init_yes(&["--client-key", &key], &[]).stdout);
+    let plan = &out[out.find("What I will do on").unwrap()..out.find("[1/").unwrap()];
+    assert!(plan.contains("3  Allow your Aria key on the server") && plan.contains("4  Test the connection"), "{plan}");
+    assert!(plan.contains("it is not a login"), "{plan}");
+    assert!(
+        out.contains("[3/4] Allowing the key on the server") && out.contains("[4/4] Testing the connection"),
+        "{out}"
+    );
+    // A hub that has everything already has nothing to copy: one step.
+    let world = World::new();
+    owner_has_all_files(&world);
+    seed_hub_files(&world);
+    let out = text(&world.init_yes(&[], &[]).stdout);
+    let plan = &out[out.find("What I will do on").unwrap()..out.find("[1/").unwrap()];
+    assert!(plan.contains("1  Install Aria") && !plan.contains("2  "), "{plan}");
+    assert!(!plan.contains("sign-ins are copied"), "{plan}");
+    assert!(out.contains("[1/1] Installing Aria"), "{out}");
+}
+
+#[test]
+fn the_technical_plan_is_printed_only_with_details_and_comes_first() {
+    let world = World::new();
+    let plain = text(&world.init_yes(&[], &[]).stdout);
+    assert!(!plain.contains("Aria will do this, in order"), "{plain}");
+    assert!(!flat(&plain).contains("hub-src"), "no command in the default screen: {plain}");
+    let detailed = text(&world.init_yes(&["--details"], &[]).stdout);
+    let said = flat(&detailed);
+    assert!(said.contains("Aria will do this, in order") && said.contains("hub-src"), "{detailed}");
+    assert!(detailed.find("Aria will do this").unwrap() < detailed.find("What I will do on").unwrap(), "{detailed}");
+    assert_fits(&detailed);
+}
+
+#[test]
+fn plain_is_accepted_and_changes_nothing_in_the_text() {
+    let world = World::new();
+    let with = world.init_yes(&["--plain"], &[]);
+    assert_eq!(with.status.code(), Some(0), "{}{}", text(&with.stdout), text(&with.stderr));
+    let without = World::new().init_yes(&[], &[]);
+    assert_eq!(text(&with.stdout), text(&without.stdout));
+}
+
+#[test]
+fn the_probe_says_what_it_found_without_the_technical_details() {
+    let world = World::new();
+    let out = text(&world.init_yes(&[], &[]).stdout);
+    let head = &out[..out.find("What I will do on").unwrap()];
+    assert!(head.contains("Aria · linking this computer to your server") || head.contains("Aria - linking"), "{head}");
+    assert!(head.contains("Looking at ana@hub.example..."), "{head}");
+    assert!(head.contains("Ubuntu 24.04.2 LTS, aarch64"), "{head}");
+    assert!(head.contains("Your settings and sign-ins are ready to send"), "{head}");
+    for private in ["/home/ana", "hub.example)", "2222", "ssh -G"] {
+        assert!(!head.contains(private), "{private} is not for the probe lines: {head}");
+    }
+    assert!(!head.contains("Aria already runs there"), "a hub with no service says nothing of one: {head}");
 }
