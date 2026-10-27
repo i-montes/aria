@@ -5,6 +5,22 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.22.0 — 2026-10-26
+
+### New
+
+- a server updates itself through the restricted key, so aria hub update needs no admin login
+- aria hub update brings a server to this Aria's version, and the terminal says when the versions differ
+- installing the dock also brings the linked servers to the same version
+- aria hub init draws a guided panel with ratatui on a terminal
+- aria hub init is a guided screen in plain words, with the technical plan behind --details
+
+### Fixed
+
+- the closing line names a binary that works, ssh-keygen is quiet, and the connectors count as one thing
+- run by aria hub init, the installer is one compact step of a longer screen
+- the screen fits a narrow terminal, every step ends with a check mark, and a hub gives an address that works
+
 ## 0.21.0 — 2026-10-26
 
 ### New
