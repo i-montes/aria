@@ -111,6 +111,10 @@ MARK_FAIL=x
 RULE=-
 STEP_N=0
 STEP_TOTAL=6
+# Run by `aria hub init` on the server, the installer is one step of a longer screen: ARIA_NESTED=1 leaves out its banner,
+# its plan, its question to start and its closing screen, and lists its steps without numbers.
+NESTED=${ARIA_NESTED:-0}
+MARK_STEP='-'
 LOG_FILE=""
 KEEP_LOG=0
 
@@ -120,6 +124,7 @@ ui_setup() {
     *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*)
       MARK_OK='✓'
       MARK_FAIL='✗'
+      MARK_STEP='·'
       RULE='─'
       ;;
   esac
@@ -146,6 +151,7 @@ warn() { printf '%s %s\n' "$(paint 33 'aria installer: warning:')" "$*" >&2; }
 
 ui_rule() { printf '  '; width=0; while [ "$width" -lt 56 ]; do printf '%s' "$RULE"; width=$((width + 1)); done; printf '\n'; }
 ui_title() {
+  [ "$NESTED" != 1 ] || return 0
   say ""
   say "  $(paint '1;36' 'Aria') $(paint 2 "· $1")"
   ui_rule
@@ -153,6 +159,10 @@ ui_title() {
 # ui_step <title> <what it is for>: the next numbered step.
 ui_step() {
   STEP_N=$((STEP_N + 1))
+  if [ "$NESTED" = 1 ]; then
+    say "  $(paint 2 "$MARK_STEP") $1"
+    return
+  fi
   say ""
   say "$(paint '1;36' "[$STEP_N/$STEP_TOTAL]") $(paint 1 "$1")"
   if [ -n "${2:-}" ]; then say "      $(paint 2 "$2")"; fi
@@ -1049,6 +1059,7 @@ resolve_mode() {
 
 # What is about to happen, in the words of someone who has not read the docs; Enter to go on when there is a terminal.
 ui_plan() {
+  [ "$NESTED" != 1 ] || return 0
   if [ "$USE" = hub ] && [ "$SERVER" = here ]; then
     ui_title "setting up a hub on this server"
     say "  This server will keep Aria running day and night."
@@ -1194,6 +1205,7 @@ server_address() {
 # for a computer it has never seen.
 ui_done() {
   [ "$DRY_RUN" != 1 ] || return 0
+  [ "$NESTED" != 1 ] || return 0
   say ""
   ui_rule
   if [ "$HEADLESS" = 1 ]; then

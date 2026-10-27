@@ -505,6 +505,17 @@ for args in '--mode desktop' '--mode hub --server here' '--server ana@my-server'
 done
 rm -r "$tmp"
 
+# run by aria hub init on the server (ARIA_NESTED=1) the installer is one step of a longer screen: no banner, plan, numbers or question
+tmp=$(mktemp -d)
+mkdir -p "$tmp/user"
+out=$(LC_ALL=C ARIA_NESTED=1 HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria --headless 2>&1)
+printf '%s\n' "$out" | grep -qE '^\[[0-9]/[0-9]\]' && fail "a nested installer numbers its steps" || pass "a nested installer does not number its steps"
+printf '%s\n' "$out" | grep -qF 'Press Enter' && fail "a nested installer waits for an Enter" || pass "a nested installer asks nothing to start"
+printf '%s\n' "$out" | grep -q 'steps\. Nothing changes\|setting up' && fail "a nested installer prints its banner" || pass "a nested installer prints no banner"
+printf '%s\n' "$out" | grep -qE '^  - Checking this server' && printf '%s\n' "$out" | grep -qE '^  - Starting Aria' && pass "a nested installer lists its steps, one line each" || fail "the nested steps are missing: $out"
+printf '%s\n' "$out" | grep -qF 'would: systemctl --user enable --now aria-serve.service' && pass "a nested installer does everything the same" || fail "a nested installer skipped work"
+rm -r "$tmp"
+
 # the address a computer links to a hub by: Tailscale's, else the one this login came to, else the name
 tmp=$(mktemp -d)
 mkdir -p "$tmp/ts" "$tmp/none"
