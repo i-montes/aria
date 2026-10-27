@@ -217,6 +217,8 @@ Run the installer again (the one-line command, or `sh install/install.sh --local
 
 An update never cuts a run. The dock restarts only when it is hidden and no session has a run going, a question waiting for you, or background work running or queued. Background work can keep an update waiting all day, so after 30 minutes of waiting for it alone, the sessions that have that work get one notice saying how to update now: stop the work from the background list.
 
+**Your server is updated with it.** When this computer is linked to a hub (`aria hub init` remembers it), the installer adds a seventh step, "Updating your server", that runs `aria hub update --all`: it brings every hub you linked to the version you just installed, so the two never drift apart. It asks for Enter first (`--yes` does not ask) and does not touch your settings or keys. If you ever need to do it alone, `aria hub update` does the same; see [Update a hub](hub.md#update-a-hub).
+
 The restart is immediate in three cases: the unit or LaunchAgent file changed, you passed `--restart-now`, or the running dock is too old to understand the request. The tabs and their conversations come back after any restart.
 
 On macOS, the microphone permission prompt may come back after an update; that has not been tried live yet ([pending](../pending.md)).

@@ -228,14 +228,25 @@ The hub reads `~/.aria/settings.json` and picks up a change within about a secon
 
 ## Update a hub
 
-Nothing updates a hub by itself. Update Aria on your computer (run the one-line installer again), then run `hub init` again: it installs the hub of the same release as your Aria. From a checkout, pull, build the binary again and run it with the same arguments:
+A hub does not update itself, but you do not have to remember to update it: the installer on your computer brings every linked hub to the version it just installed (see [Updating](getting-started.md#updating)). To do it alone:
 
 ```sh
-sh tools/build-headless.sh
-aria hub init ana@hub.example
+aria hub update            # the hub this computer opens by default
+aria hub update ana@hub.example
+aria hub update --all      # every hub this computer is linked to
 ```
 
-Running it again is safe. It installs the new version (or uploads the new tree and binary), runs the installer again, sends only the bundle files the hub lacks, leaves an active service running, and says `already allowed` for a key it has. An active service takes the new binary when it is idle: no run in progress and no background work that would be cut. If the unit file itself changed, the installer restarts the service at once. A client and a hub that speak different protocol numbers refuse each other, and the message says to update the older one, so update your computers and the hub together.
+`aria hub update` reads the version the server runs and compares it with this Aria's:
+
+- **Equal:** it says `<host> already runs Aria <version>` and changes nothing.
+- **The server is older:** it shows a short plan (`Update Aria on <host> from 0.21.0 to 0.22.0`, `Check the new version`), waits for Enter (`--yes` does not wait), runs the same install step as `hub init` and reads the version again. In release mode it fails unless the server now runs this version. It sends no settings or credentials, makes no key and leaves `authorized_keys` and `hubs.json` alone.
+- **The server is newer:** it refuses (`The server runs a newer Aria (…) than this one (…). Update this computer first.`), so an old client never downgrades a server.
+
+It chooses where the new Aria comes from the way `hub init` does: `--binary <path>`, a checkout that holds the built aarch64 binary (it uploads that build, and a stale one is easy to ship, so check its date), or this Aria's release. It logs in with your own ssh login, as `hub init` does: the client key is restricted to the terminal bridge and cannot run an installer. With `--all`, a failure on one hub is reported and the others still run; the exit code is 1 if any failed. `--details` prints the technical commands first and `--plain` forces the text screen.
+
+The terminal tells you when the versions differ: under the session list a note says `The server runs Aria 0.21.0 and this Aria is 0.22.0. Run aria hub update to bring the server up to date.` (or, when the server is the newer one, to update this computer). It never blocks the connection.
+
+Running `hub init` again also updates the hub, and is safe. It installs the new version (or uploads the new tree and binary), runs the installer again, sends only the bundle files the hub lacks, leaves an active service running, and says `already allowed` for a key it has. An active service takes the new binary when it is idle: no run in progress and no background work that would be cut. If the unit file itself changed, the installer restarts the service at once. A client and a hub that speak different protocol numbers refuse each other, and the message says to update the older one, so update your computers and the hub together.
 
 ## The sandbox on a server
 

@@ -83,8 +83,11 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
   every command asks first, and on a hub the prompt goes to whichever client is attached, so a holder of the client key can
   approve it; that is why `hub init` does not install the client key without a working sandbox unless
   `--allow-no-sandbox` is given. Until then treat the client key as shell access to the hub user.
-- **`aria update`**: there is no such command, though the hub design names one. A hub is updated by running `hub init`
-  again with a new binary; the protocol-mismatch messages only say to update the older side.
+- **Updating a hub**: `aria hub update` brings a hub to this Aria's version, and the installer runs it for the hubs a
+  computer is linked to. Not tried against a real server yet: from a release it needs the release to exist (the
+  workflow has never run, see below), and from a checkout it uploads whatever aarch64 build is there, whose date the plan
+  does not show. The terminal's note about differing versions is drawn in tests only, not seen in a real terminal.
+  There is no `aria update` for the computer itself: it is updated by the installer.
 - **A run that survives a dropped client** needs a model provider, so the acceptance script does not fake it: the maintainer
   checks by hand that a run started over `aria connect` goes on after the client is killed and shows again from a
   second connect (the design's "done when" for M1).
