@@ -284,6 +284,130 @@ if ARIA_BIN_DIR="$tmp/bin" ARIA_HOME="$tmp/home" sh "$installer" --local /nonexi
 [ ! -e "$tmp/bin" ] && [ ! -e "$tmp/home" ] && pass "nothing was created by the refused install" || fail "the refused install left files behind"
 rm -r "$tmp"
 
+# the download address: GitHub Releases of i-montes/aria, a pinned release with ARIA_VERSION, the environment wins
+repo_url=https://github.com/i-montes/aria/releases
+tmp=$(mktemp -d)
+mkdir -p "$tmp/user" "$tmp/old" "$tmp/x86"
+# the download is refused on a Linux that is not x86_64, so this block is an x86_64 machine whatever runs it
+printf '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; *) echo Linux ;; esac\n' > "$tmp/x86/uname" && chmod +x "$tmp/x86/uname"
+saved_path=$PATH
+PATH="$tmp/x86:$PATH"
+printf '#!/bin/sh\necho v18.19.1\n' > "$tmp/old/node" && printf '#!/bin/sh\n' > "$tmp/old/npm" && chmod +x "$tmp/old/node" "$tmp/old/npm"
+# a piped installer (curl | sh) has no sibling files, so it reads every pin from beside the binary
+dl() { (cd "$here" && HOME="$tmp/user" ARIA_HOME="$tmp/home" "$@" sh -s -- --dry-run --local /tmp/fake-aria < "$installer" 2>&1); }
+out=$(env -u ARIA_DOWNLOAD_URL -u ARIA_VERSION -u ARIA_REPO sh "$installer" --dry-run 2>&1)
+printf '%s\n' "$out" | grep -qF "would: download $repo_url/latest/download/aria-x86_64-linux and verify it against $repo_url/latest/download/aria-x86_64-linux.sha256" && pass "the default download is the latest GitHub release of i-montes/aria" || fail "the default download is not the GitHub latest release: $out"
+printf '%s\n' "$out" | grep -qF 'aria.example' && fail "the placeholder address is still there" || pass "no placeholder address is left"
+out=$(dl env -u ARIA_DOWNLOAD_URL -u ARIA_VERSION -u ARIA_REPO)
+ok=1
+for sibling in pi-version pi-packages engram-version agent-browser-version; do
+  printf '%s\n' "$out" | grep -qF "would: download $repo_url/latest/download/$sibling" || { ok=0; fail "$sibling is not read from beside the latest binary: $out"; }
+done
+[ "$ok" = 1 ] && pass "a piped installer reads the pins from beside the latest binary"
+out=$(cd "$here" && PATH="$tmp/old:/usr/bin:/bin" HOME="$tmp/user" ARIA_HOME="$tmp/home" env -u ARIA_DOWNLOAD_URL -u ARIA_VERSION -u ARIA_REPO sh -s -- --headless --dry-run --local /tmp/fake-aria < "$installer" 2>&1)
+printf '%s\n' "$out" | grep -qF "would: download $repo_url/latest/download/node-version" && pass "the Node pin is read from beside the latest binary too" || fail "node-version is not read from beside the binary: $out"
+out=$(dl env -u ARIA_DOWNLOAD_URL -u ARIA_REPO ARIA_VERSION=0.20.2)
+ok=1
+for sibling in pi-version pi-packages engram-version agent-browser-version; do
+  printf '%s\n' "$out" | grep -qF "would: download $repo_url/download/v0.20.2/$sibling" || { ok=0; fail "$sibling of a pinned release is not read from that release: $out"; }
+done
+[ "$ok" = 1 ] && pass "a pinned release reads its pins from the same release"
+out=$(env -u ARIA_DOWNLOAD_URL -u ARIA_REPO ARIA_VERSION=0.20.2 sh "$installer" --dry-run 2>&1)
+printf '%s\n' "$out" | grep -qF "would: download $repo_url/download/v0.20.2/aria-x86_64-linux and verify it against $repo_url/download/v0.20.2/aria-x86_64-linux.sha256" && pass "ARIA_VERSION=0.20.2 pins v0.20.2" || fail "ARIA_VERSION=0.20.2 does not pin v0.20.2: $out"
+out=$(env -u ARIA_DOWNLOAD_URL -u ARIA_REPO ARIA_VERSION=v0.20.2 sh "$installer" --dry-run 2>&1)
+printf '%s\n' "$out" | grep -qF "would: download $repo_url/download/v0.20.2/aria-x86_64-linux " && pass "ARIA_VERSION=v0.20.2 is the same release (no doubled v)" || fail "ARIA_VERSION=v0.20.2 is not normalised: $out"
+out=$(env -u ARIA_DOWNLOAD_URL ARIA_REPO=ana/aria-fork sh "$installer" --dry-run 2>&1)
+printf '%s\n' "$out" | grep -qF "would: download https://github.com/ana/aria-fork/releases/latest/download/aria-x86_64-linux " && pass "ARIA_REPO points the download at another repository" || fail "ARIA_REPO is ignored: $out"
+out=$(env -u ARIA_DOWNLOAD_URL ARIA_REPO=ana/aria-fork ARIA_VERSION=1.2.3 sh "$installer" --dry-run 2>&1)
+printf '%s\n' "$out" | grep -qF "would: download https://github.com/ana/aria-fork/releases/download/v1.2.3/aria-x86_64-linux " && pass "ARIA_REPO and ARIA_VERSION combine" || fail "ARIA_REPO with ARIA_VERSION is wrong: $out"
+out=$(ARIA_DOWNLOAD_URL=https://mirror.test/aria/aria-x86_64-linux ARIA_VERSION=9.9.9 ARIA_REPO=ana/aria-fork sh "$installer" --dry-run 2>&1)
+printf '%s\n' "$out" | grep -qF "would: download https://mirror.test/aria/aria-x86_64-linux and verify it against https://mirror.test/aria/aria-x86_64-linux.sha256" && pass "ARIA_DOWNLOAD_URL wins over ARIA_VERSION and ARIA_REPO" || fail "ARIA_DOWNLOAD_URL does not win: $out"
+out=$(dl env ARIA_DOWNLOAD_URL=https://mirror.test/aria/aria-x86_64-linux ARIA_VERSION=9.9.9)
+printf '%s\n' "$out" | grep -qF 'would: download https://mirror.test/aria/pi-packages' && pass "the pins follow ARIA_DOWNLOAD_URL" || fail "the pins do not follow ARIA_DOWNLOAD_URL: $out"
+out=$(dl env -u ARIA_DOWNLOAD_URL -u ARIA_VERSION -u ARIA_REPO ARIA_PI_VERSION_URL=https://mirror.test/pi)
+printf '%s\n' "$out" | grep -qF 'would: download https://mirror.test/pi' && pass "ARIA_PI_VERSION_URL still wins" || fail "ARIA_PI_VERSION_URL no longer wins: $out"
+for bad in 'latest' '0.20' 'v1.2.3;rm' '../x' '1.2.3 --local x'; do
+  if env -u ARIA_DOWNLOAD_URL "ARIA_VERSION=$bad" sh "$installer" --dry-run >/dev/null 2>"$tmp/err"; then fail "ARIA_VERSION='$bad' was accepted"
+  else grep -qF 'ARIA_VERSION' "$tmp/err" && pass "ARIA_VERSION='$bad' is refused" || fail "ARIA_VERSION='$bad' is refused without naming it"; fi
+done
+for bad in 'nobody' 'a/b/c' 'a b/c' '/aria' 'ana/..' 'ana/aria?x=1' '.x/y' 'a./b'; do
+  if env -u ARIA_DOWNLOAD_URL "ARIA_REPO=$bad" sh "$installer" --dry-run >/dev/null 2>"$tmp/err"; then fail "ARIA_REPO='$bad' was accepted"
+  else grep -qF 'ARIA_REPO' "$tmp/err" && pass "ARIA_REPO='$bad' is refused" || fail "ARIA_REPO='$bad' is refused without naming it"; fi
+done
+# a stray value in the environment must not stop a --local install, which downloads no binary
+ARIA_VERSION=latest ARIA_REPO=nobody sh "$installer" --dry-run --local /tmp/fake-aria >/dev/null 2>&1 && pass "a bad ARIA_VERSION or ARIA_REPO does not stop a --local install" || fail "a bad ARIA_VERSION or ARIA_REPO stopped a --local install"
+# an ARIA_VERSION that is not used (ARIA_DOWNLOAD_URL decides the address) is not checked
+ARIA_DOWNLOAD_URL=https://mirror.test/aria-x86_64-linux ARIA_VERSION=latest sh "$installer" --dry-run >/dev/null 2>&1 && pass "an unused ARIA_VERSION is not checked" || fail "an unused ARIA_VERSION stopped the installer"
+# --help documents the variables and the one-line install, and stops at the end of the header
+help=$(sh "$installer" --help)
+printf '%s\n' "$help" | grep -qF 'ARIA_REPO' && printf '%s\n' "$help" | grep -qF 'ARIA_VERSION' && printf '%s\n' "$help" | grep -qF 'curl -fsSL https://github.com/i-montes/aria/releases/latest/download/install.sh | sh' && pass "--help documents ARIA_REPO, ARIA_VERSION and the one-line install" || fail "--help lacks ARIA_REPO, ARIA_VERSION or the one-line install"
+printf '%s\n' "$help" | grep -qF 'aria.example' && fail "--help has the placeholder" || pass "--help has no placeholder"
+printf '%s\n' "$help" | grep -qF 'set -eu' && fail "--help runs past the header" || pass "--help stops at the end of the header"
+
+# the real download (the --fetch-binary hook): a verified binary, and every failure says what to do and leaves nothing
+rel="$tmp/rel"; mkdir -p "$rel" "$tmp/scratch"
+printf '#!/bin/sh\necho aria\n' > "$rel/aria-x86_64-linux"
+(cd "$rel" && sha256sum aria-x86_64-linux > aria-x86_64-linux.sha256)
+want=$(sha256sum "$rel/aria-x86_64-linux" | cut -d ' ' -f 1)
+fetch() { TMPDIR="$tmp/scratch" HOME="$tmp/user" ARIA_HOME="$tmp/home" ARIA_DOWNLOAD_URL="$1" sh "$installer" --fetch-binary 2>&1; }
+if out=$(fetch "file://$rel/aria-x86_64-linux") && printf '%s\n' "$out" | grep -qF "fetched $want" && [ -z "$(ls -A "$tmp/scratch")" ]; then pass "a binary whose checksum file is sha256sum's output is verified and the scratch directory is removed"; else fail "a good download failed or left files: $out"; fi
+printf '%s\n' "$want" > "$rel/aria-x86_64-linux.sha256"
+out=$(fetch "file://$rel/aria-x86_64-linux") && pass "a checksum file with only the digest is accepted too" || fail "a bare digest was refused: $out"
+(cd "$rel" && sha256sum aria-x86_64-linux > aria-x86_64-linux.sha256)
+check_failure() { # label, output of the failed fetch, URL expected in it
+  if printf '%s\n' "$2" | grep -qF "$3" && printf '%s\n' "$2" | grep -qi 'macOS' && printf '%s\n' "$2" | grep -qF 'cargo build --release' && printf '%s\n' "$2" | grep -qF 'sh install/install.sh --local target/release/aria' && [ -z "$(ls -A "$tmp/scratch")" ]; then
+    pass "$1: the message names the URL, macOS and the build from a clone, and nothing is left"
+  else fail "$1: unclear message or files left: $2 / $(ls -A "$tmp/scratch")"; fi
+}
+url="file://$tmp/none/aria-x86_64-linux"
+if out=$(fetch "$url"); then fail "a missing binary was accepted"; else check_failure "a missing binary" "$out" "$url"; fi
+mkdir -p "$tmp/stub"
+printf '#!/bin/sh\necho "curl: (22) The requested URL returned error: 404" >&2\nexit 22\n' > "$tmp/stub/curl" && chmod +x "$tmp/stub/curl"
+url=https://github.com/i-montes/aria/releases/latest/download/aria-x86_64-linux
+if out=$(PATH="$tmp/stub:$PATH" fetch "$url"); then fail "an HTTP 404 was accepted"; else check_failure "an HTTP 404" "$out" "$url"; fi
+# the binary is there but its checksum file is not
+mkdir -p "$tmp/nosum" && cp "$rel/aria-x86_64-linux" "$tmp/nosum/"
+if out=$(fetch "file://$tmp/nosum/aria-x86_64-linux"); then fail "a download without a checksum file was accepted"
+else printf '%s\n' "$out" | grep -qF "file://$tmp/nosum/aria-x86_64-linux.sha256" && [ -z "$(ls -A "$tmp/scratch")" ] && pass "a missing checksum file names its URL and leaves nothing" || fail "the missing-checksum message is unclear: $out"; fi
+# a checksum that does not match
+mkdir -p "$tmp/badsum" && cp "$rel/aria-x86_64-linux" "$tmp/badsum/" && printf '%064d  aria-x86_64-linux\n' 0 > "$tmp/badsum/aria-x86_64-linux.sha256"
+if out=$(fetch "file://$tmp/badsum/aria-x86_64-linux"); then fail "a wrong checksum was accepted"
+else printf '%s\n' "$out" | grep -qF 'does not match its checksum' && [ -z "$(ls -A "$tmp/scratch")" ] && pass "a wrong checksum is refused and leaves nothing" || fail "the checksum refusal is unclear: $out"; fi
+[ ! -e "$tmp/user/.local/bin/aria" ] && pass "no failed download installed a binary" || fail "a binary was installed by a failed download"
+printf '%s\n' "$out" | grep -qF 'run the command again' && pass "a checksum mismatch says a release may have been published meanwhile" || fail "the mismatch has no hint to run it again: $out"
+# a mismatch against a real (stub) download from the default address: both curls are https only, also across redirects
+mkdir -p "$tmp/rec" && printf '#!/bin/sh\necho "curl $*" >> "%s/curl-calls"\nout=""; for a in "$@"; do if [ "$out" = next ]; then : > "$a"; printf x > "$a"; out=""; fi; [ "$a" = -o ] && out=next; done\nif [ -z "$out" ] && ! printf "%%s" "$*" | grep -q -- " -o "; then echo 0.1.2; fi\nexit 0\n' "$tmp" > "$tmp/rec/curl" && chmod +x "$tmp/rec/curl"
+rm -f "$tmp/curl-calls"
+PATH="$tmp/rec:$PATH" TMPDIR="$tmp/scratch" HOME="$tmp/user" env -u ARIA_DOWNLOAD_URL -u ARIA_VERSION -u ARIA_REPO sh "$installer" --fetch-binary >/dev/null 2>&1 || true
+[ "$(grep -c -- "--proto =https --proto-redir =https" "$tmp/curl-calls")" = 2 ] && pass "the default address is fetched with --proto =https --proto-redir =https (binary and checksum)" || fail "the default download is not https only: $(cat "$tmp/curl-calls" 2>/dev/null)"
+rm -f "$tmp/curl-calls"
+PATH="$tmp/rec:$PATH" TMPDIR="$tmp/scratch" HOME="$tmp/user" ARIA_DOWNLOAD_URL=https://mirror.test/aria-x86_64-linux sh "$installer" --fetch-binary >/dev/null 2>&1 || true
+grep -q -- '--proto' "$tmp/curl-calls" && fail "an overridden address got --proto: $(cat "$tmp/curl-calls")" || pass "an ARIA_DOWNLOAD_URL override is not limited to https"
+rm -f "$tmp/curl-calls"
+(cd "$here" && PATH="$tmp/rec:$PATH" HOME="$tmp/user" env -u ARIA_DOWNLOAD_URL -u ARIA_PI_VERSION_URL sh -s -- --print-pi-version < "$installer" >/dev/null 2>&1) || true
+grep -q -- '--proto =https --proto-redir =https' "$tmp/curl-calls" && pass "the pins of the default address are https only too" || fail "the pin download is not https only: $(cat "$tmp/curl-calls" 2>/dev/null)"
+rm -f "$tmp/curl-calls"
+(cd "$here" && PATH="$tmp/rec:$PATH" HOME="$tmp/user" ARIA_PI_VERSION_URL="file://$tmp/rel/none" sh -s -- --print-pi-version < "$installer" >/dev/null 2>&1) || true
+grep -q -- '--proto' "$tmp/curl-calls" && fail "an overridden pin address got --proto" || pass "an ARIA_PI_VERSION_URL override is not limited to https"
+# the download is for x86_64 Linux: any other CPU is refused before anything is fetched, with the way out
+for cpu in aarch64 armv7l riscv64; do
+  mkdir -p "$tmp/cpu-$cpu" && printf '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo %s ;; *) echo Linux ;; esac\n' "$cpu" > "$tmp/cpu-$cpu/uname" && chmod +x "$tmp/cpu-$cpu/uname"
+  rm -f "$tmp/curl-calls"
+  # the way out: an aarch64 server installs as a hub (it has a build); the others build their own
+  if [ "$cpu" = aarch64 ]; then way_out='sh install.sh --mode hub'; else way_out='sh tools/build-headless.sh'; fi
+  if out=$(PATH="$tmp/cpu-$cpu:$tmp/rec:$PATH" TMPDIR="$tmp/scratch" HOME="$tmp/user" ARIA_DOWNLOAD_URL="file://$rel/aria-x86_64-linux" sh "$installer" --fetch-binary 2>&1); then fail "a $cpu Linux was given the x86_64 binary"
+  elif printf '%s\n' "$out" | grep -qF "$cpu" && printf '%s\n' "$out" | grep -qF 'cargo build --release' && printf '%s\n' "$out" | grep -qF 'sh install/install.sh --local target/release/aria' && printf '%s\n' "$out" | grep -qF "$way_out" && [ ! -e "$tmp/curl-calls" ] && [ -z "$(ls -A "$tmp/scratch")" ]; then pass "a $cpu Linux is refused before any download, saying how to build and what to install as a server"
+  else fail "the $cpu refusal is unclear or downloaded first: $out"; fi
+done
+if PATH="$tmp/cpu-aarch64:$PATH" sh "$installer" --dry-run >/dev/null 2>&1; then fail "the dry run of an aarch64 Linux promises a download"; else pass "the dry run says no too on an aarch64 Linux"; fi
+PATH="$tmp/cpu-aarch64:$PATH" sh "$installer" --dry-run --local /tmp/fake-aria >/dev/null 2>&1 && pass "--local still works on an aarch64 Linux" || fail "--local was refused on an aarch64 Linux"
+mkdir -p "$tmp/cpu-amd64" && printf '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo amd64 ;; *) echo Linux ;; esac\n' > "$tmp/cpu-amd64/uname" && chmod +x "$tmp/cpu-amd64/uname"
+PATH="$tmp/cpu-amd64:$PATH" TMPDIR="$tmp/scratch" ARIA_DOWNLOAD_URL="file://$rel/aria-x86_64-linux" sh "$installer" --fetch-binary >/dev/null 2>&1 && pass "amd64 is x86_64" || fail "amd64 was refused"
+# one EXIT trap for every scratch directory: a later trap must not drop an earlier cleanup
+[ "$(grep -c '^ *trap ' "$installer")" = 1 ] && pass "the installer has one EXIT trap (it removes the binary's and Node's scratch directories)" || fail "the installer sets more than one EXIT trap"
+PATH=$saved_path
+rm -r "$tmp"
+
 # uninstall only deletes a directory that is really Aria's data
 tmp=$(mktemp -d)
 mkdir "$tmp/aria-data" "$tmp/empty" "$tmp/other" "$tmp/real"
@@ -305,6 +429,110 @@ expect_no "$HOME" "the home directory"
 expect_no "$HOME/" "the home directory with a trailing slash"
 expect_no "$HOME/." "the home directory spelled with a dot"
 rm -r "$tmp/link" "$tmp/aria-data" "$tmp/empty" "$tmp/other" "$tmp/real" "$tmp"
+
+# --- the use: this computer's dock, or a hub ---
+tmp=$(mktemp -d)
+mkdir -p "$tmp/user"
+mode() { env -u DISPLAY -u WAYLAND_DISPLAY -u HYPRLAND_INSTANCE_SIGNATURE -u ARIA_MODE -u ARIA_SERVER -u XDG_CONFIG_HOME ${DESK:+DISPLAY=:0} ${AMODE:+ARIA_MODE=$AMODE} ${ASERVER:+ARIA_SERVER=$ASERVER} HOME="$tmp/user" ARIA_TTY_IN="${TTY_IN:-/nonexistent}" ARIA_TTY_OUT="$tmp/tty-out" sh "$installer" --resolve-mode "$@" 2>&1; }
+# nothing to ask on: the default follows the desktop, and a hub on this server is the default for a server
+[ "$(mode | tail -1)" = "use=hub server=here headless=1" ] && pass "with no desktop and nothing to ask, the use is a hub on this server" || fail "no desktop does not default to a hub: $(mode)"
+[ "$(DESK=1 mode | tail -1)" = "use=desktop server=none headless=0" ] && pass "with a desktop and nothing to ask, the use is the dock" || fail "a desktop does not default to the dock: $(DESK=1 mode)"
+[ "$(mode --headless | tail -1)" = "use=hub server=here headless=1" ] && pass "--headless is a hub on this server" || fail "--headless changed: $(mode --headless)"
+[ "$(mode --mode hub | tail -1)" = "use=hub server=here headless=1" ] && pass "--mode hub with nothing to ask is a hub on this server" || fail "--mode hub changed: $(mode --mode hub)"
+[ "$(DESK=1 mode --mode desktop | tail -1)" = "use=desktop server=none headless=0" ] && pass "--mode desktop is the dock" || fail "--mode desktop changed"
+[ "$(DESK=1 mode --server ana@box | tail -1)" = "use=hub server=ana@box headless=0" ] && pass "--server user@host is a hub on another computer, and this one gets the dock" || fail "--server user@host changed: $(DESK=1 mode --server ana@box)"
+[ "$(DESK=1 ASERVER=here mode | tail -1)" = "use=hub server=here headless=1" ] && pass "ARIA_SERVER=here is a hub on this server" || fail "ARIA_SERVER changed"
+[ "$(AMODE=hub DESK=1 mode | tail -1)" = "use=hub server=here headless=1" ] && pass "ARIA_MODE=hub is read" || fail "ARIA_MODE is not read"
+for bad in '--mode bogus' '--headless --mode desktop' '--mode desktop --server ana@box' '--server nobody' '--server -oProxyCommand=x@y' '--server a@b@c' '--server ana@box;ls' '--server @box'; do
+  # shellcheck disable=SC2086
+  if mode $bad >/dev/null; then fail "'$bad' was accepted"; else pass "'$bad' is refused"; fi
+done
+# an Aria that is already installed keeps its use, and nobody is asked
+mkdir -p "$tmp/user/.config/systemd/user"
+: > "$tmp/user/.config/systemd/user/aria-serve.service"
+[ "$(DESK=1 mode | tail -1)" = "use=hub server=here headless=1" ] && pass "an installed hub stays a hub on an update" || fail "an installed hub was changed: $(DESK=1 mode)"
+rm "$tmp/user/.config/systemd/user/aria-serve.service"
+: > "$tmp/user/.config/systemd/user/aria.service"
+[ "$(mode | tail -1)" = "use=desktop server=none headless=0" ] && pass "an installed dock stays the dock on an update" || fail "an installed dock was changed: $(mode)"
+rm "$tmp/user/.config/systemd/user/aria.service"
+# the questions, answered from a file standing in for the terminal
+answers() { printf '%b' "$1" > "$tmp/answers"; TTY_IN="$tmp/answers" mode; }
+out=$(answers '\n'); [ "$(printf '%s\n' "$out" | tail -1)" = "use=hub server=here headless=1" ] && pass "Enter takes the default use (a hub when there is no desktop), then the default server (this one)" || fail "Enter did not take the defaults: $out"
+out=$(DESK=1 answers '\n\n'); [ "$(printf '%s\n' "$out" | tail -1)" = "use=desktop server=none headless=0" ] && pass "Enter takes the default use (the dock when there is a desktop)" || fail "Enter on a desktop: $out"
+out=$(DESK=1 answers '2\n2\n'); [ "$(printf '%s\n' "$out" | tail -1)" = "use=hub server=here headless=1" ] && pass "2 then 2 is a hub on this computer" || fail "2 then 2: $out"
+out=$(DESK=1 answers '2\n1\nana@box\n'); [ "$(printf '%s\n' "$out" | tail -1)" = "use=hub server=ana@box headless=0" ] && pass "2, 1 and an address is a hub on another computer" || fail "2, 1, address: $out"
+out=$(DESK=1 answers '2\n1\nnonsense\nana@box\n'); [ "$(printf '%s\n' "$out" | tail -1)" = "use=hub server=ana@box headless=0" ] && pass "a bad address is asked for again" || fail "a bad address: $out"
+out=$(DESK=1 answers 'x\nx\nx\n') && fail "three wrong answers were accepted: $out" || pass "three wrong answers stop the installer"
+out=$(DESK=1 answers 'hub\nhere\n'); [ "$(printf '%s\n' "$out" | tail -1)" = "use=hub server=here headless=1" ] && pass "the words hub and here are accepted as answers" || fail "words as answers: $out"
+grep -q 'Which computer is the server' "$tmp/tty-out" && grep -q 'How will you use Aria' "$tmp/tty-out" && pass "the questions say what each answer means" || fail "the questions are not on the terminal"
+grep -q 'a server that keeps Aria running' "$tmp/tty-out" && pass "the hub is explained in plain words" || fail "the hub is not explained"
+# --yes asks nothing, even where there is a terminal
+out=$(printf '2\n2\n' > "$tmp/answers"; TTY_IN="$tmp/answers" DESK=1 mode --yes); [ "$(printf '%s\n' "$out" | tail -1)" = "use=desktop server=none headless=0" ] && pass "--yes asks nothing and takes the default" || fail "--yes asked: $out"
+rm -r "$tmp"
+
+# a hub on another computer: the dock goes in here, then this Aria sets the server up
+tmp=$(mktemp -d)
+out=$(HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria --server ana@box 2>&1)
+printf '%s\n' "$out" | grep -qF 'would: systemctl --user enable --now aria.service' && pass "a hub elsewhere still puts the dock on this computer" || fail "no dock for a hub elsewhere: $out"
+printf '%s\n' "$out" | grep -qF "would: $tmp/user/.local/bin/aria hub init ana@box --yes" && pass "a hub elsewhere is set up with aria hub init after the dock" || fail "no hub init for a hub elsewhere: $out"
+printf '%s\n' "$out" | grep -qF '[7/7]' && pass "a hub elsewhere has a seventh step" || fail "no seventh step: $out"
+printf '%s\n' "$out" | grep -qF '[6/6]' && fail "a hub elsewhere counts six steps" || pass "the steps are counted to seven"
+rm -r "$tmp"
+
+# the screen: no colour in a pipe or with NO_COLOR, and the marks are plain where the locale is not UTF-8
+tmp=$(mktemp -d)
+out=$(LC_ALL=C HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria --mode desktop 2>&1)
+printf '%s\n' "$out" | grep -q "$(printf '\033')" && fail "a pipe got colour codes" || pass "a pipe gets no colour codes"
+printf '%s\n' "$out" | grep -qE '^\[1/6\] Checking this computer' && pass "the steps are numbered" || fail "the steps are not numbered: $out"
+printf '%s\n' "$out" | grep -qE '^  ok ' && pass "the marks are plain where the locale is not UTF-8" || fail "the marks are not plain in the C locale"
+out=$(LC_ALL=en_US.UTF-8 HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria --mode desktop 2>&1)
+printf '%s\n' "$out" | grep -q '^  ✓ ' && pass "the marks are check marks in a UTF-8 locale" || fail "no check marks in a UTF-8 locale"
+rm -r "$tmp"
+
+# the headless build has its own artifact, by CPU
+tmp=$(mktemp -d)
+for cpu in aarch64 x86_64; do
+  mkdir -p "$tmp/cpu-$cpu" && printf '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo %s ;; *) echo Linux ;; esac\n' "$cpu" > "$tmp/cpu-$cpu/uname" && chmod +x "$tmp/cpu-$cpu/uname"
+  out=$(PATH="$tmp/cpu-$cpu:$PATH" HOME="$tmp/user" ARIA_HOME="$tmp/home" env -u ARIA_DOWNLOAD_URL -u ARIA_VERSION -u ARIA_REPO sh "$installer" --headless --dry-run --fetch-binary 2>&1)
+  printf '%s\n' "$out" | grep -qF "releases/latest/download/aria-$cpu-linux-headless " && pass "a hub on $cpu downloads aria-$cpu-linux-headless" || fail "a hub on $cpu asks for the wrong file: $out"
+done
+out=$(env -u ARIA_DOWNLOAD_URL -u ARIA_VERSION -u ARIA_REPO sh "$installer" --dry-run --fetch-binary 2>&1)
+printf '%s\n' "$out" | grep -qF "releases/latest/download/aria-x86_64-linux " && pass "the dock still downloads aria-x86_64-linux" || fail "the dock's artifact changed: $out"
+rm -r "$tmp"
+
+# the sandbox on a server: a profile for bwrap alone, written only with consent
+tmp=$(mktemp -d)
+mkdir -p "$tmp/bin" "$tmp/etc"
+printf '1\n' > "$tmp/restrict"; : > "$tmp/abi"
+printf '#!/bin/sh\n[ -f "%s" ] && exit 0\necho "bwrap: setting up uid map: Permission denied" >&2\nexit 1\n' "$tmp/etc/aria-bwrap" > "$tmp/bin/bwrap"
+printf '#!/bin/sh\nexec "$@"\n' > "$tmp/bin/sudo"
+printf '#!/bin/sh\necho "$@" >> "%s/parser-calls"\n' "$tmp" > "$tmp/bin/apparmor_parser"
+chmod +x "$tmp/bin/"*
+sandbox() { PATH="$tmp/bin:/usr/bin:/bin" HOME="$tmp/user" ARIA_BWRAP_PROFILE="$tmp/etc/aria-bwrap" ARIA_USERNS_SYSCTL="${RESTRICT:-$tmp/restrict}" ARIA_APPARMOR_ABI="$tmp/abi" ARIA_TTY_IN="${TTY_IN:-/nonexistent}" ARIA_TTY_OUT="$tmp/tty-out" sh "$installer" --ensure-sandbox "$@" 2>&1; }
+out=$(sandbox); [ ! -e "$tmp/etc/aria-bwrap" ] && printf '%s\n' "$out" | grep -qF 'every command asks' && pass "with no terminal and no --yes the sandbox profile is not written, and the installer says what happens" || fail "the profile was written without consent: $out"
+printf 'n\n' > "$tmp/answers"; out=$(TTY_IN="$tmp/answers" sandbox); [ ! -e "$tmp/etc/aria-bwrap" ] && pass "answering no leaves the sandbox rules alone" || fail "the profile was written on a no: $out"
+printf '\n' > "$tmp/answers"; out=$(TTY_IN="$tmp/answers" sandbox); [ -f "$tmp/etc/aria-bwrap" ] && grep -q 'profile aria-bwrap .* flags=(unconfined)' "$tmp/etc/aria-bwrap" && grep -q 'userns,' "$tmp/etc/aria-bwrap" && grep -qF -- '-r' "$tmp/parser-calls" && pass "Enter (the default yes) writes the bwrap profile and loads it" || fail "the profile was not written on Enter: $out"
+printf '%s\n' "$out" | grep -qF 'The sandbox works now' && pass "it says the sandbox works once the profile is in" || fail "no success line: $out"
+rm -f "$tmp/etc/aria-bwrap" "$tmp/parser-calls"
+out=$(sandbox --yes); [ -f "$tmp/etc/aria-bwrap" ] && pass "--yes writes the profile" || fail "--yes did not write the profile: $out"
+rm -f "$tmp/etc/aria-bwrap"
+printf '0\n' > "$tmp/restrict0"
+out=$(RESTRICT="$tmp/restrict0" sandbox --yes); [ ! -e "$tmp/etc/aria-bwrap" ] && printf '%s\n' "$out" | grep -qF "not Ubuntu's user-namespace restriction" && pass "a sandbox that fails for another reason is not given a profile" || fail "a profile was written for another cause: $out"
+if grep -rqF 'sysctl' "$installer" && grep -n 'sysctl -w\|sysctl --' "$installer" | grep -v '^.*#' | grep -q .; then fail "the installer changes a sysctl"; else pass "the installer never changes the sysctl"; fi
+rm -r "$tmp"
+sh "$installer" --print-bwrap-profile | grep -qF 'profile aria-bwrap /usr/bin/bwrap flags=(unconfined)' && pass "the profile is for bwrap alone" || fail "the profile is not for bwrap alone"
+
+# a failing noisy step shows the end of its log and keeps it
+tmp=$(mktemp -d)
+mkdir -p "$tmp/bin" "$tmp/scratch"
+printf '#!/bin/sh\necho "E: Unable to locate package bubblewrap" >&2\nexit 100\n' > "$tmp/bin/apt-get"
+printf '#!/bin/sh\nexec "$@"\n' > "$tmp/bin/sudo"
+chmod +x "$tmp/bin/"*
+# a PATH with the tools the step needs and no bwrap or ss, so it has something to install
+for tool in mktemp tail sed uname cat rm; do ln -s "$(command -v $tool)" "$tmp/bin/$tool"; done
+out=$(PATH="$tmp/bin" TMPDIR="$tmp/scratch" HOME="$tmp/user" ARIA_HOME="$tmp/home" /bin/sh "$installer" --headless --install-packages 2>&1) || true
+printf '%s\n' "$out" | grep -qF 'Unable to locate package bubblewrap' && pass "a failed step shows what it printed" || fail "a failed step hides its output: $out"
+rm -r "$tmp"
 
 # unknown flags are refused
 if sh "$installer" --frobnicate >/dev/null 2>&1; then fail "an unknown flag was accepted"; else pass "unknown flags are refused"; fi

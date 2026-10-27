@@ -107,6 +107,33 @@ restart 0 --restart-dock 0 0 >/dev/null
 ! grep -qF 'update-ready' "$tmp/calls" && grep -qF 'bootstrap' "$tmp/calls" && pass "a first install starts the agent" || fail "a first install did not start the agent"
 rm -f "$tmp/bin/aria"
 
+# the download: GitHub Releases, and the artifact is this Mac's (uname is faked off a Mac)
+repo_url=https://github.com/i-montes/aria/releases
+case "$(uname -m)" in arm64) mac_artifact=aria-aarch64-apple-darwin ;; *) mac_artifact=aria-x86_64-apple-darwin ;; esac
+out=$(env_run env -u ARIA_DOWNLOAD_URL -u ARIA_VERSION -u ARIA_REPO sh "$installer" --dry-run 2>&1)
+printf '%s\n' "$out" | grep -qF "would: download $repo_url/latest/download/$mac_artifact and verify it against $repo_url/latest/download/$mac_artifact.sha256" && pass "the default download is the latest GitHub release, as $mac_artifact" || fail "the default download is wrong on a Mac: $out"
+out=$(env_run env -u ARIA_DOWNLOAD_URL ARIA_VERSION=0.20.2 sh "$installer" --dry-run 2>&1)
+printf '%s\n' "$out" | grep -qF "would: download $repo_url/download/v0.20.2/$mac_artifact and verify it against $repo_url/download/v0.20.2/$mac_artifact.sha256" && pass "ARIA_VERSION pins a release on a Mac" || fail "ARIA_VERSION does not pin on a Mac: $out"
+out=$(env_run env ARIA_DOWNLOAD_URL=https://mirror.test/aria/mine ARIA_VERSION=0.20.2 sh "$installer" --dry-run 2>&1)
+printf '%s\n' "$out" | grep -qF "would: download https://mirror.test/aria/mine and verify it against https://mirror.test/aria/mine.sha256" && pass "ARIA_DOWNLOAD_URL wins on a Mac" || fail "ARIA_DOWNLOAD_URL does not win on a Mac: $out"
+# both Mac artifacts: an Intel Mac downloads the x86_64 one
+mkdir -p "$tmp/intel" && printf '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo x86_64 ;; *) echo Darwin ;; esac\n' > "$tmp/intel/uname" && chmod +x "$tmp/intel/uname"
+out=$(PATH="$tmp/intel:$PATH" env_run env -u ARIA_DOWNLOAD_URL -u ARIA_VERSION -u ARIA_REPO sh "$installer" --dry-run 2>&1)
+printf '%s\n' "$out" | grep -qF "$repo_url/latest/download/aria-x86_64-apple-darwin " && pass "an Intel Mac downloads aria-x86_64-apple-darwin" || fail "an Intel Mac gets the wrong artifact: $out"
+mkdir -p "$tmp/arm" && printf '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; *) echo Darwin ;; esac\n' > "$tmp/arm/uname" && chmod +x "$tmp/arm/uname"
+out=$(PATH="$tmp/arm:$PATH" env_run env -u ARIA_DOWNLOAD_URL -u ARIA_VERSION -u ARIA_REPO sh "$installer" --dry-run 2>&1)
+printf '%s\n' "$out" | grep -qF "$repo_url/latest/download/aria-aarch64-apple-darwin " && pass "an Apple silicon Mac downloads aria-aarch64-apple-darwin" || fail "an Apple silicon Mac gets the wrong artifact: $out"
+# a release without a Mac binary: the message says so, names the URL and the build from a clone, and leaves nothing
+mkdir -p "$tmp/scratch"
+url="file://$tmp/none/$mac_artifact"
+if out=$(TMPDIR="$tmp/scratch" env_run env ARIA_DOWNLOAD_URL="$url" sh "$installer" --fetch-binary 2>&1); then fail "a missing Mac binary was accepted"
+elif printf '%s\n' "$out" | grep -qF "$url" && printf '%s\n' "$out" | grep -qi 'macOS binaries are not published for every release' && printf '%s\n' "$out" | grep -qF 'cargo build --release' && printf '%s\n' "$out" | grep -qF 'sh install/install.sh --local target/release/aria' && [ -z "$(ls -A "$tmp/scratch")" ]; then pass "a missing Mac binary says which URL failed, that macOS binaries may be missing, and how to build from a clone"
+else fail "the missing Mac binary message is unclear or left files: $out"; fi
+# a binary and a checksum file in the format both sha256sum and shasum print are verified
+mkdir -p "$tmp/rel" && printf '#!/bin/sh\necho aria\n' > "$tmp/rel/$mac_artifact"
+if command -v sha256sum >/dev/null 2>&1; then (cd "$tmp/rel" && sha256sum "$mac_artifact" > "$mac_artifact.sha256"); else (cd "$tmp/rel" && shasum -a 256 "$mac_artifact" > "$mac_artifact.sha256"); fi
+if out=$(TMPDIR="$tmp/scratch" env_run env ARIA_DOWNLOAD_URL="file://$tmp/rel/$mac_artifact" sh "$installer" --fetch-binary 2>&1) && printf '%s\n' "$out" | grep -q '^fetched [0-9a-f]\{64\}$' && [ -z "$(ls -A "$tmp/scratch")" ]; then pass "a Mac binary with its checksum file is downloaded and verified"; else fail "a good Mac download failed: $out"; fi
+
 # Node is the same requirement on both platforms
 out=$(env_run sh "$installer" --check-node 2>&1) && pass "a modern Node is accepted" || fail "a modern Node was refused: $out"
 

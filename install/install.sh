@@ -1,13 +1,46 @@
 #!/bin/sh
 # Aria installer for Omarchy (Hyprland with the Lua config) and macOS.
 #
-#   curl -fsSL https://<your site>/install.sh | sh     install, or update in place
+#   curl -fsSL https://github.com/i-montes/aria/releases/latest/download/install.sh | sh     install, or update in place
+#   curl -fsSL https://github.com/i-montes/aria/releases/latest/download/install.sh | ARIA_VERSION=v0.20.2 sh     a chosen release
 #   sh install.sh --local target/release/aria          install a binary you built yourself
 #   sh install.sh --uninstall                          remove Aria (asks before deleting ~/.aria)
 #   sh install.sh --dry-run [...]                      print what would happen and change nothing
 #   sh install.sh --restart-now [...]                  restart a running dock at once, even mid-run
-#   sh install.sh --headless [...]                     a server with no desktop (Linux): `aria serve` as a user unit
+#   sh install.sh --mode hub|desktop [...]             skip the question: a hub (a server others connect to) or this computer's dock
+#   sh install.sh --server user@host [...]             a hub on another computer: installed from here, and this computer is linked to it
+#   sh install.sh --server here [...]                  this computer is the hub (the same as --headless): `aria serve` as a user unit
+#   sh install.sh --headless [...]                     a server with no desktop (Linux), `aria serve` as a user unit
+#   sh install.sh --yes [...]                          ask nothing: take the answer that is known or the default, and agree to the
+#                                                      sandbox's AppArmor profile (below)
 #   sh install.sh --headless --with-browser [...]      the same, and agent-browser with its Chrome (a large download, left out on a server)
+#
+# On Linux it asks one question, "On this computer, or as a hub?", unless the answer is known: --mode or ARIA_MODE, an
+# Aria already installed here (an update keeps its use), macOS (always the dock), or nothing to ask on (a dry run, no
+# terminal, --yes), which takes the default: the dock on a machine with a desktop, a hub on one without. A hub installs
+# the headless build (aria-x86_64-linux-headless or aria-aarch64-linux-headless), Node, Pi, Engram, the user unit and
+# linger, and makes the sandbox start: on Ubuntu 24.04, where AppArmor blocks user namespaces, it offers a profile for
+# bwrap alone (never the system-wide sysctl) and writes it only on your yes (or --yes).
+#
+# Where the binary comes from: the GitHub Releases of ARIA_REPO (default i-montes/aria), the latest release, or the one
+# named by ARIA_VERSION (v0.20.2 or 0.20.2). The environment variables go to the shell that runs the script
+# (`... | ARIA_VERSION=v0.20.2 sh`), not to curl. The binary is <artifact> next to its <artifact>.sha256 and the pins
+# (pi-version, pi-packages, engram-version, agent-browser-version, node-version) in the same release; the artifact is
+# aria-x86_64-linux, aria-aarch64-apple-darwin or aria-x86_64-apple-darwin. (A script run from a clone reads the pins
+# of that clone instead; only a piped one fetches them.) A release has a binary for a platform only if it was built for
+# it: when the download fails, build from a clone (`cargo build --release`, then
+# `sh install/install.sh --local target/release/aria`). The binary is checked against the .sha256 of the same release,
+# and the pins come from it too, so the checks show the download is whole, not that the release is authentic: nothing is
+# signed, and this script itself is trusted only through TLS. The dock's Linux binary is for x86_64; a hub's is for x86_64
+# or aarch64; any other CPU is refused.
+#   ARIA_MODE=desktop|hub      the answer to the first question, as --mode
+#   ARIA_SERVER=here|user@host the answer to the second one (which computer is the server), as --server
+#   ARIA_REPO=owner/name       the repository whose releases are used (default i-montes/aria)
+#   ARIA_VERSION=v0.20.2       a release, instead of the latest
+#   ARIA_DOWNLOAD_URL=<url>    the address of the binary itself; beats ARIA_REPO and ARIA_VERSION, and the pins and the
+#                              checksum are read from the same directory (<url>.sha256, ${url%/*}/pi-version, ...)
+#   ARIA_PI_VERSION_URL, ARIA_NODE_VERSION_URL, ARIA_NODE_DIST, ARIA_ENGRAM_URL    the addresses of the pins and of what the
+#                              installer fetches from elsewhere (Node, Engram), each beating what is derived above
 #
 # An update does not cut a run: the running dock is told a new version is installed and restarts into it once it
 # is hidden and no session has a run going. Only a changed service file, --restart-now, or a dock too old to
@@ -45,6 +78,10 @@ HEADLESS_PACKAGES="bubblewrap iproute2"
 
 DRY_RUN=0
 HEADLESS=0
+ASSUME_YES=0
+CHOSEN_MODE=${ARIA_MODE:-}
+CHOSEN_SERVER=${ARIA_SERVER:-}
+SERVER=""
 WITH_BROWSER=0
 NODE_PRIVATE=0
 NODE_PINS=""
@@ -53,10 +90,101 @@ SERVICE_CHANGED=0
 LOCAL=""
 MODE=install
 TMP=""
+NODE_WORK=""
+
+# The one EXIT trap: the scratch directories of the binary's download and of Node's (a second trap would replace the first).
+cleanup() {
+  if [ -n "$TMP" ]; then rm -rf "$TMP"; fi
+  if [ -n "$NODE_WORK" ]; then rm -rf "$NODE_WORK"; fi
+  # The log of the noisy steps goes away with a good install and stays after a bad one (die says where it is).
+  if [ -n "$LOG_FILE" ] && [ "$KEEP_LOG" != 1 ]; then rm -f "$LOG_FILE"; fi
+}
+trap cleanup EXIT
+
+# --- the screen ---------------------------------------------------------------------------------------------------------
+# A guided screen: numbered steps, what each is for, a mark when it is done, and the noisy output (apt, npm) kept in a log
+# that is shown only when a step fails. Colour only on a terminal that takes it (NO_COLOR and TERM=dumb turn it off) and
+# plain marks unless the locale is UTF-8. In a pipe or a log the same sentences come out without either.
+UI_COLOR=0
+MARK_OK=ok
+MARK_FAIL=x
+RULE=-
+STEP_N=0
+STEP_TOTAL=6
+LOG_FILE=""
+KEEP_LOG=0
+
+ui_setup() {
+  if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then UI_COLOR=1; fi
+  case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*)
+      MARK_OK='✓'
+      MARK_FAIL='✗'
+      RULE='─'
+      ;;
+  esac
+}
+ui_setup
+
+# paint <ansi code> <text>: the text in a colour on a terminal, as it is anywhere else.
+paint() {
+  code=$1
+  shift
+  if [ "$UI_COLOR" = 1 ]; then printf '\033[%sm%s\033[0m' "$code" "$*"; else printf '%s' "$*"; fi
+}
 
 say() { printf '%s\n' "$*"; }
-die() { printf 'aria installer: %s\n' "$*" >&2; exit 1; }
-warn() { printf 'aria installer: warning: %s\n' "$*" >&2; }
+die() {
+  printf 'aria installer: %s\n' "$*" >&2
+  if [ -n "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
+    KEEP_LOG=1
+    printf 'aria installer: what the steps printed is in %s\n' "$LOG_FILE" >&2
+  fi
+  exit 1
+}
+warn() { printf '%s %s\n' "$(paint 33 'aria installer: warning:')" "$*" >&2; }
+
+ui_rule() { printf '  '; width=0; while [ "$width" -lt 56 ]; do printf '%s' "$RULE"; width=$((width + 1)); done; printf '\n'; }
+ui_title() {
+  say ""
+  say "  $(paint '1;36' 'Aria') $(paint 2 "· $1")"
+  ui_rule
+}
+# ui_step <title> <what it is for>: the next numbered step.
+ui_step() {
+  STEP_N=$((STEP_N + 1))
+  say ""
+  say "$(paint '1;36' "[$STEP_N/$STEP_TOTAL]") $(paint 1 "$1")"
+  if [ -n "${2:-}" ]; then say "      $(paint 2 "$2")"; fi
+}
+ui_ok() { say "  $(paint 32 "$MARK_OK") $*"; }
+ui_info() { say "      $(paint 2 "$*")"; }
+
+# quiet <what it does> <command...>: runs the command with its output in the log and says only whether it worked; a
+# failure shows the end of that log. A dry run prints the command like `run` does.
+quiet() {
+  label=$1
+  shift
+  if [ "$DRY_RUN" = 1 ]; then
+    printf 'would: %s\n' "$*"
+    return 0
+  fi
+  if [ -z "$LOG_FILE" ]; then LOG_FILE=$(mktemp "${TMPDIR:-/tmp}/aria-install.XXXXXX" 2>/dev/null) || LOG_FILE=""; fi
+  log=${LOG_FILE:-/dev/null}
+  printf '=== %s: %s\n' "$label" "$*" >>"$log"
+  if [ "$1" = sudo ]; then say "  $(paint 33 '!') $label $(paint 2 '(your computer may ask for your password)')"; fi
+  "$@" >>"$log" 2>&1 && {
+    ui_ok "$label"
+    return 0
+  }
+  status=$?
+  say "  $(paint 31 "$MARK_FAIL") $label" >&2
+  if [ -n "$LOG_FILE" ]; then
+    KEEP_LOG=1
+    tail -n 12 "$LOG_FILE" | sed 's/^/        /' >&2
+  fi
+  return "$status"
+}
 
 # Runs a command, or only prints it in a dry run.
 run() {
@@ -71,7 +199,10 @@ run() {
 # platform-specific hook) actually needs it, so the test hooks (--check-node, --link-node) work with a
 # minimal PATH and a missing uname only matters then.
 PLATFORM=""
-# Placeholders until releases are published; override with the environment.
+# Where the binary and its siblings (the checksum, the pins) are published: the GitHub Releases of ARIA_REPO. The
+# environment overrides each address.
+REPO=${ARIA_REPO:-i-montes/aria}
+VERSION=${ARIA_VERSION:-}
 DOWNLOAD_URL=${ARIA_DOWNLOAD_URL:-}
 PI_VERSION_URL=${ARIA_PI_VERSION_URL:-}
 NODE_VERSION_URL=${ARIA_NODE_VERSION_URL:-}
@@ -81,7 +212,18 @@ detect_platform() {
   [ -n "$PLATFORM" ] && return
   platform=$(uname -s 2>/dev/null) || die "could not detect the system: uname is missing"
   case "$platform" in
-    Linux) artifact=aria-x86_64-linux ;;
+    Linux)
+      artifact=aria-x86_64-linux
+      if [ "$HEADLESS" = 1 ]; then
+        # A hub's binary has no desktop libraries, and exists for the two CPUs servers have.
+        cpu=$(uname -m 2>/dev/null) || cpu=""
+        case "$cpu" in
+          aarch64 | arm64) artifact=aria-aarch64-linux-headless ;;
+          x86_64 | amd64) artifact=aria-x86_64-linux-headless ;;
+          *) artifact=aria-x86_64-linux-headless ;; # fetch_binary refuses a CPU that has no build
+        esac
+      fi
+      ;;
     Darwin)
       machine=$(uname -m 2>/dev/null) || die "could not detect the Mac architecture"
       case "$machine" in
@@ -93,14 +235,60 @@ detect_platform() {
     *) die "unsupported system: $platform (Aria runs on Omarchy/Hyprland and macOS)" ;;
   esac
   PLATFORM=$platform
-  if [ -z "$DOWNLOAD_URL" ]; then DOWNLOAD_URL=https://aria.example/releases/latest/$artifact; fi
+  if [ -z "$DOWNLOAD_URL" ]; then release_url "$artifact"; fi
   if [ -z "$PI_VERSION_URL" ]; then PI_VERSION_URL=${DOWNLOAD_URL%/*}/pi-version; fi
   if [ -z "$NODE_VERSION_URL" ]; then NODE_VERSION_URL=${DOWNLOAD_URL%/*}/node-version; fi
   if [ "$HEADLESS" = 1 ] && [ "$PLATFORM" != Linux ]; then die "--headless is for Linux servers (this is $PLATFORM); a Mac runs the dock"; fi
 }
 
+# The binary's address in the GitHub Releases of $REPO: the latest release, or $VERSION (v-prefixed whether or not it was
+# given with the v). Both end up in a URL, so only what a repository name and a version are made of is accepted.
+release_url() {
+  problem=""
+  case "$REPO" in
+    "" | .* | */ | /* | */*/* | *./* | */.. | */. | *[!A-Za-z0-9._/-]*) problem="ARIA_REPO must look like owner/name (got '$REPO')" ;;
+    */*) ;;
+    *) problem="ARIA_REPO must look like owner/name (got '$REPO')" ;;
+  esac
+  tag=""
+  if [ -z "$problem" ] && [ -n "$VERSION" ]; then
+    tag=v${VERSION#v}
+    case "$tag" in
+      v[0-9]*.[0-9]*.[0-9]*) ;;
+      *) problem="ARIA_VERSION must look like v0.20.2 or 0.20.2 (got '$VERSION')" ;;
+    esac
+    case "$tag" in *[!A-Za-z0-9.+-]*) problem="ARIA_VERSION must look like v0.20.2 or 0.20.2 (got '$VERSION')" ;; esac
+  fi
+  if [ -n "$problem" ]; then
+    # A --local install downloads no binary: a stray variable in the environment must not stop it (the address only
+    # names the pins a piped installer reads, and falls back to the latest release).
+    [ -n "$LOCAL" ] || die "$problem"
+    REPO=i-montes/aria
+    tag=""
+  fi
+  if [ -z "$tag" ]; then
+    DOWNLOAD_URL=https://github.com/$REPO/releases/latest/download/$1
+  else
+    DOWNLOAD_URL=https://github.com/$REPO/releases/download/$tag/$1
+  fi
+}
+
+# curl for what the release serves: https only, redirects included (GitHub sends the files to its own storage hosts), but
+# only for the default address. $1 is the environment's override of this one address, if any: an override may be
+# a file:// path or a mirror, and is the owner's to choose.
+download() {
+  override=$1
+  shift
+  if [ -z "${ARIA_DOWNLOAD_URL:-}" ] && [ -z "$override" ]; then
+    curl --proto '=https' --proto-redir '=https' -fsSL "$@"
+  else
+    curl -fsSL "$@"
+  fi
+}
+
+# The header of this file is the help.
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
 }
 
 # The unit file. `curl | sh` has no sibling files, so the script carries it (install/aria.service
@@ -209,7 +397,7 @@ check_session() {
 install_packages() {
   detect_platform
   if [ "$PLATFORM" = Darwin ]; then
-    say "macOS: no system packages are needed"
+    ui_ok "macOS: no system packages are needed"
     return
   fi
   if [ "$DRY_RUN" = 1 ]; then
@@ -219,7 +407,12 @@ install_packages() {
   fi
   command -v pacman >/dev/null 2>&1 || die "pacman not found: install these packages first: $PACKAGES"
   # shellcheck disable=SC2086
-  if ! pacman -Qq $PACKAGES >/dev/null 2>&1; then run sudo pacman -S --needed $PACKAGES; fi
+  if ! pacman -Qq $PACKAGES >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    quiet "Installing the libraries the dock needs" sudo pacman -S --needed --noconfirm $PACKAGES
+  else
+    ui_ok "The libraries the dock needs are already installed"
+  fi
 }
 
 # A server's packages: the sandbox and `ss`, with the package manager it has. Never fatal: without them (or without
@@ -231,7 +424,7 @@ install_headless_packages() {
     set -- sudo apt-get install -y $HEADLESS_PACKAGES
   elif command -v pacman >/dev/null 2>&1; then
     # shellcheck disable=SC2086
-    set -- sudo pacman -S --needed $HEADLESS_PACKAGES
+    set -- sudo pacman -S --needed --noconfirm $HEADLESS_PACKAGES
   else
     say "No apt-get or pacman here: install $HEADLESS_PACKAGES with your package manager (until then every command asks before it runs)"
     return 0
@@ -240,8 +433,11 @@ install_headless_packages() {
     run "$@"
     return 0
   fi
-  if command -v bwrap >/dev/null 2>&1 && command -v ss >/dev/null 2>&1; then return 0; fi
-  "$@" || {
+  if command -v bwrap >/dev/null 2>&1 && command -v ss >/dev/null 2>&1; then
+    ui_ok "The sandbox tools are already installed"
+    return 0
+  fi
+  quiet "Installing the sandbox tools ($HEADLESS_PACKAGES)" "$@" || {
     warn "could not install $HEADLESS_PACKAGES (no sudo?)"
     say "Run this yourself: $*"
     say "Until then every command asks before it runs."
@@ -308,7 +504,7 @@ read_node_version() {
     NODE_PINS=""
     return
   else
-    NODE_PINS=$(curl -fsSL "$NODE_VERSION_URL") || die "could not download the pinned Node version from $NODE_VERSION_URL"
+    NODE_PINS=$(download "${ARIA_NODE_VERSION_URL:-}" "$NODE_VERSION_URL") || die "could not download the pinned Node version from $NODE_VERSION_URL"
   fi
   NODE_VERSION=$(printf '%s\n' "$NODE_PINS" | head -1 | tr -d '[:space:]')
   case "$NODE_VERSION" in *[!0-9.]* | "") die "the pinned Node version is not a version number: '$NODE_VERSION'" ;; esac
@@ -346,8 +542,8 @@ install_private_node() {
   command -v xz >/dev/null 2>&1 || die "xz is needed to unpack Node (on Ubuntu: sudo apt-get install xz-utils)"
   install -d -m 700 "$DATA_DIR"
   # Inside $DATA_DIR, so the final move is a rename on one filesystem; removed on any exit.
-  work=$(mktemp -d "$DATA_DIR/.node-install.XXXXXX")
-  trap 'rm -rf "$work"' EXIT
+  NODE_WORK=$(mktemp -d "$DATA_DIR/.node-install.XXXXXX")
+  work=$NODE_WORK
   curl -fsSL "$base/$tarball" -o "$work/$tarball" || die "could not download Node from $base/$tarball"
   [ "$(sha256_of "$work/$tarball")" = "$expected" ] || die "the Node download does not match the checksum pinned in node-version; nothing was installed"
   mkdir "$work/stage"
@@ -355,8 +551,8 @@ install_private_node() {
   [ ! -e "$DATA_DIR/node" ] || mv "$DATA_DIR/node" "$work/old"
   mv "$work/stage" "$DATA_DIR/node"
   rm -rf "$work"
-  trap - EXIT
-  say "Installed Node $NODE_VERSION into $DATA_DIR/node"
+  NODE_WORK=""
+  ui_ok "Installed Node $NODE_VERSION into $DATA_DIR/node"
 }
 
 # A server's Node: the private one (when an earlier run put it there) or the system's, kept when it is new enough, else
@@ -364,7 +560,7 @@ install_private_node() {
 ensure_server_node() {
   if [ -x "$DATA_DIR/node/bin/node" ]; then PATH="$DATA_DIR/node/bin:$PATH"; export PATH; fi
   if node_is_current; then
-    say "Node $(node --version | sed 's/^v//') is new enough; keeping it"
+    ui_ok "Node $(node --version | sed 's/^v//') is new enough; keeping it"
     if [ -x "$DATA_DIR/node/bin/node" ]; then NODE_PRIVATE=1; fi
     return
   fi
@@ -420,7 +616,7 @@ read_pi_version() {
     PI_VERSION=PINNED
     return
   else
-    PI_VERSION=$(curl -fsSL "$PI_VERSION_URL") || die "could not download the pinned Pi version from $PI_VERSION_URL"
+    PI_VERSION=$(download "${ARIA_PI_VERSION_URL:-}" "$PI_VERSION_URL") || die "could not download the pinned Pi version from $PI_VERSION_URL"
     PI_VERSION=$(printf '%s' "$PI_VERSION" | tr -d '[:space:]')
   fi
   case "$PI_VERSION" in *[!0-9.]* | "") die "the pinned Pi version is not a version number: '$PI_VERSION'" ;; esac
@@ -430,10 +626,10 @@ install_pi() {
   [ -n "${PI_VERSION:-}" ] || read_pi_version
   prefix="$DATA_DIR/pi/$PI_VERSION"
   if [ -x "$prefix/node_modules/.bin/pi" ]; then
-    say "Pi $PI_VERSION is already installed"
+    ui_ok "Pi $PI_VERSION is already installed"
     return
   fi
-  run npm install --prefix "$prefix" --no-audit --no-fund "$PI_PACKAGE@$PI_VERSION"
+  quiet "Installing the agent (Pi $PI_VERSION)" npm install --prefix "$prefix" --no-audit --no-fund "$PI_PACKAGE@$PI_VERSION"
 }
 
 # The packages the owner's extensions use (pi-packages, pinned), installed into Aria's own Pi directory.
@@ -445,11 +641,11 @@ install_pi_packages() {
     say "would: download ${DOWNLOAD_URL%/*}/pi-packages"
     return
   else
-    packages=$(curl -fsSL "${DOWNLOAD_URL%/*}/pi-packages") || die "could not download the list of Pi packages"
+    packages=$(download "" "${DOWNLOAD_URL%/*}/pi-packages") || die "could not download the list of Pi packages"
   fi
   run install -d -m 700 "$DATA_DIR/agent"
   for package in $packages; do
-    run env PI_CODING_AGENT_DIR="$DATA_DIR/agent" PI_SKIP_VERSION_CHECK=1 "$DATA_DIR/pi/$PI_VERSION/node_modules/.bin/pi" install "$package"
+    quiet "Adding $(printf '%s' "$package" | sed 's|^git:github.com/||; s|^npm:||; s|@[^@/]*$||')" env PI_CODING_AGENT_DIR="$DATA_DIR/agent" PI_SKIP_VERSION_CHECK=1 "$DATA_DIR/pi/$PI_VERSION/node_modules/.bin/pi" install "$package"
   done
 }
 
@@ -460,18 +656,40 @@ fetch_binary() {
     SOURCE=$LOCAL
     return
   fi
+  # The dock's Linux binary is for x86_64 and a hub's also for aarch64. Another CPU would verify, install and replace its
+  # binary with one that cannot run, so it is refused here (--local, above, and Engram's builds do support arm64).
+  if [ "$PLATFORM" = Linux ]; then
+    cpu=$(uname -m 2>/dev/null) || die "could not detect the CPU"
+    case "$cpu" in
+      x86_64 | amd64) ;;
+      aarch64 | arm64)
+        [ "$HEADLESS" = 1 ] || die "Aria publishes the dock's Linux binary only for x86_64 and this machine is $cpu; nothing was installed
+For a server, install it as a hub: sh install.sh --mode hub (a hub has an aarch64 binary)
+To build the dock yourself, from a clone of the repository: cargo build --release, then: sh install/install.sh --local target/release/aria" ;;
+      *) die "Aria publishes a Linux binary only for x86_64 and aarch64 (a hub) and this machine is $cpu; nothing was installed
+To build it yourself, from a clone of the repository: cargo build --release, then: sh install/install.sh --local target/release/aria
+For a server: sh tools/build-headless.sh, then: sh install/install.sh --headless --local <the binary it prints>" ;;
+    esac
+  fi
   if [ "$DRY_RUN" = 1 ]; then
     say "would: download $DOWNLOAD_URL and verify it against $DOWNLOAD_URL.sha256"
     SOURCE=/tmp/aria-download
     return
   fi
   TMP=$(mktemp -d)
-  trap 'rm -rf "$TMP"' EXIT
-  curl -fsSL "$DOWNLOAD_URL" -o "$TMP/aria"
-  curl -fsSL "$DOWNLOAD_URL.sha256" -o "$TMP/aria.sha256"
+  # Nothing is installed from here: the download goes to a scratch directory that any exit removes, and install_binary
+  # runs only after the checksum matched. The checksum is the release's own file, next to the binary: it shows the
+  # download is whole and is the one that was published, not that the release is authentic (nothing is signed).
+  if ! download "" "$DOWNLOAD_URL" -o "$TMP/aria"; then
+    die "could not download the Aria binary from $DOWNLOAD_URL
+There may be no binary for this platform: a release has one only if it was built for it, and macOS binaries are not published for every release (or there is no release yet). Nothing was installed.
+To build it yourself, from a clone of the repository: cargo build --release, then: sh install/install.sh --local target/release/aria"
+  fi
+  download "" "$DOWNLOAD_URL.sha256" -o "$TMP/aria.sha256" || die "could not download the checksum from $DOWNLOAD_URL.sha256; nothing was installed"
   expected=$(cut -d ' ' -f 1 "$TMP/aria.sha256")
   actual=$(sha256_of "$TMP/aria")
-  [ "$expected" = "$actual" ] || die "the downloaded binary does not match its checksum; nothing was installed"
+  [ "$expected" = "$actual" ] || die "the downloaded binary does not match its checksum; nothing was installed
+Hint: a release may have been published while this ran: run the command again"
   chmod +x "$TMP/aria"
   SOURCE=$TMP/aria
 }
@@ -489,7 +707,7 @@ install_engram() {
     say "would: install engram (the pinned version) into $DATA_DIR/bin/engram"
     return
   else
-    pins=$(curl -fsSL "${DOWNLOAD_URL%/*}/engram-version") || die "could not download the pinned Engram version"
+    pins=$(download "" "${DOWNLOAD_URL%/*}/engram-version") || die "could not download the pinned Engram version"
   fi
   version=$(printf '%s\n' "$pins" | head -1 | tr -d '[:space:]')
   case "$PLATFORM/$(uname -m)" in
@@ -501,7 +719,7 @@ install_engram() {
   esac
   target="$DATA_DIR/bin/engram"
   if [ -x "$target" ] && "$target" --version 2>/dev/null | grep -qF "$version"; then
-    say "Engram $version is already installed"
+    ui_ok "Engram $version is already installed"
     return
   fi
   url=${ARIA_ENGRAM_URL:-$ENGRAM_RELEASES/v$version/engram_${version}_$build.tar.gz}
@@ -517,7 +735,7 @@ install_engram() {
   install -d -m 700 "$DATA_DIR/bin"
   install -m 755 "$work/engram" "$target"
   rm -rf "$work"
-  say "Installed Engram $version"
+  ui_ok "Installed Engram $version"
 }
 
 # agent-browser, the browser the agents check the pages they build with (the verify-in-browser skill): the version
@@ -533,7 +751,7 @@ install_agent_browser() {
     say "would: download ${DOWNLOAD_URL%/*}/agent-browser-version"
     version=PINNED
   else
-    version=$(curl -fsSL "${DOWNLOAD_URL%/*}/agent-browser-version") || {
+    version=$(download "" "${DOWNLOAD_URL%/*}/agent-browser-version") || {
       warn "could not download the pinned agent-browser version; the agents cannot check pages in a browser"
       return 0
     }
@@ -548,9 +766,9 @@ install_agent_browser() {
   fi
   prefix="$DATA_DIR/agent-browser/$version"
   if [ -x "$prefix/node_modules/.bin/agent-browser" ]; then
-    say "agent-browser $version is already installed"
+    ui_ok "agent-browser $version is already installed"
   else
-    run npm install --prefix "$prefix" --no-audit --no-fund "agent-browser@$version" || {
+    quiet "Installing agent-browser $version" npm install --prefix "$prefix" --no-audit --no-fund "agent-browser@$version" || {
       warn "could not install agent-browser $version; the agents cannot check pages in a browser"
       return 0
     }
@@ -559,7 +777,7 @@ install_agent_browser() {
     warn "could not link agent-browser into $DATA_DIR/bin"
     return 0
   }
-  run "$DATA_DIR/bin/agent-browser" install || warn "could not install agent-browser's browser; the browser check will not work until it is installed (run: ~/.aria/bin/agent-browser install)"
+  quiet "Downloading the browser agent-browser uses" "$DATA_DIR/bin/agent-browser" install || warn "could not install agent-browser's browser; the browser check will not work until it is installed (run: ~/.aria/bin/agent-browser install)"
 }
 
 # sha256sum is Linux's; macOS has shasum.
@@ -625,21 +843,21 @@ restart_dock() {
       done
     fi
     run launchctl bootstrap "gui/$uid" "$AGENT_DIR/$AGENT"
-    say "Aria is installed. Press Option + Space to set it up."
+    ui_ok "Aria is installed. Press Option + Space to set it up."
   elif [ "$HEADLESS" = 1 ]; then
     user_session_env
     server_systemctl daemon-reload
     server_systemctl enable --now "$SERVE_UNIT"
     if [ "$1" = 1 ] && soft_restart; then return; fi
     if [ "$1" = 1 ]; then server_systemctl restart "$SERVE_UNIT"; fi
-    say "Aria is installed and running as $SERVE_UNIT. From your computer: aria connect <user>@<this server>"
+    ui_ok "Aria is installed and running as $SERVE_UNIT"
   else
     run systemctl --user daemon-reload
     run systemctl --user enable --now "$UNIT"
     if [ "$1" = 1 ] && soft_restart; then return; fi
     # An update replaces the binary under a running dock: restart it so the new one runs.
     if [ "$1" = 1 ]; then run systemctl --user restart "$UNIT"; fi
-    say "Aria is installed. Press Super+A to set it up."
+    ui_ok "Aria is installed. Press Super+A to set it up."
   fi
 }
 
@@ -656,14 +874,334 @@ install_bar_widget() {
   "$BIN_DIR/aria" bar install || warn "Aria's face could not be put in the Omarchy bar; the dock works without it"
 }
 
+# --- the use: this computer's dock, or a hub ---------------------------------------------------------------------------
+
+# Which use an existing install is for, from the unit it left: hub, desktop, or nothing.
+installed_use() {
+  if [ -f "$UNIT_DIR/$SERVE_UNIT" ]; then echo hub
+  elif [ -f "$UNIT_DIR/$UNIT" ] || [ -f "$AGENT_DIR/$AGENT" ]; then echo desktop
+  fi
+}
+
+# True when there is a terminal to ask on: not a dry run, not --yes, and /dev/tty opens (under `curl | sh` stdin is the
+# script, so the question goes to the terminal itself).
+can_ask() {
+  [ "$DRY_RUN" != 1 ] && [ "$ASSUME_YES" != 1 ] && ( : <"$TTY_IN" ) 2>/dev/null
+}
+
+# A machine with a desktop session is a computer to use; one without is a server.
+default_use() {
+  if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then echo desktop; else echo hub; fi
+}
+
+# Reads one line of the answer from the terminal.
+# The terminal is opened once and read as a stream, so each question gets the next line (can_ask checked that it opens).
+TTY_OPEN=0
+tty_read() {
+  if [ "$TTY_OPEN" != 1 ]; then
+    exec 3<"$TTY_IN"
+    TTY_OPEN=1
+  fi
+  answer=""
+  read -r answer <&3 || answer=""
+}
+tty_say() { printf '%s\n' "$*" >>"$TTY_OUT"; }
+
+# The first question. Sets USE (desktop or hub); Enter takes the default, anything else but a choice asks again.
+ask_use() {
+  default=$1
+  if [ "$default" = hub ]; then number=2; else number=1; fi
+  tries=0
+  while :; do
+    tty_say ""
+    tty_say "  $(paint 1 'How will you use Aria?')"
+    tty_say ""
+    tty_say "    $(paint '1;36' 1)  On this computer   the dock: a window that opens over what you are doing, with its shortcut"
+    tty_say "    $(paint '1;36' 2)  As a hub           a server that keeps Aria running day and night; you connect to it from your computers"
+    tty_say ""
+    printf '  Type 1 or 2, then Enter [%s]: ' "$number" >>"$TTY_OUT"
+    tty_read
+    case "$answer" in
+      "") USE=$default; return ;;
+      1 | desktop | local) USE=desktop; return ;;
+      2 | hub) USE=hub; return ;;
+    esac
+    tries=$((tries + 1))
+    [ "$tries" -lt 3 ] || die "answer 1 (this computer) or 2 (a hub), or pass --mode desktop|hub"
+  done
+}
+
+# True for something that can follow `ssh`: user@host, with nothing a shell or ssh would read as more (no space, no leading dash).
+looks_like_server() {
+  case "$1" in
+    -* | "" | *[!A-Za-z0-9._@:%+-]* | *@*@* | @* | *@) return 1 ;;
+    *@*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The second question, for a hub: which computer is the server. Sets SERVER (here, or user@host).
+ask_server() {
+  default=$1 # here or other
+  if [ "$default" = here ]; then number=2; else number=1; fi
+  tries=0
+  while :; do
+    tty_say ""
+    tty_say "  $(paint 1 'Which computer is the server?')"
+    tty_say ""
+    tty_say "    $(paint '1;36' 1)  Another one   you give me its address (like ana@my-server); I set it up from here and link this computer to it"
+    tty_say "    $(paint '1;36' 2)  This one       this computer is the server; other computers connect to it"
+    tty_say ""
+    printf '  Type 1 or 2, then Enter [%s]: ' "$number" >>"$TTY_OUT"
+    tty_read
+    case "$answer" in
+      "") if [ "$default" = here ]; then SERVER=here; else SERVER=ask; fi; break ;;
+      1) SERVER=ask; break ;;
+      2 | here) SERVER=here; break ;;
+    esac
+    tries=$((tries + 1))
+    [ "$tries" -lt 3 ] || die "answer 1 (another computer) or 2 (this one), or pass --server user@host or --server here"
+  done
+  [ "$SERVER" = ask ] || return 0
+  tries=0
+  while :; do
+    tty_say ""
+    tty_say "  $(paint 2 'The address you use to log in to it with ssh: user@host (the host can be a name or an IP).')"
+    printf '  Server address: ' >>"$TTY_OUT"
+    tty_read
+    if looks_like_server "$answer"; then SERVER=$answer; return 0; fi
+    tty_say "  That does not look like user@host."
+    tries=$((tries + 1))
+    [ "$tries" -lt 3 ] || die "give the server as user@host, for example: --server ana@my-server"
+  done
+}
+
+use_words() {
+  case "$1" in
+    hub) echo "a hub on this server" ;;
+    here) echo "a hub on this server" ;;
+    desktop) echo "this computer's dock" ;;
+    *) echo "this computer and the server $1" ;;
+  esac
+}
+
+# Settles the use before anything is detected or installed: USE (desktop or hub), SERVER (here, or user@host for a hub
+# that lives on another computer), and HEADLESS for a hub on this one.
+resolve_mode() {
+  choice=$CHOSEN_MODE
+  SERVER=$CHOSEN_SERVER
+  case "$choice" in "" | desktop | hub) ;; *) die "the mode is desktop or hub (got '$choice')" ;; esac
+  if [ -n "$SERVER" ] && [ "$SERVER" != here ] && ! looks_like_server "$SERVER"; then die "--server is here, or user@host (got '$SERVER')"; fi
+  if [ "$HEADLESS" = 1 ]; then
+    [ "$choice" != desktop ] || die "--headless is a hub and --mode desktop is the dock: give one"
+    choice=hub
+    [ -n "$SERVER" ] || SERVER=here
+  fi
+  # A server is a hub, whatever else was said.
+  if [ -n "$SERVER" ]; then
+    [ "$choice" != desktop ] || die "--server is for a hub: --mode hub, or leave --mode out"
+    choice=hub
+  fi
+  if [ -z "$choice" ]; then
+    if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+      choice=desktop
+    else
+      choice=$(installed_use)
+      if [ -n "$choice" ]; then
+        say "  Aria is already installed here for $(use_words "$choice"): updating it (--mode changes that)"
+        [ "$choice" != hub ] || SERVER=here
+      else
+        default=$(default_use)
+        if can_ask; then
+          ask_use "$default"
+          choice=$USE
+        else
+          choice=$default
+          say "  Installing for $(use_words "$choice") (nothing to ask on; --mode desktop|hub chooses)"
+        fi
+      fi
+    fi
+  fi
+  if [ "$choice" = hub ] && [ -z "$SERVER" ]; then
+    if can_ask; then
+      if [ "$(default_use)" = hub ]; then ask_server here; else ask_server other; fi
+    else
+      SERVER=here
+    fi
+  fi
+  USE=$choice
+  if [ "$choice" = hub ] && [ "$SERVER" = here ]; then HEADLESS=1; fi
+}
+
+# What is about to happen, in the words of someone who has not read the docs; Enter to go on when there is a terminal.
+ui_plan() {
+  if [ "$USE" = hub ] && [ "$SERVER" = here ]; then
+    ui_title "setting up a hub on this server"
+    say "  This server will keep Aria running day and night. You use it from your computers."
+  elif [ "$USE" = hub ]; then
+    ui_title "setting up Aria here and a hub on $SERVER"
+    say "  Aria goes on this computer, then on $SERVER (it keeps Aria running day and night), and this computer is linked to it."
+  else
+    ui_title "setting up Aria on this computer"
+    say "  Aria opens over whatever you are doing, and you ask it to work in your language."
+  fi
+  say ""
+  say "  $(paint 2 "$STEP_TOTAL steps. It changes nothing outside your home folder except system packages (it asks for your password for those).")"
+  if [ "$USE" = hub ] && [ "$SERVER" = here ]; then
+    say "  $(paint 2 'It also keeps the server running when you log out, and asks before it touches the sandbox rules.')"
+  fi
+  if can_ask; then
+    printf '\n  Press Enter to start, or Ctrl+C to cancel. ' >>"$TTY_OUT"
+    tty_read
+  fi
+}
+
+# --- the sandbox on a server ------------------------------------------------------------------------------------------
+
+# Where things are on Ubuntu; the environment overrides them for the tests (and nothing else).
+BWRAP_PROFILE=${ARIA_BWRAP_PROFILE:-/etc/apparmor.d/aria-bwrap}
+USERNS_SYSCTL=${ARIA_USERNS_SYSCTL:-/proc/sys/kernel/apparmor_restrict_unprivileged_userns}
+APPARMOR_ABI=${ARIA_APPARMOR_ABI:-/etc/apparmor.d/abi/4.0}
+# The terminal the questions use: /dev/tty, so they work under `curl | sh` (the tests give a file for each direction).
+TTY_IN=${ARIA_TTY_IN:-/dev/tty}
+TTY_OUT=${ARIA_TTY_OUT:-/dev/tty}
+
+# The probe the hub's own check uses: a namespace, with /dev and /proc mounted like the real call.
+sandbox_works() {
+  command -v bwrap >/dev/null 2>&1 && bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc true >/dev/null 2>&1
+}
+
+# Ubuntu's own shape of a profile that lets one program make user namespaces: bwrap alone, nothing else changes.
+print_bwrap_profile() {
+  cat <<PROFILE
+abi <abi/4.0>,
+include <tunables/global>
+
+profile aria-bwrap $1 flags=(unconfined) {
+  userns,
+
+  include if exists <local/aria-bwrap>
+}
+PROFILE
+}
+
+# Makes the sandbox start on a server. The usual block is Ubuntu 24.04 restricting user namespaces; the fix is a profile
+# for bwrap alone, written with sudo only on a yes (or --yes), and never the system-wide sysctl. Never fatal: without a
+# sandbox every command asks first, and the installer says how to fix it.
+ensure_sandbox() {
+  if [ "$DRY_RUN" = 1 ]; then
+    say "would: check that the sandbox starts, and offer an AppArmor profile for bwrap alone ($BWRAP_PROFILE) if Ubuntu blocks it"
+    return 0
+  fi
+  command -v bwrap >/dev/null 2>&1 || return 0 # the packages step already said what to run
+  if sandbox_works; then
+    ui_ok "The sandbox works"
+    return 0
+  fi
+  restricted=$(cat "$USERNS_SYSCTL" 2>/dev/null || echo 0)
+  if [ "$restricted" != 1 ] || [ ! -f "$APPARMOR_ABI" ]; then
+    warn "the sandbox does not start here, and it is not Ubuntu's user-namespace restriction, so Aria cannot fix it: every command will ask before it runs"
+    return 0
+  fi
+  path=$(readlink -f "$(command -v bwrap)" 2>/dev/null || command -v bwrap)
+  say "The sandbox cannot start: this Ubuntu stops programs from making user namespaces."
+  say "Fix: let bwrap alone make them, with a profile in $BWRAP_PROFILE. Nothing else on this machine changes."
+  consent=n
+  if [ "$ASSUME_YES" = 1 ]; then
+    consent=y
+  elif can_ask; then
+    printf 'Write that profile (needs sudo)? [Y/n] ' >>"$TTY_OUT"
+    tty_read
+    consent=${answer:-y}
+  fi
+  case "$consent" in
+    y | Y | yes)
+      if print_bwrap_profile "$path" | sudo tee "$BWRAP_PROFILE" >/dev/null && sudo apparmor_parser -r "$BWRAP_PROFILE"; then
+        if sandbox_works; then ui_ok "The sandbox works now"; else warn "the profile is in place and the sandbox still does not start: every command will ask before it runs"; fi
+      else
+        warn "could not write or load $BWRAP_PROFILE (no sudo?): every command will ask before it runs"
+        say "To fix it yourself, as an administrator: write the profile that 'sh install.sh --print-bwrap-profile' prints to $BWRAP_PROFILE and run: sudo apparmor_parser -r $BWRAP_PROFILE"
+      fi
+      ;;
+    *)
+      say "Left as it is: every command asks before it runs. To fix it later, run this installer again and say yes."
+      ;;
+  esac
+}
+
+# Sets up the server another computer was named for: the hub is installed there and this computer is linked to it, by the
+# Aria that was just installed here (`aria hub init`), which also tries the connection.
+link_to_server() {
+  [ -n "$SERVER" ] && [ "$SERVER" != here ] || return 0
+  ui_step "Setting up the server $SERVER" "Installs the hub there, links this computer to it and tries the connection."
+  if [ "$DRY_RUN" = 1 ]; then
+    say "would: $BIN_DIR/aria hub init $SERVER --yes"
+    return 0
+  fi
+  "$BIN_DIR/aria" hub init "$SERVER" --yes || {
+    warn "Aria is installed on this computer, but the server $SERVER is not ready"
+    say "Run this to finish it (it is safe to run again): aria hub init $SERVER"
+    exit 1
+  }
+}
+
+# The last screen: what is ready, and the one thing to do to use it. Never a setup step, except the one a server cannot do
+# for a computer it has never seen.
+ui_done() {
+  [ "$DRY_RUN" != 1 ] || return 0
+  say ""
+  ui_rule
+  if [ "$HEADLESS" = 1 ]; then
+    host=$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo this-server)
+    say "  $(paint '1;32' "$MARK_OK Aria is running on this server.")"
+    say ""
+    say "  One thing is left, and only a computer you will use can do it, because this server has never seen it."
+    say "  On that computer, with Aria installed, run:"
+    say ""
+    say "      $(paint 1 "aria hub init ${USER:-$(id -un)}@$host")"
+    say ""
+    say "  $(paint 2 "(use the address you log in to this server with, if it is not $host)")"
+  elif [ -n "$SERVER" ] && [ "$SERVER" != here ]; then
+    say "  $(paint '1;32' "$MARK_OK Aria is ready on this computer and on $SERVER.")"
+    say ""
+    say "  To use the server, open a terminal and type:  $(paint 1 'aria connect')"
+    if [ "$PLATFORM" = Darwin ]; then
+      say "  To use Aria on this computer: press $(paint 1 'Option + Space')."
+    else
+      say "  To use Aria on this computer: press $(paint 1 'Super + A')."
+    fi
+  else
+    say "  $(paint '1;32' "$MARK_OK Aria is ready.")"
+    say ""
+    if [ "$PLATFORM" = Darwin ]; then
+      say "  To use it, press $(paint 1 'Option + Space'). The first time it walks you through connecting a model."
+    else
+      say "  To use it, press $(paint 1 'Super + A'). The first time it walks you through connecting a model."
+    fi
+  fi
+  say ""
+}
+
 do_install() {
   detect_platform
   # Refuse a bad --local before anything else, so a mistake changes nothing.
   if [ -n "$LOCAL" ] && [ "$DRY_RUN" != 1 ] && [ ! -x "$LOCAL" ]; then die "$LOCAL is not an executable file"; fi
+  if [ -n "$SERVER" ] && [ "$SERVER" != here ]; then STEP_TOTAL=7; fi
+  ui_plan
+  if [ "$HEADLESS" = 1 ]; then where="this server"; else where="this computer"; fi
+  ui_step "Checking $where" "That Aria can run here, and which Node and Pi it will use."
   check_session
   if [ "$HEADLESS" = 1 ]; then ensure_server_node; else check_node; fi
   read_pi_version # before anything is installed: a version we cannot read must not leave a half install
-  if [ "$HEADLESS" = 1 ]; then install_headless_packages; else install_packages; fi
+  ui_ok "Aria can run on $where"
+  if [ "$HEADLESS" = 1 ]; then
+    ui_step "Installing what Aria needs" "The sandbox that keeps what the agent runs inside a box, and the tools around it."
+    install_headless_packages
+    ensure_sandbox
+  else
+    ui_step "Installing what Aria needs" "The libraries the dock is drawn with, and the sandbox that keeps what the agent runs inside a box."
+    install_packages
+  fi
   was_active=0
   if [ "$HEADLESS" = 1 ]; then user_session_env; fi
   if [ "$DRY_RUN" != 1 ]; then
@@ -675,23 +1213,32 @@ do_install() {
       systemctl --user is-active --quiet "$UNIT" 2>/dev/null && was_active=1
     fi
   fi
+  ui_step "Downloading Aria" "From the Aria release, checked against its checksum before anything is replaced."
   fetch_binary
+  if [ "$DRY_RUN" != 1 ]; then
+    if [ -n "$LOCAL" ]; then ui_ok "Using the program you gave: $LOCAL"; else ui_ok "Downloaded and checked"; fi
+  fi
   # Pi and its packages first: if a download fails, nothing has been replaced and the running dock stays as it was.
+  ui_step "Installing the agent and its memory" "Pi (the agent), the extensions Aria uses, and Engram (its long-term memory)."
   run install -d -m 700 "$DATA_DIR"
   link_node
   install_pi
   install_pi_packages
   install_engram
   if [ "$HEADLESS" = 1 ] && [ "$WITH_BROWSER" != 1 ]; then
-    say "Not installing agent-browser on a server (its Chrome is a large download and not available everywhere); pass --with-browser to install it"
+    ui_info "Skipping the browser check on a server (its Chrome is a large download); --with-browser adds it"
   else
     install_agent_browser
   fi
+  ui_step "Installing Aria" "The program itself, and the service that starts it for you."
   install_binary
   install_bar_widget
   write_unit
   if [ "$HEADLESS" = 1 ]; then enable_linger; fi
+  ui_step "Starting Aria" ""
   restart_dock "$was_active"
+  link_to_server
+  ui_done
 }
 
 # True only for a real directory (not a symlink) that is neither / nor the home directory and that
@@ -757,6 +1304,17 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY_RUN=1 ;;
     --restart-now) RESTART_NOW=1 ;;
     --with-browser) WITH_BROWSER=1 ;;
+    --yes | -y) ASSUME_YES=1 ;;
+    --mode)
+      [ $# -ge 2 ] || die "--mode needs desktop or hub"
+      CHOSEN_MODE=$2
+      shift
+      ;;
+    --server)
+      [ $# -ge 2 ] || die "--server needs here, or the server as user@host"
+      CHOSEN_SERVER=$2
+      shift
+      ;;
     --headless) HEADLESS=1 ;; # give it before --restart-dock, the hook that runs the moment it is read
     --local)
       [ $# -ge 2 ] || die "--local needs the path of a binary"
@@ -765,6 +1323,9 @@ while [ $# -gt 0 ]; do
       ;;
     --uninstall) MODE=uninstall ;;
     --print-unit) MODE=print-unit ;;
+    --print-bwrap-profile) MODE=print-bwrap-profile ;;
+    --ensure-sandbox) MODE=ensure-sandbox ;; # test hook
+    --resolve-mode) MODE=resolve-mode ;; # test hook: print the use and the server that were settled
     --check-node) MODE=check-node ;; # test hooks
     --print-pi-version) MODE=print-pi-version ;;
     --link-node) MODE=link-node ;;
@@ -774,6 +1335,7 @@ while [ $# -gt 0 ]; do
     --enable-linger) MODE=enable-linger ;;
     --print-node-version) MODE=print-node-version ;;
     --install-agent-browser) MODE=install-agent-browser ;; # test hook
+    --fetch-binary) MODE=fetch-binary ;; # test hook: download and verify the binary, print its checksum
     --restart-dock) # test hook: the last step of an install; $2 is 1 when a dock was running, $3 when the service file changed
       [ $# -ge 3 ] || die "--restart-dock needs two values"
       SERVICE_CHANGED=$3
@@ -792,8 +1354,15 @@ while [ $# -gt 0 ]; do
 done
 
 case "$MODE" in
-  install) do_install ;;
-  uninstall) do_uninstall ;;
+  install) resolve_mode; do_install ;;
+  uninstall)
+    # Remove what is installed: a hub's unit and a dock's differ, and nobody is asked which.
+    if [ "$HEADLESS" != 1 ] && [ "$(installed_use)" = hub ]; then HEADLESS=1; fi
+    do_uninstall
+    ;;
+  print-bwrap-profile) print_bwrap_profile /usr/bin/bwrap ;;
+  ensure-sandbox) ensure_sandbox ;;
+  resolve-mode) resolve_mode; say "use=$USE server=${SERVER:-none} headless=$HEADLESS" ;;
   print-unit) print_service ;;
   check-node) check_node ;;
   print-pi-version) read_pi_version; printf '%s\n' "$PI_VERSION" ;;
@@ -804,4 +1373,5 @@ case "$MODE" in
   enable-linger) enable_linger ;;
   print-node-version) read_node_version; printf '%s\n' "$NODE_VERSION" ;;
   install-agent-browser) install_agent_browser ;;
+  fetch-binary) fetch_binary; if [ "$DRY_RUN" != 1 ]; then say "fetched $(sha256_of "$SOURCE")"; fi ;;
 esac
