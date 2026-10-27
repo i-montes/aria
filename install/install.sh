@@ -1170,6 +1170,28 @@ ensure_sandbox() {
   esac
 }
 
+# True when this computer is linked to a hub (aria hub init remembers it in hubs.json): then an install here also brings
+# that server to the version just installed, so the two never drift apart.
+has_linked_hubs() {
+  [ "$HEADLESS" != 1 ] && [ "$NESTED" != 1 ] && [ -f "$DATA_DIR/hubs.json" ] && grep -q '"key"' "$DATA_DIR/hubs.json" 2>/dev/null
+}
+
+update_linked_hubs() {
+  has_linked_hubs || return 0
+  [ -z "$SERVER" ] || [ "$SERVER" = here ] || return 0 # a server just named is set up by link_to_server
+  ui_step "Updating your server" "Brings it to the version you just installed."
+  if [ "$DRY_RUN" = 1 ]; then
+    if [ "$ASSUME_YES" = 1 ]; then say "would: $BIN_DIR/aria hub update --all --yes"; else say "would: $BIN_DIR/aria hub update --all"; fi
+    return 0
+  fi
+  if [ "$ASSUME_YES" = 1 ]; then set -- --all --yes; else set -- --all; fi
+  "$BIN_DIR/aria" hub update "$@" || {
+    warn "Aria is installed on this computer, but the server was not updated"
+    say "  Run this to finish it (it is safe to run again): aria hub update"
+    exit 1
+  }
+}
+
 # Sets up the server another computer was named for: the hub is installed there and this computer is linked to it, by the
 # Aria that was just installed here (`aria hub init`), which also tries the connection.
 link_to_server() {
@@ -1231,6 +1253,11 @@ ui_done() {
   else
     say "  $(paint '1;32' "$MARK_OK Aria is ready.")"
     say ""
+    if has_linked_hubs; then
+      say "  Your server is on the same version. To use it, open a terminal"
+      say "  and type:  $(paint 1 'aria connect')"
+      say ""
+    fi
     if [ "$PLATFORM" = Darwin ]; then
       say "  To use it, press $(paint 1 'Option + Space')."
       say "  The first time it walks you through connecting a model."
@@ -1247,6 +1274,7 @@ do_install() {
   # Refuse a bad --local before anything else, so a mistake changes nothing.
   if [ -n "$LOCAL" ] && [ "$DRY_RUN" != 1 ] && [ ! -x "$LOCAL" ]; then die "$LOCAL is not an executable file"; fi
   if [ -n "$SERVER" ] && [ "$SERVER" != here ]; then STEP_TOTAL=7; fi
+  if has_linked_hubs && { [ -z "$SERVER" ] || [ "$SERVER" = here ]; }; then STEP_TOTAL=7; fi
   ui_plan
   if [ "$HEADLESS" = 1 ]; then where="this server"; else where="this computer"; fi
   ui_step "Checking $where" "That Aria can run here, and which Node and Pi it will use."
@@ -1298,6 +1326,7 @@ do_install() {
   ui_step "Starting Aria" ""
   restart_dock "$was_active"
   link_to_server
+  update_linked_hubs
   ui_done
 }
 

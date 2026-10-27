@@ -516,6 +516,24 @@ printf '%s\n' "$out" | grep -qE '^  - Checking this server' && printf '%s\n' "$o
 printf '%s\n' "$out" | grep -qF 'would: systemctl --user enable --now aria-serve.service' && pass "a nested installer does everything the same" || fail "a nested installer skipped work"
 rm -r "$tmp"
 
+# a computer linked to a hub (hubs.json) brings the server to the version it just installed
+tmp=$(mktemp -d)
+mkdir -p "$tmp/user" "$tmp/home"
+run_dry() { env -u XDG_CONFIG_HOME HOME="$tmp/user" ARIA_HOME="$tmp/home" "$@" 2>&1; }
+out=$(run_dry sh "$installer" --dry-run --local /tmp/fake-aria --mode desktop)
+printf '%s\n' "$out" | grep -qF 'hub update' && fail "a computer with no hub updates one: $out" || pass "a computer linked to no hub updates no server"
+printf '{"default":"vps","hubs":{"vps":{"key":"/k"}}}\n' > "$tmp/home/hubs.json"
+out=$(run_dry sh "$installer" --dry-run --local /tmp/fake-aria --mode desktop)
+printf '%s\n' "$out" | grep -qF "would: $tmp/user/.local/bin/aria hub update --all" && printf '%s\n' "$out" | grep -qF '[7/7] Updating your server' && pass "a linked computer updates its server as a seventh step" || fail "no server update for a linked computer: $out"
+printf '%s\n' "$out" | grep -qF 'hub update --all --yes' && fail "--yes was passed without being given" || pass "the update asks unless --yes was given"
+out=$(run_dry sh "$installer" --dry-run --local /tmp/fake-aria --mode desktop --yes)
+printf '%s\n' "$out" | grep -qF 'hub update --all --yes' && pass "--yes goes on to the update" || fail "--yes was not passed on: $out"
+out=$(run_dry sh "$installer" --dry-run --local /tmp/fake-aria --headless)
+printf '%s\n' "$out" | grep -qF 'hub update' && fail "a hub updates a hub" || pass "a server does not update servers"
+out=$(run_dry env ARIA_NESTED=1 sh "$installer" --dry-run --local /tmp/fake-aria --mode desktop)
+printf '%s\n' "$out" | grep -qF 'hub update' && fail "a nested installer updates a hub" || pass "a nested installer does not update servers"
+rm -r "$tmp"
+
 # the address a computer links to a hub by: Tailscale's, else the one this login came to, else the name
 tmp=$(mktemp -d)
 mkdir -p "$tmp/ts" "$tmp/none"
