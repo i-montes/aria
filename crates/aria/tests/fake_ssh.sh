@@ -30,6 +30,7 @@
 #                              `not-for-clients`), silent (no answer at all), eof (a progress line and the connection ends,
 #                              the hub counting as updated). The request is logged as `<host><TAB>hubUpdate <version>`; the
 #                              arguments of the bridge's ssh are kept in $ARIA_FAKE_SSH_ROOT/ssh-args.
+#   ARIA_FAKE_SSH_MACHINES     the JSON array `machinesList` is answered with over the terminal bridge (default [])
 # ARIA_FAKE_SSH_ROOT is the hub's computer: the upload is unpacked, and the key is added to authorized_keys, under
 # $ARIA_FAKE_SSH_ROOT/home, the only place a command is really run.
 log=${ARIA_FAKE_SSH_LOG:?ARIA_FAKE_SSH_LOG}
@@ -86,8 +87,19 @@ if [ "$a1" = client-stdio ] && [ "$a2" = "~/.local/bin/aria" ]; then
         exit 0 ;;
       silent) ;;
     esac
+    exec sleep 30
   fi
-  exec sleep 30
+  # Anything else the client asks over the bridge: `machinesList` (what `aria hub machines` and the last check of `hub init`
+  # send) is answered with ARIA_FAKE_SSH_MACHINES, a JSON array (default none), and logged; the connection ends with its client.
+  while read -r request; do
+    case "$request" in
+      *machinesList*)
+        id=$(printf '%s' "$request" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+        printf '%s\tmachinesList\tstdin=0\n' "$host" >> "$log"
+        printf '{"type":"machines","id":%s,"machines":%s}\n' "$id" "${ARIA_FAKE_SSH_MACHINES:-[]}" ;;
+    esac
+  done
+  exit 0
 fi
 stdin_file="$root/stdin.$$"
 mkdir -p "$root/home"

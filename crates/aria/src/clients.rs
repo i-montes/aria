@@ -423,6 +423,13 @@ impl Hub {
                 self.follow_current(number, &value);
                 return self.set(number, |c| c.focused = value["focused"].as_bool().unwrap_or(true));
             }
+            // The machines linked to this hub, for `aria hub machines`: a client-only line, so it is for every client (local or
+            // remote) and never reaches the chat or the handlers. It answers with the client's own id.
+            Some("machinesList") => {
+                let own = value["id"].as_u64().unwrap_or(0);
+                let machines: Vec<Value> = self.machines.list().iter().map(|machine| machine.to_json()).collect();
+                return self.send_to(number, &json!({"type": "machines", "id": own, "machines": machines}));
+            }
             _ => {}
         }
         // A line for a session that lives on a machine goes there, with the client's own ids, and never to the chat.

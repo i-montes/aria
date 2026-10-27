@@ -406,12 +406,18 @@ fn body(v: &View, p: &Palette, width: usize, budget: usize) -> Vec<Line<'static>
                             width,
                         ));
                     }
-                    (None, Some(Outcome::Ready { connect })) => {
+                    (None, Some(Outcome::Ready { connect, linked })) => {
                         tail.push(Line::from(vec![
                             Span::raw("  "),
                             Span::styled("✓ ", bold(p.green)),
                             Span::styled("Your server is ready", bold(p.green)),
                         ]));
+                        if let Some(name) = linked {
+                            tail.push(Line::from(Span::styled(
+                                format!("  This computer is linked as {name}"),
+                                style(p.grey),
+                            )));
+                        }
                         tail.push(blank());
                         tail.push(Line::from(Span::styled("  To use it, type:", style(p.grey))));
                         tail.push(blank());
@@ -442,6 +448,19 @@ fn body(v: &View, p: &Palette, width: usize, budget: usize) -> Vec<Line<'static>
                                 width,
                             ));
                         }
+                    }
+                    (None, Some(Outcome::Unlinked { name, host, was_linked })) => {
+                        tail.extend(hang(
+                            vec![Span::raw("  "), Span::styled("✓ ", bold(p.green))],
+                            4,
+                            &if *was_linked {
+                                format!("{name} is no longer linked to {host}")
+                            } else {
+                                format!("{name} was not linked to {host}")
+                            },
+                            bold(p.green),
+                            width,
+                        ));
                     }
                     (None, None) => {}
                 }
@@ -490,6 +509,7 @@ fn border_color(v: &View, p: &Palette) -> ratatui::style::Color {
         (None, Some(Outcome::Ready { .. })) => p.green,
         (None, Some(Outcome::NotReady { .. })) => p.amber,
         (None, Some(Outcome::Updated { .. })) => p.green,
+        (None, Some(Outcome::Unlinked { .. })) => p.green,
         _ => p.accent,
     }
 }
@@ -1048,7 +1068,7 @@ pub fn demo(args: &[String]) -> i32 {
         "ssh on hub.example (port 22) is open to the internet, and it stays open until you close it yourself.",
     )
     .then_text("Aria never edits sshd_config, the firewall or Tailscale.")]);
-    ui.done(&Outcome::Ready { connect: "aria connect".to_string() });
+    ui.done(&Outcome::Ready { connect: "aria connect".to_string(), linked: None });
     0
 }
 
@@ -1239,7 +1259,7 @@ mod tests {
     #[test]
     fn a_finished_run_says_the_server_is_ready_and_what_to_type() {
         let mut view = running_step_two();
-        view.finish(&Outcome::Ready { connect: "aria connect".to_string() });
+        view.finish(&Outcome::Ready { connect: "aria connect".to_string(), linked: None });
         view.live = false;
         let rows = render(&view, 80, 24);
         let text = text_of(&rows);
@@ -1313,7 +1333,10 @@ mod tests {
             running_step_two(),
             {
                 let mut view = running_step_two();
-                view.finish(&Outcome::Ready { connect: "aria connect --host ana@hub.example".to_string() });
+                view.finish(&Outcome::Ready {
+                    connect: "aria connect --host ana@hub.example".to_string(),
+                    linked: None,
+                });
                 view
             },
         ] {

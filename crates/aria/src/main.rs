@@ -40,6 +40,7 @@ mod jobs;
 mod jobs_socket;
 mod keyring_cli;
 mod lines;
+mod link;
 mod machines;
 mod omarchy_bar;
 mod schedule_store;

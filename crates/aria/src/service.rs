@@ -4,7 +4,7 @@
 
 use crate::chat::{self, ChatCtx, Sessions};
 use crate::jobs::{Jobs, UPDATE_NOTICE_AFTER};
-use crate::{clients, control, handlers, keyring_cli, note, schedule_store, QUIT};
+use crate::{clients, control, handlers, keyring_cli, link, note, schedule_store, QUIT};
 use aria_core::bridge::{DockMessage, PageMessage};
 use aria_core::paths::AriaPaths;
 use std::path::{Path, PathBuf};
@@ -86,6 +86,8 @@ pub struct Service {
     #[cfg(any(test, feature = "gui"))]
     inlet: PageInlet,
     hub: clients::Hub,
+    /// Links this computer to a hub as a machine while `~/.aria/link.json` is there (link.rs); none without a clients socket.
+    link: Option<link::Handle>,
     jobs: Jobs,
     chat: Sessions,
     vault: keyring_cli::Shared,
@@ -128,6 +130,7 @@ impl Service {
 
     fn assemble(home: Home, options: Options) -> Service {
         let Home { paths, vault, first_run, run_dir, hidden_dir, clients_socket } = home;
+        let (link_root, link_socket) = (paths.root.clone(), clients_socket.clone());
         // Replies from any thread come back to the host's tick through this channel.
         let (reply_sender, replies) = mpsc::channel::<DockMessage>();
         // The scheduled tasks: changed through every session's jobs socket, run by the scheduler on the tick.
@@ -226,6 +229,8 @@ impl Service {
                 worker.handle(message);
             }
         });
+        // The link to a hub is one more client of the clients socket, so it starts only once that is serving.
+        let link = link_socket.filter(|_| clients_error.is_none()).map(|socket| link::start(link_root, socket));
 
         Service {
             first_run,
@@ -233,6 +238,7 @@ impl Service {
             #[cfg(any(test, feature = "gui"))]
             inlet: PageInlet { ctx, chat: chat_sender, replies: reply_sender },
             hub,
+            link,
             jobs,
             chat,
             vault,
@@ -264,14 +270,22 @@ impl Service {
     /// Stops the background work, the sessions' Pis and the vault (a signal, Quit, an update): nothing is left running
     /// unseen.
     pub fn shutdown(&self) {
+        if let Some(link) = &self.link {
+            link.stop();
+        }
         stop(&self.jobs, &self.chat, &self.vault);
     }
 
     /// The same stop, for a callback that must own what it calls (Cmd+Q ends the app without a signal).
     #[cfg(target_os = "macos")]
     pub fn stopper(&self) -> impl Fn() + 'static {
-        let (jobs, chat, vault) = (self.jobs.clone(), self.chat.clone(), self.vault.clone());
-        move || stop(&jobs, &chat, &vault)
+        let (jobs, chat, vault, link) = (self.jobs.clone(), self.chat.clone(), self.vault.clone(), self.link.clone());
+        move || {
+            if let Some(link) = &link {
+                link.stop();
+            }
+            stop(&jobs, &chat, &vault)
+        }
     }
 
     /// One turn of the host's loop (the dock's 16 ms tick). `visible`: the dock is on screen. The checks run in this

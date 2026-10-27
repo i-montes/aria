@@ -7,9 +7,12 @@ use std::process::{Command, Output, Stdio};
 
 const PINS: [&str; 5] = ["pi-version", "pi-packages", "engram-version", "agent-browser-version", "node-version"];
 const KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl ana@laptop";
-const TOOLS: [&str; 16] = [
+/// The public key of a machine's link: another key than the client's.
+const MACHINE_KEY: &str =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMachineKeyBlobMachineKeyBlobMachineKey10 aria-machine-laptop";
+const TOOLS: [&str; 18] = [
     "sh", "head", "tail", "cat", "wc", "tr", "mkdir", "tar", "cut", "grep", "touch", "chmod", "rm", "cp", "sleep",
-    "sed",
+    "sed", "awk", "mktemp",
 ];
 
 /// An owner's computer (a home with settings) and a checkout of the repository, next to a hub that is only the fake ssh.
@@ -71,10 +74,16 @@ impl World {
         // be made on this computer (the tests that want it name `--client-key` or say so with `init_with_default_key`).
         let keyless =
             !args.iter().any(|arg| *arg == "--client-key" || *arg == "--no-client-key" || *arg == "--default-key");
+        // The same for the machine: with a key step this computer would become one (a key and a link file here), which only the
+        // tests about it want (`--with-machine`, `--machine-name`, `--machine-key`).
+        let machineless = !args.iter().any(|arg| {
+            *arg == "--with-machine" || *arg == "--machine-name" || *arg == "--machine-key" || *arg == "--no-machine"
+        });
         command
             .args(["hub", "init"])
-            .args(args.iter().filter(|arg| **arg != "--default-key"))
+            .args(args.iter().filter(|arg| **arg != "--default-key" && **arg != "--with-machine"))
             .args(if keyless { vec!["--no-client-key"] } else { vec![] })
+            .args(if machineless { vec!["--no-machine"] } else { vec![] })
             .current_dir(self.path("repo"))
             .env_clear()
             .env("HOME", self.path("home"))
@@ -84,6 +93,7 @@ impl World {
             .env("ARIA_FAKE_SSH_LOG", self.path("hub/log"))
             .env("ARIA_FAKE_SSH_ROOT", self.path("hub"))
             .env("ARIA_CONNECT_WORD", "aria")
+            .env("ARIA_LINK_WAIT_MS", "100")
             .stdin(Stdio::null());
         for (name, value) in envs {
             command.env(name, value);
@@ -879,8 +889,14 @@ fn fake_keygen(world: &World, body: &str) -> String {
     program.to_str().unwrap().to_string()
 }
 
+/// What the fake ssh-keygen does: finds the path after `-f` and the comment after `-C` (a machine's key has its own and `-N ""`),
+/// writes the pair (a different public key for a machine's), and records the arguments it was given in `<key>.args`.
 fn makes_the_default_key() -> String {
-    format!("printf private > \"$5\"; printf '%s\\n' '{KEY}' > \"$5.pub\"")
+    format!(
+        "f=; c=; for a in \"$@\"; do if [ \"$prev\" = -f ]; then f=$a; fi; if [ \"$prev\" = -C ]; then c=$a; fi; prev=$a; done; \
+         printf '%s\\n' \"$*\" >> \"$f.args\"; printf private > \"$f\"; \
+         case \"$c\" in aria-machine-*) printf '%s\\n' '{MACHINE_KEY}' > \"$f.pub\" ;; *) printf '%s\\n' '{KEY}' > \"$f.pub\" ;; esac"
+    )
 }
 
 #[test]
@@ -1812,4 +1828,360 @@ fn a_newer_hub_is_refused_without_the_login_too() {
     assert_eq!(output.status.code(), Some(1), "{}{}", text(&output.stdout), text(&output.stderr));
     assert!(flat(&text(&output.stderr)).contains("The server runs a newer Aria (999.0.0)"), "{}", text(&output.stderr));
     assert_no_login_was_used(&world);
+}
+
+// ---- this computer as a machine ------------------------------------------------------------------------------------------
+
+impl World {
+    /// `aria hub <args>` with the fake ssh and no terminal, in this world's home (for the commands that are not `init`).
+    fn hub(&self, args: &[&str], envs: &[(&str, &str)]) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_aria"));
+        command
+            .arg("hub")
+            .args(args)
+            .current_dir(self.path("repo"))
+            .env_clear()
+            .env("HOME", self.path("home"))
+            .env("ARIA_HOME", self.path("home/.aria"))
+            .env("PATH", self.path("bin"))
+            .env("ARIA_SSH", concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_ssh.sh"))
+            .env("ARIA_FAKE_SSH_LOG", self.path("hub/log"))
+            .env("ARIA_FAKE_SSH_ROOT", self.path("hub"))
+            .stdin(Stdio::null());
+        for (name, value) in envs {
+            command.env(name, value);
+        }
+        command.output().unwrap()
+    }
+}
+
+const ONLINE: &str =
+    r#"[{"name":"laptop","os":"linux","version":"0.22.0","online":true,"since":1700000000,"sessions":3}]"#;
+
+fn machine_line(world: &World, name: &str) -> String {
+    format!(
+        "restrict,command=\"{}/.local/bin/aria hub-link machine {name}\" {MACHINE_KEY}",
+        world.path("hub/home").display()
+    )
+}
+
+/// A run that links this computer as `laptop` and finds it online.
+fn linked(world: &World) -> Output {
+    let keygen = fake_keygen(world, &makes_the_default_key());
+    world.init_yes(
+        &["--default-key", "--machine-name", "laptop"],
+        &[("ARIA_SSH_KEYGEN", &keygen), ("ARIA_FAKE_SSH_MACHINES", ONLINE)],
+    )
+}
+
+#[test]
+fn this_computer_is_linked_as_a_machine_with_a_key_of_its_own_and_a_link_file() {
+    let world = World::new();
+    let output = linked(&world);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    assert_fits(&out);
+    // in the plan and the steps, in plain words
+    assert!(out.contains("Link this computer as laptop"), "{out}");
+    assert!(flat(&out).contains("no passphrase so it can link by itself"), "{out}");
+    assert!(out.contains("[6/6] Linking this computer as laptop"), "{out}");
+    assert!(out.contains("laptop is linked"), "{out}");
+    assert!(out.contains("This computer is linked as laptop."), "{out}");
+    // the hub allows the key for the link's command and nothing else, beside the client key's line
+    assert_eq!(world.authorized_keys(), format!("{}\n{}\n", restricted(&world), machine_line(&world, "laptop")));
+    // the key has no passphrase (it links with nobody there) and was made quietly
+    let made = std::fs::read_to_string(world.path("home/.ssh/aria-machine-laptop.args")).unwrap();
+    assert!(made.contains("-N  -f"), "an empty passphrase: {made}");
+    assert!(made.contains("-C aria-machine-laptop"), "{made}");
+    // this computer remembers how to link, for its owner alone
+    let file = world.path("home/.aria/link.json");
+    let mode = std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&file).unwrap().permissions());
+    assert_eq!(mode & 0o777, 0o600);
+    let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(config["hub"], "ana@hub.example");
+    assert_eq!(config["name"], "laptop");
+    assert_eq!(config["key"], world.path("home/.ssh/aria-machine-laptop").to_str().unwrap());
+    // the hub was asked who is linked, and the connection check still came first
+    let log = commands(&world.log());
+    assert!(log.iter().any(|command| command == "machinesList"), "{log:?}");
+}
+
+#[test]
+fn linking_again_changes_nothing_and_makes_no_key() {
+    let world = World::new();
+    assert_eq!(linked(&world).status.code(), Some(0));
+    let before = world.authorized_keys();
+    let broken = fake_keygen(&world, "exit 9");
+    let again = world.init_yes(
+        &["--default-key", "--machine-name", "laptop"],
+        &[("ARIA_SSH_KEYGEN", &broken), ("ARIA_FAKE_SSH_MACHINES", ONLINE)],
+    );
+    let (out, err) = (text(&again.stdout), text(&again.stderr));
+    assert_eq!(again.status.code(), Some(0), "{out}{err}");
+    assert_eq!(world.authorized_keys(), before, "the line is not added twice");
+    assert!(out.contains("The link's key was already allowed"), "{out}");
+}
+
+#[test]
+fn no_machine_leaves_this_computer_as_it_is() {
+    let world = World::new();
+    let keygen = fake_keygen(&world, &makes_the_default_key());
+    let output = world.init_yes(&["--default-key", "--no-machine"], &[("ARIA_SSH_KEYGEN", &keygen)]);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    assert!(!out.contains("Link this computer") && !out.contains("linked as"), "{out}");
+    assert_eq!(world.authorized_keys(), format!("{}\n", restricted(&world)));
+    assert!(!world.path("home/.aria/link.json").exists());
+    assert!(!world.path("home/.ssh/aria-machine-laptop").exists());
+    assert!(out.contains("[5/5] Testing the connection"), "the plan has one step fewer: {out}");
+}
+
+#[test]
+fn a_machine_needs_the_key_step_or_a_key_of_its_own() {
+    let world = World::new();
+    // no key step, no machine
+    let output = world.init_yes(&["--no-client-key", "--with-machine"], &[]);
+    let out = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
+    assert!(!out.contains("Link this computer"), "{out}");
+    // a bad name or a contradiction is a mistake in the command
+    for bad in [
+        vec!["--machine-name", "Laptop"],
+        vec!["--machine-name", ""],
+        vec!["--machine-name", "a b"],
+        vec!["--machine-name", "-x"],
+        vec!["--no-machine", "--machine-name", "laptop"],
+        vec!["--no-machine", "--machine-key", "k.pub"],
+    ] {
+        let mut args = vec!["ana@hub.example", "--binary", "bin/aria-aarch64", "--yes"];
+        args.extend(bad.iter());
+        let ran = world.log().len();
+        let output = world.init(&args, &[]);
+        assert_eq!(output.status.code(), Some(2), "{bad:?}: {}", text(&output.stderr));
+        assert_eq!(world.log().len(), ran, "{bad:?}: nothing ran");
+    }
+}
+
+#[test]
+fn a_machine_that_is_not_online_yet_is_said_not_failed() {
+    let world = World::new();
+    let keygen = fake_keygen(&world, &makes_the_default_key());
+    // the hub lists nobody: Aria does not run here yet
+    let output = world.init_yes(&["--default-key", "--machine-name", "laptop"], &[("ARIA_SSH_KEYGEN", &keygen)]);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    assert_fits(&out);
+    assert!(flat(&out).contains("This computer is set up as laptop but does not show as linked yet"), "{out}");
+    assert!(out.contains("aria hub machines"), "{out}");
+    assert!(!out.contains("This computer is linked as"), "{out}");
+    assert!(world.path("home/.aria/link.json").is_file(), "it is set up all the same");
+}
+
+#[test]
+fn a_machine_key_already_there_without_the_restriction_is_reported_and_left_alone() {
+    let world = World::new();
+    seed_authorized_keys(&world, MACHINE_KEY);
+    let keygen = fake_keygen(&world, &makes_the_default_key());
+    let output = world.init_yes(
+        &["--default-key", "--machine-name", "laptop"],
+        &[("ARIA_SSH_KEYGEN", &keygen), ("ARIA_FAKE_SSH_MACHINES", ONLINE)],
+    );
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(1), "{out}{err}");
+    assert!(err.contains("the machine key failed") && err.contains("WITHOUT the restriction"), "{err}");
+    assert!(err.contains("hub-link machine laptop"), "the line to write is given: {err}");
+    assert!(world.authorized_keys().contains(MACHINE_KEY));
+    assert!(!world.authorized_keys().contains("hub-link machine laptop\" "), "the line was not changed");
+    assert!(!world.path("home/.aria/link.json").exists(), "nothing says this computer links");
+    assert!(!out.contains("This computer is linked as"), "{out}");
+}
+
+#[test]
+fn the_details_say_what_the_machine_step_does() {
+    let world = World::new();
+    let keygen = fake_keygen(&world, &makes_the_default_key());
+    let output = world.init_yes(
+        &["--default-key", "--machine-name", "laptop", "--details"],
+        &[("ARIA_SSH_KEYGEN", &keygen), ("ARIA_FAKE_SSH_MACHINES", ONLINE)],
+    );
+    let out = flat(&text(&output.stdout));
+    assert!(out.contains("hub-link machine laptop"), "{out}");
+    assert!(out.contains("write ~/.aria/link.json (mode 600)"), "{out}");
+    assert!(out.contains("no passphrase, so the link can start by itself"), "{out}");
+}
+
+#[test]
+fn a_machine_key_of_its_own_is_used_and_the_agent_is_said() {
+    let world = World::new();
+    let pubfile = world.path("mine.pub");
+    std::fs::write(&pubfile, format!("{MACHINE_KEY}\n")).unwrap();
+    let broken = fake_keygen(&world, "exit 9");
+    // a client key is given too, so the only keygen call that could happen is the machine's
+    let client = world.path("client.pub");
+    std::fs::write(&client, format!("{KEY}\n")).unwrap();
+    let output = world.init_yes(
+        &[
+            "--client-key",
+            client.to_str().unwrap(),
+            "--machine-name",
+            "laptop",
+            "--machine-key",
+            pubfile.to_str().unwrap(),
+        ],
+        &[("ARIA_SSH_KEYGEN", &broken), ("ARIA_FAKE_SSH_MACHINES", ONLINE)],
+    );
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    assert!(flat(&out).contains("your ssh agent must hold it"), "{out}");
+    assert!(world.authorized_keys().contains(&machine_line(&world, "laptop")), "{}", world.authorized_keys());
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(world.path("home/.aria/link.json")).unwrap()).unwrap();
+    assert_eq!(config["key"], world.path("mine").to_str().unwrap(), "the private half is named by the .pub");
+    // a file that is not a key is a mistake in the command
+    std::fs::write(&pubfile, "not a key\n").unwrap();
+    let bad = world.init_yes(
+        &[
+            "--client-key",
+            client.to_str().unwrap(),
+            "--machine-name",
+            "laptop",
+            "--machine-key",
+            pubfile.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(bad.status.code(), Some(2), "{}", text(&bad.stderr));
+}
+
+#[test]
+fn the_plan_before_the_yes_lists_the_link_and_says_why_its_key_has_no_passphrase() {
+    let world = World::new();
+    let keygen = fake_keygen(&world, &makes_the_default_key());
+    // no --yes and no terminal: it only shows the plan
+    let output = world.init(
+        &["ana@hub.example", "--binary", "bin/aria-aarch64", "--default-key", "--machine-name", "laptop"],
+        &[("ARIA_SSH_KEYGEN", &keygen)],
+    );
+    let out = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{out}");
+    assert!(flat(&out).contains("Link this computer as laptop (the server can then work on projects here)"), "{out}");
+    assert!(flat(&out).contains("it can only act as this computer's link, not log in"), "{out}");
+    assert_fits(&out);
+    assert!(writes(&world.log()).is_empty(), "nothing was changed: {:?}", world.log());
+    assert!(!world.path("home/.ssh/aria-machine-laptop").exists());
+}
+
+// ---- aria hub machines / unlink-machine / status -------------------------------------------------------------------------
+
+#[test]
+fn the_machines_of_a_hub_are_listed_in_a_table() {
+    let world = World::new();
+    let many = r#"[{"name":"laptop","os":"linux","version":"0.22.0","online":true,"since":1700000000,"sessions":3},{"name":"mac","os":"macos","version":"0.22.0","online":false,"sessions":1}]"#;
+    let output = world.hub(&["machines", "ana@hub.example"], &[("ARIA_FAKE_SSH_MACHINES", many)]);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    assert!(out.contains("Machines linked to ana@hub.example:"), "{out}");
+    let rows: Vec<&str> = out.lines().skip(1).collect();
+    assert_eq!(rows.len(), 2, "{out}");
+    assert!(rows[0].trim_start().starts_with("laptop  linux 0.22.0  online since "), "{out}");
+    assert!(rows[0].ends_with("3 sessions"), "{out}");
+    assert!(rows[1].trim_start().starts_with("mac     macos 0.22.0  offline"), "{out}");
+    assert!(rows[1].ends_with("1 session"), "{out}");
+    assert_fits(&out);
+    // none linked
+    let none = world.hub(&["machines", "ana@hub.example"], &[]);
+    assert_eq!(none.status.code(), Some(0));
+    assert!(text(&none.stdout).contains("No machine is linked to ana@hub.example yet"), "{}", text(&none.stdout));
+}
+
+#[test]
+fn machines_of_the_default_hub_needs_a_hub_and_says_when_it_cannot_ask() {
+    let world = World::new();
+    let output = world.hub(&["machines"], &[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(text(&output.stderr).contains("aria hub init user@host"), "{}", text(&output.stderr));
+    let down = world.hub(&["machines", "ana@hub.example"], &[("ARIA_FAKE_SSH_HELLO", "fail")]);
+    assert_eq!(down.status.code(), Some(1), "{}", text(&down.stderr));
+    let option = world.hub(&["machines", "ana@hub.example", "--nope"], &[]);
+    assert_eq!(option.status.code(), Some(2));
+}
+
+#[test]
+fn unlinking_removes_the_key_line_here_and_there_and_only_what_is_the_machines() {
+    let world = World::new();
+    assert_eq!(linked(&world).status.code(), Some(0));
+    assert!(world.authorized_keys().contains("hub-link machine laptop"));
+    world.write_untouched_key();
+    let output = world.hub(&["unlink-machine", "laptop", "ana@hub.example", "--yes"], &[]);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    assert_fits(&out);
+    assert!(out.contains("laptop can no longer link to ana@hub.example"), "{out}");
+    // the client key's line stays, the machine's is gone
+    assert_eq!(world.authorized_keys(), format!("{}\n", restricted(&world)));
+    // this computer stops linking and forgets its own key, never anybody else's
+    assert!(!world.path("home/.aria/link.json").exists());
+    assert!(
+        !world.path("home/.ssh/aria-machine-laptop").exists()
+            && !world.path("home/.ssh/aria-machine-laptop.pub").exists()
+    );
+    assert!(world.path("home/.ssh/id_mine").is_file(), "a key of the owner's is never touched");
+    assert!(out.contains("Removed ~/.aria/link.json"), "{out}");
+    // again: nothing to remove, and it says so
+    let again = world.hub(&["unlink-machine", "laptop", "ana@hub.example", "--yes"], &[]);
+    let out = text(&again.stdout);
+    assert_eq!(again.status.code(), Some(0), "{out}{}", text(&again.stderr));
+    assert!(out.contains("laptop was not linked to ana@hub.example"), "{out}");
+    assert_eq!(world.authorized_keys(), format!("{}\n", restricted(&world)));
+}
+
+impl World {
+    /// A key of the owner's in the folder the machine's key lives in: unlinking must leave it alone.
+    fn write_untouched_key(&self) {
+        std::fs::write(self.path("home/.ssh/id_mine"), "mine").unwrap();
+    }
+}
+
+#[test]
+fn unlinking_asks_first_and_a_wrong_name_is_a_mistake() {
+    let world = World::new();
+    assert_eq!(linked(&world).status.code(), Some(0));
+    let before = world.authorized_keys();
+    // no --yes and no terminal: the plan only
+    let output = world.hub(&["unlink-machine", "laptop", "ana@hub.example"], &[]);
+    let out = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{out}");
+    assert!(out.contains("Remove laptop's key from ana@hub.example") && out.contains("nothing was changed"), "{out}");
+    assert_eq!(world.authorized_keys(), before);
+    assert!(world.path("home/.aria/link.json").is_file());
+    for bad in [vec!["unlink-machine"], vec!["unlink-machine", "Laptop"], vec!["unlink-machine", "a;b"]] {
+        let output = world.hub(&bad, &[]);
+        assert_eq!(output.status.code(), Some(2), "{bad:?}: {}", text(&output.stderr));
+    }
+    // a machine that is another computer's: only the hub's line goes, nothing here
+    let other = world.hub(&["unlink-machine", "desk", "ana@hub.example", "--yes"], &[]);
+    assert_eq!(other.status.code(), Some(0), "{}", text(&other.stderr));
+    assert!(world.path("home/.aria/link.json").is_file(), "this computer is laptop, not desk");
+    assert_eq!(world.authorized_keys(), before);
+}
+
+#[test]
+fn status_says_where_the_link_is_and_whether_the_hubs_answer() {
+    let world = World::new();
+    let nothing = world.hub(&["status"], &[]);
+    let out = text(&nothing.stdout);
+    assert_eq!(nothing.status.code(), Some(0), "{out}");
+    assert!(out.contains("not a machine of any hub") && out.contains("No hub is remembered here"), "{out}");
+    assert_eq!(linked(&world).status.code(), Some(0));
+    let output = world.hub(&["status"], &[("ARIA_FAKE_SSH_HELLO_VERSION", "0.22.0")]);
+    let out = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
+    assert!(out.contains("set to link to ana@hub.example as laptop"), "{out}");
+    assert!(out.contains("Aria is not running here, so the link is not up"), "{out}");
+    assert!(out.contains("ana@hub.example (the default) answers, and runs Aria 0.22.0."), "{out}");
+    let down = world.hub(&["status"], &[("ARIA_FAKE_SSH_HELLO", "fail")]);
+    assert_eq!(down.status.code(), Some(1));
+    assert!(text(&down.stdout).contains("does not answer"), "{}", text(&down.stdout));
+    let extra = world.hub(&["status", "now"], &[]);
+    assert_eq!(extra.status.code(), Some(2));
 }

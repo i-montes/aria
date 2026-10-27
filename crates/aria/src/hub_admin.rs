@@ -17,6 +17,7 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output, Stdio};
 
+mod machine;
 mod update;
 
 /// The only files a bundle carries, in the order they are written.
@@ -289,8 +290,12 @@ pub fn private_address(ip: IpAddr) -> bool {
 
 const USAGE: &str =
     "usage: aria hub init <user@host> [--binary <path>] [--projects <dir>] [--client-key <pubkey file>] \
-     [--no-client-key] [--settings] [--credentials] [--allow-no-sandbox] [--details] [--plain] [--yes]\n       \
+     [--no-client-key] [--no-machine] [--machine-name <name>] [--machine-key <pubkey file>] [--settings] [--credentials] \
+     [--allow-no-sandbox] [--details] [--plain] [--yes]\n       \
      aria hub update [<user@host>] [--all] [--binary <path>] [--details] [--plain] [--yes]\n       \
+     aria hub machines [<user@host>]\n       \
+     aria hub unlink-machine <name> [<user@host>] [--details] [--plain] [--yes]\n       \
+     aria hub status\n       \
      aria hub ui-demo [--fail] [--plain]   (development: the full-screen interface on a made-up run, no ssh)";
 
 /// What `aria hub init` uploads from the checkout: the installer, the service unit and the pins the installer reads
@@ -385,6 +390,24 @@ const REMOTE_ALLOW_KEY: &str = concat!(
     r#"*) echo "unrestricted"; exit 3 ;; esac"#,
 );
 
+/// `REMOTE_ALLOW_KEY` for a machine's key: the line it adds is `restrict,command="$HOME/.local/bin/aria hub-link machine <name>"`.
+/// The key is the first line of stdin and the name the second (checked again here: lowercase letters, digits and dashes), so
+/// nothing is interpolated into the script; the name is part of the forced command, which is what makes a key one machine.
+const REMOTE_ALLOW_MACHINE: &str = concat!(
+    r#"umask 077; f="$HOME/.ssh/authorized_keys"; mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh" "#,
+    r#"&& touch "$f" && chmod 600 "$f" && IFS= read -r key && IFS= read -r name "#,
+    r#"&& case "$name" in ""|-*|*[!a-z0-9-]*) echo "bad name"; exit 2 ;; esac "#,
+    r#"&& blob=$(printf "%s\n" "$key" | cut -d" " -f2) "#,
+    r#"&& pre="restrict,command=\"$HOME/.local/bin/aria hub-link machine $name\"" "#,
+    r#"&& first=$(grep -v "^[[:space:]]*#" "$f" | grep -F " $blob" | head -n 1) "#,
+    r#"&& case "$first" in "") if [ -s "$f" ] && [ -n "$(tail -c 1 "$f")" ]; then echo >> "$f"; fi; "#,
+    r#"printf "%s %s\n" "$pre" "$key" >> "$f" && echo "allowed" ;; "#,
+    r#""$pre"*) rest=${first#"$pre"}; case "$rest" in " "*) echo "already allowed" ;; "#,
+    r#"*) echo "other options"; exit 3 ;; esac ;; "#,
+    r#""restrict,command="*) echo "different command"; exit 3 ;; "#,
+    r#"*) echo "unrestricted"; exit 3 ;; esac"#,
+);
+
 /// The exit status `REMOTE_ALLOW_KEY` ends with when the key is there without the restriction, or with another command.
 const KEY_UNRESTRICTED: i32 = 3;
 
@@ -408,6 +431,12 @@ pub struct RawInit {
     pub client_key: Option<PathBuf>,
     /// Leave the client key out: no key is made, allowed or remembered.
     pub no_client_key: bool,
+    /// Do not make this computer a machine of the hub.
+    pub no_machine: bool,
+    /// The name this computer links under (default: its host name, cleaned up).
+    pub machine_name: Option<String>,
+    /// The public key of the machine's link, instead of making `~/.ssh/aria-machine-<name>`.
+    pub machine_key: Option<PathBuf>,
     /// Install the client key even when the sandbox does not work on the hub.
     pub allow_no_sandbox: bool,
     /// Replace the hub's `settings.json` with this computer's (otherwise a hub that has one keeps it).
@@ -433,6 +462,8 @@ pub struct InitArgs {
     pub client_key_file: Option<PathBuf>,
     /// The default key (`~/.ssh/aria-hub`) does not exist yet: it is made, after the yes and before the steps.
     pub client_key_new: bool,
+    /// This computer becomes a machine of the hub: its name and the key its link uses. None: it does not.
+    pub machine: Option<MachineSetup>,
     /// The version of this Aria's release when the hub is installed from it (no checkout, no binary built here): the
     /// installer runs on the hub and `binary` is not used. None for an upload from a checkout.
     pub release: Option<String>,
@@ -442,6 +473,18 @@ pub struct InitArgs {
     /// When the binary file was last written (UTC, to the minute): a stale cross-build is easy to ship.
     pub binary_built: Option<String>,
     pub yes: bool,
+}
+
+/// This computer as a machine of the hub: the name its key carries and the key its link opens the hub with.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MachineSetup {
+    pub name: String,
+    /// The public half of the link's key (a `.pub` file): `~/.ssh/aria-machine-<name>.pub` unless `--machine-key` names one.
+    pub key_file: PathBuf,
+    /// The public key line, validated, when the file is there; None when it is made after the yes.
+    pub key: Option<String>,
+    /// The key is made after the yes (the default key does not exist yet).
+    pub key_new: bool,
 }
 
 /// What the read-only probes learned about the hub.
@@ -498,6 +541,15 @@ pub fn hub_command(args: &[String]) -> i32 {
                 2
             }
         },
+        Some("machines") => machine::machines_command(&args[1..]),
+        Some("unlink-machine") => match machine::parse_unlink_args(&args[1..]) {
+            Ok(raw) => machine::unlink_machine(raw),
+            Err(why) => {
+                eprintln!("aria hub unlink-machine: {why}\n{}", machine::UNLINK_USAGE);
+                2
+            }
+        },
+        Some("status") => machine::status_command(&args[1..]),
         // Development: the full-screen interface driven through a made-up run, with no ssh.
         Some("ui-demo") => crate::hub_tui::demo(&args[1..]),
         _ => {
@@ -514,6 +566,9 @@ pub fn parse_init_args(args: &[String]) -> Result<RawInit, String> {
         projects: None,
         client_key: None,
         no_client_key: false,
+        no_machine: false,
+        machine_name: None,
+        machine_key: None,
         allow_no_sandbox: false,
         settings: false,
         credentials: false,
@@ -536,6 +591,9 @@ pub fn parse_init_args(args: &[String]) -> Result<RawInit, String> {
             "--projects" => raw.projects = Some(value("--projects")?),
             "--client-key" => raw.client_key = Some(PathBuf::from(value("--client-key")?)),
             "--no-client-key" => raw.no_client_key = true,
+            "--no-machine" => raw.no_machine = true,
+            "--machine-name" => raw.machine_name = Some(value("--machine-name")?),
+            "--machine-key" => raw.machine_key = Some(PathBuf::from(value("--machine-key")?)),
             // Anything else is the host, even one that looks like an option: the host check refuses that one the way
             // `aria connect` does.
             _ if host.is_none() => host = Some(arg.clone()),
@@ -546,6 +604,17 @@ pub fn parse_init_args(args: &[String]) -> Result<RawInit, String> {
     raw.host = host.ok_or("a host is needed")?;
     if raw.no_client_key && raw.client_key.is_some() {
         return Err("--client-key and --no-client-key contradict each other".into());
+    }
+    if raw.no_machine && (raw.machine_name.is_some() || raw.machine_key.is_some()) {
+        return Err("--no-machine contradicts --machine-name and --machine-key".into());
+    }
+    if let Some(name) = &raw.machine_name {
+        if !crate::machines::valid_name(name) {
+            return Err(format!(
+                "--machine-name must be lowercase letters, digits and dashes, starting with a letter or a digit, at \
+                 most 31 characters (got {name:?})"
+            ));
+        }
     }
     Ok(raw)
 }
@@ -598,6 +667,11 @@ pub fn validate_client_key(text: &str) -> Result<String, String> {
 /// The line `authorized_keys` gets: the key may only run Aria's bridge, with no terminal, forwarding or agent.
 pub fn authorized_line(hub_home: &str, key: &str) -> String {
     format!("restrict,command=\"{}/.local/bin/aria client-stdio\" {key}", hub_home.trim_end_matches('/'))
+}
+
+/// The line a machine's key gets: the same restrictions, and the one command it may run, with its name in it.
+pub fn authorized_machine_line(hub_home: &str, name: &str, key: &str) -> String {
+    format!("restrict,command=\"{}/.local/bin/aria hub-link machine {name}\" {key}", hub_home.trim_end_matches('/'))
 }
 
 /// True when a Node version (`v22.19.0`) is 22.19 or newer, which runs Pi.
@@ -821,6 +895,27 @@ pub fn plan_sending(probe: &Probe, args: &InitArgs, sent: &[&str]) -> Vec<String
             if made.is_empty() { "Allow" } else { "allow" }
         ));
     }
+    if let Some(machine) = &args.machine {
+        let key = machine.key.as_deref().unwrap_or("<the new key>");
+        let made = if machine.key_new {
+            format!(
+                "Make a key for this computer's link ({}; `ssh-keygen -q -t ed25519 -N \"\"`: no passphrase, so the link \
+                 can start by itself), then ",
+                machine.key_file.display().to_string().strip_suffix(".pub").unwrap_or_default()
+            )
+        } else {
+            String::new()
+        };
+        steps.push(format!(
+            "{made}Add {} to ~/.ssh/authorized_keys with the checks of the client key (the machine's name is part of the \
+             forced command, so the key is that machine and no other), write ~/.aria/link.json (mode 600) so that this \
+             computer's Aria links by itself, and wait up to {} seconds for the hub to list {} as online (a `machinesList` \
+             through the terminal bridge)",
+            authorized_machine_line(&probe.home, &machine.name, key),
+            machine::link_wait().as_secs(),
+            machine.name
+        ));
+    }
     lines.extend(steps.iter().enumerate().map(|(index, step)| format!("{}. {step}", index + 1)));
     lines.push(
         "Then, read-only: look at whether its ssh port can be reached from beyond its private networks.".to_string(),
@@ -877,6 +972,8 @@ enum Part {
     Copy,
     Allow,
     Test,
+    /// This computer becomes a machine of the hub: its key, its line on the hub and its link file.
+    Link,
 }
 
 fn parts(args: &InitArgs, sent: &[&str]) -> Vec<Part> {
@@ -891,6 +988,9 @@ fn parts(args: &InitArgs, sent: &[&str]) -> Vec<Part> {
     if args.client_key.is_some() || args.client_key_new {
         parts.push(Part::Allow);
         parts.push(Part::Test);
+    }
+    if args.machine.is_some() {
+        parts.push(Part::Link);
     }
     parts
 }
@@ -986,6 +1086,12 @@ pub fn plan_summary(args: &InitArgs, probe: &Probe, sent: &[&str]) -> Plan {
             Part::Allow if args.client_key_new => "Allow that key on the server, for Aria's terminal only".to_string(),
             Part::Allow => "Allow your Aria key on the server, for its terminal only".to_string(),
             Part::Test => "Test the connection".to_string(),
+            Part::Link => match &args.machine {
+                Some(machine) => {
+                    format!("Link this computer as {} (the server can then work on projects here)", machine.name)
+                }
+                None => "Link this computer".to_string(),
+            },
         });
     }
     let mut good_to_know = Vec::new();
@@ -994,6 +1100,18 @@ pub fn plan_summary(args: &InitArgs, probe: &Probe, sent: &[&str]) -> Plan {
     }
     if args.client_key.is_some() || args.client_key_new {
         good_to_know.push("The key can open Aria and nothing else: it is not a login.".to_string());
+    }
+    if let Some(machine) = &args.machine {
+        good_to_know.push(if machine.key_new {
+            "The link's key has no passphrase so it can link by itself; it can only act as this computer's link, not \
+             log in."
+                .to_string()
+        } else {
+            format!(
+                "The link uses your key {}: your ssh agent must hold it for the link to start by itself.",
+                tilde(&private_key_of(&machine.key_file))
+            )
+        });
     }
     if probe.service_active {
         good_to_know.push("The server keeps running; it takes the new version when idle.".to_string());
@@ -1294,6 +1412,13 @@ fn run_init(raw: RawInit, ui: &mut dyn HubUi) -> Result<i32, Failure> {
             }
         }
     };
+    // This computer becomes a machine of the hub too, unless it is asked not to: it needs the key step (or a key of its own).
+    let machine = machine::machine_setup(
+        raw.machine_name.clone(),
+        raw.machine_key.as_deref(),
+        raw.no_machine,
+        client_key.is_some() || client_key_new,
+    )?;
     let mut starts: Vec<PathBuf> = std::env::current_dir().into_iter().collect();
     starts.extend(std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)));
     let repo = find_repo(&starts);
@@ -1319,6 +1444,7 @@ fn run_init(raw: RawInit, ui: &mut dyn HubUi) -> Result<i32, Failure> {
         client_key,
         client_key_file,
         client_key_new,
+        machine,
         release: if repo.is_none() { Some(env!("CARGO_PKG_VERSION").to_string()) } else { None },
         allow_no_sandbox: raw.allow_no_sandbox,
         settings: raw.settings,
@@ -1797,12 +1923,24 @@ fn write_steps(
         }
     }
 
+    // This computer becomes a machine of the hub, once the connection works: what failed first is what to fix first.
+    let mut linked_as: Option<String> = None;
+    if let Some(setup) = &args.machine {
+        if code == 0 {
+            match machine::link_this_computer(host, &probe.home, setup, (number(Part::Link), total), &mut notes, ui) {
+                machine::Linked::Yes => linked_as = Some(setup.name.clone()),
+                machine::Linked::Pending => {}
+                machine::Linked::Failed => code = 1,
+            }
+        }
+    }
+
     notes.extend(public_ssh_notes(host, probe, &listeners, key));
     ui.heads_up(&notes);
     if code == 0 && !lingers {
         ui.done(&Outcome::NotReady { why: "turn linger on (see the note above)".to_string() });
     } else if code == 0 && connected && is_default {
-        ui.done(&Outcome::Ready { connect: format!("{} connect", connect_word()) });
+        ui.done(&Outcome::Ready { connect: format!("{} connect", connect_word()), linked: linked_as });
     } else if code == 0 {
         // A hub that is not the default is opened by name; one that is not remembered keeps the ssh entry's name.
         let target = if remembered {
@@ -1812,7 +1950,7 @@ fn write_steps(
         } else {
             host
         };
-        ui.done(&Outcome::Ready { connect: format!("{} connect {target}", connect_word()) });
+        ui.done(&Outcome::Ready { connect: format!("{} connect {target}", connect_word()), linked: linked_as });
     }
     Ok(code)
 }
@@ -2452,6 +2590,7 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
             client_key: None,
             client_key_file: None,
             client_key_new: false,
+            machine: None,
             release: None,
             yes: false,
             allow_no_sandbox: false,

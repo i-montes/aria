@@ -61,12 +61,15 @@ pub struct Plan {
 /// How a run that did not fail ends.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
-    /// Working: `connect` is what to type to use it (`aria connect`, with the host when `aria connect` alone is not it).
-    Ready { connect: String },
+    /// Working: `connect` is what to type to use it (`aria connect`, with the host when `aria connect` alone is not it), and
+    /// `linked` the name this computer is now a machine under (it works on projects here for the server), when it is one.
+    Ready { connect: String, linked: Option<String> },
     /// Installed, but not working yet; `why` says what to do.
     NotReady { why: String },
     /// `aria hub update` ended: every server it looked at and the version it runs now, as (host, version).
     Updated { runs: Vec<(String, String)> },
+    /// `aria hub unlink-machine` ended: whether `name` had a key on `host` to remove.
+    Unlinked { name: String, host: String, was_linked: bool },
 }
 
 /// The screen of `aria hub init`. Every method is one thing that happens in a run.
@@ -411,9 +414,12 @@ impl HubUi for PlainUi {
         let screen = self.screen;
         let mut text = format!("\n{}", screen.rule());
         match outcome {
-            Outcome::Ready { connect } => {
+            Outcome::Ready { connect, linked } => {
                 text.push('\n');
                 text.push_str(&screen.paint("1;32", &format!("  {} Your server is ready.", screen.mark_ok())));
+                if let Some(name) = linked {
+                    text.push_str(&format!("\n  This computer is linked as {name}."));
+                }
                 text.push_str(&format!("\n\n  To use it, type:  {}", screen.paint("1", connect)));
             }
             Outcome::NotReady { why } => {
@@ -426,6 +432,15 @@ impl HubUi for PlainUi {
                     let line = format!("  {} {host} runs Aria {version}", screen.mark_ok());
                     text.push_str(&screen.paint("1;32", &line));
                 }
+            }
+            Outcome::Unlinked { name, host, was_linked } => {
+                text.push('\n');
+                let line = if *was_linked {
+                    format!("  {} {name} is no longer linked to {host}.", screen.mark_ok())
+                } else {
+                    format!("  {} {name} was not linked to {host}.", screen.mark_ok())
+                };
+                text.push_str(&screen.paint("1;32", &line));
             }
         }
         self.put(&text);
@@ -534,7 +549,7 @@ mod tests {
         ui.failed("It did not work: ssh did not answer in time: if the key has a passphrase, add it to ssh-agent and run aria connect");
         ui.heads_up(&[Note::text("Linger is off for ubuntu on the server: it stops when you log out.")
             .then_command("sudo loginctl enable-linger ubuntu")]);
-        ui.done(&Outcome::Ready { connect: "aria connect".into() });
+        ui.done(&Outcome::Ready { connect: "aria connect".into(), linked: None });
         for (name, text) in [("stdout", out.text()), ("stderr", err.text())] {
             for line in text.lines() {
                 assert!(line.chars().count() <= WIDTH, "{name}: {line:?} is {} columns", line.chars().count());

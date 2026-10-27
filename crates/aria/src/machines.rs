@@ -116,9 +116,8 @@ impl Registry {
     }
 }
 
-/// What a machine said about itself, for `aria hub machines` (a later piece) and the tests.
+/// What a machine said about itself, for `machinesList` (`aria hub machines`) and the tests.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)] // read by the commands that list machines, which are the machine side's work
 pub struct MachineInfo {
     pub name: String,
     pub os: String,
@@ -126,6 +125,25 @@ pub struct MachineInfo {
     pub online: bool,
     pub since_secs: u64,
     pub sessions: usize,
+}
+
+impl MachineInfo {
+    /// The shape `machinesList` answers with: `since` is when its link began, as seconds since 1970 (a client writes the
+    /// time of day itself), and means nothing while the machine is offline.
+    pub fn to_json(&self) -> Value {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_secs())
+            .unwrap_or_default();
+        json!({
+            "name": self.name,
+            "os": self.os,
+            "version": self.version,
+            "online": self.online,
+            "since": now.saturating_sub(self.since_secs),
+            "sessions": self.sessions,
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -145,7 +163,6 @@ impl Machines {
         Machines { inner: Arc::default(), timing }
     }
 
-    #[allow(dead_code)] // see MachineInfo
     pub fn list(&self) -> Vec<MachineInfo> {
         let registry = self.inner.lock().unwrap();
         registry
@@ -352,7 +369,7 @@ impl Machines {
     }
 
     /// One machine's link, from its first byte to its last.
-    fn connection(&self, hub: &Hub, stream: UnixStream) {
+    pub(crate) fn connection(&self, hub: &Hub, stream: UnixStream) {
         let _ = stream.set_read_timeout(Some(HANDSHAKE));
         let (Ok(read_half), Ok(mut write_half)) = (stream.try_clone(), stream.try_clone()) else { return };
         let mut reader = BufReader::new(read_half);
@@ -1170,5 +1187,48 @@ mod tests {
         seen.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
         let _ = seen.read_to_string(&mut text);
         assert_eq!(text, "");
+    }
+
+    // ---- who is linked ------------------------------------------------------------------------------------------------
+
+    #[test]
+    fn any_client_can_ask_who_is_linked_and_gets_its_own_id_back() {
+        let world = world();
+        let mut machine = world.machine("laptop");
+        world.sessions_of(&mut machine, &["m-1", "m-2"]);
+        for remote in [false, true] {
+            let mut client = world.client(remote);
+            client.send(json!({"type": "machinesList", "id": 11}));
+            let reply = client.next();
+            assert_eq!(reply["type"], "machines", "{reply}");
+            assert_eq!(reply["id"], 11, "the client's own id: {reply}");
+            let listed = &reply["machines"][0];
+            assert_eq!(listed["name"], "laptop");
+            assert_eq!((listed["os"].as_str(), listed["version"].as_str()), (Some("linux"), Some("9.9.9")));
+            assert_eq!((listed["online"].as_bool(), listed["sessions"].as_u64()), (Some(true), Some(2)));
+            assert!(listed["since"].as_u64().is_some_and(|since| since > 1_600_000_000), "{listed}");
+            assert_eq!(reply["machines"].as_array().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn a_machine_that_dropped_is_listed_offline_and_nobody_is_listed_before_any_links() {
+        let world = world();
+        let mut client = world.client(true);
+        client.send(json!({"type": "machinesList", "id": 1}));
+        assert_eq!(client.next()["machines"], json!([]));
+        let mut machine = world.machine("laptop");
+        world.sessions_of(&mut machine, &["m-1"]);
+        drop(machine);
+        wait_until("the machine to go offline", || world.hub.machines().list().iter().all(|machine| !machine.online));
+        client.send(json!({"type": "machinesList", "id": 2}));
+        let reply = loop {
+            let line = client.next();
+            if line["type"] == "machines" {
+                break line;
+            }
+        };
+        assert_eq!(reply["machines"][0]["online"], false, "{reply}");
+        assert_eq!(reply["machines"][0]["sessions"], 1, "its cache stays");
     }
 }
