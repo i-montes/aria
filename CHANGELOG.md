@@ -179,3 +179,16 @@ The installer of 0.21.0 was served from the owner's computer over the tailnet an
 | linger for the server's user | `loginctl enable-linger`, so the service runs when nobody is logged in | none | `loginctl disable-linger <user>` |
 
 Not changed: `sshd_config`, the firewall, Tailscale, the system-wide `kernel.apparmor_restrict_unprivileged_userns`, the other services on the server, the owner's computer (no key made and no hub remembered yet: that is `aria hub init`'s step).
+
+## 2026-10-26 — 0.21.0 on the owner's Omarchy machine, and the link to the hub (`sh install/install.sh --local target/release/aria`, then `aria hub init`)
+
+The installed dock was 0.20.1; this installs the 0.21.0 dock built from the checkout. The dock was running, so it restarts into the new binary once it is hidden and idle. `aria hub init` was run before this, from the checkout's build, to link this computer to the hub on the server.
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| `~/.local/bin/aria` | the dock binary, replaced (0.20.1 to 0.21.0) | none | build the older tag and `sh install/install.sh --local target/release/aria` |
+| `~/.ssh/aria-hub`, `~/.ssh/aria-hub.pub` | a key only for Aria (new, made by `aria hub init`; allowed on the hub restricted to Aria's terminal bridge) | none, new | delete both files, and the `restrict,command=…client-stdio` line from the hub's `~/.ssh/authorized_keys` |
+| `~/.aria/hubs.json` | the hubs this computer is linked to, and the default one (new, mode 600) | none, new | delete it |
+| the hub's `~/.aria/` | this computer's settings, sign-ins and connectors, copied by `aria hub init` (the hub had none) | none | delete those files on the hub, or `sh install.sh --uninstall --headless` there |
+
+Not changed: `~/.config/systemd/user/aria.service` (identical), `~/.config/hypr/`, the Omarchy bar widget (up to date), the keyring.
