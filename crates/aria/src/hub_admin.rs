@@ -897,7 +897,12 @@ fn friendly(name: &str) -> &'static str {
 /// "settings, sign-ins and connectors".
 pub fn friendly_list(names: &[&str]) -> String {
     let mut words: Vec<&str> = Vec::new();
+    // A connector and its sign-in are one thing to the owner: "connectors" says both.
+    let with_connectors = names.contains(&"mcp.json") && names.contains(&"mcp-auth.json");
     for name in names {
+        if with_connectors && *name == "mcp-auth.json" {
+            continue;
+        }
         let word = friendly(name);
         if !words.contains(&word) {
             words.push(word);
@@ -907,6 +912,28 @@ pub fn friendly_list(names: &[&str]) -> String {
         [] => String::new(),
         [only] => (*only).to_string(),
         [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
+}
+
+/// The word that opens a hub in the closing line: `aria` when the `aria` on the PATH is this very binary, else this binary's
+/// own path, so what the screen tells the owner to type always works (a build run from a checkout is not the installed one,
+/// and the installed one may be older and not know the hub). `ARIA_CONNECT_WORD` names it for the tests.
+fn connect_word() -> String {
+    if let Some(word) = std::env::var("ARIA_CONNECT_WORD").ok().filter(|word| !word.is_empty()) {
+        return word;
+    }
+    let me = std::env::current_exe().ok().and_then(|path| path.canonicalize().ok());
+    let on_path = std::env::var_os("PATH")
+        .and_then(|paths| std::env::split_paths(&paths).map(|dir| dir.join("aria")).find(|path| path.is_file()))
+        .and_then(|path| path.canonicalize().ok());
+    connect_word_for(me.as_deref(), on_path.as_deref())
+}
+
+fn connect_word_for(me: Option<&Path>, on_path: Option<&Path>) -> String {
+    match (me, on_path) {
+        (Some(me), Some(on_path)) if me == on_path => "aria".to_string(),
+        (Some(me), _) => me.display().to_string(),
+        (None, _) => "aria".to_string(),
     }
 }
 
@@ -1093,9 +1120,10 @@ fn keygen_program() -> std::ffi::OsString {
     std::env::var_os("ARIA_SSH_KEYGEN").filter(|program| !program.is_empty()).unwrap_or_else(|| "ssh-keygen".into())
 }
 
-/// The arguments that make the key, with no `-N`: ssh-keygen asks for the passphrase itself, on this terminal.
+/// The arguments that make the key, with no `-N`: ssh-keygen asks for the passphrase itself, on this terminal. `-q` keeps
+/// out the fingerprint and the randomart picture, which tell the owner nothing they can use; the prompts stay.
 pub fn keygen_args(private: &Path) -> Vec<std::ffi::OsString> {
-    vec!["-t".into(), "ed25519".into(), "-f".into(), private.into(), "-C".into(), "aria-hub".into()]
+    vec!["-q".into(), "-t".into(), "ed25519".into(), "-f".into(), private.into(), "-C".into(), "aria-hub".into()]
 }
 
 /// Makes the key whose public half is `pub_file`, and returns that public line, checked. Never overwrites a key: a private
@@ -1738,7 +1766,7 @@ fn write_steps(
     if code == 0 && !lingers {
         ui.done(&Outcome::NotReady { why: "turn linger on (see the note above)".to_string() });
     } else if code == 0 && connected && is_default {
-        ui.done(&Outcome::Ready { connect: "aria connect".to_string() });
+        ui.done(&Outcome::Ready { connect: format!("{} connect", connect_word()) });
     } else if code == 0 {
         // A hub that is not the default is opened by name; one that is not remembered keeps the ssh entry's name.
         let target = if remembered {
@@ -1748,7 +1776,7 @@ fn write_steps(
         } else {
             host
         };
-        ui.done(&Outcome::Ready { connect: format!("aria connect {target}") });
+        ui.done(&Outcome::Ready { connect: format!("{} connect {target}", connect_word()) });
     }
     Ok(code)
 }
@@ -2926,10 +2954,7 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
             step(&["settings.json", "auth.json"], &with),
             "Copy your settings and sign-ins (it replaces the ones it has; the first copy stays as .bak)"
         );
-        assert_eq!(
-            step(&["mcp.json", "mcp-auth.json"], &probe()),
-            "Copy your connectors and connector sign-ins (the server has none yet)"
-        );
+        assert_eq!(step(&["mcp.json", "mcp-auth.json"], &probe()), "Copy your connectors (the server has none yet)");
     }
 
     #[test]
@@ -2970,8 +2995,9 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
         assert_eq!(friendly_list(&["settings.json", "auth.json"]), "settings and sign-ins");
         assert_eq!(
             friendly_list(&["settings.json", "auth.json", "mcp.json", "mcp-auth.json"]),
-            "settings, sign-ins, connectors and connector sign-ins"
+            "settings, sign-ins and connectors"
         );
+        assert_eq!(friendly_list(&["mcp-auth.json"]), "connector sign-ins");
     }
 
     #[test]
@@ -2992,9 +3018,19 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
     }
 
     #[test]
+    fn the_connect_line_names_the_binary_that_will_work() {
+        let here = Path::new("/work/aria/target/release/aria");
+        let installed = Path::new("/home/ana/.local/bin/aria");
+        assert_eq!(connect_word_for(Some(here), Some(here)), "aria", "the one on the PATH is this one");
+        assert_eq!(connect_word_for(Some(here), Some(installed)), "/work/aria/target/release/aria");
+        assert_eq!(connect_word_for(Some(here), None), "/work/aria/target/release/aria", "nothing on the PATH");
+        assert_eq!(connect_word_for(None, Some(installed)), "aria");
+    }
+
+    #[test]
     fn keygen_asks_for_no_passphrase_flag_so_the_owner_types_it() {
         let args = keygen_args(Path::new("/home/ana/.ssh/aria-hub"));
-        assert_eq!(args, ["-t", "ed25519", "-f", "/home/ana/.ssh/aria-hub", "-C", "aria-hub"]);
+        assert_eq!(args, ["-q", "-t", "ed25519", "-f", "/home/ana/.ssh/aria-hub", "-C", "aria-hub"]);
         assert!(!args.iter().any(|arg| arg == "-N"));
     }
 
@@ -3012,7 +3048,7 @@ LISTEN 0      128   [fe80::1%eth0]:631         [::]:*
         program
     }
 
-    const MAKES_A_KEY: &str = r#"printf 'private' > "$4"; printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl aria-hub\n' > "$4.pub""#;
+    const MAKES_A_KEY: &str = r#"printf 'private' > "$5"; printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl aria-hub\n' > "$5.pub""#;
 
     #[test]
     fn the_default_key_is_made_in_a_new_ssh_folder_that_only_its_owner_reads() {

@@ -81,6 +81,7 @@ impl World {
             .env("ARIA_SSH", concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_ssh.sh"))
             .env("ARIA_FAKE_SSH_LOG", self.path("hub/log"))
             .env("ARIA_FAKE_SSH_ROOT", self.path("hub"))
+            .env("ARIA_CONNECT_WORD", "aria")
             .stdin(Stdio::null());
         for (name, value) in envs {
             command.env(name, value);
@@ -868,7 +869,7 @@ fn a_hub_that_cannot_be_remembered_still_comes_with_the_ssh_config() {
     assert!(out.contains("To use it, type:  aria connect aria-hub"), "{out}");
 }
 
-/// A stand-in for ssh-keygen that makes the pair the way the real one does (`-f <private>`), or fails when asked to.
+/// A stand-in for ssh-keygen that makes the pair the way the real one does (`-q -t ed25519 -f <private>`), or fails when asked to.
 fn fake_keygen(world: &World, body: &str) -> String {
     let program = world.path("fake-keygen");
     std::fs::write(&program, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -877,7 +878,7 @@ fn fake_keygen(world: &World, body: &str) -> String {
 }
 
 fn makes_the_default_key() -> String {
-    format!("printf private > \"$4\"; printf '%s\\n' '{KEY}' > \"$4.pub\"")
+    format!("printf private > \"$5\"; printf '%s\\n' '{KEY}' > \"$5.pub\"")
 }
 
 #[test]
