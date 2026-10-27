@@ -2,13 +2,20 @@
 //! `hub init` and the version check, and nothing else: no sign-ins or settings are sent, no key is made, `authorized_keys`
 //! and `hubs.json` are not touched. A child of `hub_admin` so it uses that module's helpers instead of copying them.
 //!
-//! The commands run on the hub with the owner's own ssh login, as `hub init` does: the key `hub init` made for `aria connect`
-//! is restricted to Aria's terminal bridge, so it cannot run an installer.
+//! A hub that was linked with its key (`hubs.json`) and has an Aria that knows `hubUpdate` updates **itself**: this computer
+//! opens the same terminal bridge `aria connect` uses, with that restricted key, and asks the service to install this Aria's
+//! release (`hub_update.rs` is the service's side). No ssh login of the owner's is used. Everything else keeps the owner's own
+//! ssh login, as `hub init` does, since the restricted key cannot run an installer: a build uploaded by hand (`--binary`, or a
+//! checkout's), a hub that has no key here or cannot be opened with it, and a hub too old to know `hubUpdate` (said, once).
 
 use super::*;
-use crate::connect::Hubs;
+use crate::connect::{self, Hubs};
+use crate::term::link::SSH_HELLO_TIMEOUT;
 use crate::version;
+use aria_core::bridge::{DockMessage, PageMessage};
 use std::cmp::Ordering;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 pub const UPDATE_USAGE: &str =
     "usage: aria hub update [<user@host>] [--all] [--binary <path>] [--details] [--plain] [--yes]";
@@ -125,12 +132,65 @@ fn probe_hub(host: &str, binary_arch: Option<&str>) -> Result<Probed, Failure> {
     Ok(classify(&running, version::mine(), active))
 }
 
-/// One hub that gets updated: its name, the version it runs and whether its service is up.
+/// How a hub gets the new Aria.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Via {
+    /// The service installs it itself, asked through the terminal bridge with the key `hub init` linked this computer with.
+    Itself,
+    /// The owner's own ssh login runs the installer (or uploads a build), as `hub init` does.
+    Login,
+}
+
+/// One hub that gets updated: its name, the version it runs, whether its service is up and how it is updated.
 struct Todo {
     host: String,
     from: String,
     active: bool,
+    via: Via,
 }
+
+/// How long this computer waits at each point of asking a hub to update itself.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Waits {
+    /// For the first word back: a hub that says nothing in this time does not know `hubUpdate`.
+    silence: Duration,
+    /// For a hub whose connection dropped mid-update (the service restarts into the new binary): how long to try again.
+    come_back: Duration,
+    /// Between those tries.
+    poll: Duration,
+    /// For the check after a good result: how long to wait for the running service to be the new one.
+    confirm: Duration,
+}
+
+impl Waits {
+    fn standard() -> Waits {
+        Waits {
+            silence: Duration::from_secs(20),
+            come_back: Duration::from_secs(90),
+            poll: Duration::from_secs(3),
+            confirm: Duration::from_secs(10),
+        }
+    }
+
+    /// `ARIA_SELF_UPDATE_WAIT_MS=n` (how the tests make them short) makes every wait a multiple of n milliseconds.
+    fn from_env() -> Waits {
+        match std::env::var("ARIA_SELF_UPDATE_WAIT_MS").ok().and_then(|ms| ms.parse::<u64>().ok()) {
+            Some(ms) => Waits {
+                silence: Duration::from_millis(ms),
+                come_back: Duration::from_millis(ms * 20),
+                poll: Duration::from_millis(ms),
+                confirm: Duration::from_millis(ms * 5),
+            },
+            None => Waits::standard(),
+        }
+    }
+}
+
+/// How long one look at a hub that is restarting waits for its hello (it is tried again after `Waits::poll`).
+const CHECK_HELLO: Duration = Duration::from_secs(30);
+
+/// The longest the service may take (its own limit is 15 minutes) and a minute to say so.
+const UPDATE_LIMIT: Duration = Duration::from_secs(16 * 60);
 
 /// The plan in plain words: two steps for each hub, and what to know.
 fn plan_for(todo: &[Todo], release: bool, mine: &str) -> Plan {
@@ -138,7 +198,11 @@ fn plan_for(todo: &[Todo], release: bool, mine: &str) -> Plan {
     let mut steps = Vec::new();
     for hub in todo {
         steps.push(if release {
-            format!("Update Aria on {} from {} to {mine}", hub.host, hub.from)
+            let how = match hub.via {
+                Via::Itself => "the server updates itself",
+                Via::Login => "through your ssh login",
+            };
+            format!("Update Aria on {} from {} to {mine} ({how})", hub.host, hub.from)
         } else {
             format!("Update Aria on {} from {} to the build you gave me", hub.host, hub.from)
         });
@@ -159,7 +223,20 @@ fn plan_for(todo: &[Todo], release: bool, mine: &str) -> Plan {
             .to_string(),
         );
     }
-    good_to_know.push("The server's installer runs again; its sudo is used only if a package is missing.".to_string());
+    if todo.iter().any(|hub| hub.via == Via::Login) {
+        good_to_know
+            .push("The server's installer runs again; its sudo is used only if a package is missing.".to_string());
+    }
+    if todo.iter().any(|hub| hub.via == Via::Itself) {
+        good_to_know.push(
+            if many {
+                "A server that updates itself does it with the key Aria linked it with: no ssh login of yours is used."
+            } else {
+                "The server updates itself with the key Aria linked it with: no ssh login of yours is used."
+            }
+            .to_string(),
+        );
+    }
     let host = if many { "your servers".to_string() } else { todo[0].host.clone() };
     Plan { host, steps, good_to_know, blocked: Vec::new() }
 }
@@ -168,7 +245,14 @@ fn plan_for(todo: &[Todo], release: bool, mine: &str) -> Plan {
 fn details_for(todo: &[Todo], release: bool, mine: &str) -> Vec<String> {
     todo.iter()
         .map(|hub| {
-            let install = if release {
+            let install = if release && hub.via == Via::Itself {
+                format!(
+                    "ask its service to install release v{mine} through the terminal bridge (`aria client-stdio`, the \
+                     restricted key: `hubUpdate` {{\"version\": \"{mine}\"}}); the service runs the release's installer \
+                     itself: {}",
+                    release_install_command(mine)
+                )
+            } else if release {
                 format!("run the installer of release v{mine} on it: {}", release_install_command(mine))
             } else {
                 format!("upload the build you gave me and the checkout's installer to {HUB_SRC}, then run: {INSTALL_COMMAND}")
@@ -182,6 +266,144 @@ fn details_for(todo: &[Todo], release: bool, mine: &str) -> Vec<String> {
         .collect()
 }
 
+/// One line of the installer's output as the screen shows it under a step.
+fn shorten(line: &str) -> String {
+    let line = line.trim();
+    if line.chars().count() <= 70 {
+        return line.to_string();
+    }
+    let mut cut: String = line.chars().take(69).collect();
+    cut.push('…');
+    cut
+}
+
+/// The Aria a hub runs, from the hello of its terminal bridge, opened with the key `hub init` linked this computer with.
+/// `Ok(None)`: it opened and said no version (a hub that old cannot update itself).
+fn hello_version(host: &str, within: Duration) -> Result<Option<String>, String> {
+    let link = connect::open_within(host, within).map_err(|error| connection_problem(&error))?;
+    Ok(link.hub_version().map(str::to_string))
+}
+
+/// What asking a hub to update itself came to.
+#[derive(Debug, PartialEq)]
+enum Asked {
+    /// The hub has this Aria's version installed.
+    Updated,
+    /// It could not (or would not) do it: the plain reason, and the owner's ssh login does it instead.
+    Fallback(String),
+}
+
+/// The hub's connection dropped while it updated (the service restarts into the new binary once it is idle, and the line may
+/// go with it): the answer is whether it comes back running this Aria's version.
+fn wait_for_the_hub(host: &str, waits: Waits, ui: &mut dyn HubUi) -> Result<Asked, Failure> {
+    let mine = version::mine();
+    ui.step_info("The connection dropped; waiting for the server to come back.");
+    let until = Instant::now() + waits.come_back;
+    while Instant::now() < until {
+        std::thread::sleep(waits.poll);
+        if let Ok(Some(running)) = hello_version(host, CHECK_HELLO) {
+            if version::compare(&running, mine) == Some(Ordering::Equal) {
+                return Ok(Asked::Updated);
+            }
+        }
+    }
+    Err(failed(format!(
+        "{host}: the connection was lost during the update and the server does not answer with Aria {mine} yet: \
+         running `aria hub update` again is safe"
+    )))
+}
+
+/// Asks the service of `host` to install this Aria's release, through the restricted key, and shows what its installer
+/// prints. Nothing is run over the owner's own login.
+fn ask_hub(host: &str, waits: Waits, ui: &mut dyn HubUi) -> Result<Asked, Failure> {
+    let mine = version::mine();
+    let link = match connect::open_within(host, SSH_HELLO_TIMEOUT) {
+        Ok(link) => link,
+        Err(error) => {
+            return Ok(Asked::Fallback(format!(
+                "could not open the server with its key ({}); using your ssh login",
+                connection_problem(&error)
+            )))
+        }
+    };
+    let events = link.events();
+    link.send(&PageMessage::HubUpdate { id: 1, version: mine.to_string() });
+    let too_old = || Asked::Fallback("this server is too old to update itself; using your ssh login once".to_string());
+    let started = Instant::now();
+    let mut heard = false;
+    loop {
+        // A hub that knows `hubUpdate` answers at once (a line, or a refusal); one that does not says nothing or an error.
+        let wait = if heard { UPDATE_LIMIT.saturating_sub(started.elapsed()) } else { waits.silence };
+        match events.recv_timeout(wait) {
+            Ok(DockMessage::HubUpdateProgress { line, .. }) => {
+                heard = true;
+                ui.step_info(&shorten(&line));
+            }
+            Ok(DockMessage::HubUpdateResult { ok: true, version: said, .. }) => {
+                return match said.as_deref().map(|said| version::compare(said, mine)) {
+                    Some(Some(Ordering::Equal)) => Ok(Asked::Updated),
+                    _ => Err(failed(format!(
+                        "{host}: the server said it updated but not to Aria {mine} ({}): running `aria hub update` \
+                         again may finish it",
+                        said.as_deref().unwrap_or("no version")
+                    ))),
+                };
+            }
+            Ok(DockMessage::HubUpdateResult { reason, .. }) => {
+                let reason = reason.unwrap_or_else(|| "it gave no reason".to_string());
+                // Someone updated it between the look and the ask: it is what was wanted.
+                if reason == format!("already runs {mine}") {
+                    return Ok(Asked::Updated);
+                }
+                return Err(failed(format!("{host}: the server could not update itself: {reason}")));
+            }
+            Ok(DockMessage::Error { code, .. }) if code == "not-for-clients" && !heard => return Ok(too_old()),
+            Ok(DockMessage::Error { code, .. }) if code == "gone" => {
+                drop(link);
+                return if heard { wait_for_the_hub(host, waits, ui) } else { Ok(too_old()) };
+            }
+            Ok(_) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) if !heard => return Ok(too_old()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(failed(format!(
+                    "{host}: the update is taking too long: running `aria hub update` again is safe"
+                )))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                drop(link);
+                return if heard { wait_for_the_hub(host, waits, ui) } else { Ok(too_old()) };
+            }
+        }
+    }
+}
+
+/// After a hub updated itself: opens it again and says which Aria its service runs. It runs the new one once it has restarted,
+/// which it does by itself when it is idle, so an old one is not a failure: the new Aria is installed.
+fn confirm_running(host: &str, waits: Waits, ui: &mut dyn HubUi) {
+    let mine = version::mine();
+    let until = Instant::now() + waits.confirm;
+    let mut seen: Option<String> = None;
+    loop {
+        if let Ok(Some(running)) = hello_version(host, CHECK_HELLO) {
+            if version::compare(&running, mine) == Some(Ordering::Equal) {
+                ui.step_ok(&format!("The server runs Aria {mine}"));
+                return;
+            }
+            seen = Some(shown(&running));
+        }
+        if Instant::now() >= until {
+            break;
+        }
+        std::thread::sleep(waits.poll);
+    }
+    match seen {
+        Some(running) => ui.step_ok(&format!(
+            "Aria {mine} is installed; the server runs {running} until it is idle, then restarts into it by itself"
+        )),
+        None => ui.step_info(&format!("Aria {mine} is installed; the server could not be reached again just now")),
+    }
+}
+
 /// Updates one hub that the plan listed: the install step and the version check. The version it runs now.
 fn update_one(
     hub: &Todo,
@@ -192,6 +414,32 @@ fn update_one(
 ) -> Result<String, Failure> {
     let host = hub.host.as_str();
     let (number, total) = steps;
+    let title = format!("Updating Aria on {host}");
+    let checking =
+        if many { format!("Checking the new version on {host}") } else { "Checking the new version".to_string() };
+    let mut announce = true;
+    if hub.via == Via::Itself {
+        let waits = Waits::from_env();
+        let mine = version::mine();
+        ui.step_start(
+            number,
+            total,
+            &title,
+            &format!("The server downloads Aria {mine} and sets itself up. Nothing is asked of you."),
+        );
+        match ask_hub(host, waits, ui)? {
+            Asked::Updated => {
+                ui.step_ok("Aria is updated on the server");
+                ui.step_start(number + 1, total, &checking, "Opens the server again and reads the version it runs.");
+                confirm_running(host, waits, ui);
+                return Ok(shown(mine));
+            }
+            Asked::Fallback(reason) => {
+                ui.step_info(&reason);
+                announce = false;
+            }
+        }
+    }
     let stopped = |step: usize, what: &str, detail: String| {
         failed(format!(
             "{host}: step {} ({what}) failed: {detail}. The installer may have partly run on the hub; running \
@@ -199,17 +447,12 @@ fn update_one(
             if step == 1 { "upload" } else { "installer" }
         ))
     };
-    install_on_hub(host, source, &format!("Updating Aria on {host}"), (number, total), ui, &stopped)?;
+    install_on_hub(host, source, &title, (number, total), ui, announce, &stopped)?;
     ui.step_ok("Aria is updated on the server");
     if hub.active {
         ui.step_ok("The service keeps running (it takes the new version when idle)");
     }
-    ui.step_start(
-        number + 1,
-        total,
-        &if many { format!("Checking the new version on {host}") } else { "Checking the new version".to_string() },
-        "Reads the version the server runs now.",
-    );
+    ui.step_start(number + 1, total, &checking, "Reads the version the server runs now.");
     let output = remote(host, REMOTE_VERSION, None)
         .map_err(|error| failed(format!("{host}: the version check failed: {}", describe_error(&error))))?;
     if !output.status.success() {
@@ -257,7 +500,26 @@ fn run_update(raw: RawUpdate, ui: &mut dyn HubUi) -> Result<i32, Failure> {
     let mut todo: Vec<Todo> = Vec::new();
     for host in &hosts {
         ui.looking(host);
-        match probe_hub(host, binary_arch) {
+        // A hub linked with its key, updated from a release, is read through that key: the hello says the version, and no ssh
+        // login of the owner's is asked for. Anything else is read the way `hub init` reads a hub.
+        let mut via = Via::Login;
+        let mut probed = None;
+        if release && connect::remembered_key(host).is_some() {
+            match hello_version(host, SSH_HELLO_TIMEOUT) {
+                Ok(Some(version)) => {
+                    via = Via::Itself;
+                    probed = Some(Ok(classify(&version, mine, true)));
+                }
+                Ok(None) => ui.probe_note(
+                    &Note::text(format!("{host} did not say which Aria it runs.")).then_text("Using your ssh login."),
+                ),
+                Err(problem) => ui.probe_note(
+                    &Note::text(format!("Could not open {host} with its key: {problem}"))
+                        .then_text("Using your ssh login."),
+                ),
+            }
+        }
+        match probed.unwrap_or_else(|| probe_hub(host, binary_arch)) {
             Ok(Probed::Current(now)) => {
                 ui.probe_ok(&format!("{host} already runs Aria {now}"));
                 runs.push((host.clone(), now));
@@ -272,7 +534,7 @@ fn run_update(raw: RawUpdate, ui: &mut dyn HubUi) -> Result<i32, Failure> {
             }
             Ok(Probed::Older { from, active }) => {
                 ui.probe_ok(&format!("{host} runs Aria {from}"));
-                todo.push(Todo { host: host.clone(), from, active });
+                todo.push(Todo { host: host.clone(), from, active, via });
             }
             Err(Failure(_, message)) => {
                 eprintln!("aria hub update: {host}: {message}");
@@ -400,28 +662,76 @@ mod tests {
 
     #[test]
     fn the_plan_has_two_steps_for_each_hub_and_says_nothing_is_sent() {
-        let one = [Todo { host: "ana@hub".into(), from: "0.21.0".into(), active: true }];
+        let one = [Todo { host: "ana@hub".into(), from: "0.21.0".into(), active: true, via: Via::Login }];
         let plan = plan_for(&one, true, "0.22.0");
-        assert_eq!(plan.steps, ["Update Aria on ana@hub from 0.21.0 to 0.22.0", "Check the new version"]);
+        assert_eq!(
+            plan.steps,
+            ["Update Aria on ana@hub from 0.21.0 to 0.22.0 (through your ssh login)", "Check the new version"]
+        );
         assert!(plan.good_to_know[0].contains("Nothing is sent"));
         assert!(plan.good_to_know.iter().any(|line| line.contains("takes the new version when idle")));
         let build = plan_for(&one, false, "0.22.0");
         assert_eq!(build.steps[0], "Update Aria on ana@hub from 0.21.0 to the build you gave me");
 
         let two = [
-            Todo { host: "a@one".into(), from: "0.21.0".into(), active: true },
-            Todo { host: "b@two".into(), from: "0.20.1".into(), active: false },
+            Todo { host: "a@one".into(), from: "0.21.0".into(), active: true, via: Via::Login },
+            Todo { host: "b@two".into(), from: "0.20.1".into(), active: false, via: Via::Login },
         ];
         let plan = plan_for(&two, true, "0.22.0");
         assert_eq!(plan.host, "your servers");
         assert_eq!(plan.steps.len(), 4);
         assert_eq!(plan.steps[1], "Check the new version on a@one");
-        assert_eq!(plan.steps[2], "Update Aria on b@two from 0.20.1 to 0.22.0");
+        assert_eq!(plan.steps[2], "Update Aria on b@two from 0.20.1 to 0.22.0 (through your ssh login)");
+    }
+
+    #[test]
+    fn a_hub_that_updates_itself_says_so_and_asks_for_no_ssh_login() {
+        let itself = [Todo { host: "ana@hub".into(), from: "0.21.0".into(), active: true, via: Via::Itself }];
+        let plan = plan_for(&itself, true, "0.22.0");
+        assert_eq!(
+            plan.steps,
+            ["Update Aria on ana@hub from 0.21.0 to 0.22.0 (the server updates itself)", "Check the new version"]
+        );
+        assert!(plan.good_to_know.iter().any(|line| line.contains("no ssh login of yours is used")), "{plan:?}");
+        assert!(
+            !plan.good_to_know.iter().any(|line| line.contains("its sudo is used")),
+            "only a login install runs sudo"
+        );
+        // A build uploaded by hand never updates itself: its plan has no "how".
+        let build = plan_for(&itself, false, "0.22.0");
+        assert_eq!(build.steps[0], "Update Aria on ana@hub from 0.21.0 to the build you gave me");
+
+        let mixed = [
+            Todo { host: "a@one".into(), from: "0.21.0".into(), active: true, via: Via::Itself },
+            Todo { host: "b@two".into(), from: "0.20.1".into(), active: true, via: Via::Login },
+        ];
+        let plan = plan_for(&mixed, true, "0.22.0");
+        assert!(
+            plan.steps[0].ends_with("(the server updates itself)")
+                && plan.steps[2].ends_with("(through your ssh login)")
+        );
+        let details = details_for(&itself, true, "0.22.0");
+        assert!(details[0].contains("hubUpdate") && details[0].contains("restricted key"), "{details:?}");
+    }
+
+    #[test]
+    fn the_waits_are_those_of_a_real_server_unless_the_tests_shorten_them() {
+        let standard = Waits::standard();
+        assert_eq!(standard.silence, Duration::from_secs(20));
+        assert!(standard.come_back > standard.poll && standard.confirm >= standard.poll);
+    }
+
+    #[test]
+    fn a_line_of_the_installer_is_cut_to_fit_under_a_step() {
+        assert_eq!(shorten("  - Checking this server  "), "- Checking this server");
+        let long = shorten(&"x".repeat(200));
+        assert_eq!(long.chars().count(), 70);
+        assert!(long.ends_with('…'));
     }
 
     #[test]
     fn the_technical_plan_names_the_commands() {
-        let one = [Todo { host: "ana@hub".into(), from: "0.21.0".into(), active: true }];
+        let one = [Todo { host: "ana@hub".into(), from: "0.21.0".into(), active: true, via: Via::Login }];
         let release = details_for(&one, true, "0.22.0");
         assert!(release[0].contains(&release_install_command("0.22.0")), "{release:?}");
         assert!(release[0].contains("no settings or credentials"));

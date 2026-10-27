@@ -70,6 +70,8 @@ pub struct Ctx {
     /// Security: a remote client may start a sign-in and so re-bind this computer's Claude or Notion account to its own;
     /// a stolen client key could do that, which is accepted (it can already chat with the model and use those accounts).
     pub oauth_codes: Mutex<HashMap<String, PendingSignIn>>,
+    /// A hub updating itself (`hubUpdate`): only a build with no window does.
+    pub hub_update: crate::hub_update::Updater,
 }
 
 /// A sign-in waiting for its browser: `token` tells it apart from the one that replaced it.
@@ -132,6 +134,7 @@ impl Ctx {
             config_dir: mcp_import::config_dir(&home, std::env::var_os("XDG_CONFIG_HOME").as_deref()),
             restart_engines: Arc::new(|| {}),
             oauth_codes: Mutex::default(),
+            hub_update: crate::hub_update::Updater::real(),
         }
     }
 }
@@ -149,6 +152,7 @@ pub fn is_blocking(message: &PageMessage) -> bool {
             | PageMessage::CheckKey { .. }
             | PageMessage::StartOAuth { .. }
             | PageMessage::StartMcpOAuth { .. }
+            | PageMessage::HubUpdate { .. }
             | PageMessage::InstallClaudeBridge { .. }
             | PageMessage::McpScan { .. }
             | PageMessage::McpImport { .. }
@@ -235,6 +239,8 @@ pub fn handle(message: PageMessage, ctx: &Ctx, emit: &dyn Fn(DockMessage)) {
                 emit(DockMessage::Error { id, code: "no-sign-in".into() });
             }
         }
+        // Blocks for as long as the installer runs; the callers run it on a thread of its own.
+        PageMessage::HubUpdate { id, version } => ctx.hub_update.handle(id, &version, emit),
         PageMessage::InstallClaudeBridge { id } => {
             let _ = ctx.paths.ensure_root();
             emit(install_claude_bridge(id, ctx));
@@ -661,6 +667,7 @@ mod tests {
                 r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }),
             oauth_codes: Mutex::default(),
+            hub_update: crate::hub_update::Updater::real(),
         };
         Harness { dir, ctx, opened, seen_keys, checked_oauth, restarts }
     }

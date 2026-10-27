@@ -70,6 +70,11 @@ pub enum PageMessage {
     /// sign-in's own `oauthResult`. Holds the authorization code: never log it.
     #[serde(rename = "oauthCode")]
     OAuthCode { id: u64, service: String, redirect: String },
+    /// Ask a hub (a headless service) to update itself to release `version` (`X.Y.Z`, nothing else): the service installs
+    /// that release as its own user and answers with `hubUpdateProgress` lines and one `hubUpdateResult`. Refused, as a
+    /// result with `ok: false`, unless the version is a newer one; a dock (a service with a window) is not a hub and refuses.
+    #[serde(rename = "hubUpdate")]
+    HubUpdate { id: u64, version: String },
     #[serde(rename = "openUrl")]
     OpenUrl { url: String },
     /// A chat message. `behavior` is `steer` or `followUp` when a run is already going. `attachments` are the files the
@@ -280,6 +285,19 @@ pub enum DockMessage {
     /// `error` is a UI string key: `oauth-denied`, `oauth-timeout`, `oauth-state`, `network-unavailable`.
     #[serde(rename = "oauthResult")]
     OAuthResult { id: u64, ok: bool, error: Option<String> },
+    /// One line of what a hub's installer prints while it updates it (`hubUpdate`); the request's `id` stays until the result.
+    #[serde(rename = "hubUpdateProgress")]
+    HubUpdateProgress { id: u64, line: String },
+    /// The end of a `hubUpdate`: `ok` with the `version` the hub runs now, or not with the plain `reason`.
+    #[serde(rename = "hubUpdateResult")]
+    HubUpdateResult {
+        id: u64,
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     /// Something prevents Aria from working (`hyprland-classic-config`, `hyprland-not-running`, …).
     #[serde(rename = "problem")]
     Problem { code: String },
@@ -473,6 +491,10 @@ mod tests {
         assert_eq!(
             page(r#"{"type":"oauthCode","id":8,"service":"notion","redirect":"code=a&state=b"}"#),
             PageMessage::OAuthCode { id: 8, service: "notion".into(), redirect: "code=a&state=b".into() }
+        );
+        assert_eq!(
+            page(r#"{"type":"hubUpdate","id":9,"version":"0.22.0"}"#),
+            PageMessage::HubUpdate { id: 9, version: "0.22.0".into() }
         );
         assert_eq!(page(r#"{"type":"openUrl","url":"https://x"}"#), PageMessage::OpenUrl { url: "https://x".into() });
         assert_eq!(
@@ -809,6 +831,23 @@ mod tests {
         assert_eq!(
             value(DockMessage::OAuthResult { id: 4, ok: true, error: None }),
             json!({"type": "oauthResult", "id": 4, "ok": true, "error": null})
+        );
+        assert_eq!(
+            value(DockMessage::HubUpdateProgress { id: 9, line: "- Checking this server".into() }),
+            json!({"type": "hubUpdateProgress", "id": 9, "line": "- Checking this server"})
+        );
+        assert_eq!(
+            value(DockMessage::HubUpdateResult { id: 9, ok: true, version: Some("0.22.0".into()), reason: None }),
+            json!({"type": "hubUpdateResult", "id": 9, "ok": true, "version": "0.22.0"})
+        );
+        assert_eq!(
+            value(DockMessage::HubUpdateResult {
+                id: 9,
+                ok: false,
+                version: None,
+                reason: Some("a downgrade is refused".into())
+            }),
+            json!({"type": "hubUpdateResult", "id": 9, "ok": false, "reason": "a downgrade is refused"})
         );
         assert_eq!(
             value(DockMessage::Problem { code: "hyprland-classic-config".into() }),

@@ -21,6 +21,10 @@
 //!   therefore re-bind the hub's Claude or Notion account, so a stolen client key could point them at the attacker's;
 //!   accepted, since that key can already chat with the model and use those accounts. Pasted text holds a code: never
 //!   logged.
+//! - `hubUpdate { id, version }` (local or remote): asks this service, when it is a hub, to update itself to that release
+//!   (`hub_update.rs` holds what it may and may not do). It goes to the handlers; the answer is `hubUpdateProgress` lines and
+//!   then `hubUpdateResult`, so, like a sign-in, its id stays until the last of them. A stolen client key can send it, and all
+//!   it can cause is the install of a newer release from the fixed repository, once at a time.
 
 use aria_core::bridge::{DockMessage, PageMessage, PROTOCOL};
 use serde_json::{json, Value};
@@ -70,7 +74,7 @@ fn allowed(message: &PageMessage) -> bool {
     }
 }
 
-/// What goes to the handlers and not the chat: a secret to keep, and the sign-ins.
+/// What goes to the handlers and not the chat: a secret to keep, the sign-ins and a hub's update of itself.
 fn for_handlers(message: &PageMessage) -> bool {
     matches!(
         message,
@@ -78,6 +82,7 @@ fn for_handlers(message: &PageMessage) -> bool {
             | PageMessage::StartOAuth { .. }
             | PageMessage::StartMcpOAuth { .. }
             | PageMessage::OAuthCode { .. }
+            | PageMessage::HubUpdate { .. }
     )
 }
 
@@ -204,6 +209,8 @@ enum AskKind {
     SignIn,
     /// `oauthCode`: answered only when refused; a good one is answered by the sign-in's own result.
     Code,
+    /// `hubUpdate`: answers `hubUpdateProgress` as often as the installer prints, and then `hubUpdateResult` (or `error`).
+    Update,
 }
 
 /// The numeric request id of a message (at its top, or inside a `session` wrapper), as a mutable slot.
@@ -347,6 +354,7 @@ impl Hub {
         let kind = match value["type"].as_str() {
             Some("startOauth" | "startMcpOauth") => AskKind::SignIn,
             Some("oauthCode") => AskKind::Code,
+            Some("hubUpdate") => AskKind::Update,
             _ => AskKind::Plain,
         };
         // (the client's own id, the hub's)
@@ -405,19 +413,23 @@ impl Hub {
     pub fn route(&self, message: &DockMessage) -> bool {
         let Ok(mut value) = serde_json::to_value(message) else { return true };
         let is_url = value["type"] == "oauthUrl";
+        let is_progress = value["type"] == "hubUpdateProgress";
         if let Some(slot) = id_slot(&mut value) {
             let id = slot.as_u64().unwrap_or(0);
             let asked = {
                 let mut asked = self.asked.lock().unwrap();
-                // A sign-in answers twice: its URL leaves the id in place for the result (or error) that follows. Any
-                // other reply is the last: it also ends what the client pasted into that sign-in.
-                let url_of_a_sign_in = is_url && asked.get(&id).is_some_and(|a| a.kind == AskKind::SignIn);
-                let found = if url_of_a_sign_in {
+                // A sign-in answers twice: its URL leaves the id in place for the result (or error) that follows; an update
+                // answers a line at a time and leaves it for the result. Any other reply is the last: it also ends what the
+                // client pasted into that sign-in.
+                let partial = asked.get(&id).is_some_and(|a| {
+                    (is_url && a.kind == AskKind::SignIn) || (is_progress && a.kind == AskKind::Update)
+                });
+                let found = if partial {
                     asked.get(&id).map(|a| Ask { client: a.client, own: a.own, kind: a.kind })
                 } else {
                     asked.remove(&id)
                 };
-                if let Some(ask) = found.as_ref().filter(|a| a.kind == AskKind::SignIn && !url_of_a_sign_in) {
+                if let Some(ask) = found.as_ref().filter(|a| a.kind == AskKind::SignIn && !partial) {
                     asked.retain(|_, other| !(other.client == ask.client && other.kind == AskKind::Code));
                 }
                 found
@@ -822,6 +834,7 @@ mod tests {
             PageMessage::StartOAuth { .. } => "startOauth",
             PageMessage::StartMcpOAuth { .. } => "startMcpOauth",
             PageMessage::OAuthCode { .. } => "oauthCode",
+            PageMessage::HubUpdate { .. } => "hubUpdate",
             PageMessage::OpenUrl { .. } => "openUrl",
             PageMessage::ChatSend { .. } => "chatSend",
             PageMessage::ChatAbort => "chatAbort",
@@ -885,6 +898,7 @@ mod tests {
             P::StartOAuth { id: 77 },
             P::StartMcpOAuth { id: 77, service: s("notion") },
             P::OAuthCode { id: 77, service: s("notion"), redirect: s("code=a&state=s") },
+            P::HubUpdate { id: 77, version: s("0.22.0") },
             P::OpenUrl { url: s("https://example.com") },
             P::ChatSend { text: s("hi"), behavior: None, attachments: vec![] },
             P::ChatAbort,
@@ -929,7 +943,7 @@ mod tests {
     /// Each variant's fate, sent by itself and wrapped in `session { aa }`, from a local client and from a remote one:
     /// `(variant, bare local, bare remote, wrapped local, wrapped remote)`. This is the whole surface.
     #[rustfmt::skip]
-    const SURFACE: [(&str, Fate, Fate, Fate, Fate); 53] = [
+    const SURFACE: [(&str, Fate, Fate, Fate, Fate); 54] = [
         ("ready",               NC, NC, NC, NC),
         ("opened",              NC, NC, NC, NC),
         ("closeRequest",        NC, NC, NC, NC),
@@ -945,6 +959,7 @@ mod tests {
         ("startOauth",          H,  H,  NC, NC),
         ("startMcpOauth",       H,  H,  NC, NC),
         ("oauthCode",           H,  H,  NC, NC),
+        ("hubUpdate",           H,  H,  NC, NC),
         ("openUrl",             NC, NC, NC, NC),
         ("chatSend",            NC, NC, C,  C),
         ("chatAbort",           NC, NC, C,  C),
@@ -1240,7 +1255,8 @@ mod tests {
         match f.handled.recv_timeout(Duration::from_secs(5)).unwrap() {
             PageMessage::StartOAuth { id }
             | PageMessage::StartMcpOAuth { id, .. }
-            | PageMessage::OAuthCode { id, .. } => id,
+            | PageMessage::OAuthCode { id, .. }
+            | PageMessage::HubUpdate { id, .. } => id,
             other => panic!("{other:?}"),
         }
     }
@@ -1268,6 +1284,58 @@ mod tests {
         assert!(!f.hub.route(&DockMessage::Error { id: ours, code: "oauth-failed".into() }));
         assert_eq!(a.next(), json!({"type": "error", "id": 4, "code": "oauth-failed"}));
         assert_eq!(remembered(&f), 0);
+    }
+
+    #[test]
+    fn a_hub_update_answers_line_by_line_to_the_asker_alone_and_its_id_stays_until_the_result() {
+        let f = fixture();
+        let mut a = connect(&f);
+        let mut b = connect(&f);
+        // A remote client may ask for it (the restricted key is the one that does).
+        a.send(json!({"type": "hello", "protocol": PROTOCOL, "version": "x", "remote": true}));
+        a.next();
+        a.send(json!({"type": "hubUpdate", "id": 5, "version": "0.22.0"}));
+        let ours = handled_id(&f);
+        assert_ne!(ours, 5, "the client's id is swapped for the hub's");
+        assert!(f.chat.try_recv().is_err(), "an update is for the handlers, not the chat");
+        for line in ["- Checking this server", "- Installing Aria"] {
+            assert!(!f.hub.route(&DockMessage::HubUpdateProgress { id: ours, line: line.into() }), "not the page's");
+            assert_eq!(a.next(), json!({"type": "hubUpdateProgress", "id": 5, "line": line}));
+            assert_eq!(remembered(&f), 1, "the id is kept after a line");
+        }
+        assert!(!f.hub.route(&DockMessage::HubUpdateResult {
+            id: ours,
+            ok: true,
+            version: Some("0.22.0".into()),
+            reason: None
+        }));
+        assert_eq!(a.next(), json!({"type": "hubUpdateResult", "id": 5, "ok": true, "version": "0.22.0"}));
+        assert_eq!(remembered(&f), 0, "and dropped after the result");
+        // The other client heard none of it.
+        b.send(json!({"type": "saveSettings", "id": 999, "settings": {}}));
+        assert_eq!(b.next()["id"], 999, "nothing else was queued for the other client");
+    }
+
+    #[test]
+    fn a_hub_update_that_fails_ends_the_same_way() {
+        let f = fixture();
+        let mut a = connect(&f);
+        a.send(json!({"type": "hubUpdate", "id": 6, "version": "0.22.0"}));
+        let ours = handled_id(&f);
+        assert!(!f.hub.route(&DockMessage::HubUpdateProgress { id: ours, line: "curl: (22) 404".into() }));
+        a.next();
+        assert!(!f.hub.route(&DockMessage::HubUpdateResult {
+            id: ours,
+            ok: false,
+            version: None,
+            reason: Some("curl: (22) 404".into())
+        }));
+        assert_eq!(a.next(), json!({"type": "hubUpdateResult", "id": 6, "ok": false, "reason": "curl: (22) 404"}));
+        assert_eq!(remembered(&f), 0);
+        // A message that is not a version string at all is refused before it reaches anyone.
+        a.send(json!({"type": "hubUpdate", "id": 7, "version": 22}));
+        assert_eq!(a.next(), json!({"type": "error", "id": 7, "code": "not-for-clients"}));
+        assert!(f.handled.try_recv().is_err());
     }
 
     #[test]

@@ -1503,18 +1503,21 @@ fn install_on_hub(
     title: &str,
     step: (usize, usize),
     ui: &mut dyn HubUi,
+    announce: bool,
     stopped: &dyn Fn(usize, &str, String) -> Failure,
 ) -> Result<(), Failure> {
     let (number, total) = step;
     if let Some(version) = source.release {
-        ui.step_start(
-            number,
-            total,
-            title,
-            &format!(
-                "The server downloads Aria {version} and sets itself up. It may ask for the server's sudo password."
-            ),
-        );
+        if announce {
+            ui.step_start(
+                number,
+                total,
+                title,
+                &format!(
+                    "The server downloads Aria {version} and sets itself up. It may ask for the server's sudo password."
+                ),
+            );
+        }
         ui.step_info("The server's installer prints its own steps below.");
         ui.hand_terminal_over();
         let status = remote_tty(host, &user_env(&release_install_command(version)));
@@ -1525,7 +1528,9 @@ fn install_on_hub(
         }
     } else {
         let repo = source.repo.ok_or_else(|| failed("the Aria checkout is not here"))?;
-        ui.step_start(number, total, title, "Uploads the build you gave me, then runs the installer there.");
+        if announce {
+            ui.step_start(number, total, title, "Uploads the build you gave me, then runs the installer there.");
+        }
         let mut files: Vec<(String, Vec<u8>, u32)> = Vec::new();
         for name in UPLOAD_FILES {
             let content = std::fs::read(repo.join(name)).map_err(|error| failed(format!("{name}: {error}")))?;
@@ -1599,7 +1604,7 @@ fn write_steps(
     }
 
     let source = InstallSource { release: args.release.as_deref(), repo, binary: &args.binary };
-    install_on_hub(host, &source, "Installing Aria on the server", (number(Part::Install), total), ui, &stopped)?;
+    install_on_hub(host, &source, "Installing Aria on the server", (number(Part::Install), total), ui, true, &stopped)?;
     ui.step_ok("Aria is installed on the server");
     // The installer may have put iproute2 on the hub: a `ss` that was missing is asked again before giving up.
     let listeners =

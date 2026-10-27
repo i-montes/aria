@@ -7,8 +7,10 @@ use std::process::{Command, Output, Stdio};
 
 const PINS: [&str; 5] = ["pi-version", "pi-packages", "engram-version", "agent-browser-version", "node-version"];
 const KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl ana@laptop";
-const TOOLS: [&str; 15] =
-    ["sh", "head", "tail", "cat", "wc", "tr", "mkdir", "tar", "cut", "grep", "touch", "chmod", "rm", "cp", "sleep"];
+const TOOLS: [&str; 16] = [
+    "sh", "head", "tail", "cat", "wc", "tr", "mkdir", "tar", "cut", "grep", "touch", "chmod", "rm", "cp", "sleep",
+    "sed",
+];
 
 /// An owner's computer (a home with settings) and a checkout of the repository, next to a hub that is only the fake ssh.
 struct World {
@@ -1585,4 +1587,229 @@ fn plain_and_details_are_accepted_and_the_arguments_are_checked() {
         let output = world.update(bad, &[]);
         assert_eq!(output.status.code(), Some(2), "{bad:?}: {}", text(&output.stderr));
     }
+}
+
+// ---- a hub that updates itself ----------------------------------------------------------------------------------------
+
+impl World {
+    /// Hubs this computer is linked to WITH a key that exists (`aria hub update` reaches such a hub through the terminal
+    /// bridge and asks it to update itself); the first of `hosts` is the default.
+    fn link_with_key(&self, hosts: &[&str]) -> PathBuf {
+        let key = self.path("home/linked-key");
+        std::fs::write(&key, "a private key").unwrap();
+        let entries: Vec<String> =
+            hosts.iter().map(|host| format!(r#""{host}": {{"key": "{}"}}"#, key.display())).collect();
+        std::fs::write(
+            self.path("home/.aria/hubs.json"),
+            format!(r#"{{"default": "{}", "hubs": {{{}}}}}"#, hosts[0], entries.join(", ")),
+        )
+        .unwrap();
+        key
+    }
+
+    fn bridge_args(&self) -> String {
+        std::fs::read_to_string(self.path("hub/ssh-args")).unwrap_or_default()
+    }
+}
+
+/// What a hub that runs `before` says through its terminal bridge, says once it updated itself, and how its bridge answers
+/// `hubUpdate`.
+fn itself<'a>(before: &'a str, after: &'a str, answer: &'a str) -> Vec<(&'a str, &'a str)> {
+    vec![
+        ("ARIA_FAKE_SSH_HELLO_VERSION", before),
+        ("ARIA_FAKE_SSH_HELLO_VERSION_AFTER", after),
+        ("ARIA_FAKE_SSH_SELFUPDATE", answer),
+        ("ARIA_SELF_UPDATE_WAIT_MS", "300"),
+    ]
+}
+
+/// Every remote command the log holds is the terminal bridge or the request sent through it: the owner's login ran nothing.
+fn assert_no_login_was_used(world: &World) {
+    let log = commands(&world.log());
+    assert!(
+        log.iter()
+            .all(|command| command.starts_with("~/.local/bin/aria client-stdio") || command.starts_with("hubUpdate")),
+        "only the bridge was opened: {log:?}"
+    );
+}
+
+#[test]
+fn a_linked_hub_updates_itself_through_its_key_and_no_login_is_used() {
+    let world = World::new();
+    let key = world.link_with_key(&["ana@hub.example"]);
+    let hubs_before = world.hubs_json();
+    let output = world.update(&["ana@hub.example", "--yes"], &itself("0.0.1", MINE, "ok"));
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    let said = flat(&out);
+    for expected in [
+        "ana@hub.example runs Aria 0.0.1",
+        format!("Update Aria on ana@hub.example from 0.0.1 to {MINE} (the server updates itself)").as_str(),
+        "no ssh login of yours is used",
+        "[1/2] Updating Aria on ana@hub.example",
+        "Nothing is asked of you",
+        "- Checking this server",
+        "- Installing Aria",
+        "Aria is updated on the server",
+        "[2/2] Checking the new version",
+        format!("The server runs Aria {MINE}").as_str(),
+        format!("ana@hub.example runs Aria {MINE}").as_str(),
+    ] {
+        assert!(said.contains(expected), "{expected:?} not in\n{out}");
+    }
+    assert_fits(&out);
+    // The request carried this Aria's version and nothing else; no command ran over the owner's own login.
+    let log = commands(&world.log());
+    assert!(log.contains(&format!("hubUpdate {MINE}")), "{log:?}");
+    assert_no_login_was_used(&world);
+    // The bridge was opened with the linked key, and that key only.
+    let args = world.bridge_args();
+    assert!(args.contains(&format!("-i {}", key.display())) && args.contains("IdentitiesOnly=yes"), "{args}");
+    assert_sent_nothing(&world);
+    assert_eq!(world.hubs_json(), hubs_before, "hubs.json is not touched");
+}
+
+#[test]
+fn a_hub_that_is_too_old_to_update_itself_is_updated_through_the_login_once() {
+    for answer in ["unknown", "silent"] {
+        let world = World::new();
+        world.link_with_key(&["ana@hub.example"]);
+        let mut envs = itself("0.0.1", MINE, answer);
+        envs.extend(versions("0.0.1", MINE));
+        let output = world.update(&["ana@hub.example", "--yes"], &envs);
+        let (out, err) = (text(&output.stdout), text(&output.stderr));
+        assert_eq!(output.status.code(), Some(0), "{answer}: {out}{err}");
+        let said = flat(&out);
+        assert!(said.contains("too old to update itself; using your ssh login once"), "{answer}: {out}");
+        assert_eq!(said.matches("[1/2] Updating Aria on ana@hub.example").count(), 1, "one header, not two: {out}");
+        assert!(said.contains(&format!("The server runs Aria {MINE}")), "{answer}: {out}");
+        let log = commands(&world.log());
+        assert!(log.iter().any(|command| command.contains("install.sh")), "the login ran the installer: {log:?}");
+        assert_fits(&out);
+        assert_sent_nothing(&world);
+    }
+}
+
+#[test]
+fn a_server_that_cannot_update_itself_says_why_and_the_login_is_not_used_instead() {
+    let world = World::new();
+    world.link_with_key(&["ana@hub.example"]);
+    let output = world.update(&["ana@hub.example", "--yes"], &itself("0.0.1", MINE, "fail"));
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(1), "{out}{err}");
+    assert!(
+        flat(&err).contains("the server could not update itself: curl: (22) The requested URL returned error: 404"),
+        "{err}"
+    );
+    assert!(flat(&err).contains("ana@hub.example was not updated."), "the mark beside the error: {err}");
+    assert_no_login_was_used(&world);
+    assert_fits(&out);
+    // A refusal (the server says it is newer, say) is reported the same way.
+    let output = world.update(&["ana@hub.example", "--yes"], &itself("0.0.1", MINE, "refuse"));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        flat(&text(&output.stderr)).contains("could not update itself: a downgrade is refused"),
+        "{}",
+        text(&output.stderr)
+    );
+    assert_no_login_was_used(&world);
+}
+
+#[test]
+fn a_result_for_another_version_is_a_failure() {
+    let world = World::new();
+    world.link_with_key(&["ana@hub.example"]);
+    let output = world.update(&["ana@hub.example", "--yes"], &itself("0.0.1", MINE, "wrong"));
+    assert_eq!(output.status.code(), Some(1), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert!(flat(&text(&output.stderr)).contains(&format!("not to Aria {MINE} (9.9.9)")), "{}", text(&output.stderr));
+}
+
+#[test]
+fn a_connection_that_drops_while_the_server_restarts_is_waited_for() {
+    let world = World::new();
+    world.link_with_key(&["ana@hub.example"]);
+    let output = world.update(&["ana@hub.example", "--yes"], &itself("0.0.1", MINE, "eof"));
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    let said = flat(&out);
+    assert!(said.contains("The connection dropped; waiting for the server to come back."), "{out}");
+    assert!(said.contains(&format!("The server runs Aria {MINE}")), "{out}");
+    assert_no_login_was_used(&world);
+}
+
+#[test]
+fn a_connection_that_drops_and_a_server_that_never_comes_back_with_the_new_version_fails() {
+    let world = World::new();
+    world.link_with_key(&["ana@hub.example"]);
+    // The hub says the old version for ever (its bridge answers the new one only once `HELLO_VERSION_AFTER` is set).
+    let envs = [
+        ("ARIA_FAKE_SSH_HELLO_VERSION", "0.0.1"),
+        ("ARIA_FAKE_SSH_SELFUPDATE", "eof"),
+        ("ARIA_SELF_UPDATE_WAIT_MS", "100"),
+    ];
+    let output = world.update(&["ana@hub.example", "--yes"], &envs);
+    assert_eq!(output.status.code(), Some(1), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert!(flat(&text(&output.stderr)).contains("does not answer with Aria"), "{}", text(&output.stderr));
+}
+
+#[test]
+fn a_hub_that_cannot_be_opened_with_its_key_is_updated_through_the_login() {
+    let world = World::new();
+    world.link_with_key(&["ana@hub.example"]);
+    let mut envs = versions("0.0.1", MINE).to_vec();
+    envs.push(("ARIA_FAKE_SSH_HELLO", "fail"));
+    let output = world.update(&["ana@hub.example", "--yes"], &envs);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    let said = flat(&out);
+    assert!(said.contains("Could not open ana@hub.example with its key"), "{out}");
+    assert!(said.contains("Using your ssh login."), "{out}");
+    assert!(said.contains("(through your ssh login)"), "{out}");
+    assert!(commands(&world.log()).iter().any(|command| command.contains("install.sh")), "{:?}", world.log());
+    assert_fits(&out);
+}
+
+#[test]
+fn a_build_given_by_hand_never_updates_itself_even_with_a_key() {
+    let world = World::new();
+    world.link_with_key(&["ana@hub.example"]);
+    let mut envs = itself("0.0.1", MINE, "ok");
+    envs.extend(versions("0.0.1", MINE));
+    let output = world.update(&["ana@hub.example", "--binary", "bin/aria-aarch64", "--yes"], &envs);
+    assert_eq!(output.status.code(), Some(0), "{}{}", text(&output.stdout), text(&output.stderr));
+    let log = commands(&world.log());
+    assert!(!log.iter().any(|command| command.starts_with("hubUpdate")), "no request was sent: {log:?}");
+    assert!(log.iter().any(|command| command.contains("tar -xf")), "the build was uploaded: {log:?}");
+}
+
+#[test]
+fn a_hub_with_no_key_here_is_updated_through_the_login_as_before() {
+    let world = World::new();
+    world.link(&["ana@hub.example"]); // its key file does not exist
+    let output = world.update(&["ana@hub.example", "--yes"], &versions("0.0.1", MINE));
+    assert_eq!(output.status.code(), Some(0), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert!(flat(&text(&output.stdout)).contains("(through your ssh login)"), "{}", text(&output.stdout));
+    assert!(!commands(&world.log()).iter().any(|command| command.starts_with("hubUpdate")));
+}
+
+#[test]
+fn a_hub_that_already_runs_this_version_is_left_alone_and_read_through_its_key() {
+    let world = World::new();
+    world.link_with_key(&["ana@hub.example"]);
+    let output = world.update(&["ana@hub.example", "--yes"], &itself(MINE, MINE, "ok"));
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    assert!(out.contains(&format!("ana@hub.example already runs Aria {MINE}")), "{out}");
+    assert!(!commands(&world.log()).iter().any(|command| command.starts_with("hubUpdate")), "nothing was asked");
+    assert_no_login_was_used(&world);
+}
+
+#[test]
+fn a_newer_hub_is_refused_without_the_login_too() {
+    let world = World::new();
+    world.link_with_key(&["ana@hub.example"]);
+    let output = world.update(&["ana@hub.example", "--yes"], &itself("999.0.0", MINE, "ok"));
+    assert_eq!(output.status.code(), Some(1), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert!(flat(&text(&output.stderr)).contains("The server runs a newer Aria (999.0.0)"), "{}", text(&output.stderr));
+    assert_no_login_was_used(&world);
 }

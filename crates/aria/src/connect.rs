@@ -99,7 +99,7 @@ impl Hubs {
 }
 
 /// The key `hub init` linked this computer to `host` with, when it is still there to use.
-fn remembered_key(host: &str) -> Option<PathBuf> {
+pub(crate) fn remembered_key(host: &str) -> Option<PathBuf> {
     let hubs = Hubs::load(&AriaPaths::from_env().root).ok()?;
     hubs.key_for(host).filter(|key| key.is_file()).map(Path::to_path_buf)
 }
@@ -148,13 +148,25 @@ fn try_with(command: &mut Command, within: Duration) -> Result<(), ConnectError>
     })
 }
 
+/// What a link that did not open was: no ssh to run, or a hub that did not open it.
+fn spawn_error(error: io::Error) -> ConnectError {
+    match error.kind() {
+        io::ErrorKind::NotFound => ConnectError::NoSsh,
+        _ => ConnectError::Failed(error),
+    }
+}
+
 /// A link to the hub of `host`: ssh runs, the hellos are exchanged. ssh's own errors go to this terminal's stderr.
 pub fn open(host: &str) -> Result<Link, ConnectError> {
     let mut command = ssh_command(host)?;
-    Link::spawn(&mut command).map_err(|error| match error.kind() {
-        io::ErrorKind::NotFound => ConnectError::NoSsh,
-        _ => ConnectError::Failed(error),
-    })
+    Link::spawn(&mut command).map_err(spawn_error)
+}
+
+/// `open`, with the time the hub has to answer the hello (`hub update` looks at a hub that is restarting, and says so
+/// sooner than a terminal would).
+pub fn open_within(host: &str, within: Duration) -> Result<Link, ConnectError> {
+    let mut command = ssh_command(host)?;
+    Link::spawn_within(&mut command, within).map_err(spawn_error)
 }
 
 #[cfg(test)]

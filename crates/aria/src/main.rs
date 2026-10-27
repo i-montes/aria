@@ -33,6 +33,7 @@ mod handlers;
 mod hub_admin;
 mod hub_tui;
 mod hub_ui;
+mod hub_update;
 mod jobs;
 mod jobs_socket;
 mod keyring_cli;

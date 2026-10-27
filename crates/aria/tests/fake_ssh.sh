@@ -20,7 +20,16 @@
 #                              set, is what it says once the installer has run
 #   ARIA_FAKE_SSH_DOWN         hosts (space separated) that cannot be reached: ssh exits 255 for every command to them
 #   ARIA_FAKE_SSH_HELLO        fail: `aria client-stdio` (the connection `hub init` tries at the end) exits at once; otherwise it
-#                              answers the hello with protocol ARIA_FAKE_SSH_PROTOCOL (default 1)
+#                              answers the hello with protocol ARIA_FAKE_SSH_PROTOCOL (default 1) and the version
+#                              ARIA_FAKE_SSH_HELLO_VERSION (default x); once a hub has "updated itself" (below) it says
+#                              ARIA_FAKE_SSH_HELLO_VERSION_AFTER instead, when that is set
+#   ARIA_FAKE_SSH_SELFUPDATE   what the terminal bridge does with a `hubUpdate` request (`aria hub update` on a hub linked with
+#                              its key): ok (two progress lines, then a good result for the version asked, and the hub counts
+#                              as updated), fail (a progress line and a failed result: a 404), refuse (a failed result:
+#                              a downgrade), wrong (a good result for another version), unknown (an old hub: an error,
+#                              `not-for-clients`), silent (no answer at all), eof (a progress line and the connection ends,
+#                              the hub counting as updated). The request is logged as `<host><TAB>hubUpdate <version>`; the
+#                              arguments of the bridge's ssh are kept in $ARIA_FAKE_SSH_ROOT/ssh-args.
 # ARIA_FAKE_SSH_ROOT is the hub's computer: the upload is unpacked, and the key is added to authorized_keys, under
 # $ARIA_FAKE_SSH_ROOT/home, the only place a command is really run.
 log=${ARIA_FAKE_SSH_LOG:?ARIA_FAKE_SSH_LOG}
@@ -45,8 +54,39 @@ if [ "$a1" = client-stdio ] && [ "$a2" = "~/.local/bin/aria" ]; then
   cmd="$a2 $a1"
   printf '%s\t%s\tstdin=0\n' "$host" "$cmd" >> "$log"
   if [ "${ARIA_FAKE_SSH_HELLO:-ok}" = fail ]; then echo "fake ssh: the connection is refused" >&2; exit 255; fi
+  printf '%s\n' "$*" > "$root/ssh-args"
   read -r hello
-  printf '{"type":"hello","protocol":%s,"version":"x"}\n' "${ARIA_FAKE_SSH_PROTOCOL:-1}"
+  hello_version=${ARIA_FAKE_SSH_HELLO_VERSION:-x}
+  if [ -f "$root/self-updated" ] && [ -n "${ARIA_FAKE_SSH_HELLO_VERSION_AFTER:-}" ]; then hello_version=$ARIA_FAKE_SSH_HELLO_VERSION_AFTER; fi
+  printf '{"type":"hello","protocol":%s,"version":"%s"}\n' "${ARIA_FAKE_SSH_PROTOCOL:-1}" "$hello_version"
+  if [ -n "${ARIA_FAKE_SSH_SELFUPDATE:-}" ]; then
+    # A connection that only says hello (the checks of `hub update`) is closed by its client: no request, nothing to log.
+    read -r request || exit 0
+    asked=$(printf '%s' "$request" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+    id=$(printf '%s' "$request" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+    printf '%s\thubUpdate %s\tstdin=0\n' "$host" "$asked" >> "$log"
+    case "$ARIA_FAKE_SSH_SELFUPDATE" in
+      ok)
+        printf '{"type":"hubUpdateProgress","id":%s,"line":"- Checking this server"}\n' "$id"
+        printf '{"type":"hubUpdateProgress","id":%s,"line":"- Installing Aria"}\n' "$id"
+        touch "$root/self-updated"
+        printf '{"type":"hubUpdateResult","id":%s,"ok":true,"version":"%s"}\n' "$id" "$asked" ;;
+      wrong)
+        printf '{"type":"hubUpdateResult","id":%s,"ok":true,"version":"9.9.9"}\n' "$id" ;;
+      fail)
+        printf '{"type":"hubUpdateProgress","id":%s,"line":"curl: (22) The requested URL returned error: 404"}\n' "$id"
+        printf '{"type":"hubUpdateResult","id":%s,"ok":false,"reason":"curl: (22) The requested URL returned error: 404"}\n' "$id" ;;
+      refuse)
+        printf '{"type":"hubUpdateResult","id":%s,"ok":false,"reason":"a downgrade is refused"}\n' "$id" ;;
+      unknown)
+        printf '{"type":"error","id":%s,"code":"not-for-clients"}\n' "$id" ;;
+      eof)
+        printf '{"type":"hubUpdateProgress","id":%s,"line":"- Installing Aria"}\n' "$id"
+        touch "$root/self-updated"
+        exit 0 ;;
+      silent) ;;
+    esac
+  fi
   exec sleep 30
 fi
 stdin_file="$root/stdin.$$"
