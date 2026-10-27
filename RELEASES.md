@@ -5,6 +5,14 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.21.0 — 2026-10-26
+
+### New
+
+- aria hub init needs no checkout, makes its key and remembers the hub
+- the installer asks for this computer or a hub, and sets a hub up by itself
+- a release carries the installer, the dock and the hub's binaries
+
 ## 0.20.2 — 2026-10-26
 
 ### Fixed
