@@ -8,7 +8,8 @@
 //! that can only run this command cannot reach the hub in any other way. A line is read up to `MAX_LINE` bytes and no
 //! further: nothing longer is ever buffered.
 //!
-//! Exit codes (`Exit`): 0 the client closed, 1 the hub is down (or went away), 3 another protocol, 4 a line over the cap.
+//! Exit codes (`Exit`): 0 the client closed, 1 the hub is down (or went away), 2 bad arguments (`aria hub-link`), 3 another
+//! protocol, 4 a line over the cap.
 
 use aria_core::bridge::PROTOCOL;
 use serde_json::{json, Value};
@@ -26,6 +27,8 @@ pub enum Exit {
     Done = 0,
     /// No hub on the socket, or it went away.
     HubDown = 1,
+    /// `aria hub-link` was given arguments it does not take.
+    Usage = 2,
     /// The client or the hub speaks another protocol (or the client's first line was no `hello`).
     Mismatch = 3,
     /// A line over `MAX_LINE`.
@@ -33,7 +36,7 @@ pub enum Exit {
 }
 
 /// What reading one line gave.
-enum Next {
+pub(crate) enum Next {
     Line(Vec<u8>),
     Eof,
     /// The line went past the cap before its end: what came after is not read.
@@ -41,7 +44,7 @@ enum Next {
 }
 
 /// One line (without its newline), never holding more than `max` bytes of it.
-fn next_line(reader: &mut impl BufRead, max: usize) -> std::io::Result<Next> {
+pub(crate) fn next_line(reader: &mut impl BufRead, max: usize) -> std::io::Result<Next> {
     let mut line = Vec::new();
     loop {
         let buffered = match reader.fill_buf() {
@@ -65,7 +68,7 @@ fn next_line(reader: &mut impl BufRead, max: usize) -> std::io::Result<Next> {
     }
 }
 
-fn write_line(out: &mut impl Write, value: &Value) -> std::io::Result<()> {
+pub(crate) fn write_line(out: &mut impl Write, value: &Value) -> std::io::Result<()> {
     out.write_all(format!("{value}\n").as_bytes())?;
     out.flush()
 }
@@ -111,8 +114,21 @@ pub fn run(input: impl Read + Send + 'static, output: impl Write + Send + 'stati
         return Exit::HubDown;
     }
 
+    relay(input, output, to_hub, from_hub, closer, |value| value["type"] != "hello")
+}
+
+/// The two halves every bridge is made of: the hub's lines go to `output` as they are, until the hub closes, and the far
+/// side's lines go to the hub when they are JSON objects `forward` lets through. Whichever side ends first ends both: the
+/// hub's end is shut (`closer`), which ends the hub's connection and the thread reading it.
+pub(crate) fn relay(
+    mut input: BufReader<impl Read + Send + 'static>,
+    mut output: impl Write + Send + 'static,
+    mut to_hub: UnixStream,
+    from_hub: UnixStream,
+    closer: UnixStream,
+    forward: fn(&Value) -> bool,
+) -> Exit {
     let (ended, end) = mpsc::channel::<Exit>();
-    // The hub's lines go to the client as they are, until the hub closes.
     let hub_ended = ended.clone();
     std::thread::spawn(move || {
         let mut lines = BufReader::new(from_hub);
@@ -135,7 +151,6 @@ pub fn run(input: impl Read + Send + 'static, output: impl Write + Send + 'stati
         };
         let _ = hub_ended.send(exit);
     });
-    // The client's lines go to the hub when they are JSON objects and not a `hello`.
     std::thread::spawn(move || {
         let exit = loop {
             let line = match next_line(&mut input, MAX_LINE) {
@@ -144,7 +159,7 @@ pub fn run(input: impl Read + Send + 'static, output: impl Write + Send + 'stati
                 Ok(Next::Eof) | Err(_) => break Exit::Done,
             };
             let Ok(value) = serde_json::from_slice::<Value>(&line) else { continue };
-            if !value.is_object() || value["type"] == "hello" {
+            if !value.is_object() || !forward(&value) {
                 continue;
             }
             if write_line(&mut to_hub, &value).is_err() {
@@ -154,7 +169,6 @@ pub fn run(input: impl Read + Send + 'static, output: impl Write + Send + 'stati
         let _ = ended.send(exit);
     });
     let exit = end.recv().unwrap_or(Exit::Done);
-    // One side is over: closing the hub's end ends the hub's client, and the thread reading it.
     let _ = closer.shutdown(std::net::Shutdown::Both);
     exit
 }

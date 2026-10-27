@@ -21,11 +21,18 @@
 //!   therefore re-bind the hub's Claude or Notion account, so a stolen client key could point them at the attacker's;
 //!   accepted, since that key can already chat with the model and use those accounts. Pasted text holds a code: never
 //!   logged.
+//! - Machines (`machines.rs`): a session that lives on a computer linked to this hub as a machine is listed with the rest
+//!   (`machine`, and `offline` while it is not linked), and a line for it is wrapped `{"c": client, "line": ...}` and sent
+//!   over that machine's link, with the client's own ids (the machine rewrites them as its own hub does) and after the
+//!   same checks a remote client's line gets here; `attach`, `detach` and `focus` follow the session they name, and
+//!   `sessionNew { machine: "<name>" }` starts one there (`unknown-machine`, `machine-offline`). A session the hub has
+//!   itself is never a machine's. The page's own list is not touched.
 //! - `hubUpdate { id, version }` (local or remote): asks this service, when it is a hub, to update itself to that release
 //!   (`hub_update.rs` holds what it may and may not do). It goes to the handlers; the answer is `hubUpdateProgress` lines and
 //!   then `hubUpdateResult`, so, like a sign-in, its id stays until the last of them. A stolen client key can send it, and all
 //!   it can cause is the install of a newer release from the fixed repository, once at a time.
 
+use crate::machines::{self, Machines, Refused};
 use aria_core::bridge::{DockMessage, PageMessage, PROTOCOL};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -193,6 +200,9 @@ pub struct Hub {
     /// The ids given to clients' requests. A reply whose id is not here is the page's.
     asked: Arc<Mutex<HashMap<u64, Ask>>>,
     next_ask: Arc<AtomicU64>,
+    /// The computers linked to this hub as machines (`machines.rs`): their sessions join the list, and a line for one of
+    /// them travels over its link.
+    machines: Machines,
 }
 
 /// A client's request in flight: who asked, with which id, and what kind of request it was.
@@ -211,6 +221,24 @@ enum AskKind {
     Code,
     /// `hubUpdate`: answers `hubUpdateProgress` as often as the installer prints, and then `hubUpdateResult` (or `error`).
     Update,
+}
+
+/// A client's line as the page message it is, with a `!command` (a `piCommand` named `bash`, which the page can never
+/// send) turned into its own message so every rule that names it sees it.
+fn client_message(value: Value) -> Option<PageMessage> {
+    serde_json::from_value::<PageMessage>(value).ok().map(|message| match message {
+        PageMessage::Session { session, message } => match *message {
+            PageMessage::PiCommand { id, command, args } if command == "bash" => PageMessage::Session {
+                session,
+                message: Box::new(PageMessage::ChatBash {
+                    id,
+                    command: args["command"].as_str().unwrap_or_default().to_string(),
+                }),
+            },
+            other => PageMessage::Session { session, message: Box::new(other) },
+        },
+        other => other,
+    })
 }
 
 /// The numeric request id of a message (at its top, or inside a `session` wrapper), as a mutable slot.
@@ -234,6 +262,38 @@ impl Hub {
             next: Arc::new(AtomicU64::new(1)),
             asked: Arc::default(),
             next_ask: Arc::new(AtomicU64::new(CLIENT_BASE)),
+            machines: Machines::default(),
+        }
+    }
+
+    /// The registry of linked machines (the tests look at it; the machine side's commands will too).
+    #[cfg(test)]
+    pub fn machines(&self) -> Machines {
+        self.machines.clone()
+    }
+
+    /// A hub with other link intervals, before anything is served (the tests need not wait 45 seconds).
+    #[cfg(test)]
+    pub fn with_timing(mut self, timing: machines::Timing) -> Hub {
+        self.machines = Machines::with_timing(timing);
+        self
+    }
+
+    /// Accepts the machines' links on `listener` (`aria hub-link machine <name>` is the other end).
+    pub fn serve_machines(&self, listener: UnixListener) {
+        self.machines.serve(self.clone(), listener);
+    }
+
+    /// A line to client `number`, if it is still there (the machines' deliveries).
+    pub(crate) fn send_line(&self, number: u64, value: &Value) {
+        self.send_to(number, value);
+    }
+
+    /// A line to every client.
+    pub(crate) fn broadcast(&self, value: &Value) {
+        let numbers: Vec<u64> = self.clients.0.lock().unwrap().keys().copied().collect();
+        for number in numbers {
+            self.send_to(number, value);
         }
     }
 
@@ -290,6 +350,8 @@ impl Hub {
     }
 
     fn drop_client(&self, number: u64) {
+        // The machines it had a route to are told it is gone (nothing happens when it had none).
+        self.machines.client_gone(number);
         if let Some(client) = self.clients.0.lock().unwrap().remove(&number) {
             let _ = client.stream.shutdown(std::net::Shutdown::Both);
         }
@@ -346,10 +408,26 @@ impl Hub {
                 }
                 return;
             }
-            Some("attach") => return self.set(number, |c| c.session = value["session"].as_str().map(str::to_string)),
-            Some("detach") => return self.set(number, |c| c.session = None),
-            Some("focus") => return self.set(number, |c| c.focused = value["focused"].as_bool().unwrap_or(true)),
+            Some("attach") => {
+                let session = value["session"].as_str().map(str::to_string);
+                if let Some(session) = &session {
+                    self.follow(number, session, &value);
+                }
+                return self.set(number, |c| c.session = session);
+            }
+            Some("detach") => {
+                self.follow_current(number, &value);
+                return self.set(number, |c| c.session = None);
+            }
+            Some("focus") => {
+                self.follow_current(number, &value);
+                return self.set(number, |c| c.focused = value["focused"].as_bool().unwrap_or(true));
+            }
             _ => {}
+        }
+        // A line for a session that lives on a machine goes there, with the client's own ids, and never to the chat.
+        if self.machine_route(number, remote, &value) {
+            return;
         }
         let kind = match value["type"].as_str() {
             Some("startOauth" | "startMcpOauth") => AskKind::SignIn,
@@ -374,19 +452,7 @@ impl Hub {
             self.send_to(number, &json!({"type": "error", "id": own.unwrap_or(0), "code": code}));
         };
         // A client's `!command`: its own message, which the page can never send.
-        let message = serde_json::from_value::<PageMessage>(value).ok().map(|message| match message {
-            PageMessage::Session { session, message } => match *message {
-                PageMessage::PiCommand { id, command, args } if command == "bash" => PageMessage::Session {
-                    session,
-                    message: Box::new(PageMessage::ChatBash {
-                        id,
-                        command: args["command"].as_str().unwrap_or_default().to_string(),
-                    }),
-                },
-                other => PageMessage::Session { session, message: Box::new(other) },
-            },
-            other => other,
-        });
+        let message = client_message(value);
         match message {
             Some(message) if remote && refused_for_remote(&message) => refuse("not-for-remote"),
             Some(message) if allowed(&message) => {
@@ -399,6 +465,77 @@ impl Hub {
             }
             Some(message) if for_handlers(&message) => (self.handlers)(message),
             _ => refuse("not-for-clients"),
+        }
+    }
+
+    /// The machine a session lives on, when it is a machine's and not one of this hub's own.
+    fn machine_of(&self, session: &str) -> Option<String> {
+        if (self.known_session)(session) {
+            return None;
+        }
+        self.machines.owner_of(session)
+    }
+
+    /// `line` (an `attach`, `detach` or `focus`) goes on to the machine that owns `session`, if one does.
+    fn follow(&self, number: u64, session: &str, line: &Value) {
+        if let Some(machine) = self.machine_of(session) {
+            let _ = self.machines.forward(&machine, number, line);
+        }
+    }
+
+    /// The same for the session the client is attached to now.
+    fn follow_current(&self, number: u64, line: &Value) {
+        let current = self.clients.0.lock().unwrap().get(&number).and_then(|c| c.session.clone());
+        if let Some(session) = current {
+            self.follow(number, &session, line);
+        }
+    }
+
+    /// A client's line addressed to a machine: a message for one of its sessions, closing one, or a new session that
+    /// names it. Returns whether it was one (and was handled: forwarded, or refused with the client's own id).
+    fn machine_route(&self, number: u64, remote: bool, value: &Value) -> bool {
+        let refuse = |own: u64, code: &str| self.send_to(number, &json!({"type": "error", "id": own, "code": code}));
+        let offline = |own: u64, outcome: Result<(), Refused>| match outcome {
+            Ok(()) => {}
+            Err(Refused::Unknown) => refuse(own, "unknown-machine"),
+            Err(Refused::Offline) => refuse(own, "machine-offline"),
+        };
+        match value["type"].as_str() {
+            Some("session") => {
+                let Some(machine) = value["session"].as_str().and_then(|session| self.machine_of(session)) else {
+                    return false;
+                };
+                let own = value["message"]["id"].as_u64().unwrap_or(0);
+                // What the hub lets a client do with a session, and what a remote one may not: the machine checks it again.
+                match client_message(value.clone()) {
+                    Some(message) if remote && refused_for_remote(&message) => refuse(own, "not-for-remote"),
+                    Some(message) if allowed(&message) => offline(own, self.machines.forward(&machine, number, value)),
+                    _ => refuse(own, "not-for-clients"),
+                }
+                true
+            }
+            Some("sessionClose") => {
+                let Some(machine) = value["session"].as_str().and_then(|session| self.machine_of(session)) else {
+                    return false;
+                };
+                offline(0, self.machines.forward(&machine, number, value));
+                true
+            }
+            Some("sessionNew") if !value["machine"].is_null() && value.get("machine").is_some() => {
+                let own = value["id"].as_u64().unwrap_or(0);
+                let Some(machine) = value["machine"].as_str().filter(|name| machines::valid_name(name)) else {
+                    refuse(own, "unknown-machine");
+                    return true;
+                };
+                // The machine is the one asked: its name does not go on.
+                let mut line = value.clone();
+                if let Some(object) = line.as_object_mut() {
+                    object.remove("machine");
+                }
+                offline(own, self.machines.forward(machine, number, &line));
+                true
+            }
+            _ => false,
         }
     }
 
@@ -436,7 +573,17 @@ impl Hub {
             };
             if let Some(Ask { client: number, own, .. }) = asked {
                 *slot = json!(own);
+                // The list a client asks for has the machines' sessions in it, and their last statuses follow it.
+                let is_list = value["type"] == "sessions";
+                if is_list {
+                    self.machines.merge_into(&mut value);
+                }
                 self.send_to(number, &value);
+                if is_list {
+                    for status in self.machines.status_events() {
+                        self.send_to(number, &status);
+                    }
+                }
                 // A tab a client opened is everyone's: the page and the other clients get it, without the asker's id.
                 if value["type"] == "sessionAdded" {
                     if let Some(object) = value.as_object_mut() {

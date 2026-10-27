@@ -213,6 +213,12 @@ impl Service {
                     clients_error = Some(message);
                 }
             }
+            // The machines linked to this hub come in beside the terminals; a failure here only means none can.
+            let machines_socket = socket.with_file_name("machines.sock");
+            match clients::bind(&machines_socket) {
+                Ok(listener) => hub.serve_machines(listener),
+                Err(error) => note(&format!("machines cannot link: {}: {error}", machines_socket.display())),
+            }
         }
         let worker = chat.clone();
         std::thread::spawn(move || {

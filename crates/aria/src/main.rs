@@ -9,6 +9,8 @@
 //! `aria bar install|remove` puts Aria's face in the Omarchy bar or takes it out (the installer runs it).
 //! `aria client-stdio` is the bridge `ssh <host> aria client-stdio` runs: the client's lines on stdin and stdout, the
 //! machine's clients socket on the other side.
+//! `aria hub-link machine <name>` is the forced command of a machine's key: the bridge between that machine's ssh and
+//! the hub's `machines.sock` (docs/superpowers/specs/2026-10-27-machine-link-design.md).
 //! `aria hub-import` is what the owner's computer runs on a hub (`ssh <host> aria hub-import`): it reads one line from
 //! stdin, a bundle of settings and credentials, writes its files into `~/.aria` (mode 600, the old ones kept as
 //! `.bak`) and prints the names it wrote.
@@ -38,6 +40,7 @@ mod jobs;
 mod jobs_socket;
 mod keyring_cli;
 mod lines;
+mod machines;
 mod omarchy_bar;
 mod schedule_store;
 mod serve;
@@ -148,6 +151,11 @@ fn main() {
             }
         },
         Some("client-stdio") => std::process::exit(stdio_bridge::command()),
+        // The forced command of a machine's key: argv only, never SSH_ORIGINAL_COMMAND.
+        Some("hub-link") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            std::process::exit(machines::hub_link_command(&args));
+        }
         Some("hub-import") => std::process::exit(hub_import()),
         Some("hub") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -162,7 +170,7 @@ fn main() {
         Some("bar") => std::process::exit(omarchy_bar::bar_command(std::env::args().nth(2).as_deref())),
         Some("--version" | "-V" | "version") => println!("aria {}", env!("CARGO_PKG_VERSION")),
         Some(other) => {
-            eprintln!("aria: unknown command '{other}'\nusage: aria [dock|serve|toggle|show|start|quit|keyring|secret|bar|update-ready|connect|client-stdio|hub-import|hub|--version]");
+            eprintln!("aria: unknown command '{other}'\nusage: aria [dock|serve|toggle|show|start|quit|keyring|secret|bar|update-ready|connect|client-stdio|hub-link|hub-import|hub|--version]");
             std::process::exit(2);
         }
         None => unreachable!("plain aria is the client or the dock"),
