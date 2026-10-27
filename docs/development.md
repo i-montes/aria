@@ -102,7 +102,7 @@ It has the design's "simulate" buttons (permission and quota cards, questions, c
 | 2 | Linux only, with `CARGO_TARGET_DIR=target/headless`: `cargo test -p aria --no-default-features`; `sh tools/hub/no-gui-libs.test.sh`; `cargo build -p aria --no-default-features`; `tools/hub/no-gui-libs.sh` and `tools/hub/accept.sh` on the binary that build made |
 | 3 | `bun test ui`, `bun test extensions`, `bun test tools/parity` |
 | 4 | `sh install/install.test.sh` and `sh install/install-mac.test.sh` |
-| 5 | `sh tools/parity/scratch-home.test.sh`, `sh tools/release.test.sh` and `sh tools/release-assets.test.sh` |
+| 5 | `sh tools/parity/scratch-home.test.sh`, `sh tools/release.test.sh`, `sh tools/release-assets.test.sh` and `sh tools/release-local.test.sh` |
 | 6 | Linux only: `sh tools/check-macos.sh` |
 
 It does not run `aria-mac`'s tests (`cargo test -p aria-mac`), `tools/hooks/pre-push.test.sh`, the UI sandbox check, `tools/term/live-check.sh` or anything marked `#[ignore]`; they are below. So before a change that touches a Mac-only crate or the pre-push hook, run `suites.sh` and those two commands.
@@ -189,6 +189,7 @@ tools/
   build-headless.sh       cross-builds `aria serve` with zig
   release.sh              makes a release; release.test.sh tests it
   release-assets.sh       collects a release's binary, checksum, pins and installer; release-assets.test.sh tests it
+  release-local.sh        makes and publishes a release from this machine, with no path of it in the binaries; release-local.test.sh tests it
   hooks/                  the pre-push hook and its test
   hub/                    the headless checks and the hub's acceptance script
   parity/                 the parity matrix checks, the scratch home, the offline suites (suites.sh)
@@ -251,7 +252,7 @@ A release must put these files next to the binary, because the piped `curl | sh`
 | the five pin files | copied from the repository root at the tag |
 | `install.sh` | `install/install.sh`, which is what `curl -fsSL https://github.com/i-montes/aria/releases/latest/download/install.sh \| sh` runs |
 
-Two routes make them, and they use the same script.
+Three routes make them, and they use the same script.
 
 **The workflow.** Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`; so does "Run workflow" with the name of a tag that exists, to publish one pushed before the workflow was on GitHub or to run a failed run again. Three build jobs (Linux x86_64 on `ubuntu-24.04`, Apple silicon on `macos-14`, and Intel cross-compiled on `macos-14`) each run `sh tools/release-assets.sh dist` and upload their binary and checksum. Then `publish` adds the pin files and `install.sh` from the tagged commit, takes the notes from the tag's section of `RELEASES.md` and creates the release with `gh release create` (adding the files with `gh release upload` when the release already exists). Only `publish` can write to the repository. It publishes the Linux assets even when a macOS build failed. The workflow has never run ([pending](pending.md)); its header says what to look at first if the first tag run fails.
 
@@ -263,7 +264,17 @@ sh tools/release-assets.sh              # builds, and fills dist/ for this machi
 
 It prints the exact `gh release create vX.Y.Z <files> --title … --notes-file dist/notes.md --verify-tag` command and does not run it; run it yourself. A Mac that wants to add its binary to a release that exists runs the script and then `gh release upload <tag> dist/<artifact> dist/<artifact>.sha256`. `ARIA_BINARY=<path>` skips the build (the tests use it) and `ARIA_TARGET=<triple>` cross-builds, which is how the workflow makes the Intel Mac's binary.
 
-The server's headless build is not one of these: `aria hub init` uploads one you build with `tools/build-headless.sh`, and the release's Linux binary links the desktop libraries.
+**From this machine, when Actions cannot run** (a billing lock on the account, no runner): `sh tools/release-local.sh vX.Y.Z` does everything the workflow does and publishes with `gh`.
+
+```sh
+sh tools/release.sh                       # the tag, as always
+git push origin main vX.Y.Z               # the tag must be on GitHub
+sh tools/release-local.sh vX.Y.Z          # builds, checks, asks "Publish ...? [y/N]", publishes
+```
+
+It builds from a clean worktree of the tag (never from your working tree) in its own `target/release-local`, with every path under your home folder and the worktree rewritten (`--remap-path-prefix` for Rust, `-ffile-prefix-map` for the C and C++ of whisper.cpp), and it **stops without publishing when a binary still holds your home folder**: the repository is public and so are its binaries. On Linux x86_64 it makes the dock (`aria-x86_64-linux`) and the hub's two builds (`tools/build-headless.sh`, zig, glibc 2.39, so they run on Ubuntu 24.04); on a Mac it makes that Mac's dock. A release is made by whichever machine runs it first and completed by the next (`gh release upload --clobber`), so run it on the Mac too. `--only dock|hub` makes part, `--no-publish` leaves the files in `dist/<tag>/`, `--yes` does not ask. Its binaries are built on your machine and not signed, so they are as trustworthy as that machine; the workflow's come from a clean runner.
+
+The hub's headless build is one of the release's files (`aria-x86_64-linux-headless`, `aria-aarch64-linux-headless`); `aria hub init` from a checkout can still upload one you build with `tools/build-headless.sh`. The release's `aria-x86_64-linux` links the desktop libraries, so it is the dock's, not a server's.
 
 ## Contributing a provider or a platform
 

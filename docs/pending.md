@@ -348,6 +348,10 @@ Attachments (the paperclip, drop and paste; `~/.aria/attachments/`):
 - The Linux release binary is built on Ubuntu 24.04 (glibc 2.39, the Ubuntu soname of GTK, WebKitGTK and the rest), so
   an older distribution does not run it; Omarchy's glibc and libstdc++ are newer and stay compatible with it. That it
   starts on Omarchy has not been tried from a release.
+- GitHub Actions has not run for this account since at least September 2026 ("account is locked due to a billing issue"; the
+  jobs of `aria`, `legajo`, `herdr-web-service` and `recova-crm` all end without starting), so no release has been built by
+  CI. `tools/release-local.sh` makes and publishes a release from a machine instead; its binaries are not signed and come
+  from that machine.
 - The hub's binaries (`aria-x86_64-linux-headless`, `aria-aarch64-linux-headless`) are built by the workflow's `hub` job,
   natively on `ubuntu-24.04` and on `ubuntu-24.04-arm`, and by `ARIA_HEADLESS=1 sh tools/release-assets.sh`. That job has
   never run either (`ubuntu-24.04-arm` is unchecked), and no release carries them yet, so the one-line install of a hub
