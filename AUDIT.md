@@ -1,6 +1,6 @@
 # Auditoría Aria — checklist completa
 
-Todo lo que hay que revisar del proyecto Aria (dock, terminal, extensiones, puente del navegador, datos).
+Todo lo que hay que revisar del proyecto Aria (dock, terminal, extensiones, puente del navegador, datos, hub, máquinas, instalador y releases).
 Ir punto por punto; marcar la casilla al cerrarlo. Numeración continua para referirse a cualquier punto.
 También en Obsidian (bóveda Prototype): `Auditoría Aria - checklist.md`.
 
@@ -31,7 +31,7 @@ También en Obsidian (bóveda Prototype): `Auditoría Aria - checklist.md`.
 - [ ] **23.** Backups (Time Machine): confirmar que la copia viva de credenciales NO se copia
 - [ ] **24.** Permisos de `~/.aria` (0700), `attachments/` (0700) y cada archivo sensible
 - [ ] **25.** Cadena de suministro: `npx rea-agents@6.7.0` fijado ✓; auditar paquetes npm/bun descargados al vuelo y dependencias cargo
-- [ ] **26.** Binarios (`~/.local/bin/aria`, `~/.aria/bin/*`): permisos y firmas
+- [ ] **26.** Binarios (`~/.local/bin/aria`, `~/.aria/bin/*`): permisos y firmas (ver también 108–109 de releases e instalador)
 
 ## ESTABILIDAD — fallos, deuda y bordes
 
@@ -111,3 +111,60 @@ También en Obsidian (bóveda Prototype): `Auditoría Aria - checklist.md`.
 - [ ] **88.** Trazas `/debug` y sesiones JSONL con conversaciones completas — quién las lee
 - [ ] **89.** `attachments/` con archivos privados
 - [ ] **90.** Briefs de Notion copiando datos de trabajo a `~/.aria/briefs/` — sensible
+
+## HUB, MÁQUINAS E INSTALADOR — seguridad
+
+- [ ] **91.** Llave del cliente `~/.ssh/aria-hub`: permisos 600, con passphrase y en `ssh-agent`; revocarla = quitar su línea de `authorized_keys` del hub (comprobar que la conexión abierta se corta al reiniciar el servicio)
+- [ ] **92.** Línea de la llave del cliente en el hub: `restrict,command="…/aria client-stdio"` sin opciones de más (solo `from=`, `expiry-time=`, `verify-required`); revisar `authorized_keys` en busca de llaves de Aria sin restricción
+- [ ] **93.** Una llave de cliente robada equivale a un shell como el usuario del hub (el cliente responde las preguntas del sandbox): decidir `sandbox.askToLeave=false` en el hub y revisar qué más se puede cerrar
+- [ ] **94.** Usuario del hub: hoy es un usuario con `sudo` sin contraseña — crear un usuario dedicado sin privilegios para `aria serve` y volver a probar `hub init` con él
+- [ ] **95.** Llave de la máquina `~/.ssh/aria-machine-<nombre>`: sin passphrase por diseño (el enlace arranca solo) — decidir si se acepta o se exige agente (`--machine-key`); permisos 600
+- [ ] **96.** `aria hub-link machine <nombre>`: el nombre sale solo de la línea forzada de `authorized_keys`; probar con `SSH_ORIGINAL_COMMAND` manipulado, nombres inválidos y dos máquinas con el mismo nombre
+- [ ] **97.** Lo que una máquina puede mandar al hub: listas de sesiones falsas, respuestas a clientes que no preguntaron, `machine`/`offline` falsificados — confirmar con una máquina maliciosa que el hub los descarta
+- [ ] **98.** Topes del enlace de máquinas (línea 16 MiB, `link-sessions` 2 MiB, 500 sesiones, 32 clientes por enlace, 64 KiB de saludo, 10 s para identificarse): revisar que sean razonables y que una máquina que los pasa solo se cae a sí misma
+- [ ] **99.** `hubUpdate` (el hub se actualiza solo): solo `X.Y.Z` exacta y mayor que la que corre, un repositorio fijo, hijo sin `sudo` y con límite de 15 min — revisar `ARIA_REPO` del servicio y que ninguna ruta del cliente llegue a un shell
+- [ ] **100.** `unlink-machine` edita `authorized_keys` del hub: probar con líneas parecidas (mismo prefijo, otro nombre), con el archivo sin salto de línea final y comprobar el respaldo `authorized_keys.aria-backup` (permisos 600, borrarlo cuando no haga falta)
+- [ ] **101.** `hub init` y `hub update` entran con el login de administrador de quien los ejecuta: confirmar que no guardan ni envían ese login a ninguna parte (solo `~/.ssh/config`, agente y `ARIA_SSH`)
+- [ ] **102.** `hub init` envía credenciales al hub (`auth.json`, `mcp.json`, `mcp-auth.json`): revisar qué archivos salieron, que un hub que ya los tiene no los reemplaza sin `--credentials`, y que ningún valor aparece en logs ni en la pantalla
+- [ ] **103.** Perfil de AppArmor `/etc/apparmor.d/aria-bwrap`: revisar que cubre solo `bwrap`, que el `sysctl` global sigue en 1 y cómo se quita (`apparmor_parser -R` y borrar el archivo)
+- [ ] **104.** Puerto ssh público del hub (2222): cerrar cuando la red privada sea la única entrada (Tailscale) y confirmar `PasswordAuthentication no`; hasta entonces las llaves restringidas son la protección
+- [ ] **105.** Credenciales en el hub: sin llavero (archivos 600 en `~/.aria`) — confirmar permisos, cifrado de disco del VPS y que los backups del VPS no las copian
+- [ ] **106.** Un plan de Claude no funciona en un hub: decidir API key de Anthropic u OpenCode Go en el hub y comprobar que el aviso de `hub init` aparece
+
+## INSTALADOR Y RELEASES — cadena de suministro
+
+- [ ] **107.** `curl | sh` del instalador: confía solo en TLS y en GitHub; documentar la verificación manual (descargar, leer, ejecutar) y el checksum de cada binario
+- [ ] **108.** Releases sin firma: el `.sha256` sale del mismo release que el binario — decidir firmas (minisign o cosign) o un checksum fijo en el repo
+- [ ] **109.** Binarios publicados desde el portátil (`tools/release-local.sh`): antes de cada release comprobar que ningún binario contiene la ruta del home ni el usuario (el script lo exige), y decidir pasar a CI limpio cuando GitHub vuelva a ejecutar Actions
+- [ ] **110.** GitHub Actions bloqueado por facturación (los jobs no arrancan en ningún repo de la cuenta): resolver el pago, y revisar de paso los repos privados con CI o despliegue que llevan semanas sin ejecutarse
+- [ ] **111.** `.github/workflows/release.yml` no ha corrido nunca: probar `glslc`/`spirv-headers` en Ubuntu, el runner `ubuntu-24.04-arm` para el hub aarch64 y la compilación cruzada del Mac Intel
+- [ ] **112.** El tag `v0.21.0` está en GitHub sin release (quedó atrás del 0.22.0): decidir borrarlo o publicarlo
+- [ ] **113.** El release 0.22.0 no trae binarios de macOS: ejecutar `sh tools/release-local.sh vX.Y.Z` en el Mac (completa el release) y probar `curl | sh` en un Mac limpio
+- [ ] **114.** El instalador de escritorio desde el release (`curl | sh`) no se ha probado de punta a punta; solo el de hub dentro de una actualización
+- [ ] **115.** Instalador: `sudo` solo para paquetes, `loginctl enable-linger` y el perfil de AppArmor — verificar que no ejecuta nada más con privilegios y que `--yes` solo acepta lo que el plan anuncia
+- [ ] **116.** Instalador: pantallas y preguntas probadas con una terminal simulada (archivos y stubs); probar a mano en terminal real (80 columnas, `NO_COLOR`, `TERM=dumb`, UTF-8 y no UTF-8), en macOS y con Ctrl+C en cada pregunta
+- [ ] **117.** Instalar el dock actualiza los hubs enlazados (`aria hub update --all`): probar con dos hubs, uno caído y sin terminal; que un fallo no deje la instalación local a medias
+
+## HUB Y MÁQUINAS — estabilidad y pruebas pendientes
+
+- [ ] **118.** Auto-actualización del hub por la llave restringida (`hubUpdate`): no se ha ejecutado contra un hub real (el primero que la entienda es el 0.22.0); probar con un release más nuevo, y el reinicio del servicio a mitad de la actualización con systemd real (la conexión puede cortarse antes del resultado)
+- [ ] **119.** Enlace de máquinas (`aria link`): probado solo con hubs y ssh falsos; probar con el VPS y el Omarchy reales, `BatchMode=yes` con una llave que pide agente, y la reconexión tras suspender y reanudar el portátil
+- [ ] **120.** Dock ya abierto antes de `link.json`: tarda hasta 10 s en notarlo, y uno abierto con un binario viejo no enlaza hasta reiniciar — comprobar el aviso de `hub init` y el reinicio del dock
+- [ ] **121.** El dock de macOS: el enlace compila (cfg) pero no se ha ejecutado; la ruta del runtime privado y el supervisor del hilo
+- [ ] **122.** La lista de sesiones de la terminal solo conoce las máquinas por sus sesiones o por `machinesList`: probar un hub viejo que no contesta `machinesList` y una máquina que desaparece
+- [ ] **123.** Un hub y un cliente de versiones distintas: la nota de versión en la terminal está probada en tests, no vista; probar hub viejo, hub nuevo y protocolo distinto
+- [ ] **124.** `aria hub init`: panel de ratatui probado en tmux; probar en otras terminales, con redimensionado, passphrase real de `ssh-keygen`, `ssh -tt` con `sudo` real y un fallo a mitad (la terminal debe quedar limpia)
+- [ ] **125.** `aria hub init --binary` desde un checkout puede subir una compilación vieja sin avisar (el plan no muestra su fecha): mostrar la fecha o comparar versiones
+- [ ] **126.** Test inestable `pi::tests::with_saved_sessions_the_shim_gives_a_child_a_session_dir` (aparece cuando corre otra compilación a la vez, probable «text file busy»): reproducir y arreglar
+- [ ] **127.** `cargo fmt --check` falla en `term/app.rs` y `term/picker.rs` (commits de otra máquina) y `clippy` deja 3 avisos preexistentes en `chat.rs` y `state.rs`: limpiar
+- [ ] **128.** `aria connect` sigue siendo un segundo comando: el diseño de «un solo Aria» (`docs/superpowers/specs/2026-10-27-one-aria-design.md`) lo convierte en alias — piezas S3 (el cerebro desde el hub), S4 (un solo `aria`), S5 (adopción) y S6 (instalador) sin construir
+
+## HUB — operación y privacidad
+
+- [ ] **129.** VPS compartido con otros servicios: poner límites de memoria y CPU a `aria-serve.service` (`MemoryMax`, `CPUQuota`) y revisar que un Pi descontrolado no afecte al resto
+- [ ] **130.** Logs del hub (`journalctl --user`, `~/.aria/logs`): rotación, tamaño y que no contengan secretos ni texto de conversaciones
+- [ ] **131.** Copias de seguridad del hub: qué de `~/.aria` (sesiones, memoria de Engram, credenciales) se respalda, dónde y cifrado; probar una restauración
+- [ ] **132.** Memoria dividida: el Engram del hub y el del computador son bases distintas hasta la pieza S3 — decidir qué se importa y cómo se verifica (conteo de entradas)
+- [ ] **133.** Datos que viajan al hub: ajustes, credenciales y conectores se copian al VPS — documentar quién tiene acceso a ese servidor (otros usuarios, otros servicios) y qué país/proveedor lo aloja
+- [ ] **134.** Servidor de prueba por la tailnet usado durante las pruebas (`python3 -m http.server` en la IP de Tailscale): comprobar que no queda ninguno corriendo
+- [ ] **135.** Cambios hechos fuera del repositorio en el VPS y en esta máquina: mantener `CHANGELOG.md` al día (archivo, copia, cómo revertir) y revisar que cada fila siga siendo cierta
