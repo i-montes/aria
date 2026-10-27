@@ -194,6 +194,33 @@ The computer you set the hub up from is not the only one that can attach. A seco
 
 Then, on that computer, `aria connect` is all there is to type ([Troubleshooting](#connecting-aria-connect) has its messages).
 
+## Machines: work on this computer from the hub
+
+A **machine** is a computer linked to the hub. Its sessions work in folders **on that computer**, inside its own sandbox, and they show in the same list as the hub's. The hub's terminal can open them, answer them and start new ones there (`+ new on laptop`). You choose where a session lives when you create it, and it stays there.
+
+`aria hub init` makes this computer a machine by default (`--no-machine` skips it; `--machine-name <name>` sets the name, which is this computer's host name by default; `--machine-key <file.pub>` uses a key you made). It does four things, and the plan says so in plain words before it starts:
+
+1. Makes a second key, `~/.ssh/aria-machine-<name>`. **It has no passphrase**, because the link starts by itself with nobody there; the key can only act as this computer's link, not log in (see below).
+2. Adds it to the hub's `authorized_keys` as `restrict,command="…/aria hub-link machine <name>" <key>`. The name is part of that line, so a key is one machine and cannot call itself another.
+3. Writes `~/.aria/link.json` (mode 600: the hub, the name and the key's path). A running dock or service notices the file within ten seconds and starts linking; an old one that was already open needs a restart.
+4. Checks that the machine shows as linked, waiting up to 20 seconds, and says plainly if it does not (the service may not be running here).
+
+**How it works.** The machine's service keeps one ssh connection open to the hub (outbound only, so NAT is no problem and no port is opened), sends its list of sessions whenever it changes, and answers every hub client through a local connection of its own that is a *remote* client: the same limits as over `aria connect` apply on the machine (no `secretSave`, no `!command`, no folder chosen by the client, only sessions that exist). If the link drops it comes back with waiting times of 2, 4, 8 seconds up to a minute; an unanswered ping for 45 seconds ends it. A computer that is off or asleep shows greyed as `offline`, with the sessions it had; they cannot be opened until it is back.
+
+**In the terminal.** Once a machine is linked, each session in the list says where it lives (`· server`, `· laptop`; with only the hub there is no tag), a machine that is off is greyed and says so when you open one of its sessions, and the new-session rows offer one per online machine. A client cannot choose the folder of a session on a machine: it starts in that machine's projects folder, as with the hub.
+
+```sh
+aria hub machines            # the machines linked to the default hub, and whether they are online
+aria hub status              # this computer's link state, and each linked hub's version
+aria hub unlink-machine laptop   # remove a machine: with your own ssh login, removes its key line
+```
+
+`unlink-machine` uses your administrator login, because it edits the hub's `authorized_keys`. It removes only the lines whose forced command is exactly `hub-link machine <name>`, keeps a copy of the file as `authorized_keys.aria-backup` first, and says `was not linked` when there is none. On this computer, when the machine is this one, it also deletes `~/.aria/link.json` and the key it made, only if that key is under `~/.ssh` and named `aria-machine-*`. A link that is already open stays open until it closes; to cut it at once, restart the hub's service.
+
+**What a stolen machine key can do.** It gets no shell. It can link under its own name (and under no other), publish a list of sessions, and answer the client lines the hub sends it. The hub reads from a machine only a fixed set of lines, drops any that name a client it was not asked by, removes `machine` and `offline` from its entries and never lets a line of it run as a client's or a handler's message; what a machine says is shown to you like what the dock says. A key without a passphrase is as exposed as the file: treat a stolen laptop's machine key like the laptop, remove it with `unlink-machine`, and use `--machine-key` with a key your agent holds if you prefer.
+
+**Not yet.** The machine uses the credentials and memory it has on its own disk; moving the keys, the memory and the connectors to the hub is the next piece. Until then, a session on a machine uses that computer's own sign-ins.
+
 ## Sign in from a terminal
 
 A browser sign-in cannot reach a hub: the redirect at the end goes to `localhost`, which on your computer is not the hub. The terminal handles it:
@@ -399,7 +426,7 @@ The unit restarts the service five seconds after a failure. `aria quit` exits 0,
 
 ## What is not there yet
 
-- **Machines.** Linking other computers to a hub, so that a session works in a folder on your laptop and every session shows in one list, is designed and not built. So are the shared credentials and memory it needs. Today a hub's sessions work in the hub's own folders: chat, research, memory, schedules, and code in repositories you clone there over ssh with the server's own git credentials. Aria never handles git credentials.
+- **Shared credentials and memory for machines.** Machines exist (above), but each one still uses its own keys and memory; moving them to the hub is designed ([one Aria](../superpowers/specs/2026-10-27-one-aria-design.md)) and not built. Today a session on the hub works in the hub's own folders: chat, research, memory, schedules, and code in repositories you clone there over ssh with the server's own git credentials. Aria never handles git credentials.
 - **A web client** and **the dock as a client of a hub**, and **notifications that find the device you are using**.
 - **`aria update` for a hub**, and a release asset for the headless build (the releases carry only the dock's). A hub is updated by running `hub init` again.
 - **A run that survives a dropped client** is checked by hand, not by the acceptance script, and the repository does not record that the hand check was done.

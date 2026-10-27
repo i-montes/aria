@@ -41,6 +41,9 @@ Everything Aria stores for you is in `~/.aria`, mode `700`. The repository never
 | `auth.json` | Your provider sign-ins, in Pi's format. With the keyring on it is not in this folder: it is sealed in the keyring and a live copy sits in the runtime location of the table above while the service runs. With it off, a plain file here. | Yes | Yes: you sign in again |
 | `mcp-auth.json` | The MCP sign-in state (registered client, tokens), in Pi's format. Same placement as `auth.json`. | Yes | Yes: you sign in to the connectors again |
 | `hubs.json` | On the computer you connect from: the hubs `aria hub init` linked, as `{"default": "ana@srv", "hubs": {"ana@srv": {"key": "/home/ana/.ssh/aria-hub"}}}` (mode `600`). `aria connect` with no host opens the default one, and a host listed here is reached with its own key. It holds no secret: the key is a path. | Yes | Yes: run `aria hub init` again |
+| `link.json` | On a computer linked to a hub as a machine: `{"hub": "ana@srv", "name": "laptop", "key": "/home/ana/.ssh/aria-machine-laptop"}` (mode `600`). Its presence makes the service run `aria link`; removing it stops the link within ten seconds. The key is a path, not a secret | Yes | Yes: run `aria hub init` again |
+| `link.state` | The link's state as JSON (`state`, `reason`, `pid`), written by the service for `aria hub status` | No | Yes |
+| `~/.ssh/aria-machine-<name>` (and `.pub`) | The machine's key, made by `aria hub init` without a passphrase. The hub allows it only as `restrict,command="…aria hub-link machine <name>"` | Yes | Not while linked: `aria hub unlink-machine <name>` removes it |
 
 ### Folders
 

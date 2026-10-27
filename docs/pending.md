@@ -72,6 +72,13 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
 `tools/hub/accept.sh` (no display, no provider); this is milestone M1 of
 [the design](superpowers/specs/2026-10-23-hub-and-machines-design.md). Left:
 
+- **Machines (piece S2 of [one Aria](superpowers/specs/2026-10-27-machine-link-design.md))**: built (the hub's registry and routing,
+  `aria link` on the machine, the machine key, `aria hub machines`/`status`/`unlink-machine`, the terminal's tags and `+ new on`),
+  and tested only with in-memory hubs and a fake ssh. Not run against a real hub and machine; `BatchMode=yes` with a key that
+  needs an agent, the machine's service coming back after sleep, and the dock on macOS have not been seen. The machine key has no
+  passphrase by default (the link starts by itself). A running dock needs a restart to notice `link.json` if it predates it. The
+  dock's window does not show machines (it ignores the extra fields) until the dock is a client of the hub (S4). A machine still
+  uses its own credentials and memory (S3).
 - **Machines (M2)**: linking other computers to a hub (`aria machine add`, `aria link`), one list over all of them,
   "new here", the credentials pushed to each; attachments from a client's computer. **A web client (M3)** and **push
   notifications (M4)**. **Shared memory**: Engram is per service, so a hub has its own.
