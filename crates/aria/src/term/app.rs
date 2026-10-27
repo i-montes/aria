@@ -64,6 +64,10 @@ pub enum Effect {
         message: PageMessage,
         machine: String,
     },
+    /// Ask the hub which machines it has linked (`machinesList`); the answer comes back as `App::roster`.
+    MachinesList {
+        id: u64,
+    },
     Attach(String),
     Detach,
     Focus(bool),
@@ -91,6 +95,8 @@ enum PickerKind {
 #[derive(Debug, Clone, PartialEq)]
 enum Pending {
     SessionsLoad,
+    /// `machinesList`: the answer is not a dock message, it comes through `App::roster`, and an error is never shown.
+    Roster,
     SessionNew,
     Files,
     Commands,
@@ -177,6 +183,14 @@ pub struct App {
     /// Every machine seen on this connection and whether it is on: one whose entries all say `offline` is off, and one
     /// seen before that has no entry now stays listed as off. Sorted by name.
     machines: std::collections::BTreeMap<String, bool>,
+    /// The hub's own account of its machines (name to on), once it has answered `machinesList` on this connection. It is
+    /// the truth about which machines exist and are on: a machine it lists as off, or does not list, is off whatever an
+    /// older line of sessions said. None until the hub answers, and for good with a hub that cannot.
+    roster: Option<std::collections::BTreeMap<String, bool>>,
+    /// The `machinesList` in flight: at most one is, so a burst of changes asks once.
+    roster_asked: Option<u64>,
+    /// The hub answered `machinesList` with an error (an older one): it is not asked again on this connection.
+    roster_off: bool,
 }
 
 /// How a list row says where its session lives: a short tag after the title, dim when the machine is off.
@@ -233,9 +247,53 @@ impl App {
             now_ms: 0,
             places: HashMap::new(),
             machines: Default::default(),
+            roster: None,
+            roster_asked: None,
+            roster_off: false,
         };
         let load = app.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
-        (app, vec![load])
+        let mut first = vec![load];
+        first.extend(app.ask_roster());
+        (app, first)
+    }
+
+    /// Asks the hub for its machines, when this is a hub over ssh (a terminal on this computer sends nothing) and no
+    /// request is in flight and the hub has not shown it cannot answer. Nothing otherwise.
+    fn ask_roster(&mut self) -> Vec<Effect> {
+        if self.config.remote.is_none() || self.roster_asked.is_some() || self.roster_off {
+            return Vec::new();
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.pending.insert(id, Pending::Roster);
+        self.roster_asked = Some(id);
+        vec![Effect::MachinesList { id }]
+    }
+
+    /// The hub's answer to `machinesList` (see `link::roster_of`). One that is not the request in flight (a late one from
+    /// before a reconnection) is ignored.
+    pub fn roster(&mut self, roster: crate::term::link::Roster) {
+        if self.roster_asked != Some(roster.id) {
+            return;
+        }
+        self.roster_asked = None;
+        self.pending.remove(&roster.id);
+        self.roster = Some(roster.machines.into_iter().map(|machine| (machine.name, machine.online)).collect());
+        self.selected = self.selected.min(self.last_row());
+    }
+
+    /// A new connection may reach another hub, and an answer to the old one will never come: start the roster over.
+    fn forget_roster(&mut self) {
+        self.pending.retain(|_, pending| *pending != Pending::Roster);
+        self.roster = None;
+        self.roster_asked = None;
+        self.roster_off = false;
+    }
+
+    /// Whether a machine is off as far as this client can tell: its sessions' entries say so, or the hub's account of its
+    /// machines (when it gave one) lists it as off or not at all.
+    fn machine_off(&self, machine: &str, entry_says_off: bool) -> bool {
+        entry_says_off || self.roster.as_ref().is_some_and(|roster| !roster.get(machine).copied().unwrap_or(false))
     }
 
     pub fn screen(&self) -> Screen {
@@ -372,7 +430,9 @@ impl App {
             None => t(lang, "term.new", &json!({"folder": self.config.cwd})),
         };
         let mut rows = vec![NewRow { label: own, machine: None }];
-        for (name, on) in &self.machines {
+        // The hub's own account of its machines when it gave one (a machine with no session is in it), else the machines the
+        // sessions' lists named.
+        for (name, on) in self.roster.as_ref().unwrap_or(&self.machines) {
             if *on {
                 rows.push(NewRow {
                     label: t(lang, "term.newMachine", &json!({"machine": name})),
@@ -381,6 +441,11 @@ impl App {
             }
         }
         rows
+    }
+
+    /// Whether any machine is linked, by the hub's account or by the sessions' lists.
+    fn has_machines(&self) -> bool {
+        !self.machines.is_empty() || self.roster.as_ref().is_some_and(|roster| !roster.is_empty())
     }
 
     /// The index of the list's last row.
@@ -402,11 +467,12 @@ impl App {
                     } else {
                         machine.clone()
                     };
+                    let off = self.machine_off(machine, *off);
                     let off_word =
-                        if *off { format!(" · {}", t(lang, "term.place.offline", &json!({}))) } else { String::new() };
-                    Place { tag: format!("· {name}{off_word}"), dim: *off }
+                        if off { format!(" · {}", t(lang, "term.place.offline", &json!({}))) } else { String::new() };
+                    Place { tag: format!("· {name}{off_word}"), dim: off }
                 }
-                None if self.machines.is_empty() => Place::default(),
+                None if !self.has_machines() => Place::default(),
                 None => Place { tag: format!("· {}", t(lang, "term.place.server", &json!({}))), dim: false },
             })
             .collect();
@@ -463,9 +529,11 @@ impl App {
         let at = self.selected.min(self.last_row());
         if let Some(id) = self.ordered().get(at).map(|s| s.id.clone()) {
             // A session a machine owns cannot be opened while the machine is off: say so, in the list's own note.
-            if let Some((machine, true)) = self.places.get(&id) {
-                self.note = Some(t(&self.config.lang, "term.machineOffline", &json!({"machine": machine})));
-                return Vec::new();
+            if let Some((machine, off)) = self.places.get(&id).cloned() {
+                if self.machine_off(&machine, off) {
+                    self.note = Some(t(&self.config.lang, "term.machineOffline", &json!({"machine": machine})));
+                    return Vec::new();
+                }
             }
             return self.attach(id);
         }
@@ -532,17 +600,25 @@ impl App {
                 self.note = Some(t(&self.config.lang, "term.gone", &json!({})));
                 vec![Effect::Quit]
             }
-            Input::Reconnected => match self.attached.clone() {
-                Some(session) => {
-                    let effects = self.attach(session);
-                    let said = t(&self.config.lang, "term.reconnected", &json!({}));
-                    self.session
-                        .entries
-                        .push(crate::term::state::Entry::Note { text: crate::term::state::Text::Raw(said) });
-                    effects
+            Input::Reconnected => {
+                self.forget_roster();
+                match self.attached.clone() {
+                    Some(session) => {
+                        let effects = self.attach(session);
+                        let said = t(&self.config.lang, "term.reconnected", &json!({}));
+                        self.session
+                            .entries
+                            .push(crate::term::state::Entry::Note { text: crate::term::state::Text::Raw(said) });
+                        effects
+                    }
+                    None => {
+                        let mut effects =
+                            vec![self.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id })];
+                        effects.extend(self.ask_roster());
+                        effects
+                    }
                 }
-                None => vec![self.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id })],
-            },
+            }
             Input::Paste(text) if self.signin.is_some() => {
                 // The address goes to the panel whole: its newlines are not Enter, and it never reaches the editor.
                 if let Some(open) = self.signin.as_mut() {
@@ -1082,6 +1158,11 @@ impl App {
             DockMessage::Error { id: 0, code } if code == "gone" => vec![Effect::Reconnect],
             DockMessage::Error { id, code } => {
                 match self.pending.remove(&id) {
+                    // The hub does not know `machinesList` (an older one): say nothing, and ask no more on this connection.
+                    Some(Pending::Roster) => {
+                        self.roster_asked = None;
+                        self.roster_off = true;
+                    }
                     // A connected hub refused what was asked (a `!command`, a session it does not have): say so.
                     Some(_) if code == "not-for-remote" || code == "unknown-session" => {
                         self.say(crate::term::state::Tone::Warn, "term.notForRemote", json!({}));
@@ -1185,14 +1266,19 @@ impl App {
             DockMessage::Sessions { id, sessions, .. } if self.pending.remove(&id).is_some() => {
                 self.sessions = sessions.into_iter().filter(|s| s.schedule.is_none()).collect();
                 self.selected = self.selected.min(self.last_row());
-                Vec::new()
+                // A list is a change: the hub's machines may have changed with it.
+                self.ask_roster()
             }
             DockMessage::SessionAdded { id: Some(id), session } if self.pending.remove(&id).is_some() => {
                 self.attach(session.id)
             }
             DockMessage::SessionAdded { .. } | DockMessage::SessionsChanged if self.screen == Screen::List => {
-                vec![self.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id })]
+                let mut effects = vec![self.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id })];
+                effects.extend(self.ask_roster());
+                effects
             }
+            // Inside a session a change still moves the machines: the list shows them when the client is back on it.
+            DockMessage::SessionsChanged => self.ask_roster(),
             DockMessage::SessionRemoved { session } if self.attached.as_deref() == Some(session.as_str()) => {
                 let effects = self.back_to_list();
                 self.note = Some(t(&self.config.lang, "term.closedElsewhere", &json!({})));
@@ -2632,5 +2718,197 @@ mod tests {
         let before = app.session().entries.len();
         app.update(Input::Dock(DockMessage::Error { id, code: "machine-offline".into() }));
         assert_eq!(app.session().entries.len(), before + 1, "a notice joins the conversation");
+    }
+
+    // ---- the hub's account of its machines ---------------------------------------------------------------------------
+
+    use crate::term::link::{Roster, RosterMachine};
+
+    fn asked(effects: &[Effect]) -> Option<u64> {
+        effects.iter().find_map(|effect| match effect {
+            Effect::MachinesList { id } => Some(*id),
+            _ => None,
+        })
+    }
+
+    fn answer(app: &mut App, id: u64, machines: &[(&str, bool)]) {
+        let machines = machines.iter().map(|(name, online)| RosterMachine { name: (*name).into(), online: *online });
+        app.roster(Roster { id, machines: machines.collect() });
+    }
+
+    /// An app over ssh that has asked for the hub's machines (the id of that request comes back) and been given the list.
+    fn hub_app(lang: &str, others: &[(&str, &str, bool)]) -> (App, u64) {
+        let (mut app, effects) = App::new(Config { remote: Some("hub.example".into()), lang: lang.into(), ..config() });
+        let Some(Effect::Send(PageMessage::SessionsLoad { id })) = effects.first().cloned() else {
+            panic!("{effects:?}")
+        };
+        let roster_id = asked(&effects).expect("a hub over ssh is asked for its machines");
+        app.machine_tags(others.iter().map(|(id, machine, off)| tag(id, machine, *off)).collect());
+        let mut sessions = vec![entry("hub-1", "on the server")];
+        sessions.extend(others.iter().map(|(id, _, _)| entry(id, &format!("work {id}"))));
+        let more = app.update(Input::Dock(DockMessage::Sessions { id, sessions, active: None }));
+        assert_eq!(asked(&more), None, "the first request is still in flight: no second one");
+        (app, roster_id)
+    }
+
+    #[test]
+    fn a_hub_over_ssh_asks_for_its_machines_with_its_first_request() {
+        let (_, effects) = App::new(Config { remote: Some("hub.example".into()), ..config() });
+        assert!(matches!(&effects[0], Effect::Send(PageMessage::SessionsLoad { .. })));
+        assert!(matches!(&effects[1], Effect::MachinesList { .. }), "{effects:?}");
+        assert_eq!(effects.len(), 2);
+    }
+
+    #[test]
+    fn a_terminal_on_this_computer_never_asks() {
+        let (mut app, effects) = App::new(config());
+        assert_eq!(asked(&effects), None);
+        let Some(Effect::Send(PageMessage::SessionsLoad { id })) = effects.first().cloned() else {
+            panic!("{effects:?}")
+        };
+        let after = app.update(Input::Dock(DockMessage::Sessions { id, sessions: vec![], active: None }));
+        assert_eq!(asked(&after), None);
+        assert_eq!(asked(&app.update(Input::Dock(DockMessage::SessionsChanged))), None);
+        assert_eq!(asked(&app.update(Input::Reconnected)), None);
+    }
+
+    #[test]
+    fn a_machine_with_no_session_gets_a_row_from_the_roster() {
+        let (mut app, id) = hub_app("en", &[]);
+        assert_eq!(labels(&app), ["on the server", "+ new on hub.example"], "nothing is known of a machine yet");
+        answer(&mut app, id, &[("attic", true), ("laptop", false)]);
+        assert_eq!(labels(&app), ["on the server", "+ new on hub.example", "+ new on attic"], "laptop is off: no row");
+        assert_eq!(app.list_places()[0].tag, "· server", "the hub's own session says so once a machine is linked");
+        key(&mut app, Key::Down);
+        key(&mut app, Key::Down);
+        let effects = key(&mut app, Key::Enter);
+        assert!(matches!(&effects[..], [Effect::SendOn { machine, .. }] if machine == "attic"), "{effects:?}");
+    }
+
+    #[test]
+    fn a_roster_that_is_empty_changes_nothing() {
+        let (mut app, id) = hub_app("en", &[]);
+        answer(&mut app, id, &[]);
+        assert_eq!(app.list_places()[0], Place::default(), "no machine is linked: no tag");
+        assert_eq!(labels(&app).len(), 2);
+    }
+
+    #[test]
+    fn a_machine_going_off_and_on_in_the_roster_flips_its_row_and_its_sessions() {
+        let (mut app, id) = hub_app("en", &[("m-1", "laptop", false)]);
+        answer(&mut app, id, &[("laptop", true)]);
+        assert_eq!(labels(&app).last().unwrap(), "+ new on laptop");
+        assert_eq!(app.list_places()[1], Place { tag: "· laptop".into(), dim: false });
+
+        // It goes off: the session's entry still says it is on (a stale line), the hub's own account wins.
+        let again = app.update(Input::Dock(DockMessage::SessionsChanged));
+        let id = asked(&again).expect("a change asks again");
+        answer(&mut app, id, &[("laptop", false)]);
+        assert_eq!(labels(&app).last().unwrap(), "+ new on hub.example", "no row for a machine that is off");
+        assert_eq!(app.list_places()[1], Place { tag: "· laptop · offline".into(), dim: true });
+        key(&mut app, Key::Down);
+        assert!(key(&mut app, Key::Enter).is_empty());
+        assert_eq!(app.note().as_deref(), Some("laptop is offline: its sessions cannot be opened until it is back."));
+
+        // And it is back.
+        let again = app.update(Input::Dock(DockMessage::SessionsChanged));
+        let id = asked(&again).expect("a change asks again");
+        answer(&mut app, id, &[("laptop", true)]);
+        assert_eq!(app.list_places()[1], Place { tag: "· laptop".into(), dim: false });
+        assert_eq!(labels(&app).last().unwrap(), "+ new on laptop");
+        assert!(key(&mut app, Key::Enter).iter().any(|e| matches!(e, Effect::Attach(id) if id == "m-1")));
+    }
+
+    #[test]
+    fn a_machine_the_roster_does_not_list_is_gone_and_its_stale_sessions_are_off() {
+        let (mut app, id) = hub_app("es", &[("m-1", "laptop", false)]);
+        answer(&mut app, id, &[]);
+        assert_eq!(app.list_places()[1], Place { tag: "· laptop · apagado".into(), dim: true });
+        key(&mut app, Key::Down);
+        assert!(key(&mut app, Key::Enter).is_empty());
+        assert!(app.note().unwrap().contains("laptop está apagado"));
+        // The roster only adds "off": a session that says it is off stays off even when the roster lists the machine on.
+        let (mut app, id) = hub_app("en", &[("m-1", "laptop", true)]);
+        answer(&mut app, id, &[("laptop", true)]);
+        assert!(app.list_places()[1].dim);
+    }
+
+    #[test]
+    fn a_burst_of_changes_asks_once_and_a_stale_answer_is_ignored() {
+        let (mut app, id) = hub_app("en", &[]);
+        for _ in 0..3 {
+            assert_eq!(asked(&app.update(Input::Dock(DockMessage::SessionsChanged))), None, "one is in flight");
+        }
+        answer(&mut app, id + 100, &[("ghost", true)]);
+        assert_eq!(labels(&app).len(), 2, "an answer that is not the request's is not taken");
+        assert_eq!(asked(&app.update(Input::Dock(DockMessage::SessionsChanged))), None, "and it did not free the slot");
+        answer(&mut app, id, &[("attic", true)]);
+        let next = asked(&app.update(Input::Dock(DockMessage::SessionsChanged))).expect("the next change asks again");
+        assert_ne!(next, id);
+        assert_eq!(asked(&app.update(Input::Dock(DockMessage::SessionsChanged))), None);
+    }
+
+    #[test]
+    fn a_change_arriving_inside_a_session_asks_too() {
+        let (mut app, id) = hub_app("en", &[("m-1", "laptop", false)]);
+        answer(&mut app, id, &[("laptop", true)]);
+        key(&mut app, Key::Down);
+        key(&mut app, Key::Enter);
+        assert_eq!(app.screen(), Screen::Session);
+        assert!(asked(&app.update(Input::Dock(DockMessage::SessionsChanged))).is_some());
+    }
+
+    #[test]
+    fn an_older_hub_that_answers_with_an_error_is_never_heard_of_again() {
+        for code in ["not-for-clients", "not-for-remote", "unknown-session", "bad-message"] {
+            let (mut app, id) = hub_app("en", &[("m-1", "laptop", false)]);
+            let before = app.session().entries.len();
+            let effects = app.update(Input::Dock(DockMessage::Error { id, code: code.into() }));
+            assert!(effects.is_empty(), "{effects:?}");
+            assert_eq!(app.note(), None, "{code}: no error is shown for it");
+            assert_eq!(app.session().entries.len(), before, "{code}: nor in the conversation");
+            assert_eq!(
+                asked(&app.update(Input::Dock(DockMessage::SessionsChanged))),
+                None,
+                "{code}: it is not asked again"
+            );
+            // The rows are the sessions' as they were before the roster existed.
+            assert_eq!(labels(&app).last().unwrap(), "+ new on laptop", "{code}");
+            assert_eq!(app.list_places()[0].tag, "· server", "{code}");
+        }
+    }
+
+    #[test]
+    fn an_older_hub_that_says_nothing_leaves_the_rows_to_the_sessions() {
+        let (mut app, _) = hub_app("en", &[("m-1", "laptop", false), ("m-2", "kitchen", true)]);
+        assert_eq!(app.roster, None);
+        assert_eq!(labels(&app)[3..], ["+ new on hub.example", "+ new on laptop"]);
+        assert_eq!(app.list_places()[2], Place { tag: "· kitchen · offline".into(), dim: true });
+        for _ in 0..2 {
+            assert_eq!(
+                asked(&app.update(Input::Dock(DockMessage::SessionsChanged))),
+                None,
+                "one request, still waiting"
+            );
+        }
+        assert_eq!(app.note(), None);
+    }
+
+    #[test]
+    fn a_new_connection_starts_the_roster_over() {
+        let (mut app, id) = hub_app("en", &[("m-1", "laptop", false)]);
+        answer(&mut app, id, &[("laptop", true), ("attic", true)]);
+        assert_eq!(labels(&app).last().unwrap(), "+ new on laptop");
+        let effects = app.update(Input::Reconnected);
+        let again = asked(&effects).expect("the new connection asks for the machines again");
+        assert_ne!(again, id);
+        assert_eq!(app.roster, None);
+        answer(&mut app, id, &[("ghost", true)]);
+        assert_eq!(app.roster, None, "a late answer of the old connection is ignored");
+        // A hub that was found too old on the old connection may be a newer one now.
+        let (mut app, id) = hub_app("en", &[]);
+        app.update(Input::Dock(DockMessage::Error { id, code: "not-for-clients".into() }));
+        let effects = app.update(Input::Reconnected);
+        assert!(asked(&effects).is_some(), "{effects:?}");
     }
 }

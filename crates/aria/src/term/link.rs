@@ -65,6 +65,42 @@ pub struct Tag {
     pub offline: bool,
 }
 
+/// One machine as the hub's own account of its machines says it: its name and whether its link is up.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RosterMachine {
+    pub name: String,
+    pub online: bool,
+}
+
+/// The hub's answer to `machinesList`: every machine it has linked (online or not), with the id the request had.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Roster {
+    pub id: u64,
+    pub machines: Vec<RosterMachine>,
+}
+
+/// The roster of a `machines` line; `None` for any other line. A name that is not a machine's (lowercase letters, digits and
+/// dashes) is dropped, so nothing the hub says can put a control character on this screen or in a `sessionNew`.
+pub fn roster_of(line: &str) -> Option<Roster> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value["type"] != "machines" {
+        return None;
+    }
+    let machines = value["machines"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let name = entry["name"].as_str().filter(|name| crate::machines::valid_name(name))?;
+                    Some(RosterMachine { name: name.to_string(), online: entry["online"] == true })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(Roster { id: value["id"].as_u64()?, machines })
+}
+
 /// The tags of a `sessions` line (empty when no entry names a machine); `None` for any other line.
 pub fn machine_tags(line: &str) -> Option<Vec<Tag>> {
     let value: Value = serde_json::from_str(line).ok()?;
@@ -77,7 +113,7 @@ pub fn machine_tags(line: &str) -> Option<Vec<Tag>> {
             entries
                 .iter()
                 .filter_map(|entry| {
-                    let machine = entry["machine"].as_str().filter(|name| !name.is_empty())?;
+                    let machine = entry["machine"].as_str().filter(|name| crate::machines::valid_name(name))?;
                     Some(Tag {
                         id: entry["id"].as_str()?.to_string(),
                         machine: machine.to_string(),
@@ -95,6 +131,8 @@ pub struct Link {
     events: Mutex<Option<Receiver<DockMessage>>>,
     /// The machine tags of each `sessions` list, sent just before the list itself.
     tags: Mutex<Option<Receiver<Vec<Tag>>>>,
+    /// The hub's answers to `machinesList`.
+    roster: Mutex<Option<Receiver<Roster>>>,
     /// The ssh a link over `spawn` runs on: killed and waited on when the link goes.
     child: Option<Child>,
     /// The version the hub's `hello` said (a hub of this protocol always sends one; an old one may not).
@@ -162,6 +200,7 @@ impl Link {
         let (first, hello_reply) = mpsc::channel::<io::Result<String>>();
         let (sender, events) = mpsc::channel();
         let (tag_sender, tags) = mpsc::channel();
+        let (roster_sender, roster) = mpsc::channel();
         // The reply is waited for here, with a timeout; a pipe has none, so the reading is a thread's.
         std::thread::spawn(move || {
             let mut lines = BufReader::new(reader).lines();
@@ -188,6 +227,9 @@ impl Link {
                 if let Some(found) = machine_tags(&line) {
                     let _ = tag_sender.send(found);
                 }
+                if let Some(found) = roster_of(&line) {
+                    let _ = roster_sender.send(found);
+                }
                 if let Ok(message) = serde_json::from_str::<DockMessage>(&line) {
                     if sender.send(message).is_err() {
                         return;
@@ -213,6 +255,7 @@ impl Link {
                 out: Mutex::new(writer),
                 events: Mutex::new(Some(events)),
                 tags: Mutex::new(Some(tags)),
+                roster: Mutex::new(Some(roster)),
                 child: None,
                 hub_version: reply_version(&line),
             }),
@@ -241,6 +284,12 @@ impl Link {
         }
     }
 
+    /// Asks the hub which machines it has linked; the answer comes on `roster()` with the same id. Only a hub answers it: an
+    /// older one answers an error or nothing.
+    pub fn machines_list(&self, id: u64) {
+        self.line(json!({"type": "machinesList", "id": id}));
+    }
+
     pub fn attach(&self, session: &str) {
         self.line(json!({"type": "attach", "session": session}));
     }
@@ -261,6 +310,11 @@ impl Link {
     /// What the dock says; taken once (later calls get a receiver that is already closed).
     pub fn events(&self) -> Receiver<DockMessage> {
         self.events.lock().unwrap().take().unwrap_or_else(|| mpsc::channel().1)
+    }
+
+    /// The hub's answers to `machinesList`; taken once, like `events`.
+    pub fn roster(&self) -> Receiver<Roster> {
+        self.roster.lock().unwrap().take().unwrap_or_else(|| mpsc::channel().1)
     }
 
     /// The machine tags of the lists the dock sends; taken once, like `events`.
@@ -388,6 +442,47 @@ mod tests {
         let found = tags.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(found, vec![Tag { id: "m-1".into(), machine: "laptop".into(), offline: true }]);
         assert!(matches!(events.recv_timeout(Duration::from_secs(5)).unwrap(), DockMessage::Sessions { .. }));
+    }
+
+    #[test]
+    fn the_roster_is_taken_from_the_hubs_machines_line() {
+        let line = json!({"type": "machines", "id": 7, "machines": [
+            {"name": "laptop", "os": "linux", "version": "0.22.0", "online": true, "since": 5, "sessions": 2},
+            {"name": "kitchen", "os": "macos", "version": "0.22.0", "online": false, "since": 0, "sessions": 0},
+            {"name": "Bad Name\u{1b}[31m", "online": true},
+            {"online": true},
+        ]})
+        .to_string();
+        assert_eq!(
+            roster_of(&line),
+            Some(Roster {
+                id: 7,
+                machines: vec![
+                    RosterMachine { name: "laptop".into(), online: true },
+                    RosterMachine { name: "kitchen".into(), online: false },
+                ],
+            }),
+            "a name that is not a machine's is dropped, so no control character reaches the screen"
+        );
+        assert_eq!(
+            roster_of(&json!({"type": "machines", "id": 1, "machines": []}).to_string()).unwrap().machines,
+            vec![]
+        );
+        assert_eq!(roster_of(&json!({"type": "machines", "machines": []}).to_string()), None, "it has no id to match");
+        assert_eq!(roster_of(&json!({"type": "sessions", "id": 1}).to_string()), None);
+    }
+
+    #[test]
+    fn asking_for_the_machines_sends_machines_list_and_the_answer_arrives_on_its_own_channel() {
+        let mut dock = fake_dock();
+        let roster = dock.link.roster();
+        let events = dock.link.events();
+        dock.link.machines_list(9);
+        assert_eq!(dock.read(), json!({"type": "machinesList", "id": 9}));
+        dock.say(json!({"type": "machines", "id": 9, "machines": [{"name": "laptop", "online": true}]}));
+        let got = roster.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(got, Roster { id: 9, machines: vec![RosterMachine { name: "laptop".into(), online: true }] });
+        assert!(events.try_recv().is_err(), "it is not an event of the dock's: the page's messages do not know it");
     }
 
     #[test]

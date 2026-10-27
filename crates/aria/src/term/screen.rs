@@ -140,6 +140,7 @@ pub fn run(
     let palette = Palette::detect();
     let mut events = link.events();
     let mut tags = link.tags();
+    let mut roster = link.roster();
     let remote = config.remote.is_some();
     let (mut app, first) = App::new(config);
     app.hub_version(link.hub_version());
@@ -147,6 +148,7 @@ pub fn run(
         match effect {
             Effect::Send(message) => link.send(&message),
             Effect::SendOn { message, machine } => link.send_on(&message, &machine),
+            Effect::MachinesList { id } => link.machines_list(id),
             _ => {}
         }
     }
@@ -307,6 +309,10 @@ pub fn run(
             changed = true;
             app.machine_tags(found);
         }
+        while let Ok(found) = roster.try_recv() {
+            changed = true;
+            app.roster(found);
+        }
         while let Ok(message) = events.try_recv() {
             changed = true;
             effects.extend(app.update(Input::Dock(message)));
@@ -315,6 +321,7 @@ pub fn run(
             match effect {
                 Effect::Send(message) => link.send(&message),
                 Effect::SendOn { message, machine } => link.send_on(&message, &machine),
+                Effect::MachinesList { id } => link.machines_list(id),
                 Effect::Attach(session) => link.attach(&session),
                 Effect::Detach => link.detach(),
                 Effect::Focus(focused) => link.focus(focused),
@@ -325,6 +332,7 @@ pub fn run(
                         Ok(new) => {
                             events = new.events();
                             tags = new.tags();
+                            roster = new.roster();
                             link = new;
                             reconnected = true;
                             Input::Reconnected
@@ -335,6 +343,7 @@ pub fn run(
                         match effect {
                             Effect::Send(message) => link.send(&message),
                             Effect::SendOn { message, machine } => link.send_on(&message, &machine),
+                            Effect::MachinesList { id } => link.machines_list(id),
                             Effect::Attach(session) => link.attach(&session),
                             Effect::Quit => quit = true,
                             _ => {}
