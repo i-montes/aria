@@ -287,7 +287,8 @@ pub fn private_address(ip: IpAddr) -> bool {
 
 const USAGE: &str =
     "usage: aria hub init <user@host> [--binary <path>] [--projects <dir>] [--client-key <pubkey file>] \
-     [--no-client-key] [--settings] [--credentials] [--allow-no-sandbox] [--details] [--plain] [--yes]";
+     [--no-client-key] [--settings] [--credentials] [--allow-no-sandbox] [--details] [--plain] [--yes]\n       \
+     aria hub ui-demo [--fail] [--plain]   (development: the full-screen interface on a made-up run, no ssh)";
 
 /// What `aria hub init` uploads from the checkout: the installer, the service unit and the pins the installer reads
 /// (`install/install.sh` reads `../<pin>`, so the tree keeps its shape under `~/.aria/hub-src`).
@@ -486,6 +487,8 @@ pub fn hub_command(args: &[String]) -> i32 {
                 2
             }
         },
+        // Development: the full-screen interface driven through a made-up run, with no ssh.
+        Some("ui-demo") => crate::hub_tui::demo(&args[1..]),
         _ => {
             eprintln!("{USAGE}");
             2

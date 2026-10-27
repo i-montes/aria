@@ -31,6 +31,7 @@ mod face;
 mod face_motion;
 mod handlers;
 mod hub_admin;
+mod hub_tui;
 mod hub_ui;
 mod jobs;
 mod jobs_socket;

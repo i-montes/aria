@@ -106,11 +106,13 @@ pub trait HubUi {
     fn take_terminal_back(&mut self) {}
 }
 
-/// The screen for this run. A full-screen version will be chosen here; for now the text one is, in every case
-/// (`force_plain` is `--plain`).
+/// The screen for this run: the full-screen version (`hub_tui.rs`) where the terminal can hold it, the text one everywhere
+/// else (`force_plain` is `--plain`).
 pub fn ui_for_terminal(force_plain: bool) -> Box<dyn HubUi> {
-    let _ = force_plain;
-    Box::new(PlainUi::stdio())
+    match crate::hub_tui::for_terminal(force_plain) {
+        Some(ui) => Box::new(ui),
+        None => Box::new(PlainUi::stdio()),
+    }
 }
 
 // ---- the text version ------------------------------------------------------------------------------------------------
