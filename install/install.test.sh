@@ -534,6 +534,17 @@ out=$(run_dry env ARIA_NESTED=1 sh "$installer" --dry-run --local /tmp/fake-aria
 printf '%s\n' "$out" | grep -qF 'hub update' && fail "a nested installer updates a hub" || pass "a nested installer does not update servers"
 rm -r "$tmp"
 
+# the update message says what restarts: the service on a server, the dock on a computer
+tmp=$(mktemp -d)
+mkdir -p "$tmp/bin" "$tmp/user"
+printf '#!/bin/sh\nexit 0\n' > "$tmp/bin/aria"; printf '#!/bin/sh\nexit 0\n' > "$tmp/bin/systemctl"; chmod +x "$tmp/bin/aria" "$tmp/bin/systemctl"
+# a systemctl of its own: the test must never reach this machine's user manager
+out=$(PATH="$tmp/bin:$PATH" HOME="$tmp/user" ARIA_BIN_DIR="$tmp/bin" sh "$installer" --headless --restart-dock 1 0 2>&1 || true)
+printf '%s\n' "$out" | grep -qF 'The service restarts into the new version' && ! printf '%s\n' "$out" | grep -qF 'The dock' && pass "a server's update says the service restarts" || fail "a server's update message is wrong: $out"
+out=$(PATH="$tmp/bin:$PATH" HOME="$tmp/user" ARIA_BIN_DIR="$tmp/bin" sh "$installer" --restart-dock 1 0 2>&1 || true)
+printf '%s\n' "$out" | grep -qF 'The dock restarts into the new version' && pass "a computer's update says the dock restarts" || fail "a computer's update message is wrong: $out"
+rm -r "$tmp"
+
 # the address a computer links to a hub by: Tailscale's, else the one this login came to, else the name
 tmp=$(mktemp -d)
 mkdir -p "$tmp/ts" "$tmp/none"

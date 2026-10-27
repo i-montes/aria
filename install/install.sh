@@ -838,7 +838,11 @@ write_service_file() {
 soft_restart() {
   [ "$SERVICE_CHANGED" = 0 ] && [ "$RESTART_NOW" = 0 ] || return 1
   run "$BIN_DIR/aria" update-ready 2>/dev/null || return 1
-  say "Aria is updated. The dock restarts into the new version once it is hidden and nothing is running."
+  if [ "$HEADLESS" = 1 ]; then
+    say "  Aria is updated. The service restarts into the new version when nothing is running."
+  else
+    say "Aria is updated. The dock restarts into the new version once it is hidden and nothing is running."
+  fi
 }
 
 # Starts the dock, or brings the running one to the new version. $1 is 1 when the dock was running before the install.

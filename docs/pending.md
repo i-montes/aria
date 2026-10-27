@@ -85,9 +85,11 @@ Milestones 1 and 2 are done ([design](superpowers/specs/2026-10-23-terminal-desi
   `--allow-no-sandbox` is given. Until then treat the client key as shell access to the hub user.
 - **Updating a hub**: `aria hub update` brings a hub to this Aria's version, and the installer runs it for the hubs a
   computer is linked to. From a release the hub updates itself through the restricted key (`hubUpdate`), so no admin login
-  is needed; the first update of a hub older than 0.22 still uses it once. Not tried against a real server yet: it needs
-  the release to exist (the workflow has never run, see below); the service's restart in the middle of an update, which
-  can cut the connection before the result, is covered by a fake and not by a real systemd; from a checkout it uploads
+  is needed; the first update of a hub older than 0.22 still uses it once. Tried once against the real server (0.21.0 to
+  0.22.0, from the release v0.22.0, through the ssh login because that hub was too old to update itself); the update
+  through the restricted key itself (`hubUpdate`) has not run against a real hub, since none runs a version that has it
+  and a newer release is needed to try it; the service's restart in the middle of an update, which can cut the
+  connection before the result, is covered by a fake and not by a real systemd; from a checkout it uploads
   whatever aarch64 build is there, whose date the plan does not show. The terminal's note about differing versions is drawn in tests only, not seen in a real terminal.
   There is no `aria update` for the computer itself: it is updated by the installer.
 - **A run that survives a dropped client** needs a model provider, so the acceptance script does not fake it: the maintainer
@@ -334,8 +336,9 @@ Attachments (the paperclip, drop and paste; `~/.aria/attachments/`):
 ## Install and releases ([guide](guide/getting-started.md))
 
 - The install downloads from the GitHub releases of `i-montes/aria` (`install/install.sh`; the files of a release are made
-  by `tools/release-assets.sh` or `.github/workflows/release.yml`), and until a release is made with those assets the
-  one-line install has nothing to download and `--local` is the install that works. A release must carry `install.sh`,
+  by `tools/release-assets.sh`, `tools/release-local.sh` or `.github/workflows/release.yml`). The release v0.22.0 exists
+  (made with `tools/release-local.sh`, so the Linux assets only: no macOS binary yet) and an install or update from it has
+  been run on the owner's server; the one-line `curl | sh` of a desktop has not been run from it. A release must carry `install.sh`,
   `pi-version`, `pi-packages`, `engram-version`, `agent-browser-version` and `node-version` next to the binary: the
   piped installer reads them from there.
 - `.github/workflows/release.yml` has never run. Unchecked: the Ubuntu package names for the build (`glslc` and
@@ -359,9 +362,8 @@ Attachments (the paperclip, drop and paste; `~/.aria/attachments/`):
   from that machine.
 - The hub's binaries (`aria-x86_64-linux-headless`, `aria-aarch64-linux-headless`) are built by the workflow's `hub` job,
   natively on `ubuntu-24.04` and on `ubuntu-24.04-arm`, and by `ARIA_HEADLESS=1 sh tools/release-assets.sh`. That job has
-  never run either (`ubuntu-24.04-arm` is unchecked), and no release carries them yet, so the one-line install of a hub
-  works only after the next release is published. Until then a hub is installed from a checkout (`aria hub init
-  --binary`). The dock's Linux binary still exists for x86_64 only.
+  never run either (`ubuntu-24.04-arm` is unchecked). The release v0.22.0 carries both hub binaries, built by
+  `tools/release-local.sh` instead. The dock's Linux binary still exists for x86_64 only.
 - The installer's two questions, the guided screen and the AppArmor profile are tested with a terminal and a sandbox
   stood in by files and stubs (`install/install.test.sh`); none has been tried by a person at a real terminal, and the
   profile has not been loaded on a real Ubuntu 24.04 server. The profile is Ubuntu's own shape for one program

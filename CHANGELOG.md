@@ -192,3 +192,15 @@ The installed dock was 0.20.1; this installs the 0.21.0 dock built from the chec
 | the hub's `~/.aria/` | this computer's settings, sign-ins and connectors, copied by `aria hub init` (the hub had none) | none | delete those files on the hub, or `sh install.sh --uninstall --headless` there |
 
 Not changed: `~/.config/systemd/user/aria.service` (identical), `~/.config/hypr/`, the Omarchy bar widget (up to date), the keyring.
+
+## 2026-10-26 — the hub on the VPS updated to 0.22.0, and 0.22.0 on the Omarchy machine
+
+The release v0.22.0 was published on GitHub from the owner's computer (`sh tools/release-local.sh v0.22.0 --yes`, since GitHub Actions cannot run on the account). The hub was then updated from it with `aria hub update vps --yes` (through the ssh login, once: the 0.21.0 hub could not update itself), and the dock here with `sh install/install.sh --local dist/v0.22.0/aria-x86_64-linux --yes`, which also confirmed the server was already current.
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| the GitHub release `v0.22.0` | 12 files: the dock, the two hub binaries, their checksums, the pins and `install.sh` | not applicable | `gh release delete v0.22.0 --cleanup-tag` (it also removes the tag on GitHub) |
+| the hub's `~/.local/bin/aria` | 0.21.0 replaced by 0.22.0, downloaded and checked by the hub itself; the service re-executed into it when idle | none | install the older release there: `ARIA_VERSION=v0.21.0` is not published, so build the older tag and `aria hub init --binary` |
+| `~/.local/bin/aria` (this computer) | the dock binary, replaced (0.21.0 to 0.22.0) | none | build the older tag and `sh install/install.sh --local target/release/aria` |
+
+Not changed: the hub's keys, settings and credentials, `authorized_keys`, `~/.config/hypr/`, the Omarchy bar widget, the keyring.
