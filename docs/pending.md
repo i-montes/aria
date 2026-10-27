@@ -328,16 +328,42 @@ Attachments (the paperclip, drop and paste; `~/.aria/attachments/`):
 
 ## Install and releases ([guide](guide/getting-started.md))
 
-- Nothing is published: no binaries, no hosted `install.sh`. `tools/release.sh` tags a version and writes its notes
-  (`RELEASES.md`), and the installer's download address is a placeholder (`install/install.sh`, `aria.example`), so
-  `--local` is the install that works. A release must publish `pi-version`, `pi-packages`, `engram-version`,
-  `agent-browser-version` and `node-version` next to the binary: the installer reads them from there.
-- The release artifact names only know x86_64 on Linux (`aria-x86_64-linux`); releases need an arm64 name, though
-  `tools/build-headless.sh` builds aarch64 by default.
+- The install downloads from the GitHub releases of `i-montes/aria` (`install/install.sh`; the files of a release are made
+  by `tools/release-assets.sh` or `.github/workflows/release.yml`), and until a release is made with those assets the
+  one-line install has nothing to download and `--local` is the install that works. A release must carry `install.sh`,
+  `pi-version`, `pi-packages`, `engram-version`, `agent-browser-version` and `node-version` next to the binary: the
+  piped installer reads them from there.
+- `.github/workflows/release.yml` has never run. Unchecked: the Ubuntu package names for the build (`glslc` and
+  `spirv-headers` are the doubtful ones), whisper.cpp's Vulkan build there, and the cross-compile of the Intel Mac
+  binary on an Apple silicon runner (Intel runners were not relied on). Its `publish` job publishes the Linux assets
+  even when a macOS build failed. Its header says what to look at first.
+- macOS binaries exist only for a release the workflow built them for (or whose maker ran `tools/release-assets.sh` on a
+  Mac), so the installer's download of one may fail with a message that says to build from a clone. The Mac binaries are
+  signed ad hoc by the installer after the download and are not notarised; none of this has been tried from a release on a
+  Mac.
+- The checksum is downloaded from the same place as the binary (the release), so it shows the download is whole, not that
+  the release is authentic: whoever can replace the binary there can replace its `.sha256`, and a piped install also
+  takes the pins' checksums (`engram-version`, `node-version`) from that release. Nothing is signed and no provenance is
+  attached.
+- The Linux release binary is built on Ubuntu 24.04 (glibc 2.39, the Ubuntu soname of GTK, WebKitGTK and the rest), so
+  an older distribution does not run it; Omarchy's glibc and libstdc++ are newer and stay compatible with it. That it
+  starts on Omarchy has not been tried from a release.
+- The hub's binaries (`aria-x86_64-linux-headless`, `aria-aarch64-linux-headless`) are built by the workflow's `hub` job,
+  natively on `ubuntu-24.04` and on `ubuntu-24.04-arm`, and by `ARIA_HEADLESS=1 sh tools/release-assets.sh`. That job has
+  never run either (`ubuntu-24.04-arm` is unchecked), and no release carries them yet, so the one-line install of a hub
+  works only after the next release is published. Until then a hub is installed from a checkout (`aria hub init
+  --binary`). The dock's Linux binary still exists for x86_64 only.
+- The installer's two questions, the guided screen and the AppArmor profile are tested with a terminal and a sandbox
+  stood in by files and stubs (`install/install.test.sh`); none has been tried by a person at a real terminal, and the
+  profile has not been loaded on a real Ubuntu 24.04 server. The profile is Ubuntu's own shape for one program
+  (`abi <abi/4.0>`, `userns,`), so it needs that ABI file and nothing older.
+- `aria hub init` run by the installer asks for the server's `sudo` password through the ssh session's terminal; a server
+  whose `sudo` needs a password and whose ssh cannot give a terminal fails at the packages step and says what to run.
 - The installer moves the private Node into place non-atomically.
 - The uninstaller leaves the keyring items (the person's own secrets included), `~/.agent-browser`,
   `shell.json.bak.*` and system packages; it does not offer `aria keyring off` first.
-- There is no CONTRIBUTING file and no CI: nothing says how an outside contributor sends a change.
+- There is no CONTRIBUTING file and no CI that tests a change (the one workflow publishes a release and has never run):
+  nothing says how an outside contributor sends a change.
 - `tools/parity/suites.sh` does not run `aria-mac`'s tests or `tools/hooks/pre-push.test.sh` (`cargo test --workspace`
   runs the first).
 - On Linux the control and clients sockets ignore `ARIA_HOME` (only macOS puts them under it), so a scratch run next to an

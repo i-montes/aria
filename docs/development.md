@@ -102,7 +102,7 @@ It has the design's "simulate" buttons (permission and quota cards, questions, c
 | 2 | Linux only, with `CARGO_TARGET_DIR=target/headless`: `cargo test -p aria --no-default-features`; `sh tools/hub/no-gui-libs.test.sh`; `cargo build -p aria --no-default-features`; `tools/hub/no-gui-libs.sh` and `tools/hub/accept.sh` on the binary that build made |
 | 3 | `bun test ui`, `bun test extensions`, `bun test tools/parity` |
 | 4 | `sh install/install.test.sh` and `sh install/install-mac.test.sh` |
-| 5 | `sh tools/parity/scratch-home.test.sh` and `sh tools/release.test.sh` |
+| 5 | `sh tools/parity/scratch-home.test.sh`, `sh tools/release.test.sh` and `sh tools/release-assets.test.sh` |
 | 6 | Linux only: `sh tools/check-macos.sh` |
 
 It does not run `aria-mac`'s tests (`cargo test -p aria-mac`), `tools/hooks/pre-push.test.sh`, the UI sandbox check, `tools/term/live-check.sh` or anything marked `#[ignore]`; they are below. So before a change that touches a Mac-only crate or the pre-push hook, run `suites.sh` and those two commands.
@@ -123,12 +123,13 @@ Some things skip without failing the run, so "all suites passed" does not prove 
 | `bun test ui` | the page: each part of the chat, the state reducer, the onboarding, both languages' strings, and the golden files that tie the JS defaults to the Rust ones |
 | `bun test extensions` | the Pi extensions that run inside Aria (router, sandbox policy, quota, connectors, background work, rotation, tasks and the rest). Tests that need `bwrap` or `agent-browser` skip where it is missing |
 | `bun test tools/parity` | `matrix.test.ts` keeps [the parity matrix](parity.md) honest: every setup item has a row and every file or test a row names exists; `smoke.test.ts` tests the smoke test's judge |
-| `sh install/install.test.sh` | the Omarchy installer branch and the headless one, without touching the system: the dry run's steps and their order, the pinned Pi, Engram, agent-browser and Node (checksums, refusals), the units matching their embedded text, uninstall. Skips itself on macOS |
-| `sh install/install-mac.test.sh` | the macOS branch: the LaunchAgent, the soft update, uninstall. Off a Mac it fakes `uname` and the system tools, so it runs anywhere |
+| `sh install/install.test.sh` | the Omarchy installer branch and the headless one, without touching the system: the dry run's steps and their order, the download address (GitHub releases, `ARIA_VERSION`, `ARIA_REPO`, which variable wins) and what a failed or mismatching download says and leaves, the pinned Pi, Engram, agent-browser and Node (checksums, refusals), the units matching their embedded text, uninstall. Skips itself on macOS |
+| `sh install/install-mac.test.sh` | the macOS branch: the LaunchAgent, the soft update, uninstall, the two Mac artifact names and the message for a missing Mac binary. Off a Mac it fakes `uname` and the system tools, so it runs anywhere |
 | `sh tools/hub/no-gui-libs.test.sh` | the library check, against a fake `ldd` |
 | `sh tools/hub/accept.sh <headless binary>` | the hub with no display, ssh or model provider: `aria serve` in scratch homes and `aria connect` through a pseudo-terminal, with ssh replaced by `tools/hub/ssh-shim.sh` (the list, a session with no folder, a killed client, `/schedules`, a refused protocol, a refused secret, an unknown session, `aria quit`). A run that survives a dropped client needs a provider and is checked by hand |
 | `sh tools/parity/scratch-home.test.sh` | `scratch-home.sh` against a fake `~/.aria` |
 | `sh tools/release.test.sh` | `tools/release.sh` in scratch repositories: the version it decides, the notes, the commit, the tag, its refusals |
+| `sh tools/release-assets.test.sh` | `tools/release-assets.sh` in scratch repositories, with a fake binary instead of a build: the artifact names for each platform, the `.sha256` file (checked with the real installer's download step), the notes, the printed `gh release create` command (`gh` is never run), and its refusals: a dirty tree, a HEAD that is not at the release tag, a tag that is not the workspace version |
 | `sh tools/hooks/pre-push.test.sh` | the pre-push hook in a scratch repository: a home path, a listed pattern and an unreleased `feat` are refused; a docs commit and a released main go through |
 | `sh tools/check-macos.sh` | type-checks the macOS build from Linux: `clippy` for `aarch64-apple-darwin` over `aria`, `aria-mac`, `aria-core` and `aria-engine`, all targets, with zig (through mise) as the C compiler. Nothing links or runs. It stubs whisper.cpp's bindings, so dictation's C++ is not built |
 
@@ -187,6 +188,7 @@ tools/
   check-macos.sh          type-checks the macOS build from Linux
   build-headless.sh       cross-builds `aria serve` with zig
   release.sh              makes a release; release.test.sh tests it
+  release-assets.sh       collects a release's binary, checksum, pins and installer; release-assets.test.sh tests it
   hooks/                  the pre-push hook and its test
   hub/                    the headless checks and the hub's acceptance script
   parity/                 the parity matrix checks, the scratch home, the offline suites (suites.sh)
@@ -236,7 +238,32 @@ Five files at the repository root pin what Aria installs. Each is read by the in
 | `agent-browser-version` | the `agent-browser` the agents use to check pages |
 | `node-version` | the Node a server gets when its own is missing or older than Pi needs: the version, then one SHA-256 per CPU. The repository is the trust root |
 
-A published release must put these files next to the binary, because the `curl | sh` install reads them from there. Nothing is published yet: no binaries and no hosted `install.sh` ([pending](pending.md)).
+A release must put these files next to the binary, because the piped `curl | sh` install reads them from there (run from a checkout, the installer reads the checkout's own).
+
+### How a release's binaries are made and published
+
+`tools/release.sh` makes the version and the tag. What the installer downloads is a GitHub release of `i-montes/aria`, with these assets:
+
+| Asset | What it is |
+|---|---|
+| `aria-x86_64-linux`, `aria-aarch64-apple-darwin`, `aria-x86_64-apple-darwin` | the binary of one platform: `cargo build --release` with the default features (the dock). The Linux one is built on Ubuntu 24.04, so it needs glibc 2.39 or newer; Omarchy (Arch) has a newer one |
+| `<artifact>.sha256` | the binary's digest as `sha256sum` prints it (digest, two spaces, name). The installer takes the first field. It comes from the same release as the binary, so it shows the download is whole, not that the release is authentic |
+| the five pin files | copied from the repository root at the tag |
+| `install.sh` | `install/install.sh`, which is what `curl -fsSL https://github.com/i-montes/aria/releases/latest/download/install.sh \| sh` runs |
+
+Two routes make them, and they use the same script.
+
+**The workflow.** Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`; so does "Run workflow" with the name of a tag that exists, to publish one pushed before the workflow was on GitHub or to run a failed run again. Three build jobs (Linux x86_64 on `ubuntu-24.04`, Apple silicon on `macos-14`, and Intel cross-compiled on `macos-14`) each run `sh tools/release-assets.sh dist` and upload their binary and checksum. Then `publish` adds the pin files and `install.sh` from the tagged commit, takes the notes from the tag's section of `RELEASES.md` and creates the release with `gh release create` (adding the files with `gh release upload` when the release already exists). Only `publish` can write to the repository. It publishes the Linux assets even when a macOS build failed. The workflow has never run ([pending](pending.md)); its header says what to look at first if the first tag run fails.
+
+**By hand**, on a machine that should give its binary. Check out the tag with a clean tree (the script refuses otherwise), push the tag to GitHub (the command uses `--verify-tag`), then:
+
+```sh
+sh tools/release-assets.sh              # builds, and fills dist/ for this machine
+```
+
+It prints the exact `gh release create vX.Y.Z <files> --title … --notes-file dist/notes.md --verify-tag` command and does not run it; run it yourself. A Mac that wants to add its binary to a release that exists runs the script and then `gh release upload <tag> dist/<artifact> dist/<artifact>.sha256`. `ARIA_BINARY=<path>` skips the build (the tests use it) and `ARIA_TARGET=<triple>` cross-builds, which is how the workflow makes the Intel Mac's binary.
+
+The server's headless build is not one of these: `aria hub init` uploads one you build with `tools/build-headless.sh`, and the release's Linux binary links the desktop libraries.
 
 ## Contributing a provider or a platform
 
@@ -267,7 +294,7 @@ The base design, [2026-10-18-aria-base-design.md](superpowers/specs/2026-10-18-a
 
 ## How a change goes in
 
-**If you are sending a change**, the repository does not say how: it has no `CONTRIBUTING` file, no CI and no defined review process. The usual way on a public repository, which this page assumes, is a branch and a pull request. The release and the push of `main` are the maintainer's, per `CLAUDE.md` (see [the rules](#the-rules-the-project-keeps)), so leave `tools/release.sh` and the push of `main` to them. Nothing checks your change for you, so run the checks yourself: `sh tools/parity/suites.sh`, `cargo test -p aria-mac` and `sh tools/hooks/pre-push.test.sh`, and say what you could not run (on a Mac, the Linux-only steps; the tests that skip without `bwrap` or `agent-browser`). Write commit subjects in the conventional form (`feat(scope): …`, `fix(scope): …`), because they decide the version, and keep everything in English and free of personal data.
+**If you are sending a change**, the repository does not say how: it has no `CONTRIBUTING` file, no CI that tests a change (its one workflow publishes a release) and no defined review process. The usual way on a public repository, which this page assumes, is a branch and a pull request. The release and the push of `main` are the maintainer's, per `CLAUDE.md` (see [the rules](#the-rules-the-project-keeps)), so leave `tools/release.sh` and the push of `main` to them. Nothing checks your change for you, so run the checks yourself: `sh tools/parity/suites.sh`, `cargo test -p aria-mac` and `sh tools/hooks/pre-push.test.sh`, and say what you could not run (on a Mac, the Linux-only steps; the tests that skip without `bwrap` or `agent-browser`). Write commit subjects in the conventional form (`feat(scope): …`, `fix(scope): …`), because they decide the version, and keep everything in English and free of personal data.
 
 The repository's own files describe how the project builds its features, and no more:
 

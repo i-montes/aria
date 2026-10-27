@@ -104,4 +104,4 @@ Notes:
   live copy outside `~/.aria`; see [safety](guide/safety.md) and [data and paths](reference/data-and-paths.md).
 - The sandbox rows (24, 36) run on Linux with `bwrap`. macOS has no sandbox: every command asks first.
 - The results are dated and were not rerun for this page. `tools/parity/suites.sh` has grown since row 35 passed: it also
-  builds and checks the headless service and the hub's acceptance on Linux, and runs the release test.
+  builds and checks the headless service and the hub's acceptance on Linux, and runs the release tests.

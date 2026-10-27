@@ -13,7 +13,61 @@ A computer with no desktop can run Aria as a hub that terminals connect to; that
 
 ## Install
 
-Nothing is published yet: there are no release binaries and no hosted installer (see [what is pending](../pending.md)). Today you build the binary yourself and install it from the clone you built it in.
+Two ways: one line that downloads a release from GitHub, or a build of your own from a clone.
+
+### One line, from a GitHub release
+
+```sh
+curl -fsSL https://github.com/i-montes/aria/releases/latest/download/install.sh | sh
+```
+
+`install.sh` is a file of the release. It asks what you want (below), detects the system and downloads, from the same release, the binary for it (`aria-x86_64-linux`, `aria-aarch64-apple-darwin`, `aria-x86_64-apple-darwin`, or for a hub `aria-x86_64-linux-headless` or `aria-aarch64-linux-headless`), its `.sha256` file and the pin files (`pi-version`, `pi-packages`, `engram-version`, `agent-browser-version`, `node-version`). It installs the binary only when its SHA-256 is the one in the `.sha256` file, and a download that fails installs nothing. Running it again updates.
+
+### What it asks, and what you see
+
+The installer is a guided screen, not a stream of log lines. It starts by saying what it is about to do, in six steps (seven when it also sets up a server), and waits for Enter. Each step has a title and one sentence about what it is for, and a check mark when it is done. What the system tools print (apt, npm, downloads) stays out of sight; if a step fails, you see the end of it and where the whole log is. Colour appears only on a terminal (`NO_COLOR` turns it off).
+
+On Linux it asks one question, unless it already knows the answer:
+
+```
+How will you use Aria?
+
+  1  On this computer   the dock: a window that opens over what you are doing, with its shortcut
+  2  As a hub           a server that keeps Aria running day and night; you connect to it from your computers
+```
+
+Enter takes the default: the dock on a machine with a desktop, a hub on one without. Choosing a hub asks one more thing:
+
+```
+Which computer is the server?
+
+  1  Another one   you give me its address (like ana@my-server); I set it up from here and link this computer to it
+  2  This one       this computer is the server; other computers connect to it
+```
+
+- **Another one** is the way that leaves nothing to do. The installer installs Aria here, then sets the server up over ssh, links this computer to it and tries the connection. When it ends, open a terminal and type `aria connect`.
+- **This one** is for running the installer on the server itself. When it ends the hub is running; the one thing left is to link each computer that will use it, with the single line the last screen prints, because a server cannot link a computer it has never seen.
+
+It does not ask when it knows: you gave `--mode` or `--server`, Aria is already installed here (an update keeps its use), the computer is a Mac (always the dock), or there is no terminal to ask on (it takes the default and says so). The questions read the terminal itself, so they work under `curl | sh`.
+
+When it ends there is nothing to set up: the dock opens with Super + A (Option + Space on a Mac) and its welcome screen connects a model, or `aria connect` opens the hub.
+
+To install a release other than the latest, name it with `ARIA_VERSION` (`v0.20.2` and `0.20.2` mean the same). The variable goes to `sh`, after the pipe: put before `curl` it would reach only curl. The script is the latest release's; the binary and the pin files are the named release's.
+
+```sh
+curl -fsSL https://github.com/i-montes/aria/releases/latest/download/install.sh | ARIA_VERSION=v0.20.2 sh
+```
+
+`ARIA_REPO=<owner>/<name>` takes the releases of another repository (a fork); the default is `i-montes/aria`. `ARIA_DOWNLOAD_URL` names the binary's address itself and beats both; see [the installer's variables](../reference/commands.md#environment-variables).
+
+Which systems have a binary depends on what the release carries, and the release's page on GitHub shows it:
+
+- **Linux x86_64 (Omarchy).** `aria-x86_64-linux`, the dock's build (`cargo build --release`, default features), made on Ubuntu 24.04 by `tools/release-assets.sh` or by the release workflow. It needs glibc 2.39 or newer and the system libraries the installer's packages bring; Omarchy's glibc is newer than that.
+- **macOS.** `aria-aarch64-apple-darwin` (Apple silicon) and `aria-x86_64-apple-darwin` (Intel) exist only in a release whose workflow run built them, or whose maker ran `tools/release-assets.sh` on a Mac. The workflow has never run ([pending](../pending.md)), so a release may have no Mac binary.
+- **A hub.** `aria-x86_64-linux-headless` and `aria-aarch64-linux-headless`: the service and the terminal without the desktop libraries, built natively on Ubuntu 24.04 (glibc 2.39) by the release workflow. A server needs nothing but the installer.
+- **Another Linux CPU.** The dock exists for x86_64 only, and a hub for x86_64 and aarch64; the installer refuses any other CPU and says how to build.
+
+When the download fails (no release yet, or none for your system) the installer says which address failed, that macOS binaries may not be published for every release, and that nothing was installed. Build from a clone then.
 
 ### From a clone
 
@@ -30,17 +84,7 @@ cargo build --release
 sh install/install.sh --local target/release/aria
 ```
 
-Run the installer from the clone: it reads `pi-version`, `pi-packages`, `engram-version` and `agent-browser-version` from the files next to it (and `node-version` too, but only on a server that needs its own Node). It installs the binary you built instead of downloading one, and running it again updates. When it ends it says "Aria is installed. Press Super+A to set it up." on Omarchy, or "Press Option + Space" on macOS.
-
-### When a release exists
-
-The intended path is one line that downloads the binary and the pin files and installs them. It cannot work until releases and a hosted `install.sh` are published (its address is a placeholder in the script), so do not use it today:
-
-```sh
-curl -fsSL https://<your site>/install.sh | sh
-```
-
-The installer detects the system, and running it again updates.
+Run the installer from the clone: it reads `pi-version`, `pi-packages`, `engram-version` and `agent-browser-version` from the files next to it (and `node-version` too, but only on a server that needs its own Node), so `ARIA_VERSION` has no part in it. It installs the binary you built instead of downloading one, and running it again updates. This is also how to install on a system whose release has no binary. When it ends it says "Aria is installed. Press Super+A to set it up." on Omarchy, or "Press Option + Space" on macOS.
 
 ### What the installer puts where
 
@@ -68,16 +112,20 @@ What it never touches: `~/.config/hypr/`. On Omarchy the dock registers its shor
 
 ### Installer options
 
-Give these to `sh install.sh`. With `curl | sh`, pass them after `sh -s --`, for example `curl -fsSL https://<your site>/install.sh | sh -s -- --dry-run`.
+Give these to `sh install.sh`. With `curl | sh`, pass them after `sh -s --`, for example `curl -fsSL https://github.com/i-montes/aria/releases/latest/download/install.sh | sh -s -- --dry-run`.
 
 | Option | What it does |
 |---|---|
-| (none) | Installs, or updates in place. |
+| (none) | Installs, or updates in place: downloads the binary from the latest GitHub release (`ARIA_VERSION` names another). |
 | `--local <path>` | Installs a binary you built yourself instead of downloading one. |
 | `--dry-run` | Prints what would happen (`would: …`) and changes nothing. Works with every other option. |
 | `--restart-now` | Restarts a running dock at once, even in the middle of a run. See [Updating](#updating). |
 | `--uninstall` | Removes Aria. See [Uninstalling](#uninstalling). |
+| `--mode desktop\|hub` | Answers the first question. `ARIA_MODE` does the same. |
+| `--server user@host` | A hub on another computer: installs Aria here, then sets that server up and links this computer to it. `ARIA_SERVER` does the same. |
+| `--server here` | This computer is the hub. The same as `--headless`. |
 | `--headless` | Installs `aria serve` as a user service on a server with no desktop (Linux). With `--with-browser` it adds the agent browser too. See [the hub guide](hub.md). |
+| `--yes`, `-y` | Asks nothing: takes the answer that is known or the default, and agrees to the sandbox profile a hub may need (see [the hub guide](hub.md#the-sandbox-on-a-server)). |
 | `--help` | Prints the usage. |
 
 ## The first run
@@ -165,7 +213,7 @@ The same sessions are in a terminal: run `aria` in a terminal. See [Aria in the 
 
 ## Updating
 
-Run the installer again. It replaces the files, then, if the dock was running, asks it to restart into the new version, and prints "Aria is updated. The dock restarts into the new version once it is hidden and nothing is running."
+Run the installer again (the one-line command, or `sh install/install.sh --local target/release/aria` from a clone you rebuilt). It replaces the files, then, if the dock was running, asks it to restart into the new version, and prints "Aria is updated. The dock restarts into the new version once it is hidden and nothing is running."
 
 An update never cuts a run. The dock restarts only when it is hidden and no session has a run going, a question waiting for you, or background work running or queued. Background work can keep an update waiting all day, so after 30 minutes of waiting for it alone, the sessions that have that work get one notice saying how to update now: stop the work from the background list.
 
@@ -185,7 +233,7 @@ It does not touch the system keyring, and it leaves `~/.agent-browser/browsers` 
 
 ## Limits
 
-- No release is published, so the `curl | sh` line has nothing to download from yet; build and use `--local`. The installer's Linux download name knows only x86_64. See [what is pending](../pending.md).
+- The one-line install downloads what a release carries: Linux x86_64 from the assets built on Ubuntu 24.04, and macOS only if the release workflow (never run yet) or its maker built it. Until a release has the assets for your system, build and use `--local`. The installer's Linux download name knows only x86_64. See [what is pending](../pending.md).
 - Aria is built for Omarchy and macOS. Another Linux desktop is not supported for the dock.
 - On macOS, the whole panel takes clicks (a click on the dark area closes the dock instead of reaching the app below), a desktop notification does not open the dock when clicked, and commands have no sandbox, so each one asks.
 

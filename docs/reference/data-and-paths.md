@@ -40,6 +40,7 @@ Everything Aria stores for you is in `~/.aria`, mode `700`. The repository never
 | `mcp.json` | The MCP servers (Notion, Tavily, Engram, the ones you import or install), in Pi's format. With the keyring on, the headers of a remote server and the `env` values with a secret-looking name are `!aria secret …` commands; with it off, the values themselves. An argument or another value you wrote there stays as written. | Only with the keyring off, and a value you put in `args` is always in the file | No: you lose the connectors (their keys stay in the keyring) |
 | `auth.json` | Your provider sign-ins, in Pi's format. With the keyring on it is not in this folder: it is sealed in the keyring and a live copy sits in the runtime location of the table above while the service runs. With it off, a plain file here. | Yes | Yes: you sign in again |
 | `mcp-auth.json` | The MCP sign-in state (registered client, tokens), in Pi's format. Same placement as `auth.json`. | Yes | Yes: you sign in to the connectors again |
+| `hubs.json` | On the computer you connect from: the hubs `aria hub init` linked, as `{"default": "ana@srv", "hubs": {"ana@srv": {"key": "/home/ana/.ssh/aria-hub"}}}` (mode `600`). `aria connect` with no host opens the default one, and a host listed here is reached with its own key. It holds no secret: the key is a path. | Yes | Yes: run `aria hub init` again |
 
 ### Folders
 
@@ -174,7 +175,7 @@ guide is [safety](../guide/safety.md).
 
 | It | On |
 |---|---|
-| installs the binary | `~/.local/bin/aria`; on macOS it also signs it ad hoc as `com.aria.dock` |
+| installs the binary | `~/.local/bin/aria`: downloaded from the latest GitHub release of `i-montes/aria` (a chosen one with `ARIA_VERSION`) and checked against its `.sha256`, or the one you give with `--local`; on macOS it also signs it ad hoc as `com.aria.dock` |
 | creates and fills | `~/.aria`: `bin/` (with `engram`), `pi/<version>/`, `agent/` (with the pinned packages), `agent-browser/<version>/` (not on a hub unless `--with-browser`), `node/` (a hub that needs it), `logs/` (macOS) |
 | downloads a browser | `~/.agent-browser/browsers` (not on a hub unless `--with-browser`) |
 | writes the service | `aria.service` (Omarchy), `aria-serve.service` (hub with `--headless`) or `com.aria.dock.plist` (macOS), and starts it |

@@ -9,7 +9,7 @@ Aria is split in two. The **service** owns the sessions: one Pi per session, the
 ```text
 your computer                       the server (the hub)
 -------------                       -----------------------------------------------
-aria connect aria-hub               sshd
+aria connect                        sshd
   ssh --------------------------->    aria client-stdio    the only command the key may run
                                         clients.sock  (a unix socket, not a port)
                                           aria serve       the service
@@ -28,7 +28,33 @@ Built (milestone M1 of [the design](../superpowers/specs/2026-10-23-hub-and-mach
 
 Planned, not built: machines (other computers linked to a hub, so that a session can work in their folders), one memory shared across computers, a web client, the dock as a client of a hub, and notifications that find the device you are using. See [What is not there yet](#what-is-not-there-yet).
 
-## What you need
+## Set up a hub: nothing to build, nothing to copy
+
+You need a Linux server you can log in to over ssh (an Ubuntu 24.04 VPS is the usual case), and Aria on your own computer. Run the installer on your computer:
+
+```sh
+curl -fsSL https://github.com/i-montes/aria/releases/latest/download/install.sh | sh
+```
+
+Answer **2** (a hub), then **1** (another computer), and type the server as `user@host`. The installer puts Aria on your computer, then sets the server up over ssh and links your computer to it. It shows its steps as it goes, asks for your server's `sudo` password if it needs one, and ends with a connection that was tried and worked. After that, open a terminal and type:
+
+```sh
+aria connect
+```
+
+That is all there is to do. What it did for you, so you can check it:
+
+1. **On the server**, by running the same installer there, for the same version as your Aria: the hub's binary (`aria-x86_64-linux-headless` or `aria-aarch64-linux-headless`, downloaded and checked against its checksum), `bubblewrap` and `iproute2`, a private Node when the server's is too old, Pi and its packages, Engram, the `aria-serve.service` user unit and linger so it keeps running when you log out.
+2. **The sandbox.** On Ubuntu 24.04 AppArmor can stop the sandbox from starting. The installer tests it and, if that is the cause, writes a profile in `/etc/apparmor.d/aria-bwrap` that lets `bwrap` alone make user namespaces. Everything else on the server keeps the restriction, and the system-wide switch (`sysctl`) is never touched. It asks first when you answer on a terminal, and `--yes` counts as yes.
+3. **A key only for Aria** on your computer (`~/.ssh/aria-hub`, made if it is not there: it asks you for a passphrase, and one is a good idea), allowed on the server restricted to Aria's terminal bridge, so that it cannot be used as a login. See [the security model](#the-security-model).
+4. **Your settings and sign-ins**, for the files the server does not have yet, so the hub can use the same models without you typing a key twice. A Claude Pro or Max plan does not work on a hub (see [Sign in from a terminal](#sign-in-from-a-terminal)); an Anthropic API key or an OpenCode Go key does.
+5. **Your computer remembers the hub** (`~/.aria/hubs.json`), so `aria connect` needs no address and finds the key by itself. There is no ssh entry to write.
+
+You can also run the installer **on the server** and answer 2, then 2 (this computer is the server). The hub is installed and running, and the last screen prints the one line each computer needs to link to it (`aria hub init user@host`), because a server cannot link a computer it has never seen. To skip the questions: `--server user@host` or `--server here` (see [the installer's options](getting-started.md#installer-options)).
+
+The rest of this section, and the sections that follow up to [Connect to the hub](#connect-to-the-hub), describe the same set-up from a checkout of the repository, with a headless binary you build yourself and every flag of `aria hub init`. That is the developer's way, and the way to use a binary that is not a release.
+
+## What you need (from a checkout)
 
 On the server:
 
@@ -43,19 +69,18 @@ On your computer:
 - `ssh`. `aria connect` runs from Omarchy or macOS; the hub itself is Linux only.
 - A way to build the headless binary for the server's architecture. Nothing is compiled on the server. `sh tools/build-headless.sh` cross-builds it, for `aarch64` by default or for `x86_64` with `sh tools/build-headless.sh x86_64-unknown-linux-gnu`. It needs `rustup` (it adds the Rust target) and `mise` (it asks for zig 0.14.1 with `mise x zig@0.14.1`) on your `PATH`, and `python3`. Install `rustup` and `mise` yourself: the script uses them and does not install them. It is linked against glibc 2.39 (Ubuntu 24.04), so an older distribution may not run it.
 
-There are no published releases or hosted installer yet, so a hub is installed from a checkout.
+From a checkout, `hub init` uploads the installer and the headless binary you built. The release's `aria-x86_64-linux` is the dock's build, which links the desktop libraries (GTK, WebKitGTK, Vulkan), so it does not run on a server that lacks them: a hub uses the `-headless` assets of the release, which the set-up above downloads by itself.
 
-## Set up a hub
+## Set up a hub from a checkout
 
-Build the binary, make a key that Aria alone uses, and run `hub init` from the root of the checkout:
+Build the binary and run `hub init` from the root of the checkout. With the build in `target/aarch64-unknown-linux-gnu/release/aria` (or `--binary <path>` for another) `hub init` uploads that binary and the checkout's installer instead of installing the release:
 
 ```sh
 sh tools/build-headless.sh
-ssh-keygen -t ed25519 -f ~/.ssh/aria-hub
-aria hub init ana@hub.example --client-key ~/.ssh/aria-hub.pub
+aria hub init ana@hub.example
 ```
 
-`ssh-keygen` asks for a passphrase. Give one (see [Protect the key](#protect-the-key)). Use a dedicated key, not the one you log in with: that one is a shell on the server, and this one is meant to be only a terminal. `hub init` logs in to the server the way you normally do, and adds the public key you give it to `~/.ssh/authorized_keys` with a restriction that lets it run only Aria's bridge (see [The security model](#the-security-model)). If that key is already in `authorized_keys` without the restriction, `hub init` reports it and leaves it alone.
+`hub init` makes the key Aria alone uses, `~/.ssh/aria-hub`, if it is not there: it says why in a sentence and `ssh-keygen` asks for a passphrase (give one: see [Protect the key](#protect-the-key); with no terminal to ask on, the run stops and never uses an empty one). It is a dedicated key, not the one you log in with: that one is a shell on the server, and this one is meant to be only a terminal. `hub init` logs in to the server the way you normally do and adds the public key to `~/.ssh/authorized_keys` with a restriction that lets it run only Aria's bridge (see [The security model](#the-security-model)). `--client-key <file>` allows another public key instead, and `--no-client-key` skips the key step. If the key is already in `authorized_keys` without the restriction, `hub init` reports it and leaves it alone.
 
 **On Ubuntu 24.04 the sandbox may not start, and then `hub init` does not install the key.** `bwrap` can be installed and still be blocked by AppArmor. `hub init` finds out with a real probe, prints the fix and never applies it; until the sandbox works it skips the client key (exit 1), so `aria connect` has no key to use, and scheduled tasks cannot run shell commands. An administrator can fix it on the server in one of two ways:
 
@@ -79,11 +104,11 @@ Then it prints the plan and asks `Go ahead? [y/N]`. Only a `y` or `yes` goes on.
 3. Sends your settings and credentials as one bundle to `aria hub-import` on the server, for the files the server does not have yet (below).
 4. Restarts `aria-serve.service`, unless it was already active. An active service takes the new binary when it is idle and the settings within a second.
 5. Runs `aria --version` on the server and prints the version it found.
-6. With `--client-key`: tries the sandbox on the server first, and only then adds your key to `authorized_keys`.
+6. With a client key (the default one, or `--client-key`): tries the sandbox on the server first, and only then adds your key to `authorized_keys`, remembers the hub in `~/.aria/hubs.json` and tries the connection the way `aria connect` makes it.
 
 After step 5 it reads whether the user lingers, tries the sandbox, and after step 6 checks whether sshd is reachable from the internet. Steps 1 to 5 stop the run when they fail, and the error says what is already on the server. Step 6 and the checks report and go on.
 
-A successful run ends with `The hub is ready. Connect from this computer with: aria connect aria-hub`, or with the host you typed when no key was installed. Without linger it says the hub is installed but not ready, because the service stops when you log out of the server.
+A successful run ends with `connection tried: it works` and `The hub is ready. To use it, type: aria connect` (with the host when this hub is not the default one, or when no key was installed). Without linger it says the hub is installed but not ready, because the service stops when you log out of the server.
 
 ### What the installer does on the server
 
@@ -126,19 +151,9 @@ A successful run ends with `The hub is ready. Connect from this computer with: a
 
 When step 6 fails, the earlier steps have still run, so the hub is installed and the exit code is 1.
 
-### The ssh entry
+### The hub is remembered
 
-When the key is installed, `hub init` prints an entry for `~/.ssh/config` on your computer:
-
-```text
-Host aria-hub
-    HostName hub.example
-    User ana
-    IdentityFile /home/ana/.ssh/aria-hub
-    IdentitiesOnly yes
-```
-
-Add it. It makes `aria connect aria-hub` use the dedicated key and no other. To reach the hub over a private network, put that network's address or name in `HostName`.
+When the key is installed, `hub init` writes the hub into `~/.aria/hubs.json` on your computer (mode 600): the host and the key it uses. The first hub you set up is the default one. `aria connect` then needs no address, and `aria connect ana@hub.example` finds the key by itself, adding `-i <key> -o IdentitiesOnly=yes` to ssh so no other key is offered. There is no entry to write in `~/.ssh/config`. Only if `hubs.json` cannot be written does `hub init` print the old ssh entry (`Host aria-hub`, `IdentityFile …`, `IdentitiesOnly yes`) for you to add.
 
 ### Protect the key
 
@@ -152,10 +167,10 @@ The client key is what stands between a stranger and your hub's sessions, and a 
 ## Connect to the hub
 
 ```sh
-aria connect aria-hub
+aria connect
 ```
 
-`aria connect [user@]host` runs `ssh -T -o ServerAliveInterval=15 -o ServerAliveCountMax=3 <host> ~/.local/bin/aria client-stdio` and gives the pipe to the terminal client. Everything after that is the terminal described in [the terminal guide](terminal.md): the same list, the same keys and commands. Set `ARIA_SSH` to use another program than `ssh`. A host that starts with `-` is refused.
+With no address it opens the default hub (the first one `hub init` set up); `aria connect user@host` opens another one you have set up. With neither it says to run `aria hub init user@host`. `aria connect [user@]host` runs `ssh -T -o ServerAliveInterval=15 -o ServerAliveCountMax=3 <host> ~/.local/bin/aria client-stdio` and gives the pipe to the terminal client. Everything after that is the terminal described in [the terminal guide](terminal.md): the same list, the same keys and commands. Set `ARIA_SSH` to use another program than `ssh`. A host that starts with `-` is refused.
 
 What differs from a local terminal:
 
@@ -175,18 +190,9 @@ A terminal on the hub itself (a login as the hub's user, then `aria`) is a local
 The computer you set the hub up from is not the only one that can attach. A second computer needs:
 
 - **An `aria` binary for its system.** `aria connect` is part of every build, the headless one included, so on a Linux computer the binary from `sh tools/build-headless.sh` works as a client; on a Mac use the build you make for the dock (a Mac has no build without a window). The client needs no running service and no setup: it reads `~/.aria/settings.json` for the language and `display.verbose` when there is one. It also needs `ssh`. The two sides must speak the same protocol number, so update the client and the hub together.
-- **A key the hub allows.** The safer way is a second key, not a copy of the first. On the second computer run `ssh-keygen -t ed25519 -f ~/.ssh/aria-hub` (with a passphrase), bring the `.pub` file to the computer you ran `hub init` from, and run `aria hub init ana@hub.example --client-key <that .pub>` there. It adds a second restricted line and leaves the first, so you can revoke one without the other. Copying the first private key also works, but then the key lives in two places and revoking it locks out both.
-- **The ssh entry**, in `~/.ssh/config` on the second computer. `hub init` prints it when it installs a key, but it names the key's path on the computer where you ran `hub init`: write the path the key has on this one.
+- **Its own key, made by the same command.** On the second computer, with Aria installed, run `aria hub init ana@hub.example`. It logs in to the hub with that computer's own ssh login, makes a key there (`~/.ssh/aria-hub`, with a passphrase), adds it as a second restricted line and leaves the first, so you can revoke one without the other, remembers the hub and tries the connection. The hub already has everything else, so nothing else is sent. Copying the first private key also works, but then the key lives in two places and revoking it locks out both.
 
-```text
-Host aria-hub
-    HostName hub.example
-    User ana
-    IdentityFile /home/ana/.ssh/aria-hub
-    IdentitiesOnly yes
-```
-
-Then run `ssh aria-hub` once by hand to accept the server's host key. The restricted key can only run Aria's bridge, which waits for a client, so press `Ctrl+D` once the question is answered. After that, `aria connect aria-hub` ([Troubleshooting](#connecting-aria-connect) has its messages).
+Then, on that computer, `aria connect` is all there is to type ([Troubleshooting](#connecting-aria-connect) has its messages).
 
 ## Sign in from a terminal
 
@@ -222,20 +228,20 @@ The hub reads `~/.aria/settings.json` and picks up a change within about a secon
 
 ## Update a hub
 
-Nothing updates a hub by itself. Pull the repository, build the binary again, and run `hub init` again with the same arguments:
+Nothing updates a hub by itself. Update Aria on your computer (run the one-line installer again), then run `hub init` again: it installs the hub of the same release as your Aria. From a checkout, pull, build the binary again and run it with the same arguments:
 
 ```sh
 sh tools/build-headless.sh
-aria hub init ana@hub.example --client-key ~/.ssh/aria-hub.pub
+aria hub init ana@hub.example
 ```
 
-Running it again is safe. It uploads the new tree and binary, runs the installer again, sends only the bundle files the hub lacks, leaves an active service running, and says `already allowed` for a key it has. An active service takes the new binary when it is idle: no run in progress and no background work that would be cut. If the unit file itself changed, the installer restarts the service at once. A client and a hub that speak different protocol numbers refuse each other, and the message says to update the older one, so update your computers and the hub together.
+Running it again is safe. It installs the new version (or uploads the new tree and binary), runs the installer again, sends only the bundle files the hub lacks, leaves an active service running, and says `already allowed` for a key it has. An active service takes the new binary when it is idle: no run in progress and no background work that would be cut. If the unit file itself changed, the installer restarts the service at once. A client and a hub that speak different protocol numbers refuse each other, and the message says to update the older one, so update your computers and the hub together.
 
 ## The sandbox on a server
 
 The sandbox runs the model's commands inside `bwrap` so they can write only to the project. It needs unprivileged user namespaces. Ubuntu 24.04 restricts them with AppArmor, so `bwrap` can be installed and still fail.
 
-`hub init` runs a real probe on the server, `bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc true`, and tells a missing `bwrap` from a blocked one. For a blocked one it prints the two usual fixes and never applies either: the `sysctl` line, which is system-wide, or an AppArmor profile for `bwrap` alone. Both, with their trade-offs, are under [Set up a hub](#set-up-a-hub). The probe mounts `/dev` and `/proc` as the real call does, so a container-style server that lets `bwrap` make the namespace but not mount `/proc` is blocked too. For that case `hub init` prints what `bwrap` said, "the mount of /proc or /dev … failed", and that the two fixes do not help (the host has to allow the mount); it does not print them. After fixing it, restart the service so each session's Pi checks again, and run `hub init` again to install the key.
+`hub init` runs a real probe on the server, `bwrap --unshare-user --ro-bind / / --dev /dev --proc /proc true`, and tells a missing `bwrap` from a blocked one. For a blocked one it prints the two usual fixes and never applies either: the `sysctl` line, which is system-wide, or an AppArmor profile for `bwrap` alone. Both, with their trade-offs, are under [Set up a hub](#set-up-a-hub-from-a-checkout). The probe mounts `/dev` and `/proc` as the real call does, so a container-style server that lets `bwrap` make the namespace but not mount `/proc` is blocked too. For that case `hub init` prints what `bwrap` said, "the mount of /proc or /dev … failed", and that the two fixes do not help (the host has to allow the mount); it does not print them. After fixing it, restart the service so each session's Pi checks again, and run `hub init` again to install the key.
 
 Where the sandbox does not work, every command asks first, as on a Mac. The question goes to whichever client is attached, so anyone holding the client key can approve it. That is why `hub init` does not install the client key in that state unless you pass `--allow-no-sandbox`. A working sandbox narrows this less than it may seem, because the model can also ask to run a command outside the box and the same client answers that card: see [what a stolen client key can do](#what-a-stolen-client-key-can-do).
 
@@ -304,7 +310,7 @@ The safe end state is a hub whose ssh is reachable only over a private network, 
 
 `aria serve` is the service with no window: no dock, no face, no hotkey, no notifications, no dictation. `aria dock` also runs it when the binary was built without a window. It takes the same control socket as the dock, so a dock and a serve on one computer exclude each other. It runs until `aria quit` or a stop signal, ends background work and Pis cleanly, and exits 1 when terminals have no way in.
 
-Manage it with your own ssh login (the `aria-hub` entry's key is restricted and gives no shell):
+Manage it with your own ssh login (the key `aria connect` uses is restricted and gives no shell):
 
 ```sh
 ssh ana@hub.example
@@ -382,7 +388,7 @@ The unit restarts the service five seconds after a failure. `aria quit` exits 0,
 
 - **Machines.** Linking other computers to a hub, so that a session works in a folder on your laptop and every session shows in one list, is designed and not built. So are the shared credentials and memory it needs. Today a hub's sessions work in the hub's own folders: chat, research, memory, schedules, and code in repositories you clone there over ssh with the server's own git credentials. Aria never handles git credentials.
 - **A web client** and **the dock as a client of a hub**, and **notifications that find the device you are using**.
-- **`aria update` for a hub**, releases and a hosted installer. A hub is updated by running `hub init` again.
+- **`aria update` for a hub**, and a release asset for the headless build (the releases carry only the dock's). A hub is updated by running `hub init` again.
 - **A run that survives a dropped client** is checked by hand, not by the acceptance script, and the repository does not record that the hand check was done.
 
 The full list is in [pending](../pending.md), and the design is in [the hub and machines spec](../superpowers/specs/2026-10-23-hub-and-machines-design.md). How the pieces fit is in [the architecture](../architecture.md).
