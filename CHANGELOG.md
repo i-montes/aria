@@ -164,3 +164,18 @@ The installed dock was 0.18.0; this skips 0.19.0 (slice) and installs 0.20.1 (th
 | `$XDG_RUNTIME_DIR/aria/clients.sock` | the socket the terminal client uses, created at the restart (mode 600) | not applicable | it goes away with the dock |
 
 Not changed: `~/.config/systemd/user/aria.service` (the installer found it identical, so no immediate restart), `~/.config/hypr/`, the Omarchy bar widget (already up to date), the keyring, Engram and agent-browser (already at their pinned versions).
+
+## 2026-10-26 — a hub on the owner's VPS (the installer's hub mode, run on the server over ssh)
+
+The installer of 0.21.0 was served from the owner's computer over the tailnet and run on the server (Ubuntu 24.04, aarch64) with `ssh -tt <vps> 'curl -fsSL <url>/install.sh | ARIA_DOWNLOAD_URL=<url>/aria-aarch64-linux-headless sh'`, answering "a hub" and "this one". Nothing else on the server was touched; its public ssh port is as it was.
+
+| File | What | Backup | Revert |
+|---|---|---|---|
+| `/etc/apparmor.d/aria-bwrap` | AppArmor profile that lets `bwrap` alone make user namespaces (the system-wide restriction stays on), loaded with `apparmor_parser -r` | none, new file | `sudo apparmor_parser -R /etc/apparmor.d/aria-bwrap && sudo rm /etc/apparmor.d/aria-bwrap` |
+| the `bubblewrap` package | the sandbox's tool (installed by the hub installer with `apt-get`) | none | `sudo apt-get remove bubblewrap` |
+| `~/.local/bin/aria` | the hub's headless binary, 0.21.0 (new) | none, new file | `sh install.sh --uninstall --headless` |
+| `~/.config/systemd/user/aria-serve.service` | the user unit that runs `aria serve`, enabled and started (new) | none, new file | `sh install.sh --uninstall --headless` |
+| `~/.aria/` (`node`, `pi`, `agent`, `bin/engram`) | a private Node 22, Pi 1.3.0 with its packages, Engram 3.3.2 (new) | none, new | `sh install.sh --uninstall --headless` asks before deleting `~/.aria` |
+| linger for the server's user | `loginctl enable-linger`, so the service runs when nobody is logged in | none | `loginctl disable-linger <user>` |
+
+Not changed: `sshd_config`, the firewall, Tailscale, the system-wide `kernel.apparmor_restrict_unprivileged_userns`, the other services on the server, the owner's computer (no key made and no hub remembered yet: that is `aria hub init`'s step).

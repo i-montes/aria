@@ -489,6 +489,32 @@ out=$(LC_ALL=en_US.UTF-8 HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" 
 printf '%s\n' "$out" | grep -q '^  ✓ ' && pass "the marks are check marks in a UTF-8 locale" || fail "no check marks in a UTF-8 locale"
 rm -r "$tmp"
 
+# every line of the screen fits a narrow terminal (a remote login can be 80 columns wide), whatever the answers
+tmp=$(mktemp -d)
+mkdir -p "$tmp/user"
+printf '2\n1\nana@my-server\n' > "$tmp/answers"
+: > "$tmp/tty-out"
+env -u XDG_CONFIG_HOME -u HYPRLAND_INSTANCE_SIGNATURE -u WAYLAND_DISPLAY DISPLAY=:0 HOME="$tmp/user" ARIA_TTY_IN="$tmp/answers" ARIA_TTY_OUT="$tmp/tty-out" sh "$installer" --resolve-mode >/dev/null 2>&1
+wide=$(awk 'length($0) > 78' "$tmp/tty-out")
+[ -z "$wide" ] && pass "the questions fit 78 columns" || fail "a question line is wider than 78 columns: $wide"
+for args in '--mode desktop' '--mode hub --server here' '--server ana@my-server'; do
+  # shellcheck disable=SC2086
+  out=$(env -u XDG_CONFIG_HOME HOME="$tmp/user" ARIA_HOME="$tmp/home" sh "$installer" --dry-run --local /tmp/fake-aria $args 2>&1)
+  wide=$(printf '%s\n' "$out" | grep -v '^would:' | awk 'length($0) > 78')
+  [ -z "$wide" ] && pass "the screen of '$args' fits 78 columns" || fail "a line of '$args' is wider than 78 columns: $wide"
+done
+rm -r "$tmp"
+
+# the address a computer links to a hub by: Tailscale's, else the one this login came to, else the name
+tmp=$(mktemp -d)
+mkdir -p "$tmp/ts" "$tmp/none"
+printf '#!/bin/sh\necho 100.64.0.9\n' > "$tmp/ts/tailscale"; chmod +x "$tmp/ts/tailscale"
+for tool in head hostname uname dirname; do ln -s "$(command -v $tool)" "$tmp/none/$tool"; done
+[ "$(PATH="$tmp/ts:$tmp/none" SSH_CONNECTION='1.2.3.4 5 9.9.9.9 22' /bin/sh "$installer" --print-address)" = 100.64.0.9 ] && pass "the hub is reached by its Tailscale address when it has one" || fail "the Tailscale address was not chosen"
+[ "$(PATH="$tmp/none" SSH_CONNECTION='1.2.3.4 5 9.9.9.9 22' /bin/sh "$installer" --print-address)" = 9.9.9.9 ] && pass "without Tailscale, the address this login came to" || fail "the ssh address was not chosen"
+[ -n "$(PATH="$tmp/none" /bin/sh -c 'unset SSH_CONNECTION; exec /bin/sh "$0" --print-address' "$installer")" ] && pass "without either, its name" || fail "no address at all"
+rm -r "$tmp"
+
 # the headless build has its own artifact, by CPU
 tmp=$(mktemp -d)
 for cpu in aarch64 x86_64; do

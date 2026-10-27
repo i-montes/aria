@@ -160,9 +160,9 @@ ui_step() {
 ui_ok() { say "  $(paint 32 "$MARK_OK") $*"; }
 ui_info() { say "      $(paint 2 "$*")"; }
 
-# quiet <what it does> <command...>: runs the command with its output in the log and says only whether it worked; a
-# failure shows the end of that log. A dry run prints the command like `run` does.
-quiet() {
+# hush <what it does> <command...>: runs the command with its output in the log and says nothing when it worked; a failure
+# shows the end of that log. A dry run prints the command like `run` does. quiet is hush and a check mark for what it did.
+hush() {
   label=$1
   shift
   if [ "$DRY_RUN" = 1 ]; then
@@ -172,11 +172,8 @@ quiet() {
   if [ -z "$LOG_FILE" ]; then LOG_FILE=$(mktemp "${TMPDIR:-/tmp}/aria-install.XXXXXX" 2>/dev/null) || LOG_FILE=""; fi
   log=${LOG_FILE:-/dev/null}
   printf '=== %s: %s\n' "$label" "$*" >>"$log"
-  if [ "$1" = sudo ]; then say "  $(paint 33 '!') $label $(paint 2 '(your computer may ask for your password)')"; fi
-  "$@" >>"$log" 2>&1 && {
-    ui_ok "$label"
-    return 0
-  }
+  if [ "$1" = sudo ]; then say "  $(paint 33 '!') This step uses sudo $(paint 2 '(it may ask for your password)')"; fi
+  "$@" >>"$log" 2>&1 && return 0
   status=$?
   say "  $(paint 31 "$MARK_FAIL") $label" >&2
   if [ -n "$LOG_FILE" ]; then
@@ -184,6 +181,11 @@ quiet() {
     tail -n 12 "$LOG_FILE" | sed 's/^/        /' >&2
   fi
   return "$status"
+}
+quiet() {
+  label=$1
+  hush "$@" || return $?
+  if [ "$DRY_RUN" != 1 ]; then ui_ok "$label"; fi
 }
 
 # Runs a command, or only prints it in a dry run.
@@ -365,6 +367,7 @@ install_binary() {
   else
     run install -Dm755 "$SOURCE" "$BIN_DIR/aria"
   fi
+  if [ "$DRY_RUN" != 1 ]; then ui_ok "Aria is in $BIN_DIR/aria"; fi
 }
 
 print_service() {
@@ -409,7 +412,7 @@ install_packages() {
   # shellcheck disable=SC2086
   if ! pacman -Qq $PACKAGES >/dev/null 2>&1; then
     # shellcheck disable=SC2086
-    quiet "Installing the libraries the dock needs" sudo pacman -S --needed --noconfirm $PACKAGES
+    quiet "Installed the libraries the dock needs" sudo pacman -S --needed --noconfirm $PACKAGES
   else
     ui_ok "The libraries the dock needs are already installed"
   fi
@@ -437,7 +440,7 @@ install_headless_packages() {
     ui_ok "The sandbox tools are already installed"
     return 0
   fi
-  quiet "Installing the sandbox tools ($HEADLESS_PACKAGES)" "$@" || {
+  quiet "Installed the sandbox tools ($HEADLESS_PACKAGES)" "$@" || {
     warn "could not install $HEADLESS_PACKAGES (no sudo?)"
     say "Run this yourself: $*"
     say "Until then every command asks before it runs."
@@ -465,7 +468,7 @@ user_session_env() {
 
 # `systemctl --user` on a server; when it fails the reason is nearly always the user manager's bus or linger.
 server_systemctl() {
-  run systemctl --user "$@" || die "systemctl --user $* failed. A server needs dbus-user-session (sudo apt-get install -y dbus-user-session) and linger on (sudo loginctl enable-linger ${USER:-$(id -un)}) for its user manager and bus to be there without a login; then run this again"
+  hush "systemctl --user $*" systemctl --user "$@" || die "systemctl --user $* failed. A server needs dbus-user-session (sudo apt-get install -y dbus-user-session) and linger on (sudo loginctl enable-linger ${USER:-$(id -un)}) for its user manager and bus to be there without a login; then run this again"
 }
 
 # Without linger the user manager (and Aria with it) stops when the last login ends.
@@ -475,10 +478,12 @@ enable_linger() {
     run loginctl enable-linger "$who"
     return 0
   fi
-  loginctl enable-linger "$who" || {
-    warn "could not enable linger, so Aria stops when you log out"
-    say "Run this yourself: sudo loginctl enable-linger $who"
+  loginctl enable-linger "$who" && {
+    ui_ok "Aria stays on when you log out (linger)"
+    return 0
   }
+  warn "could not enable linger, so Aria stops when you log out"
+  say "  Run this yourself: sudo loginctl enable-linger $who"
 }
 
 # True when the Node on PATH (with its npm) is 22.19 or newer. Silent: a server falls back to a private Node.
@@ -629,7 +634,7 @@ install_pi() {
     ui_ok "Pi $PI_VERSION is already installed"
     return
   fi
-  quiet "Installing the agent (Pi $PI_VERSION)" npm install --prefix "$prefix" --no-audit --no-fund "$PI_PACKAGE@$PI_VERSION"
+  quiet "Installed the agent (Pi $PI_VERSION)" npm install --prefix "$prefix" --no-audit --no-fund "$PI_PACKAGE@$PI_VERSION"
 }
 
 # The packages the owner's extensions use (pi-packages, pinned), installed into Aria's own Pi directory.
@@ -645,7 +650,7 @@ install_pi_packages() {
   fi
   run install -d -m 700 "$DATA_DIR/agent"
   for package in $packages; do
-    quiet "Adding $(printf '%s' "$package" | sed 's|^git:github.com/||; s|^npm:||; s|@[^@/]*$||')" env PI_CODING_AGENT_DIR="$DATA_DIR/agent" PI_SKIP_VERSION_CHECK=1 "$DATA_DIR/pi/$PI_VERSION/node_modules/.bin/pi" install "$package"
+    quiet "Added $(printf '%s' "$package" | sed 's|^git:github.com/||; s|^npm:||; s|@[^@/]*$||')" env PI_CODING_AGENT_DIR="$DATA_DIR/agent" PI_SKIP_VERSION_CHECK=1 "$DATA_DIR/pi/$PI_VERSION/node_modules/.bin/pi" install "$package"
   done
 }
 
@@ -768,7 +773,7 @@ install_agent_browser() {
   if [ -x "$prefix/node_modules/.bin/agent-browser" ]; then
     ui_ok "agent-browser $version is already installed"
   else
-    quiet "Installing agent-browser $version" npm install --prefix "$prefix" --no-audit --no-fund "agent-browser@$version" || {
+    quiet "Installed agent-browser $version" npm install --prefix "$prefix" --no-audit --no-fund "agent-browser@$version" || {
       warn "could not install agent-browser $version; the agents cannot check pages in a browser"
       return 0
     }
@@ -777,7 +782,7 @@ install_agent_browser() {
     warn "could not link agent-browser into $DATA_DIR/bin"
     return 0
   }
-  quiet "Downloading the browser agent-browser uses" "$DATA_DIR/bin/agent-browser" install || warn "could not install agent-browser's browser; the browser check will not work until it is installed (run: ~/.aria/bin/agent-browser install)"
+  quiet "Downloaded the browser agent-browser uses" "$DATA_DIR/bin/agent-browser" install || warn "could not install agent-browser's browser; the browser check will not work until it is installed (run: ~/.aria/bin/agent-browser install)"
 }
 
 # sha256sum is Linux's; macOS has shasum.
@@ -805,6 +810,7 @@ write_unit() {
   else
     write_service_file "$UNIT_DIR/$UNIT" "$(print_unit)"
   fi
+  if [ "$DRY_RUN" != 1 ]; then ui_ok "The service that starts Aria is set up"; fi
 }
 
 write_service_file() {
@@ -852,11 +858,11 @@ restart_dock() {
     if [ "$1" = 1 ]; then server_systemctl restart "$SERVE_UNIT"; fi
     ui_ok "Aria is installed and running as $SERVE_UNIT"
   else
-    run systemctl --user daemon-reload
-    run systemctl --user enable --now "$UNIT"
+    hush "systemctl --user daemon-reload" systemctl --user daemon-reload
+    hush "systemctl --user enable --now $UNIT" systemctl --user enable --now "$UNIT"
     if [ "$1" = 1 ] && soft_restart; then return; fi
     # An update replaces the binary under a running dock: restart it so the new one runs.
-    if [ "$1" = 1 ]; then run systemctl --user restart "$UNIT"; fi
+    if [ "$1" = 1 ]; then hush "systemctl --user restart $UNIT" systemctl --user restart "$UNIT"; fi
     ui_ok "Aria is installed. Press Super+A to set it up."
   fi
 }
@@ -916,8 +922,13 @@ ask_use() {
     tty_say ""
     tty_say "  $(paint 1 'How will you use Aria?')"
     tty_say ""
-    tty_say "    $(paint '1;36' 1)  On this computer   the dock: a window that opens over what you are doing, with its shortcut"
-    tty_say "    $(paint '1;36' 2)  As a hub           a server that keeps Aria running day and night; you connect to it from your computers"
+    tty_say "    $(paint '1;36' 1)  On this computer"
+    tty_say "       the dock: a window that opens over what you are doing,"
+    tty_say "       with its own shortcut"
+    tty_say ""
+    tty_say "    $(paint '1;36' 2)  As a hub"
+    tty_say "       a server that keeps Aria running day and night,"
+    tty_say "       which you connect to from your computers"
     tty_say ""
     printf '  Type 1 or 2, then Enter [%s]: ' "$number" >>"$TTY_OUT"
     tty_read
@@ -949,8 +960,12 @@ ask_server() {
     tty_say ""
     tty_say "  $(paint 1 'Which computer is the server?')"
     tty_say ""
-    tty_say "    $(paint '1;36' 1)  Another one   you give me its address (like ana@my-server); I set it up from here and link this computer to it"
-    tty_say "    $(paint '1;36' 2)  This one       this computer is the server; other computers connect to it"
+    tty_say "    $(paint '1;36' 1)  Another one"
+    tty_say "       you give me its address (like ana@my-server); I set it up"
+    tty_say "       from here and link this computer to it"
+    tty_say ""
+    tty_say "    $(paint '1;36' 2)  This one"
+    tty_say "       this computer is the server; other computers connect to it"
     tty_say ""
     printf '  Type 1 or 2, then Enter [%s]: ' "$number" >>"$TTY_OUT"
     tty_read
@@ -966,8 +981,7 @@ ask_server() {
   tries=0
   while :; do
     tty_say ""
-    tty_say "  $(paint 2 'The address you use to log in to it with ssh: user@host (the host can be a name or an IP).')"
-    printf '  Server address: ' >>"$TTY_OUT"
+    printf '  Its ssh address, like ana@my-server (a name or an IP): ' >>"$TTY_OUT"
     tty_read
     if looks_like_server "$answer"; then SERVER=$answer; return 0; fi
     tty_say "  That does not look like user@host."
@@ -1037,18 +1051,23 @@ resolve_mode() {
 ui_plan() {
   if [ "$USE" = hub ] && [ "$SERVER" = here ]; then
     ui_title "setting up a hub on this server"
-    say "  This server will keep Aria running day and night. You use it from your computers."
+    say "  This server will keep Aria running day and night."
+    say "  You use it from your computers."
   elif [ "$USE" = hub ]; then
     ui_title "setting up Aria here and a hub on $SERVER"
-    say "  Aria goes on this computer, then on $SERVER (it keeps Aria running day and night), and this computer is linked to it."
+    say "  Aria goes on this computer, then on $SERVER, which keeps it"
+    say "  running day and night. This computer is linked to it."
   else
     ui_title "setting up Aria on this computer"
-    say "  Aria opens over whatever you are doing, and you ask it to work in your language."
+    say "  Aria opens over whatever you are doing, and you ask it to work"
+    say "  in your language."
   fi
   say ""
-  say "  $(paint 2 "$STEP_TOTAL steps. It changes nothing outside your home folder except system packages (it asks for your password for those).")"
+  say "  $(paint 2 "$STEP_TOTAL steps. Nothing changes outside your home folder except")"
+  say "  $(paint 2 'system packages (it asks for your password for those).')"
   if [ "$USE" = hub ] && [ "$SERVER" = here ]; then
-    say "  $(paint 2 'It also keeps the server running when you log out, and asks before it touches the sandbox rules.')"
+    say "  $(paint 2 'It also stays on after you log out, and asks before it')"
+    say "  $(paint 2 'changes the sandbox rules.')"
   fi
   if can_ask; then
     printf '\n  Press Enter to start, or Ctrl+C to cancel. ' >>"$TTY_OUT"
@@ -1100,31 +1119,42 @@ ensure_sandbox() {
   fi
   restricted=$(cat "$USERNS_SYSCTL" 2>/dev/null || echo 0)
   if [ "$restricted" != 1 ] || [ ! -f "$APPARMOR_ABI" ]; then
-    warn "the sandbox does not start here, and it is not Ubuntu's user-namespace restriction, so Aria cannot fix it: every command will ask before it runs"
+    warn "the sandbox does not start, and it is not Ubuntu's user-namespace restriction"
+    say "  Aria cannot fix that: every command will ask before it runs."
     return 0
   fi
   path=$(readlink -f "$(command -v bwrap)" 2>/dev/null || command -v bwrap)
-  say "The sandbox cannot start: this Ubuntu stops programs from making user namespaces."
-  say "Fix: let bwrap alone make them, with a profile in $BWRAP_PROFILE. Nothing else on this machine changes."
+  say ""
+  say "  The sandbox cannot start: this Ubuntu stops programs from making"
+  say "  user namespaces. The fix is a profile in $BWRAP_PROFILE"
+  say "  that lets bwrap alone make them. Nothing else changes."
   consent=n
   if [ "$ASSUME_YES" = 1 ]; then
     consent=y
   elif can_ask; then
-    printf 'Write that profile (needs sudo)? [Y/n] ' >>"$TTY_OUT"
+    printf '  Write that profile (needs sudo)? [Y/n] ' >>"$TTY_OUT"
     tty_read
     consent=${answer:-y}
   fi
   case "$consent" in
     y | Y | yes)
       if print_bwrap_profile "$path" | sudo tee "$BWRAP_PROFILE" >/dev/null && sudo apparmor_parser -r "$BWRAP_PROFILE"; then
-        if sandbox_works; then ui_ok "The sandbox works now"; else warn "the profile is in place and the sandbox still does not start: every command will ask before it runs"; fi
+        if sandbox_works; then
+          ui_ok "The sandbox works now"
+        else
+          warn "the profile is in place and the sandbox still does not start"
+          say "  Every command will ask before it runs."
+        fi
       else
-        warn "could not write or load $BWRAP_PROFILE (no sudo?): every command will ask before it runs"
-        say "To fix it yourself, as an administrator: write the profile that 'sh install.sh --print-bwrap-profile' prints to $BWRAP_PROFILE and run: sudo apparmor_parser -r $BWRAP_PROFILE"
+        warn "could not write or load $BWRAP_PROFILE (no sudo?)"
+        say "  Every command will ask before it runs. To fix it yourself, an"
+        say "  administrator writes what 'sh install.sh --print-bwrap-profile'"
+        say "  prints to that file and runs: sudo apparmor_parser -r $BWRAP_PROFILE"
       fi
       ;;
     *)
-      say "Left as it is: every command asks before it runs. To fix it later, run this installer again and say yes."
+      say "  Left as it is: every command asks before it runs."
+      say "  To fix it later, run this installer again and say yes."
       ;;
   esac
 }
@@ -1133,7 +1163,7 @@ ensure_sandbox() {
 # Aria that was just installed here (`aria hub init`), which also tries the connection.
 link_to_server() {
   [ -n "$SERVER" ] && [ "$SERVER" != here ] || return 0
-  ui_step "Setting up the server $SERVER" "Installs the hub there, links this computer to it and tries the connection."
+  ui_step "Setting up the server $SERVER" "Installs the hub there, links this computer, tests the connection."
   if [ "$DRY_RUN" = 1 ]; then
     say "would: $BIN_DIR/aria hub init $SERVER --yes"
     return 0
@@ -1145,6 +1175,21 @@ link_to_server() {
   }
 }
 
+# The address a computer reaches this server by: the Tailscale one when there is one (it works from every device of the
+# tailnet), else the address this very ssh login came to (SSH_CONNECTION: client, port, server, port), else its name.
+server_address() {
+  if command -v tailscale >/dev/null 2>&1; then
+    found=$(tailscale ip -4 2>/dev/null | head -1)
+    if [ -n "$found" ]; then echo "$found"; return; fi
+  fi
+  if [ -n "${SSH_CONNECTION:-}" ]; then
+    # shellcheck disable=SC2086
+    set -- $SSH_CONNECTION
+    if [ -n "${3:-}" ]; then echo "$3"; return; fi
+  fi
+  hostname -f 2>/dev/null || hostname 2>/dev/null || echo this-server
+}
+
 # The last screen: what is ready, and the one thing to do to use it. Never a setup step, except the one a server cannot do
 # for a computer it has never seen.
 ui_done() {
@@ -1152,15 +1197,16 @@ ui_done() {
   say ""
   ui_rule
   if [ "$HEADLESS" = 1 ]; then
-    host=$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo this-server)
+    host=$(server_address)
     say "  $(paint '1;32' "$MARK_OK Aria is running on this server.")"
     say ""
-    say "  One thing is left, and only a computer you will use can do it, because this server has never seen it."
-    say "  On that computer, with Aria installed, run:"
+    say "  One thing is left, and only a computer you will use can do it:"
+    say "  this server has never seen it. On that computer, with Aria"
+    say "  installed, run:"
     say ""
     say "      $(paint 1 "aria hub init ${USER:-$(id -un)}@$host")"
     say ""
-    say "  $(paint 2 "(use the address you log in to this server with, if it is not $host)")"
+    say "  $(paint 2 "(if you reach this server by another name, use that one)")"
   elif [ -n "$SERVER" ] && [ "$SERVER" != here ]; then
     say "  $(paint '1;32' "$MARK_OK Aria is ready on this computer and on $SERVER.")"
     say ""
@@ -1174,9 +1220,11 @@ ui_done() {
     say "  $(paint '1;32' "$MARK_OK Aria is ready.")"
     say ""
     if [ "$PLATFORM" = Darwin ]; then
-      say "  To use it, press $(paint 1 'Option + Space'). The first time it walks you through connecting a model."
+      say "  To use it, press $(paint 1 'Option + Space')."
+      say "  The first time it walks you through connecting a model."
     else
-      say "  To use it, press $(paint 1 'Super + A'). The first time it walks you through connecting a model."
+      say "  To use it, press $(paint 1 'Super + A')."
+      say "  The first time it walks you through connecting a model."
     fi
   fi
   say ""
@@ -1195,11 +1243,11 @@ do_install() {
   read_pi_version # before anything is installed: a version we cannot read must not leave a half install
   ui_ok "Aria can run on $where"
   if [ "$HEADLESS" = 1 ]; then
-    ui_step "Installing what Aria needs" "The sandbox that keeps what the agent runs inside a box, and the tools around it."
+    ui_step "Installing what Aria needs" "The sandbox that boxes what the agent runs, and its tools."
     install_headless_packages
     ensure_sandbox
   else
-    ui_step "Installing what Aria needs" "The libraries the dock is drawn with, and the sandbox that keeps what the agent runs inside a box."
+    ui_step "Installing what Aria needs" "The dock's libraries, and the sandbox that boxes what the agent runs."
     install_packages
   fi
   was_active=0
@@ -1213,20 +1261,20 @@ do_install() {
       systemctl --user is-active --quiet "$UNIT" 2>/dev/null && was_active=1
     fi
   fi
-  ui_step "Downloading Aria" "From the Aria release, checked against its checksum before anything is replaced."
+  ui_step "Downloading Aria" "From the Aria release, checked against its checksum."
   fetch_binary
   if [ "$DRY_RUN" != 1 ]; then
     if [ -n "$LOCAL" ]; then ui_ok "Using the program you gave: $LOCAL"; else ui_ok "Downloaded and checked"; fi
   fi
   # Pi and its packages first: if a download fails, nothing has been replaced and the running dock stays as it was.
-  ui_step "Installing the agent and its memory" "Pi (the agent), the extensions Aria uses, and Engram (its long-term memory)."
+  ui_step "Installing the agent and its memory" "Pi (the agent), its extensions, and Engram (long-term memory)."
   run install -d -m 700 "$DATA_DIR"
   link_node
   install_pi
   install_pi_packages
   install_engram
   if [ "$HEADLESS" = 1 ] && [ "$WITH_BROWSER" != 1 ]; then
-    ui_info "Skipping the browser check on a server (its Chrome is a large download); --with-browser adds it"
+    ui_info "No browser check on a server (a large download): --with-browser adds it"
   else
     install_agent_browser
   fi
@@ -1326,6 +1374,7 @@ while [ $# -gt 0 ]; do
     --print-bwrap-profile) MODE=print-bwrap-profile ;;
     --ensure-sandbox) MODE=ensure-sandbox ;; # test hook
     --resolve-mode) MODE=resolve-mode ;; # test hook: print the use and the server that were settled
+    --print-address) MODE=print-address ;; # test hook: the address a computer would link to this server by
     --check-node) MODE=check-node ;; # test hooks
     --print-pi-version) MODE=print-pi-version ;;
     --link-node) MODE=link-node ;;
@@ -1362,6 +1411,7 @@ case "$MODE" in
     ;;
   print-bwrap-profile) print_bwrap_profile /usr/bin/bwrap ;;
   ensure-sandbox) ensure_sandbox ;;
+  print-address) server_address ;;
   resolve-mode) resolve_mode; say "use=$USE server=${SERVER:-none} headless=$HEADLESS" ;;
   print-unit) print_service ;;
   check-node) check_node ;;
