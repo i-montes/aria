@@ -56,9 +56,45 @@ impl LinkError {
     }
 }
 
+/// Where one session of a `sessions` list lives, when the hub says so: the machine's name and whether it is off. The hub's
+/// own sessions carry neither, and `DockMessage::Sessions` does not hold them, so the reader takes them from the raw line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tag {
+    pub id: String,
+    pub machine: String,
+    pub offline: bool,
+}
+
+/// The tags of a `sessions` line (empty when no entry names a machine); `None` for any other line.
+pub fn machine_tags(line: &str) -> Option<Vec<Tag>> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value["type"] != "sessions" {
+        return None;
+    }
+    let tags = value["sessions"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let machine = entry["machine"].as_str().filter(|name| !name.is_empty())?;
+                    Some(Tag {
+                        id: entry["id"].as_str()?.to_string(),
+                        machine: machine.to_string(),
+                        offline: entry["offline"] == true,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(tags)
+}
+
 pub struct Link {
     out: Mutex<Box<dyn Write + Send>>,
     events: Mutex<Option<Receiver<DockMessage>>>,
+    /// The machine tags of each `sessions` list, sent just before the list itself.
+    tags: Mutex<Option<Receiver<Vec<Tag>>>>,
     /// The ssh a link over `spawn` runs on: killed and waited on when the link goes.
     child: Option<Child>,
     /// The version the hub's `hello` said (a hub of this protocol always sends one; an old one may not).
@@ -125,6 +161,7 @@ impl Link {
         writer.flush()?;
         let (first, hello_reply) = mpsc::channel::<io::Result<String>>();
         let (sender, events) = mpsc::channel();
+        let (tag_sender, tags) = mpsc::channel();
         // The reply is waited for here, with a timeout; a pipe has none, so the reading is a thread's.
         std::thread::spawn(move || {
             let mut lines = BufReader::new(reader).lines();
@@ -147,6 +184,10 @@ impl Link {
                 return;
             }
             for line in lines.map_while(Result::ok) {
+                // The tags go first, so the list they belong to never shows without them.
+                if let Some(found) = machine_tags(&line) {
+                    let _ = tag_sender.send(found);
+                }
                 if let Ok(message) = serde_json::from_str::<DockMessage>(&line) {
                     if sender.send(message).is_err() {
                         return;
@@ -171,6 +212,7 @@ impl Link {
             None => Ok(Link {
                 out: Mutex::new(writer),
                 events: Mutex::new(Some(events)),
+                tags: Mutex::new(Some(tags)),
                 child: None,
                 hub_version: reply_version(&line),
             }),
@@ -185,6 +227,16 @@ impl Link {
 
     pub fn send(&self, message: &PageMessage) {
         if let Ok(value) = serde_json::to_value(message) {
+            self.line(value);
+        }
+    }
+
+    /// A new session on a machine of the hub: the same `sessionNew`, with the machine's name for the hub to route it by.
+    pub fn send_on(&self, message: &PageMessage, machine: &str) {
+        if let Ok(mut value) = serde_json::to_value(message) {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("machine".into(), json!(machine));
+            }
             self.line(value);
         }
     }
@@ -209,6 +261,11 @@ impl Link {
     /// What the dock says; taken once (later calls get a receiver that is already closed).
     pub fn events(&self) -> Receiver<DockMessage> {
         self.events.lock().unwrap().take().unwrap_or_else(|| mpsc::channel().1)
+    }
+
+    /// The machine tags of the lists the dock sends; taken once, like `events`.
+    pub fn tags(&self) -> Receiver<Vec<Tag>> {
+        self.tags.lock().unwrap().take().unwrap_or_else(|| mpsc::channel().1)
     }
 }
 
@@ -295,6 +352,54 @@ mod tests {
         fn say(&mut self, value: Value) {
             writeln!(self.to_client, "{value}").unwrap();
         }
+    }
+
+    #[test]
+    fn the_machine_tags_of_a_sessions_list_are_taken_from_its_raw_line() {
+        let line = json!({"type": "sessions", "id": 4, "active": null, "sessions": [
+            {"id": "hub-1", "title": "a"},
+            {"id": "m-1", "title": "b", "machine": "laptop"},
+            {"id": "m-2", "title": "c", "machine": "kitchen", "offline": true},
+            {"id": "m-3", "title": "d", "machine": ""},
+        ]})
+        .to_string();
+        assert_eq!(
+            machine_tags(&line),
+            Some(vec![
+                Tag { id: "m-1".into(), machine: "laptop".into(), offline: false },
+                Tag { id: "m-2".into(), machine: "kitchen".into(), offline: true },
+            ]),
+            "the hub's own sessions and an empty name carry no tag"
+        );
+        let plain = json!({"type": "sessions", "id": 4, "sessions": [{"id": "a"}]}).to_string();
+        assert_eq!(machine_tags(&plain), Some(vec![]), "a list with no machine says so, so old tags are cleared");
+        assert_eq!(machine_tags(&json!({"type": "sessionsChanged"}).to_string()), None);
+        assert_eq!(machine_tags("not json"), None);
+    }
+
+    #[test]
+    fn a_lists_tags_arrive_before_the_list() {
+        let mut dock = fake_dock();
+        let tags = dock.link.tags();
+        let events = dock.link.events();
+        dock.say(json!({"type": "sessions", "id": 1, "active": null, "sessions": [
+            {"id": "m-1", "title": "b", "machine": "laptop", "offline": true}
+        ]}));
+        let found = tags.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(found, vec![Tag { id: "m-1".into(), machine: "laptop".into(), offline: true }]);
+        assert!(matches!(events.recv_timeout(Duration::from_secs(5)).unwrap(), DockMessage::Sessions { .. }));
+    }
+
+    #[test]
+    fn a_new_session_on_a_machine_carries_the_machine_name() {
+        let mut dock = fake_dock();
+        dock.link.send_on(&PageMessage::SessionNew { id: 5, workdir: None }, "laptop");
+        let sent = dock.read();
+        assert_eq!(sent["type"], "sessionNew");
+        assert_eq!(sent["id"], 5);
+        assert_eq!(sent["machine"], "laptop");
+        dock.link.send(&PageMessage::SessionNew { id: 6, workdir: None });
+        assert!(dock.read().get("machine").is_none(), "one for the hub itself names no machine");
     }
 
     /// `Link::over` on a pair of sockets whose other end reads the client's first line, then says `replies`. What the

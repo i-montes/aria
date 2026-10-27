@@ -173,6 +173,20 @@ const OWN: &[(&str, &str, &str)] = &[
     ),
     ("term.new", "+ new in {folder}", "+ nueva en {folder}"),
     ("term.newRemote", "+ new on {host}", "+ nueva en {host}"),
+    ("term.newMachine", "+ new on {machine}", "+ nueva en {machine}"),
+    ("term.place.server", "server", "servidor"),
+    ("term.place.offline", "offline", "apagado"),
+    (
+        "term.machineOffline",
+        "{machine} is offline: its sessions cannot be opened until it is back.",
+        "{machine} está apagado: sus sesiones no se pueden abrir hasta que vuelva.",
+    ),
+    (
+        "term.machineDown",
+        "That machine is offline: nothing can reach it until it is back.",
+        "Esa máquina está apagada: nada puede llegar a ella hasta que vuelva.",
+    ),
+    ("term.machineUnknown", "The server does not know that machine.", "El servidor no conoce esa máquina."),
     (
         "term.noSsh",
         "ssh is not installed here (or ARIA_SSH names a program that is not there).",

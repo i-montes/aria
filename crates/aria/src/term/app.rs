@@ -59,6 +59,11 @@ pub enum Input {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
     Send(PageMessage),
+    /// A `sessionNew` for a machine of the hub: the message with the machine's name beside it.
+    SendOn {
+        message: PageMessage,
+        machine: String,
+    },
     Attach(String),
     Detach,
     Focus(bool),
@@ -167,7 +172,28 @@ pub struct App {
     now_ms: u64,
     /// The `… N more lines` rows on screen, with their call.
     more_rows: Vec<(u16, String)>,
+    /// Where the sessions a machine owns live, by session id: (machine, off). The hub's own sessions carry no tag.
+    places: HashMap<String, (String, bool)>,
+    /// Every machine seen on this connection and whether it is on: one whose entries all say `offline` is off, and one
+    /// seen before that has no entry now stays listed as off. Sorted by name.
+    machines: std::collections::BTreeMap<String, bool>,
 }
+
+/// How a list row says where its session lives: a short tag after the title, dim when the machine is off.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Place {
+    pub tag: String,
+    pub dim: bool,
+}
+
+/// The "new session" rows at the end of the list: the hub's own first, then one for each machine that is on.
+struct NewRow {
+    label: String,
+    machine: Option<String>,
+}
+
+/// A machine's name as a tag shows it: whole when it is short, else cut with `…`.
+const TAG_NAME: usize = 12;
 
 fn folder_name(path: &str) -> String {
     path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_string()
@@ -205,6 +231,8 @@ impl App {
             schedules: None,
             signin: None,
             now_ms: 0,
+            places: HashMap::new(),
+            machines: Default::default(),
         };
         let load = app.request(Pending::SessionsLoad, |id| PageMessage::SessionsLoad { id });
         (app, vec![load])
@@ -318,6 +346,74 @@ impl App {
         sessions
     }
 
+    /// The machine tags of the list that just came (see `link::machine_tags`): which sessions a machine owns and which
+    /// machines are on. The list's rows and its "new" rows follow them.
+    pub fn machine_tags(&mut self, tags: Vec<crate::term::link::Tag>) {
+        let mut seen: std::collections::BTreeMap<String, bool> = Default::default();
+        for tag in &tags {
+            *seen.entry(tag.machine.clone()).or_insert(false) |= !tag.offline;
+        }
+        for (name, on) in self.machines.iter_mut() {
+            if !seen.contains_key(name) {
+                *on = false;
+            }
+        }
+        self.machines.extend(seen);
+        self.places = tags.into_iter().map(|tag| (tag.id, (tag.machine, tag.offline))).collect();
+        self.selected = self.selected.min(self.last_row());
+    }
+
+    /// The rows that start a session: the hub's own (a folder of this computer, or the hub's projects folder over ssh), then
+    /// one per machine that is on, by name.
+    fn new_rows(&self) -> Vec<NewRow> {
+        let lang = &self.config.lang;
+        let own = match &self.config.remote {
+            Some(host) => t(lang, "term.newRemote", &json!({"host": host})),
+            None => t(lang, "term.new", &json!({"folder": self.config.cwd})),
+        };
+        let mut rows = vec![NewRow { label: own, machine: None }];
+        for (name, on) in &self.machines {
+            if *on {
+                rows.push(NewRow {
+                    label: t(lang, "term.newMachine", &json!({"machine": name})),
+                    machine: Some(name.clone()),
+                });
+            }
+        }
+        rows
+    }
+
+    /// The index of the list's last row.
+    fn last_row(&self) -> usize {
+        self.sessions.len() + self.new_rows().len() - 1
+    }
+
+    /// Where each row lives, in the order of `list_rows`: nothing for a hub with no machines, `· server` for the hub's own
+    /// sessions once a machine is linked, `· laptop` (and `· offline` when it is off, dimmed) for a machine's.
+    pub fn list_places(&self) -> Vec<Place> {
+        let lang = &self.config.lang;
+        let mut places: Vec<Place> = self
+            .ordered()
+            .into_iter()
+            .map(|s| match self.places.get(&s.id) {
+                Some((machine, off)) => {
+                    let name: String = if machine.chars().count() > TAG_NAME {
+                        machine.chars().take(TAG_NAME - 1).chain(std::iter::once('…')).collect()
+                    } else {
+                        machine.clone()
+                    };
+                    let off_word =
+                        if *off { format!(" · {}", t(lang, "term.place.offline", &json!({}))) } else { String::new() };
+                    Place { tag: format!("· {name}{off_word}"), dim: *off }
+                }
+                None if self.machines.is_empty() => Place::default(),
+                None => Place { tag: format!("· {}", t(lang, "term.place.server", &json!({}))), dim: false },
+            })
+            .collect();
+        places.extend(self.new_rows().iter().map(|_| Place::default()));
+        places
+    }
+
     /// How long ago `at` (ms) was: `just now`, `3 min ago`, `2 h ago`, `3 d ago`.
     fn ago(&self, at: i64) -> String {
         let seconds = (self.now_ms as i64 - at).max(0) / 1000;
@@ -355,21 +451,34 @@ impl App {
                 (title, folder, state, ago)
             })
             .collect();
-        let new = match &self.config.remote {
-            Some(host) => t(lang, "term.newRemote", &json!({"host": host})),
-            None => t(lang, "term.new", &json!({"folder": self.config.cwd})),
-        };
-        rows.push((new, String::new(), String::new(), String::new()));
+        rows.extend(self.new_rows().into_iter().map(|row| (row.label, String::new(), String::new(), String::new())));
         rows
     }
 
     pub fn selected(&self) -> usize {
-        self.selected
+        self.selected.min(self.last_row())
     }
 
     fn open_selected(&mut self) -> Vec<Effect> {
-        match self.ordered().get(self.selected).map(|s| s.id.clone()) {
-            Some(id) => self.attach(id),
+        let at = self.selected.min(self.last_row());
+        if let Some(id) = self.ordered().get(at).map(|s| s.id.clone()) {
+            // A session a machine owns cannot be opened while the machine is off: say so, in the list's own note.
+            if let Some((machine, true)) = self.places.get(&id) {
+                self.note = Some(t(&self.config.lang, "term.machineOffline", &json!({"machine": machine})));
+                return Vec::new();
+            }
+            return self.attach(id);
+        }
+        let machine = self.new_rows().into_iter().nth(at - self.sessions.len()).and_then(|row| row.machine);
+        match machine {
+            // A machine's session works in that machine's projects folder: the client never chooses one.
+            Some(machine) => {
+                let sent = self.request(Pending::SessionNew, |id| PageMessage::SessionNew { id, workdir: None });
+                vec![match sent {
+                    Effect::Send(message) => Effect::SendOn { message, machine },
+                    other => other,
+                }]
+            }
             None => {
                 let workdir = if self.config.remote.is_some() { None } else { Some(self.config.cwd.clone()) };
                 vec![self.request(Pending::SessionNew, |id| PageMessage::SessionNew { id, workdir })]
@@ -459,7 +568,7 @@ impl App {
     }
 
     fn list_key(&mut self, key: Key) -> Vec<Effect> {
-        let last = self.sessions.len();
+        let last = self.last_row();
         match key {
             Key::Up => self.selected = self.selected.saturating_sub(1),
             Key::Down => self.selected = (self.selected + 1).min(last),
@@ -919,7 +1028,7 @@ impl App {
             Screen::List => {
                 // The list starts on the second row.
                 let at = usize::from(row.saturating_sub(1));
-                if at <= self.sessions.len() {
+                if at <= self.last_row() {
                     self.selected = at;
                     effects.extend(self.open_selected());
                 }
@@ -979,6 +1088,17 @@ impl App {
                     }
                     Some(Pending::SessionNew) if code == "too-many-sessions" => {
                         self.note = Some(t(&self.config.lang, "term.tooMany", &json!({})));
+                    }
+                    // The hub could not start a session on a machine: it is off, or it never linked.
+                    Some(Pending::SessionNew) if code == "machine-offline" => {
+                        self.note = Some(t(&self.config.lang, "term.machineDown", &json!({})));
+                    }
+                    Some(Pending::SessionNew) if code == "unknown-machine" => {
+                        self.note = Some(t(&self.config.lang, "term.machineUnknown", &json!({})));
+                    }
+                    // A session's machine went off while the client was talking to it.
+                    Some(_) if code == "machine-offline" => {
+                        self.say(crate::term::state::Tone::Warn, "term.machineDown", json!({}));
                     }
                     Some(Pending::SchedulesOpen) => {
                         self.session.entries.push(crate::term::state::Entry::Notice {
@@ -1064,7 +1184,7 @@ impl App {
             }
             DockMessage::Sessions { id, sessions, .. } if self.pending.remove(&id).is_some() => {
                 self.sessions = sessions.into_iter().filter(|s| s.schedule.is_none()).collect();
-                self.selected = self.selected.min(self.sessions.len());
+                self.selected = self.selected.min(self.last_row());
                 Vec::new()
             }
             DockMessage::SessionAdded { id: Some(id), session } if self.pending.remove(&id).is_some() => {
@@ -2329,5 +2449,188 @@ mod tests {
         assert_eq!(effects, vec![Effect::Reconnect]);
         let effects = app.update(Input::Reconnected);
         assert_eq!(effects[0], Effect::Attach("aa".into()));
+    }
+
+    // ---- machines ----------------------------------------------------------------------------------------------------
+
+    use crate::term::link::Tag;
+
+    fn tag(id: &str, machine: &str, offline: bool) -> Tag {
+        Tag { id: id.into(), machine: machine.into(), offline }
+    }
+
+    /// An app over ssh on the list, with the hub's session `hub-1` and `others` (id, machine, off), answered.
+    fn with_machines(lang: &str, others: &[(&str, &str, bool)]) -> App {
+        let (mut app, effects) = App::new(Config { remote: Some("hub.example".into()), lang: lang.into(), ..config() });
+        let Some(Effect::Send(PageMessage::SessionsLoad { id })) = effects.first().cloned() else {
+            panic!("{effects:?}")
+        };
+        app.machine_tags(others.iter().map(|(id, machine, off)| tag(id, machine, *off)).collect());
+        let mut sessions = vec![entry("hub-1", "on the server")];
+        sessions.extend(others.iter().map(|(id, _, _)| entry(id, &format!("work {id}"))));
+        app.update(Input::Dock(DockMessage::Sessions { id, sessions, active: None }));
+        app
+    }
+
+    fn tags_of(app: &App) -> Vec<(String, bool)> {
+        app.list_places().into_iter().map(|place| (place.tag, place.dim)).collect()
+    }
+
+    fn labels(app: &App) -> Vec<String> {
+        app.list_rows().into_iter().map(|row| row.0).collect()
+    }
+
+    #[test]
+    fn with_no_machine_nothing_is_tagged() {
+        let app = with_machines("en", &[]);
+        assert_eq!(tags_of(&app), vec![(String::new(), false), (String::new(), false)]);
+        assert_eq!(labels(&app), ["on the server", "+ new on hub.example"]);
+    }
+
+    #[test]
+    fn once_a_machine_is_linked_each_session_says_where_it_lives() {
+        let app = with_machines("en", &[("m-1", "laptop", false)]);
+        assert_eq!(
+            tags_of(&app),
+            vec![
+                ("· server".to_string(), false),
+                ("· laptop".to_string(), false),
+                (String::new(), false),
+                (String::new(), false)
+            ],
+            "the hub's session, the machine's, and the two rows that start one"
+        );
+        let app = with_machines("es", &[("m-1", "laptop", false)]);
+        assert_eq!(tags_of(&app)[0].0, "· servidor");
+    }
+
+    #[test]
+    fn a_machine_that_is_off_is_tagged_and_dimmed() {
+        let app = with_machines("en", &[("m-1", "laptop", true)]);
+        assert_eq!(tags_of(&app)[1], ("· laptop · offline".to_string(), true));
+        let app = with_machines("es", &[("m-1", "laptop", true)]);
+        assert_eq!(tags_of(&app)[1], ("· laptop · apagado".to_string(), true));
+    }
+
+    #[test]
+    fn a_long_machine_name_is_cut_with_an_ellipsis_in_the_tag_only() {
+        let app = with_machines("en", &[("m-1", "the-machine-in-the-attic", false)]);
+        assert_eq!(tags_of(&app)[1].0, "· the-machine…", "twelve columns: eleven letters and the ellipsis");
+        assert!(
+            labels(&app).contains(&"+ new on the-machine-in-the-attic".to_string()),
+            "the row keeps the whole name"
+        );
+    }
+
+    #[test]
+    fn opening_a_session_of_a_machine_that_is_off_says_so_and_attaches_nothing() {
+        for (lang, said) in [
+            ("en", "laptop is offline: its sessions cannot be opened until it is back."),
+            ("es", "laptop está apagado: sus sesiones no se pueden abrir hasta que vuelva."),
+        ] {
+            let mut app = with_machines(lang, &[("m-1", "laptop", true)]);
+            key(&mut app, Key::Down);
+            assert_eq!(app.selected(), 1);
+            let effects = key(&mut app, Key::Enter);
+            assert!(effects.is_empty(), "{effects:?}");
+            assert_eq!(app.attached_session(), None);
+            assert_eq!(app.note().as_deref(), Some(said));
+        }
+        // The hub's own session and a machine that is on open as ever.
+        let mut app = with_machines("en", &[("m-1", "laptop", false)]);
+        assert!(key(&mut app, Key::Enter).iter().any(|e| matches!(e, Effect::Attach(id) if id == "hub-1")));
+        let mut app = with_machines("en", &[("m-1", "laptop", false)]);
+        key(&mut app, Key::Down);
+        assert!(key(&mut app, Key::Enter).iter().any(|e| matches!(e, Effect::Attach(id) if id == "m-1")));
+    }
+
+    #[test]
+    fn the_rows_that_start_a_session_are_the_hubs_then_the_machines_that_are_on_by_name() {
+        let app = with_machines("en", &[("k-1", "kitchen", false), ("m-1", "laptop", true), ("a-1", "attic", false)]);
+        let rows = labels(&app);
+        assert_eq!(rows[4..], ["+ new on hub.example", "+ new on attic", "+ new on kitchen"], "laptop is off: no row");
+        let app = with_machines("es", &[("k-1", "kitchen", false)]);
+        assert_eq!(labels(&app)[2..], ["+ nueva en hub.example", "+ nueva en kitchen"]);
+    }
+
+    #[test]
+    fn choosing_a_row_starts_the_session_on_its_machine_or_on_the_hub() {
+        let mut app = with_machines("en", &[("k-1", "kitchen", false)]);
+        // sessions: hub-1, k-1; rows: the hub's, kitchen's
+        key(&mut app, Key::Down);
+        key(&mut app, Key::Down);
+        key(&mut app, Key::Down);
+        assert_eq!(app.selected(), 3, "the last row is reachable");
+        let effects = key(&mut app, Key::Enter);
+        let [Effect::SendOn { message: PageMessage::SessionNew { workdir: None, .. }, machine }] = &effects[..] else {
+            panic!("{effects:?}")
+        };
+        assert_eq!(machine, "kitchen", "a machine's session never gets a folder from the client");
+        key(&mut app, Key::Up);
+        let effects = key(&mut app, Key::Enter);
+        assert!(matches!(&effects[..], [Effect::Send(PageMessage::SessionNew { workdir: None, .. })]), "{effects:?}");
+        key(&mut app, Key::Down);
+        key(&mut app, Key::Down);
+        assert_eq!(app.selected(), 3, "there is no row after the last one");
+    }
+
+    #[test]
+    fn a_click_on_a_machines_row_starts_a_session_there() {
+        let mut app = with_machines("en", &[("k-1", "kitchen", false)]);
+        // The list starts on the second screen row: sessions at 1 and 2, the hub's row at 3, kitchen's at 4.
+        let effects = app.update(Input::Click { row: 4 });
+        assert!(matches!(&effects[..], [Effect::SendOn { machine, .. }] if machine == "kitchen"), "{effects:?}");
+    }
+
+    #[test]
+    fn a_machine_seen_before_that_is_gone_from_the_list_stays_but_is_off() {
+        let mut app = with_machines("en", &[("k-1", "kitchen", false)]);
+        assert_eq!(labels(&app).last().unwrap(), "+ new on kitchen");
+        app.machine_tags(vec![]);
+        assert_eq!(labels(&app).last().unwrap(), "+ new on hub.example", "it cannot start a session while it is gone");
+        // Linked sessions are tagged by the machines seen, so the hub's own still say where they are.
+        assert_eq!(app.list_places()[0].tag, "· server");
+    }
+
+    #[test]
+    fn a_hub_with_one_machine_that_has_no_session_yet_shows_nothing_new() {
+        // The list is all the client has to know a machine by: one with no session is not named in it.
+        let app = with_machines("en", &[]);
+        assert_eq!(labels(&app).len(), 2);
+    }
+
+    #[test]
+    fn the_hub_refusing_a_session_on_a_machine_is_said_as_a_plain_note() {
+        for (lang, code, said) in [
+            ("en", "machine-offline", "That machine is offline: nothing can reach it until it is back."),
+            ("es", "machine-offline", "Esa máquina está apagada: nada puede llegar a ella hasta que vuelva."),
+            ("en", "unknown-machine", "The server does not know that machine."),
+            ("es", "unknown-machine", "El servidor no conoce esa máquina."),
+        ] {
+            let mut app = with_machines(lang, &[("k-1", "kitchen", false)]);
+            for _ in 0..3 {
+                key(&mut app, Key::Down);
+            }
+            let effects = key(&mut app, Key::Enter);
+            let [Effect::SendOn { message: PageMessage::SessionNew { id, .. }, .. }] = effects[..] else {
+                panic!("{effects:?}")
+            };
+            app.update(Input::Dock(DockMessage::Error { id, code: code.into() }));
+            assert_eq!(app.note().as_deref(), Some(said), "{lang} {code}");
+        }
+    }
+
+    #[test]
+    fn a_machine_that_goes_off_under_an_open_session_is_said_in_the_conversation() {
+        let mut app = with_machines("en", &[("m-1", "laptop", false)]);
+        key(&mut app, Key::Down);
+        key(&mut app, Key::Enter);
+        assert_eq!(app.attached_session(), Some("m-1"));
+        typed(&mut app, "/schedules");
+        let effects = key(&mut app, Key::Enter);
+        let [Effect::Send(PageMessage::SchedulesList { id })] = effects[..] else { panic!("{effects:?}") };
+        let before = app.session().entries.len();
+        app.update(Input::Dock(DockMessage::Error { id, code: "machine-offline".into() }));
+        assert_eq!(app.session().entries.len(), before + 1, "a notice joins the conversation");
     }
 }

@@ -2,6 +2,7 @@
 //! the bottom (or a panel in its place: a picker, a dialog), and one footer line. Nothing here reads or writes anything
 //! but the frame.
 
+use crate::term::app::Place;
 use crate::term::git::GitStatus;
 use crate::term::markdown;
 use crate::term::state::{Call, Entry, Session, Status, Text, Tone};
@@ -594,10 +595,13 @@ fn editor_lines(v: &SessionView, width: usize) -> Vec<Line<'static>> {
     lines.into_iter().skip(skip).collect()
 }
 
-/// The start screen: the open sessions (title, folder) and the new one in the current folder last; `note` under them.
+/// The start screen: the open sessions (title, where they live, folder) and the rows that start one last; `note` under them.
+/// `places` runs beside `rows` (a shorter one counts as empty): a session on a machine shows a dim tag after its title, and
+/// one on a machine that is off is dimmed whole.
 pub fn draw_list(
     frame: &mut Frame,
     rows: &[(String, String, String, String)],
+    places: &[Place],
     selected: usize,
     note: Option<&str>,
     p: &Palette,
@@ -607,7 +611,28 @@ pub fn draw_list(
         return;
     }
     let inner = Rect { x: area.x + 2, y: area.y + 1, width: area.width - 4, height: area.height - 1 };
-    let title_width = rows.iter().map(|row| row.0.width()).max().unwrap_or(0).min(usize::from(inner.width) / 2);
+    let half = usize::from(inner.width) / 2;
+    let tag_width = places.iter().map(|place| place.tag.width()).max().unwrap_or(0);
+    // The tag is never cut: the title gives way to it (not below 16 columns, so it stays readable), and the right-hand
+    // columns (folder, state, how long ago) clip first.
+    let title_cap = if tag_width == 0 { half } else { half.saturating_sub(tag_width + 2).max(16) };
+    // Once the list has tags, a row that starts a session (a label and nothing else) is not a column: it is drawn whole,
+    // and its label does not set the title column's width.
+    let is_new = |i: usize, folder: &str, state: &str, ago: &str| {
+        tag_width > 0
+            && places.get(i).is_none_or(|place| place.tag.is_empty())
+            && folder.is_empty()
+            && state.is_empty()
+            && ago.is_empty()
+    };
+    let title_width = rows
+        .iter()
+        .enumerate()
+        .filter(|(i, row)| !is_new(*i, &row.1, &row.2, &row.3))
+        .map(|(_, row)| row.0.width())
+        .max()
+        .unwrap_or(0)
+        .min(title_cap);
     let folder_width = rows.iter().map(|row| row.1.width()).max().unwrap_or(0).min(24);
     let state_width = rows.iter().map(|row| row.2.width()).max().unwrap_or(0);
     let mut lines: Vec<Line<'static>> = rows
@@ -615,19 +640,44 @@ pub fn draw_list(
         .enumerate()
         .map(|(i, (title, folder, state, ago))| {
             let on = i == selected;
-            let style = Style::default().fg(if on { p.accent } else { p.text });
+            let place = places.get(i).cloned().unwrap_or_default();
+            if is_new(i, folder, state, ago) {
+                let style = Style::default().fg(if on { p.accent } else { p.text });
+                return Line::from(vec![
+                    Span::styled(if on { "› " } else { "  " }, style),
+                    Span::styled(title.clone(), style),
+                ]);
+            }
+            let marker_style = Style::default().fg(if on { p.accent } else { p.text });
+            let style = if place.dim { Style::default().fg(p.faint) } else { marker_style };
             let cut: String = title.chars().take(title_width).collect();
             let pad = title_width.saturating_sub(cut.width());
+            let tag_pad = tag_width.saturating_sub(place.tag.width());
             let folder: String = folder.chars().take(folder_width).collect();
             let folder_pad = folder_width.saturating_sub(folder.width());
             let state_pad = state_width.saturating_sub(state.width());
-            Line::from(vec![
-                Span::styled(if on { "› " } else { "  " }, style),
+            let mut spans = vec![
+                Span::styled(if on { "› " } else { "  " }, marker_style),
                 Span::styled(format!("{cut}{}", " ".repeat(pad)), style),
-                Span::styled(format!("    {folder}{}", " ".repeat(folder_pad)), Style::default().fg(p.grey)),
-                Span::styled(format!("    {state}{}", " ".repeat(state_pad)), Style::default().fg(p.text)),
+            ];
+            if tag_width > 0 {
+                spans.push(Span::styled(
+                    format!("  {}{}", place.tag, " ".repeat(tag_pad)),
+                    Style::default().fg(p.faint),
+                ));
+            }
+            spans.extend([
+                Span::styled(
+                    format!("    {folder}{}", " ".repeat(folder_pad)),
+                    Style::default().fg(if place.dim { p.faint } else { p.grey }),
+                ),
+                Span::styled(
+                    format!("    {state}{}", " ".repeat(state_pad)),
+                    Style::default().fg(if place.dim { p.faint } else { p.text }),
+                ),
                 Span::styled(format!("    {ago}"), Style::default().fg(p.faint)),
-            ])
+            ]);
+            Line::from(spans)
         })
         .collect();
     if let Some(note) = note {
@@ -1200,5 +1250,117 @@ mod tests {
         assert_eq!(short_model("opencode-go/mimo-v2.6-pro"), "mimo v2.6 pro");
         assert_eq!(short_model("opencode-go/glm-5.3"), "glm 5.3");
         assert_eq!(short_model("x"), "x");
+    }
+
+    // ---- the list with machines --------------------------------------------------------------------------------------
+
+    type ListRow = (String, String, String, String);
+
+    fn row(title: &str, folder: &str, state: &str, ago: &str) -> ListRow {
+        (title.into(), folder.into(), state.into(), ago.into())
+    }
+
+    fn place(tag: &str, dim: bool) -> Place {
+        Place { tag: tag.into(), dim }
+    }
+
+    fn render_list(rows: &[ListRow], places: &[Place], selected: usize, w: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(w, 8)).unwrap();
+        let palette = Palette::truecolor();
+        terminal.draw(|frame| draw_list(frame, rows, places, selected, None, &palette)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// The list of a hub with a laptop that is on and a kitchen that is off.
+    fn with_machines_list() -> (Vec<ListRow>, Vec<Place>) {
+        (
+            vec![
+                row("fix the coupon", "checkout", "working", "3 min ago"),
+                row("write the notes", "docs", "done", "1 h ago"),
+                row("old experiment", "attic", "done", "2 d ago"),
+                row("+ new on hub.example", "", "", ""),
+                row("+ new on laptop", "", "", ""),
+            ],
+            vec![
+                place("· server", false),
+                place("· laptop", false),
+                place("· kitchen · offline", true),
+                Place::default(),
+                Place::default(),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_list_with_no_machine_looks_as_it_did() {
+        let rows =
+            vec![row("fix the coupon", "checkout", "working", "3 min ago"), row("+ new on hub.example", "", "", "")];
+        let places = vec![Place::default(), Place::default()];
+        let with = text(&render_list(&rows, &places, 0, 100));
+        let without = text(&render_list(&rows, &[], 0, 100));
+        assert_eq!(with, without, "no places is the same as empty ones");
+        assert!(with.contains("› fix the coupon") && with.contains("checkout    working    3 min ago"), "{with}");
+        assert!(!with.contains('·'), "{with}");
+    }
+
+    #[test]
+    fn each_session_says_where_it_lives_right_after_its_title() {
+        let (rows, places) = with_machines_list();
+        let screen = text(&render_list(&rows, &places, 0, 100));
+        println!("{screen}");
+        assert!(screen.contains("› fix the coupon   · server"), "{screen}");
+        assert!(screen.contains("write the notes  · laptop"), "{screen}");
+        assert!(screen.contains("old experiment   · kitchen · offline"), "{screen}");
+        assert!(screen.contains("+ new on hub.example") && screen.contains("+ new on laptop"), "{screen}");
+        // The rows that start a session are whole and start at the left, not in the title column.
+        assert!(screen.lines().any(|l| l == "    + new on laptop"), "{screen}");
+    }
+
+    #[test]
+    fn a_session_on_a_machine_that_is_off_is_dim_whole_and_a_live_one_is_not() {
+        let (rows, places) = with_machines_list();
+        let buffer = render_list(&rows, &places, 0, 100);
+        let palette = Palette::truecolor();
+        assert_eq!(colour_of(&buffer, "old experiment"), palette.faint);
+        assert_eq!(colour_of(&buffer, "attic"), palette.faint);
+        assert_eq!(colour_of(&buffer, "· kitchen"), palette.faint);
+        assert_eq!(colour_of(&buffer, "write the notes"), palette.text);
+        assert_eq!(colour_of(&buffer, "fix the coupon"), palette.accent, "the selected one");
+        assert_eq!(colour_of(&buffer, "· laptop"), palette.faint, "the tag is dim");
+        // The marker of the selected row stays the accent even when the row is dimmed.
+        let buffer = render_list(&rows, &places, 2, 100);
+        assert_eq!(colour_of(&buffer, "› old"), palette.accent);
+        assert_eq!(colour_of(&buffer, "old experiment"), palette.faint);
+    }
+
+    #[test]
+    fn at_sixty_columns_the_tag_is_whole_and_the_new_rows_are_not_cut() {
+        let (rows, places) = with_machines_list();
+        let screen = text(&render_list(&rows, &places, 0, 60));
+        println!("{screen}");
+        for tag in ["· server", "· laptop", "· kitchen · offline"] {
+            assert!(screen.contains(tag), "{tag} in\n{screen}");
+        }
+        assert!(screen.lines().any(|l| l == "    + new on hub.example"), "{screen}");
+        assert!(screen.lines().any(|l| l == "    + new on laptop"), "{screen}");
+        // The titles stay readable: the right-hand columns give way first.
+        for title in ["fix the coupon", "write the notes", "old experiment"] {
+            assert!(screen.contains(title), "{title} in\n{screen}");
+        }
+        for line in screen.lines() {
+            assert!(line.chars().count() <= 60, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_long_title_gives_way_to_the_tag_and_never_the_other_way() {
+        let rows = vec![
+            row("a very long title for a session that has been going for days", "checkout", "working", "3 min ago"),
+            row("+ new on laptop", "", "", ""),
+        ];
+        let places = vec![place("· the-machine…", false), Place::default()];
+        let screen = text(&render_list(&rows, &places, 0, 100));
+        assert!(screen.contains("· the-machine…"), "{screen}");
+        assert!(screen.contains("checkout"), "{screen}");
     }
 }

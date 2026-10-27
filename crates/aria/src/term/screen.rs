@@ -139,12 +139,15 @@ pub fn run(
     let mut link = link;
     let palette = Palette::detect();
     let mut events = link.events();
+    let mut tags = link.tags();
     let remote = config.remote.is_some();
     let (mut app, first) = App::new(config);
     app.hub_version(link.hub_version());
     for effect in first {
-        if let Effect::Send(message) = effect {
-            link.send(&message);
+        match effect {
+            Effect::Send(message) => link.send(&message),
+            Effect::SendOn { message, machine } => link.send_on(&message, &machine),
+            _ => {}
         }
     }
     let previous = std::panic::take_hook();
@@ -201,7 +204,14 @@ pub fn run(
             last_draw = std::time::Instant::now();
             let completed = terminal.draw(|frame| {
                 match app.screen() {
-                    Screen::List => draw_list(frame, &app.list_rows(), app.selected(), app.note().as_deref(), &palette),
+                    Screen::List => draw_list(
+                        frame,
+                        &app.list_rows(),
+                        &app.list_places(),
+                        app.selected(),
+                        app.note().as_deref(),
+                        &palette,
+                    ),
                     Screen::Session => {
                         let area = frame.area();
                         let width = area.width.saturating_sub(4);
@@ -292,6 +302,11 @@ pub fn run(
                 }
             }
         }
+        // The tags of a list come just before the list: both are taken in this turn of the loop, the tags first.
+        while let Ok(found) = tags.try_recv() {
+            changed = true;
+            app.machine_tags(found);
+        }
         while let Ok(message) = events.try_recv() {
             changed = true;
             effects.extend(app.update(Input::Dock(message)));
@@ -299,6 +314,7 @@ pub fn run(
         for effect in effects {
             match effect {
                 Effect::Send(message) => link.send(&message),
+                Effect::SendOn { message, machine } => link.send_on(&message, &machine),
                 Effect::Attach(session) => link.attach(&session),
                 Effect::Detach => link.detach(),
                 Effect::Focus(focused) => link.focus(focused),
@@ -308,6 +324,7 @@ pub fn run(
                     let back = match reconnect() {
                         Ok(new) => {
                             events = new.events();
+                            tags = new.tags();
                             link = new;
                             reconnected = true;
                             Input::Reconnected
@@ -317,6 +334,7 @@ pub fn run(
                     for effect in app.update(back) {
                         match effect {
                             Effect::Send(message) => link.send(&message),
+                            Effect::SendOn { message, machine } => link.send_on(&message, &machine),
                             Effect::Attach(session) => link.attach(&session),
                             Effect::Quit => quit = true,
                             _ => {}
