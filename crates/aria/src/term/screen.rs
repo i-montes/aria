@@ -141,6 +141,7 @@ pub fn run(
     let mut events = link.events();
     let remote = config.remote.is_some();
     let (mut app, first) = App::new(config);
+    app.hub_version(link.hub_version());
     for effect in first {
         if let Effect::Send(message) = effect {
             link.send(&message);
@@ -303,10 +304,12 @@ pub fn run(
                 Effect::Focus(focused) => link.focus(focused),
                 Effect::SaveVerbose(on) => save_verbose(paths, on),
                 Effect::Reconnect => {
+                    let mut reconnected = false;
                     let back = match reconnect() {
                         Ok(new) => {
                             events = new.events();
                             link = new;
+                            reconnected = true;
                             Input::Reconnected
                         }
                         Err(_) => Input::Lost,
@@ -318,6 +321,10 @@ pub fn run(
                             Effect::Quit => quit = true,
                             _ => {}
                         }
+                    }
+                    // A new connection is one more connection: the version is said again if it still differs.
+                    if reconnected {
+                        app.hub_version(link.hub_version());
                     }
                 }
                 Effect::Redraw => {

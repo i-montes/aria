@@ -392,7 +392,8 @@ fn body(v: &View, p: &Palette, width: usize, budget: usize) -> Vec<Line<'static>
                 ];
                 out.extend(hang(lead, 7, title, title_style, width));
             }
-            let mut tail = vec![blank(), progress(v, p, width)];
+            // A run with no steps (every server already current) has no bar to show.
+            let mut tail = if v.rows.is_empty() { Vec::new() } else { vec![blank(), progress(v, p, width)] };
             if v.phase == Phase::Finished {
                 tail.push(blank());
                 match (&v.failure, &v.outcome) {
@@ -430,6 +431,17 @@ fn body(v: &View, p: &Palette, width: usize, budget: usize) -> Vec<Line<'static>
                             bold(p.amber),
                             width,
                         ));
+                    }
+                    (None, Some(Outcome::Updated { runs })) => {
+                        for (host, version) in runs {
+                            tail.extend(hang(
+                                vec![Span::raw("  "), Span::styled("✓ ", bold(p.green))],
+                                4,
+                                &format!("{host} runs Aria {version}"),
+                                bold(p.green),
+                                width,
+                            ));
+                        }
                     }
                     (None, None) => {}
                 }
@@ -477,6 +489,7 @@ fn border_color(v: &View, p: &Palette) -> ratatui::style::Color {
         (Some(_), _) => p.coral,
         (None, Some(Outcome::Ready { .. })) => p.green,
         (None, Some(Outcome::NotReady { .. })) => p.amber,
+        (None, Some(Outcome::Updated { .. })) => p.green,
         _ => p.accent,
     }
 }
@@ -1236,6 +1249,33 @@ mod tests {
         assert!(text.contains("5 of 5"));
         assert_eq!(text.matches('✓').count(), 5 + 1, "five steps and the ready line: {text}");
         assert!(!text.contains('○'));
+    }
+
+    #[test]
+    fn an_update_ends_with_each_server_and_the_version_it_runs() {
+        let mut view = running_step_two();
+        view.finish(&Outcome::Updated {
+            runs: vec![
+                ("ana@hub.example".to_string(), "0.22.0".to_string()),
+                ("b@two".to_string(), "0.22.0".to_string()),
+            ],
+        });
+        view.live = false;
+        let text = text_of(&render(&view, 80, 24));
+        assert!(text.contains("ana@hub.example runs Aria 0.22.0"), "{text}");
+        assert!(text.contains("b@two runs Aria 0.22.0"), "{text}");
+        assert!(!text.contains("Your server is ready"), "that is init's closing: {text}");
+    }
+
+    #[test]
+    fn an_update_with_nothing_to_do_has_no_progress_bar() {
+        let mut view = View::new();
+        view.title = "updating your server".to_string();
+        view.finish(&Outcome::Updated { runs: vec![("ana@hub.example".to_string(), "0.22.0".to_string())] });
+        view.live = false;
+        let text = text_of(&render(&view, 80, 24));
+        assert!(text.contains("ana@hub.example runs Aria 0.22.0"), "{text}");
+        assert!(!text.contains(" of "), "no step, no bar: {text}");
     }
 
     #[test]

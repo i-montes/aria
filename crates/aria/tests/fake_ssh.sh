@@ -16,6 +16,9 @@
 #   ARIA_FAKE_SSH_PASSWORDS    yes: sshd_config allows password logins (default no)
 #   ARIA_FAKE_SSH_LINGER       no: the user does not linger on the hub; fail: `loginctl` fails (default: yes)
 #   ARIA_FAKE_SSH_ACTIVE       1: aria-serve.service is already active before the run (default: it is not)
+#   ARIA_FAKE_SSH_VERSION      the version `aria --version` says on the hub (default 0.0.0-fake); ARIA_FAKE_SSH_VERSION_AFTER, when
+#                              set, is what it says once the installer has run
+#   ARIA_FAKE_SSH_DOWN         hosts (space separated) that cannot be reached: ssh exits 255 for every command to them
 #   ARIA_FAKE_SSH_HELLO        fail: `aria client-stdio` (the connection `hub init` tries at the end) exits at once; otherwise it
 #                              answers the hello with protocol ARIA_FAKE_SSH_PROTOCOL (default 1)
 # ARIA_FAKE_SSH_ROOT is the hub's computer: the upload is unpacked, and the key is added to authorized_keys, under
@@ -52,6 +55,9 @@ cat > "$stdin_file"
 bytes=$(wc -c < "$stdin_file" | tr -d ' ')
 printf '%s\t%s\tstdin=%s\n' "$host" "$cmd" "$bytes" >> "$log"
 trap 'rm -f "$stdin_file"' EXIT
+case " ${ARIA_FAKE_SSH_DOWN:-} " in
+  *" $host "*) echo "ssh: connect to host $host port 22: Connection refused" >&2; exit 255 ;;
+esac
 
 missing=" ${ARIA_FAKE_SSH_MISSING:-} "
 case "$cmd" in
@@ -112,6 +118,8 @@ case "$cmd" in
   *authorized_keys*) HOME="$root/home" sh -c "$cmd" < "$stdin_file" ;;
   *sshd_config*)
     if [ "${ARIA_FAKE_SSH_PASSWORDS:-no}" = yes ]; then echo "PasswordAuthentication yes"; else echo "PasswordAuthentication no"; fi ;;
-  *--version*) echo "aria 0.0.0-fake" ;;
+  *--version*)
+    if [ -f "$root/installed" ] && [ -n "${ARIA_FAKE_SSH_VERSION_AFTER:-}" ]; then echo "aria $ARIA_FAKE_SSH_VERSION_AFTER"
+    else echo "aria ${ARIA_FAKE_SSH_VERSION:-0.0.0-fake}"; fi ;;
   *) echo "fake ssh: unexpected command: $cmd" >&2; exit 97 ;;
 esac

@@ -1325,3 +1325,264 @@ fn the_probe_says_what_it_found_without_the_technical_details() {
     }
     assert!(!head.contains("Aria already runs there"), "a hub with no service says nothing of one: {head}");
 }
+
+// ---- aria hub update ------------------------------------------------------------------------------------------------
+
+/// This Aria's version: what a hub that is up to date says.
+const MINE: &str = env!("CARGO_PKG_VERSION");
+
+impl World {
+    /// `aria hub update <args>` with the fake ssh and no terminal.
+    fn update(&self, args: &[&str], envs: &[(&str, &str)]) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_aria"));
+        command
+            .args(["hub", "update"])
+            .args(args)
+            .current_dir(self.path("repo"))
+            .env_clear()
+            .env("HOME", self.path("home"))
+            .env("ARIA_HOME", self.path("home/.aria"))
+            .env("PATH", self.path("bin"))
+            .env("ARIA_SSH", concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_ssh.sh"))
+            .env("ARIA_FAKE_SSH_LOG", self.path("hub/log"))
+            .env("ARIA_FAKE_SSH_ROOT", self.path("hub"))
+            .stdin(Stdio::null());
+        for (name, value) in envs {
+            command.env(name, value);
+        }
+        command.output().unwrap()
+    }
+
+    /// The hubs this computer is linked to (`~/.aria/hubs.json`), the first of `hosts` being the default.
+    fn link(&self, hosts: &[&str]) {
+        let entries: Vec<String> = hosts.iter().map(|host| format!(r#""{host}": {{"key": "/k/aria-hub"}}"#)).collect();
+        std::fs::write(
+            self.path("home/.aria/hubs.json"),
+            format!(r#"{{"default": "{}", "hubs": {{{}}}}}"#, hosts[0], entries.join(", ")),
+        )
+        .unwrap();
+    }
+
+    fn hubs_json(&self) -> String {
+        std::fs::read_to_string(self.path("home/.aria/hubs.json")).unwrap_or_default()
+    }
+}
+
+/// What a hub that runs `before` says, and says after the installer ran.
+fn versions<'a>(before: &'a str, after: &'a str) -> [(&'a str, &'a str); 2] {
+    [("ARIA_FAKE_SSH_VERSION", before), ("ARIA_FAKE_SSH_VERSION_AFTER", after)]
+}
+
+/// Nothing a `hub update` must never do: send settings, make or allow a key, upload.
+fn assert_sent_nothing(world: &World) {
+    let log = commands(&world.log());
+    for forbidden in ["hub-import", "authorized_keys", "ssh-keygen"] {
+        assert!(!log.iter().any(|command| command.contains(forbidden)), "{forbidden} in {log:?}");
+    }
+    assert!(world.authorized_keys().is_empty(), "no key was allowed");
+    assert!(!world.path("home/.ssh").exists(), "no key was made on this computer");
+}
+
+#[test]
+fn an_older_hub_is_updated_with_the_release_installer_and_gets_nothing_else() {
+    let world = World::new();
+    world.link(&["ana@hub.example"]);
+    let hubs_before = world.hubs_json();
+    let mut envs = versions("0.0.1", MINE).to_vec();
+    envs.push(("ARIA_FAKE_SSH_ACTIVE", "1"));
+    let output = world.update(&["ana@hub.example", "--yes"], &envs);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    for expected in [
+        "updating your server",
+        "ana@hub.example runs Aria 0.0.1",
+        format!("Update Aria on ana@hub.example from 0.0.1 to {MINE}").as_str(),
+        "Check the new version",
+        "[1/2] Updating Aria on ana@hub.example",
+        "[2/2] Checking the new version",
+        format!("The server runs Aria {MINE}").as_str(),
+        format!("ana@hub.example runs Aria {MINE}").as_str(),
+        "Nothing is sent: no sign-ins, no settings, no key.",
+    ] {
+        assert!(flat(&out).contains(expected), "{expected:?} not in\n{out}");
+    }
+    assert_fits(&out);
+    // The installer of this version's release, nested, with --yes; and the version read again afterwards.
+    let log = commands(&world.log());
+    let install = log.iter().find(|command| command.contains("install.sh")).expect("the installer ran");
+    for part in [
+        format!("releases/download/v{MINE}/install.sh").as_str(),
+        format!("ARIA_VERSION=v{MINE}").as_str(),
+        "ARIA_NESTED=1",
+        "--headless --yes",
+    ] {
+        assert!(install.contains(part), "{part} not in {install}");
+    }
+    assert!(!log.iter().any(|command| command.contains("tar -xf")), "a release uploads nothing: {log:?}");
+    assert!(
+        log.iter().rposition(|c| c.ends_with("aria --version")).unwrap()
+            > log.iter().position(|c| c.contains("install.sh")).unwrap(),
+        "the version is read again after the installer: {log:?}"
+    );
+    assert_sent_nothing(&world);
+    assert_eq!(world.hubs_json(), hubs_before, "hubs.json is not touched");
+}
+
+#[test]
+fn a_hub_that_runs_this_version_is_left_alone() {
+    let world = World::new();
+    world.link(&["ana@hub.example"]);
+    let output = world.update(&["ana@hub.example", "--yes"], &[("ARIA_FAKE_SSH_VERSION", MINE)]);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    assert!(out.contains(&format!("ana@hub.example already runs Aria {MINE}")), "{out}");
+    assert!(out.contains(&format!("ana@hub.example runs Aria {MINE}")), "{out}");
+    assert!(!out.contains("What I will do"), "nothing to plan: {out}");
+    assert_fits(&out);
+    let log = commands(&world.log());
+    assert!(!log.iter().any(|c| c.contains("install.sh") || c.contains("tar -xf")), "nothing was installed: {log:?}");
+    assert_sent_nothing(&world);
+}
+
+#[test]
+fn a_hub_that_runs_a_newer_version_is_refused() {
+    let world = World::new();
+    world.link(&["ana@hub.example"]);
+    let output = world.update(&["ana@hub.example", "--yes"], &[("ARIA_FAKE_SSH_VERSION", "999.0.0")]);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(1), "{out}{err}");
+    assert!(
+        flat(&err).contains(&format!(
+            "The server runs a newer Aria (999.0.0) than this one ({MINE}). Update this computer first."
+        )),
+        "{err}"
+    );
+    assert!(!commands(&world.log()).iter().any(|c| c.contains("install.sh")), "nothing was installed");
+    assert_fits(&out);
+}
+
+#[test]
+fn a_build_given_by_hand_is_uploaded_and_installed_as_init_does() {
+    let world = World::new();
+    world.link(&["ana@hub.example"]);
+    let output = world.update(
+        &["ana@hub.example", "--binary", "bin/aria-aarch64", "--yes", "--details"],
+        &[("ARIA_FAKE_SSH_VERSION", "0.0.1")],
+    );
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    assert!(flat(&out).contains("from 0.0.1 to the build you gave me"), "{out}");
+    assert!(flat(&out).contains("hub-src"), "--details names the commands: {out}");
+    let log = world.log();
+    assert!(
+        log.iter().any(|line| line.contains("tar -xf") && !line.ends_with("stdin=0")),
+        "the build was uploaded: {log:?}"
+    );
+    assert!(
+        commands(&log).iter().any(|c| c.contains("install.sh --headless --local") && c.contains("ARIA_NESTED=1")),
+        "{log:?}"
+    );
+    assert_fits(&out);
+    assert_sent_nothing(&world);
+}
+
+#[test]
+fn an_update_that_did_not_take_is_said() {
+    let world = World::new();
+    world.link(&["ana@hub.example"]);
+    // The hub still says the old version after the installer: the release was not what it runs.
+    let output = world.update(&["ana@hub.example", "--yes"], &[("ARIA_FAKE_SSH_VERSION", "0.0.1")]);
+    assert_eq!(output.status.code(), Some(1), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert!(flat(&text(&output.stderr)).contains(&format!("runs Aria 0.0.1 after the update, not {MINE}")));
+}
+
+#[test]
+fn all_updates_every_linked_hub_and_one_that_fails_does_not_stop_the_others() {
+    let world = World::new();
+    world.link(&["a@one", "b@two"]);
+    let mut envs = versions("0.0.1", MINE).to_vec();
+    envs.push(("ARIA_FAKE_SSH_DOWN", "b@two"));
+    let output = world.update(&["--all", "--yes"], &envs);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(1), "one failed: {out}{err}");
+    assert!(out.contains("updating your servers"), "{out}");
+    assert!(flat(&out).contains(&format!("a@one runs Aria {MINE}")), "the first was updated: {out}");
+    assert!(err.contains("b@two"), "the second is reported: {err}");
+    let log = world.log();
+    assert!(log.iter().any(|line| line.starts_with("a@one\t") && line.contains("install.sh")), "{log:?}");
+    assert!(!log.iter().any(|line| line.starts_with("b@two\t") && line.contains("install.sh")), "{log:?}");
+    assert_fits(&out);
+    assert_sent_nothing(&world);
+}
+
+#[test]
+fn with_two_hubs_that_need_it_one_plan_lists_them_all() {
+    let world = World::new();
+    world.link(&["a@one", "b@two"]);
+    let output = world.update(&["--all", "--yes"], &versions("0.0.1", MINE));
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    let said = flat(&out);
+    for step in [
+        format!("1 Update Aria on a@one from 0.0.1 to {MINE}").as_str(),
+        "2 Check the new version on a@one",
+        format!("3 Update Aria on b@two from 0.0.1 to {MINE}").as_str(),
+        "4 Check the new version on b@two",
+        "[3/4] Updating Aria on b@two",
+    ] {
+        assert!(said.contains(step), "{step} not in {out}");
+    }
+    assert!(
+        said.contains(&format!("a@one runs Aria {MINE}")) && said.contains(&format!("b@two runs Aria {MINE}")),
+        "{out}"
+    );
+    assert_fits(&out);
+}
+
+#[test]
+fn with_no_host_the_default_hub_is_the_one() {
+    let world = World::new();
+    world.link(&["a@one", "b@two"]);
+    let output = world.update(&["--yes"], &versions("0.0.1", MINE));
+    assert_eq!(output.status.code(), Some(0), "{}{}", text(&output.stdout), text(&output.stderr));
+    let log = world.log();
+    assert!(log.iter().all(|line| !line.starts_with("b@two\t")), "only the default is touched: {log:?}");
+    assert!(log.iter().any(|line| line.starts_with("a@one\t") && line.contains("install.sh")), "{log:?}");
+}
+
+#[test]
+fn with_no_hub_linked_it_says_to_run_init() {
+    let world = World::new();
+    for args in [&["--yes"][..], &["--all", "--yes"]] {
+        let output = world.update(args, &[]);
+        assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr));
+        assert!(text(&output.stderr).contains("aria hub init user@host"), "{}", text(&output.stderr));
+    }
+    assert!(world.log().is_empty(), "nothing was asked of any server");
+}
+
+#[test]
+fn without_a_yes_and_without_a_terminal_nothing_changes() {
+    let world = World::new();
+    world.link(&["ana@hub.example"]);
+    let output = world.update(&["ana@hub.example"], &versions("0.0.1", MINE));
+    let out = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
+    assert!(out.contains("nothing was changed"), "{out}");
+    assert!(!out.contains("Press Enter"), "{out}");
+    assert!(!commands(&world.log()).iter().any(|c| c.contains("install.sh")));
+}
+
+#[test]
+fn plain_and_details_are_accepted_and_the_arguments_are_checked() {
+    let world = World::new();
+    world.link(&["ana@hub.example"]);
+    let with = world.update(&["ana@hub.example", "--yes", "--plain", "--details"], &versions("0.0.1", MINE));
+    assert_eq!(with.status.code(), Some(0), "{}{}", text(&with.stdout), text(&with.stderr));
+    let said = flat(&text(&with.stdout));
+    assert!(said.contains(&format!("releases/download/v{MINE}/install.sh")), "--details names the installer: {said}");
+    for bad in [&["--all", "ana@hub.example"][..], &["a@b", "c@d"], &["--frobnicate"], &["-oProxyCommand=x", "--yes"]] {
+        let output = world.update(bad, &[]);
+        assert_eq!(output.status.code(), Some(2), "{bad:?}: {}", text(&output.stderr));
+    }
+}

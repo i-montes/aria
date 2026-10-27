@@ -17,6 +17,8 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output, Stdio};
 
+mod update;
+
 /// The only files a bundle carries, in the order they are written.
 pub const BUNDLE_FILES: [&str; 4] = ["settings.json", "auth.json", "mcp.json", "mcp-auth.json"];
 
@@ -288,6 +290,7 @@ pub fn private_address(ip: IpAddr) -> bool {
 const USAGE: &str =
     "usage: aria hub init <user@host> [--binary <path>] [--projects <dir>] [--client-key <pubkey file>] \
      [--no-client-key] [--settings] [--credentials] [--allow-no-sandbox] [--details] [--plain] [--yes]\n       \
+     aria hub update [<user@host>] [--all] [--binary <path>] [--details] [--plain] [--yes]\n       \
      aria hub ui-demo [--fail] [--plain]   (development: the full-screen interface on a made-up run, no ssh)";
 
 /// What `aria hub init` uploads from the checkout: the installer, the service unit and the pins the installer reads
@@ -467,6 +470,7 @@ pub struct Probe {
 }
 
 /// Something that stops `aria hub init`, with the exit status it ends with.
+#[derive(Debug)]
 struct Failure(i32, String);
 
 fn usage_error(message: impl Into<String>) -> Failure {
@@ -484,6 +488,13 @@ pub fn hub_command(args: &[String]) -> i32 {
             Ok(raw) => init(raw),
             Err(why) => {
                 eprintln!("aria hub init: {why}\n{USAGE}");
+                2
+            }
+        },
+        Some("update") => match update::parse_update_args(&args[1..]) {
+            Ok(raw) => update::update(raw),
+            Err(why) => {
+                eprintln!("aria hub update: {why}\n{}", update::UPDATE_USAGE);
                 2
             }
         },
@@ -1475,6 +1486,74 @@ fn on_the_hub_after(step: usize, release: bool) -> &'static str {
     }
 }
 
+/// Where the Aria that goes on a hub comes from: this Aria's own release, installed by the installer that runs on the hub
+/// (`release` is the version), or a binary built here and uploaded with the checkout's installer (`repo` and `binary`).
+struct InstallSource<'a> {
+    release: Option<&'a str>,
+    repo: Option<&'a Path>,
+    binary: &'a Path,
+}
+
+/// The step that puts Aria on a hub, for `hub init` and `hub update` alike: the release's installer over `ssh -tt`, or the
+/// upload of the build and the checkout's installer. `step` is its number and the total shown; `stopped` makes the error of a
+/// failing sub-step (1 the upload, 2 the installer) in the words of the command that runs it.
+fn install_on_hub(
+    host: &str,
+    source: &InstallSource<'_>,
+    title: &str,
+    step: (usize, usize),
+    ui: &mut dyn HubUi,
+    stopped: &dyn Fn(usize, &str, String) -> Failure,
+) -> Result<(), Failure> {
+    let (number, total) = step;
+    if let Some(version) = source.release {
+        ui.step_start(
+            number,
+            total,
+            title,
+            &format!(
+                "The server downloads Aria {version} and sets itself up. It may ask for the server's sudo password."
+            ),
+        );
+        ui.step_info("The server's installer prints its own steps below.");
+        ui.hand_terminal_over();
+        let status = remote_tty(host, &user_env(&release_install_command(version)));
+        ui.take_terminal_back();
+        let status = status.map_err(|error| stopped(2, "installer", describe_error(&error)))?;
+        if !status.success() {
+            return Err(stopped(2, "installer", describe(status)));
+        }
+    } else {
+        let repo = source.repo.ok_or_else(|| failed("the Aria checkout is not here"))?;
+        ui.step_start(number, total, title, "Uploads the build you gave me, then runs the installer there.");
+        let mut files: Vec<(String, Vec<u8>, u32)> = Vec::new();
+        for name in UPLOAD_FILES {
+            let content = std::fs::read(repo.join(name)).map_err(|error| failed(format!("{name}: {error}")))?;
+            files.push((name.to_string(), content, if name.ends_with(".sh") { 0o755 } else { 0o644 }));
+        }
+        let binary =
+            std::fs::read(source.binary).map_err(|error| failed(format!("{}: {error}", source.binary.display())))?;
+        files.push(("aria".to_string(), binary, 0o755));
+        let entries: Vec<(&str, &[u8], u32)> =
+            files.iter().map(|(name, content, mode)| (name.as_str(), content.as_slice(), *mode)).collect();
+        let output = remote(host, REMOTE_UPLOAD, Some(&tar_archive(&entries)))
+            .map_err(|error| stopped(1, "upload", describe_error(&error)))?;
+        if !output.status.success() {
+            return Err(stopped(1, "upload", format!("{} {}", describe(output.status), first_line(&output.stderr))));
+        }
+        ui.step_ok("Uploaded the build");
+        ui.step_info("The server's installer prints its own steps below.");
+        ui.hand_terminal_over();
+        let status = remote_shown(host, &user_env(INSTALL_COMMAND));
+        ui.take_terminal_back();
+        let status = status.map_err(|error| stopped(2, "installer", describe_error(&error)))?;
+        if !status.success() {
+            return Err(stopped(2, "installer", describe(status)));
+        }
+    }
+    Ok(())
+}
+
 /// The writes, in order. A failing install, import, restart or version check stops the run; the key and the checks after
 /// it report and go on. What is shown goes through `ui`; the errors go to stderr as they always did.
 fn write_steps(
@@ -1519,56 +1598,8 @@ fn write_steps(
         ui.step_ok(&format!("The key is {}", tilde(&private_key_of(file))));
     }
 
-    if let Some(version) = &args.release {
-        ui.step_start(
-            number(Part::Install),
-            total,
-            "Installing Aria on the server",
-            &format!(
-                "The server downloads Aria {version} and sets itself up. It may ask for the server's sudo password."
-            ),
-        );
-        ui.step_info("The server's installer prints its own steps below.");
-        ui.hand_terminal_over();
-        let status = remote_tty(host, &user_env(&release_install_command(version)));
-        ui.take_terminal_back();
-        let status = status.map_err(|error| stopped(2, "installer", describe_error(&error)))?;
-        if !status.success() {
-            return Err(stopped(2, "installer", describe(status)));
-        }
-    } else {
-        let repo = repo.ok_or_else(|| failed("the Aria checkout is not here"))?;
-        ui.step_start(
-            number(Part::Install),
-            total,
-            "Installing Aria on the server",
-            "Uploads the build you gave me, then runs the installer there.",
-        );
-        let mut files: Vec<(String, Vec<u8>, u32)> = Vec::new();
-        for name in UPLOAD_FILES {
-            let content = std::fs::read(repo.join(name)).map_err(|error| failed(format!("{name}: {error}")))?;
-            files.push((name.to_string(), content, if name.ends_with(".sh") { 0o755 } else { 0o644 }));
-        }
-        let binary =
-            std::fs::read(&args.binary).map_err(|error| failed(format!("{}: {error}", args.binary.display())))?;
-        files.push(("aria".to_string(), binary, 0o755));
-        let entries: Vec<(&str, &[u8], u32)> =
-            files.iter().map(|(name, content, mode)| (name.as_str(), content.as_slice(), *mode)).collect();
-        let output = remote(host, REMOTE_UPLOAD, Some(&tar_archive(&entries)))
-            .map_err(|error| stopped(1, "upload", describe_error(&error)))?;
-        if !output.status.success() {
-            return Err(stopped(1, "upload", format!("{} {}", describe(output.status), first_line(&output.stderr))));
-        }
-        ui.step_ok("Uploaded the build");
-        ui.step_info("The server's installer prints its own steps below.");
-        ui.hand_terminal_over();
-        let status = remote_shown(host, &user_env(INSTALL_COMMAND));
-        ui.take_terminal_back();
-        let status = status.map_err(|error| stopped(2, "installer", describe_error(&error)))?;
-        if !status.success() {
-            return Err(stopped(2, "installer", describe(status)));
-        }
-    }
+    let source = InstallSource { release: args.release.as_deref(), repo, binary: &args.binary };
+    install_on_hub(host, &source, "Installing Aria on the server", (number(Part::Install), total), ui, &stopped)?;
     ui.step_ok("Aria is installed on the server");
     // The installer may have put iproute2 on the hub: a `ss` that was missing is asked again before giving up.
     let listeners =

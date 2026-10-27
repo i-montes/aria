@@ -46,6 +46,7 @@ mod term;
 mod trace;
 #[cfg(feature = "gui")]
 mod ui;
+mod version;
 #[cfg(feature = "gui")]
 mod visibility;
 mod watch;

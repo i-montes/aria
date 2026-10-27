@@ -222,6 +222,24 @@ impl App {
         self.note.clone()
     }
 
+    /// What the hub said its version is, once per connection: when it is not this Aria's, the list says which is older and
+    /// what to do. It blocks nothing, says nothing for a version it cannot read, and only a hub over ssh has one to compare
+    /// (the dock on this computer is this binary's own).
+    pub fn hub_version(&mut self, version: Option<&str>) {
+        let Some(hub) = version.filter(|_| self.config.remote.is_some()) else { return };
+        let key = match crate::version::compare(hub, crate::version::mine()) {
+            Some(std::cmp::Ordering::Less) => "term.hubOlder",
+            Some(std::cmp::Ordering::Greater) => "term.hubNewer",
+            _ => return,
+        };
+        let (Some(hub), Some(mine)) = (crate::version::parse(hub), crate::version::parse(crate::version::mine()))
+        else {
+            return;
+        };
+        let vars = json!({"hub": crate::version::show(hub), "mine": crate::version::show(mine)});
+        self.note = Some(t(&self.config.lang, key, &vars));
+    }
+
     /// The time now (ms since the epoch): a run that just started is timed from it, one that ended stops being timed.
     pub fn clock(&mut self, now_ms: u64) {
         self.now_ms = now_ms;
@@ -1800,6 +1818,37 @@ mod tests {
         );
         let effects = app.update(Input::Dock(DockMessage::Error { id: 0, code: "gone".into() }));
         assert_eq!(effects, vec![Effect::Reconnect], "every loss tries once more");
+    }
+
+    #[test]
+    fn a_hub_of_another_version_says_so_once_on_the_list() {
+        let mine = crate::version::mine();
+        let (older, newer) = ("0.0.1".to_string(), "999.0.0".to_string());
+        let remote = || Config { remote: Some("hub.example".into()), ..config() };
+
+        let (mut app, _) = App::new(remote());
+        app.hub_version(Some(&older));
+        let said = app.note().expect("an older hub is said");
+        assert!(said.contains(&older) && said.contains("aria hub update"), "{said}");
+
+        let (mut app, _) = App::new(remote());
+        app.hub_version(Some(&newer));
+        let said = app.note().expect("a newer hub is said");
+        assert!(said.contains(&newer) && said.contains("install.sh"), "{said}");
+
+        let (mut app, _) = App::new(Config { lang: "es".into(), ..remote() });
+        app.hub_version(Some(&newer));
+        assert!(app.note().unwrap().contains("Actualiza este computador"));
+
+        for quiet in [Some(mine), Some("garbled"), Some(""), None] {
+            let (mut app, _) = App::new(remote());
+            app.hub_version(quiet);
+            assert_eq!(app.note(), None, "{quiet:?}");
+        }
+        // The dock on this computer is this binary's own: nothing to compare.
+        let (mut app, _) = App::new(config());
+        app.hub_version(Some(&newer));
+        assert_eq!(app.note(), None);
     }
 
     #[test]

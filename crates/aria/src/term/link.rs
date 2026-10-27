@@ -61,6 +61,8 @@ pub struct Link {
     events: Mutex<Option<Receiver<DockMessage>>>,
     /// The ssh a link over `spawn` runs on: killed and waited on when the link goes.
     child: Option<Child>,
+    /// The version the hub's `hello` said (a hub of this protocol always sends one; an old one may not).
+    hub_version: Option<String>,
 }
 
 impl Link {
@@ -166,7 +168,12 @@ impl Link {
             }
         };
         match check_reply(&line) {
-            None => Ok(Link { out: Mutex::new(writer), events: Mutex::new(Some(events)), child: None }),
+            None => Ok(Link {
+                out: Mutex::new(writer),
+                events: Mutex::new(Some(events)),
+                child: None,
+                hub_version: reply_version(&line),
+            }),
             Some(error) => Err(error.io()),
         }
     }
@@ -194,6 +201,11 @@ impl Link {
         self.line(json!({"type": "focus", "focused": focused}));
     }
 
+    /// The version of Aria the hub said it is, for a notice when it is not this one.
+    pub fn hub_version(&self) -> Option<&str> {
+        self.hub_version.as_deref()
+    }
+
     /// What the dock says; taken once (later calls get a receiver that is already closed).
     pub fn events(&self) -> Receiver<DockMessage> {
         self.events.lock().unwrap().take().unwrap_or_else(|| mpsc::channel().1)
@@ -207,6 +219,12 @@ impl Drop for Link {
             let _ = child.wait();
         }
     }
+}
+
+/// The `version` of a `hello`, when it has one.
+fn reply_version(line: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    value["version"].as_str().filter(|version| !version.is_empty()).map(str::to_string)
 }
 
 /// What the hub's first line says: `None` when it is a `hello` of this protocol.
@@ -308,6 +326,17 @@ mod tests {
             Ok(_) => panic!("the link opened"),
             Err(error) => error,
         }
+    }
+
+    #[test]
+    fn the_hubs_version_is_kept_from_its_hello() {
+        let (link, _, _dock) = open_with(&[hello_reply()], true);
+        assert_eq!(link.unwrap().hub_version(), Some("9.9.9"));
+        let no_version = json!({"type": "hello", "protocol": PROTOCOL});
+        let (link, _, _dock) = open_with(&[no_version], true);
+        assert_eq!(link.unwrap().hub_version(), None, "an old hub may not say");
+        assert_eq!(reply_version("not json"), None);
+        assert_eq!(reply_version(r#"{"type":"hello","version":""}"#), None);
     }
 
     #[test]

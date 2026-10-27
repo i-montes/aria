@@ -65,6 +65,8 @@ pub enum Outcome {
     Ready { connect: String },
     /// Installed, but not working yet; `why` says what to do.
     NotReady { why: String },
+    /// `aria hub update` ended: every server it looked at and the version it runs now, as (host, version).
+    Updated { runs: Vec<(String, String)> },
 }
 
 /// The screen of `aria hub init`. Every method is one thing that happens in a run.
@@ -417,6 +419,13 @@ impl HubUi for PlainUi {
             Outcome::NotReady { why } => {
                 text.push('\n');
                 text.push_str(&screen.note(&Note::text(format!("The server is installed, but not ready: {why}"))));
+            }
+            Outcome::Updated { runs } => {
+                for (host, version) in runs {
+                    text.push('\n');
+                    let line = format!("  {} {host} runs Aria {version}", screen.mark_ok());
+                    text.push_str(&screen.paint("1;32", &line));
+                }
             }
         }
         self.put(&text);

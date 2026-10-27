@@ -194,6 +194,16 @@ const OWN: &[(&str, &str, &str)] = &[
         "Aria en ese computador es más viejo que este aria: actualízalo allá.",
     ),
     (
+        "term.hubOlder",
+        "The server runs Aria {hub} and this Aria is {mine}. Run aria hub update to bring the server up to date.",
+        "El servidor usa Aria {hub} y este Aria es el {mine}. Ejecuta aria hub update para actualizar el servidor.",
+    ),
+    (
+        "term.hubNewer",
+        "The server runs Aria {hub} and this Aria is {mine}. Update this computer: sh install.sh (the installer).",
+        "El servidor usa Aria {hub} y este Aria es el {mine}. Actualiza este computador: sh install.sh (el instalador).",
+    ),
+    (
         "term.protocolMismatch",
         "This aria speaks protocol {ours} and Aria on that computer speaks {theirs}: update the older one.",
         "Este aria habla el protocolo {ours} y Aria en ese computador habla el {theirs}: actualiza el más viejo.",
@@ -293,6 +303,25 @@ pub fn t(lang: &str, key: &str, vars: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_version_notices_are_said_in_both_languages_with_both_versions() {
+        let vars = json!({"hub": "0.21.0", "mine": "0.22.0"});
+        for key in ["term.hubOlder", "term.hubNewer"] {
+            let en = t("en", key, &vars);
+            let es = t("es", key, &vars);
+            assert_ne!(en, key);
+            assert_ne!(es, key);
+            assert_ne!(en, es);
+            for text in [&en, &es] {
+                assert!(text.contains("0.21.0") && text.contains("0.22.0"), "{text}");
+                assert!(!text.contains('{'), "{text}");
+            }
+        }
+        assert!(t("en", "term.hubOlder", &vars).contains("aria hub update"));
+        assert!(t("es", "term.hubOlder", &vars).contains("aria hub update"));
+        assert!(t("es", "term.hubNewer", &vars).contains("el instalador"));
+    }
 
     #[test]
     fn the_ssh_timeout_is_said_in_both_languages_with_the_host() {
