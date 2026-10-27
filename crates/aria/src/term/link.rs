@@ -81,7 +81,7 @@ impl Link {
         Link::spawn_within(command, SSH_HELLO_TIMEOUT)
     }
 
-    fn spawn_within(command: &mut Command, within: Duration) -> io::Result<Link> {
+    pub(crate) fn spawn_within(command: &mut Command, within: Duration) -> io::Result<Link> {
         let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
         let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
             let _ = child.kill();

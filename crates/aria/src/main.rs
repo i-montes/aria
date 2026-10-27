@@ -134,10 +134,12 @@ fn main() {
                 std::process::exit(1);
             }
         },
-        Some("connect") => match std::env::args().nth(2) {
+        Some("connect") => match std::env::args().nth(2).or_else(connect::default_hub) {
             Some(host) => std::process::exit(term::run_remote(&host)),
             None => {
-                eprintln!("usage: aria connect [user@]host");
+                eprintln!(
+                    "aria: no hub is set up on this computer: run `aria hub init user@host` to set one up, or give the host: aria connect [user@]host"
+                );
                 std::process::exit(2);
             }
         },

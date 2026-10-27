@@ -16,6 +16,8 @@
 #   ARIA_FAKE_SSH_PASSWORDS    yes: sshd_config allows password logins (default no)
 #   ARIA_FAKE_SSH_LINGER       no: the user does not linger on the hub; fail: `loginctl` fails (default: yes)
 #   ARIA_FAKE_SSH_ACTIVE       1: aria-serve.service is already active before the run (default: it is not)
+#   ARIA_FAKE_SSH_HELLO        fail: `aria client-stdio` (the connection `hub init` tries at the end) exits at once; otherwise it
+#                              answers the hello with protocol ARIA_FAKE_SSH_PROTOCOL (default 1)
 # ARIA_FAKE_SSH_ROOT is the hub's computer: the upload is unpacked, and the key is added to authorized_keys, under
 # $ARIA_FAKE_SSH_ROOT/home, the only place a command is really run.
 log=${ARIA_FAKE_SSH_LOG:?ARIA_FAKE_SSH_LOG}
@@ -31,6 +33,19 @@ host=""
 prev=""
 for argument in "$@"; do host=$prev; prev=$argument; done
 cmd=$prev
+# The terminal's own connection (`<host> ~/.local/bin/aria client-stdio`, the last two words as arguments of their own): no
+# stdin to slurp, a hello to answer, and it stays open until its client closes it.
+a3=""; a2=""; a1=""
+for argument in "$@"; do a3=$a2; a2=$a1; a1=$argument; done
+if [ "$a1" = client-stdio ] && [ "$a2" = "~/.local/bin/aria" ]; then
+  host=$a3
+  cmd="$a2 $a1"
+  printf '%s\t%s\tstdin=0\n' "$host" "$cmd" >> "$log"
+  if [ "${ARIA_FAKE_SSH_HELLO:-ok}" = fail ]; then echo "fake ssh: the connection is refused" >&2; exit 255; fi
+  read -r hello
+  printf '{"type":"hello","protocol":%s,"version":"x"}\n' "${ARIA_FAKE_SSH_PROTOCOL:-1}"
+  exec sleep 30
+fi
 stdin_file="$root/stdin.$$"
 mkdir -p "$root/home"
 cat > "$stdin_file"

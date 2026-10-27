@@ -7,8 +7,8 @@ use std::process::{Command, Output, Stdio};
 
 const PINS: [&str; 5] = ["pi-version", "pi-packages", "engram-version", "agent-browser-version", "node-version"];
 const KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl ana@laptop";
-const TOOLS: [&str; 14] =
-    ["sh", "head", "tail", "cat", "wc", "tr", "mkdir", "tar", "cut", "grep", "touch", "chmod", "rm", "cp"];
+const TOOLS: [&str; 15] =
+    ["sh", "head", "tail", "cat", "wc", "tr", "mkdir", "tar", "cut", "grep", "touch", "chmod", "rm", "cp", "sleep"];
 
 /// An owner's computer (a home with settings) and a checkout of the repository, next to a hub that is only the fake ssh.
 struct World {
@@ -65,9 +65,14 @@ impl World {
     /// `aria hub init ana@hub.example <args>` with the fake ssh and no terminal; `envs` pick the fake's variants.
     fn init(&self, args: &[&str], envs: &[(&str, &str)]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_aria"));
+        // Most tests are about the hub's install, not the key: without a key flag they leave the default key out, which would
+        // be made on this computer (the tests that want it name `--client-key` or say so with `init_with_default_key`).
+        let keyless =
+            !args.iter().any(|arg| *arg == "--client-key" || *arg == "--no-client-key" || *arg == "--default-key");
         command
             .args(["hub", "init"])
-            .args(args)
+            .args(args.iter().filter(|arg| **arg != "--default-key"))
+            .args(if keyless { vec!["--no-client-key"] } else { vec![] })
             .current_dir(self.path("repo"))
             .env_clear()
             .env("HOME", self.path("home"))
@@ -120,6 +125,7 @@ fn writes(log: &[String]) -> Vec<String> {
         .filter(|command| !command.starts_with("-G ") && !PROBES.iter().any(|probe| command.contains(probe)))
         .filter(|command| !command.contains("os-release") && !command.starts_with("cat /etc/ssh"))
         .filter(|command| !command.starts_with("bwrap "))
+        .filter(|command| command != "~/.local/bin/aria client-stdio")
         .collect()
 }
 
@@ -162,7 +168,7 @@ fn the_plan_comes_before_the_first_write_in_the_output() {
     let out = text(&output.stdout);
     assert!(output.status.success(), "{out}{}", text(&output.stderr));
     let plan = out.find("1. ").expect("a plan");
-    let first_step = out.find("step 1").expect("a first step");
+    let first_step = out.find("[1/").expect("a first step");
     assert!(plan < first_step, "{out}");
 }
 
@@ -403,12 +409,22 @@ fn a_binary_of_another_architecture_is_refused() {
 }
 
 #[test]
-fn without_a_binary_the_cross_build_is_used_or_asked_for() {
+fn without_a_binary_the_cross_build_is_used_or_the_release_is_installed() {
     let world = World::new();
+    // No binary and no headless build in the checkout: the hub is installed from this Aria's release, by the hub itself.
     let output = world.init(&["ana@hub.example", "--yes"], &[]);
-    assert_eq!(output.status.code(), Some(1));
-    assert!(text(&output.stderr).contains("sh tools/build-headless.sh"), "{}", text(&output.stderr));
-    assert!(world.log().is_empty());
+    assert_eq!(output.status.code(), Some(0), "{}{}", text(&output.stdout), text(&output.stderr));
+    let commands = commands(&world.log());
+    assert!(!world.path("hub/home/.aria/hub-src").exists(), "nothing is uploaded");
+    let version = env!("CARGO_PKG_VERSION");
+    let installer = commands.iter().find(|command| command.contains("install.sh")).expect("the installer ran");
+    assert!(
+        installer.contains(&format!("https://github.com/i-montes/aria/releases/download/v{version}/install.sh"))
+            && installer.contains(&format!("ARIA_VERSION=v{version} sh -s -- --headless --yes")),
+        "{installer}"
+    );
+    // With the headless build made in the checkout, the upload is used as before.
+    let world = World::new();
     let built = world.path("repo/target/aarch64-unknown-linux-gnu/release");
     std::fs::create_dir_all(&built).unwrap();
     std::fs::write(built.join("aria"), elf(0xB7)).unwrap();
@@ -763,26 +779,186 @@ fn with_a_working_sandbox_the_key_goes_in_with_no_flag() {
 }
 
 #[test]
-fn a_restricted_key_that_went_in_comes_with_the_ssh_config_to_use_it() {
+fn a_restricted_key_that_went_in_is_remembered_and_needs_no_ssh_config() {
     let world = World::new();
     let key = key_file(&world);
     let output = world.init_yes(&["--client-key", &key], &[]);
     let out = text(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
     let private = key.trim_end_matches(".pub");
-    // The host and user are the ones given; the identity is the key's file without `.pub`.
+    // The hub is remembered with the key's file (without `.pub`), and is the default: `aria connect` needs no host.
+    let hubs: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(world.path("home/.aria/hubs.json")).unwrap()).unwrap();
+    assert_eq!(hubs["default"], "ana@hub.example");
+    assert_eq!(hubs["hubs"]["ana@hub.example"]["key"], private);
+    let mode = std::os::unix::fs::PermissionsExt::mode(
+        &std::fs::metadata(world.path("home/.aria/hubs.json")).unwrap().permissions(),
+    );
+    assert_eq!(mode & 0o777, 0o600);
+    assert!(!out.contains("IdentityFile") && !out.contains("Host aria-hub") && !out.contains("~/.ssh/config"), "{out}");
+    assert!(out.contains("connection tried: it works"), "{out}");
+    assert!(out.contains("The hub is ready. To use it, type: aria connect\n"), "{out}");
+    // The connection that was tried used the key and only it.
+    let tried: Vec<String> =
+        world.log().into_iter().filter(|line| line.contains("client-stdio") && !line.contains("restrict")).collect();
+    assert_eq!(tried.len(), 1, "{tried:?}");
+    // A key that was already there, restricted, is as good.
+    let again = text(&world.init_yes(&["--client-key", &key], &[]).stdout);
+    assert!(again.contains("The hub is ready. To use it, type: aria connect"), "{again}");
+    // No key asked for, no snippet and no hub remembered.
+    let other = World::new();
+    let plain = text(&other.init_yes(&[], &[]).stdout);
+    assert!(!plain.contains("IdentityFile") && !plain.contains("Host aria-hub"), "{plain}");
+    assert!(!other.path("home/.aria/hubs.json").exists());
+    assert!(
+        plain.contains("The hub is ready. Connect from this computer with: aria connect ana@hub.example"),
+        "{plain}"
+    );
+}
+
+#[test]
+fn a_hub_that_cannot_be_remembered_still_comes_with_the_ssh_config() {
+    let world = World::new();
+    let key = key_file(&world);
+    // A folder where the file should be: the write fails, and the old way in is printed.
+    std::fs::create_dir_all(world.path("home/.aria/hubs.json")).unwrap();
+    let output = world.init_yes(&["--client-key", &key], &[]);
+    let out = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
+    let private = key.trim_end_matches(".pub");
     let snippet = format!(
         "Host aria-hub\n    HostName hub.example\n    User ana\n    IdentityFile {private}\n    IdentitiesOnly yes\n"
     );
-    assert!(out.contains(&snippet), "{out}");
-    assert!(out.contains("~/.ssh/config") && out.contains("aria connect aria-hub"), "{out}");
-    // A key that was already there, restricted, is as good: same snippet.
-    let again = text(&world.init_yes(&["--client-key", &key], &[]).stdout);
-    assert!(again.contains(&snippet), "{again}");
-    assert!(again.contains("The hub is ready. Connect from this computer with: aria connect aria-hub"), "{again}");
-    // No key asked for, no snippet.
-    let plain = text(&World::new().init_yes(&[], &[]).stdout);
-    assert!(!plain.contains("IdentityFile") && !plain.contains("Host aria-hub"), "{plain}");
+    assert!(out.contains("could not remember the hub") && out.contains(&snippet), "{out}");
+    assert!(out.contains("The hub is ready. Connect from this computer with: aria connect aria-hub"), "{out}");
+}
+
+/// A stand-in for ssh-keygen that makes the pair the way the real one does (`-f <private>`), or fails when asked to.
+fn fake_keygen(world: &World, body: &str) -> String {
+    let program = world.path("fake-keygen");
+    std::fs::write(&program, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&program, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    program.to_str().unwrap().to_string()
+}
+
+fn makes_the_default_key() -> String {
+    format!("printf private > \"$4\"; printf '%s\\n' '{KEY}' > \"$4.pub\"")
+}
+
+#[test]
+fn the_default_key_is_made_allowed_remembered_and_tried() {
+    let world = World::new();
+    let keygen = fake_keygen(&world, &makes_the_default_key());
+    let output = world.init_yes(&["--default-key"], &[("ARIA_SSH_KEYGEN", &keygen)]);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}{err}");
+    // Said before the install, in plain words, and made in a folder only its owner reads.
+    let said = out.find("a key only for Aria").expect("the key is explained");
+    assert!(out.find("1. ").unwrap() < said && said < out.find("[1/6]").unwrap(), "{out}");
+    assert!(out.contains("passphrase"), "{out}");
+    assert!(world.path("home/.ssh/aria-hub").is_file() && world.path("home/.ssh/aria-hub.pub").is_file());
+    let mode =
+        std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(world.path("home/.ssh")).unwrap().permissions());
+    assert_eq!(mode & 0o777, 0o700);
+    assert_eq!(world.authorized_keys(), format!("{}\n", restricted(&world)));
+    let hubs: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(world.path("home/.aria/hubs.json")).unwrap()).unwrap();
+    assert_eq!(hubs["hubs"]["ana@hub.example"]["key"], world.path("home/.ssh/aria-hub").to_str().unwrap());
+    assert!(out.contains("[6/6] Linking this computer to the hub"), "{out}");
+    assert!(
+        out.contains("connection tried: it works") && out.contains("The hub is ready. To use it, type: aria connect"),
+        "{out}"
+    );
+    // A second run finds the key and never runs ssh-keygen again (this one would fail).
+    let broken = fake_keygen(&world, "exit 9");
+    let again = world.init_yes(&["--default-key"], &[("ARIA_SSH_KEYGEN", &broken)]);
+    assert_eq!(again.status.code(), Some(0), "{}{}", text(&again.stdout), text(&again.stderr));
+}
+
+#[test]
+fn a_keygen_that_fails_stops_before_anything_is_changed_on_the_hub() {
+    let world = World::new();
+    let keygen = fake_keygen(&world, "exit 1");
+    let output = world.init_yes(&["--default-key"], &[("ARIA_SSH_KEYGEN", &keygen)]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output.stderr).contains("--no-client-key"), "{}", text(&output.stderr));
+    assert!(writes(&world.log()).is_empty(), "{:?}", writes(&world.log()));
+}
+
+#[test]
+fn a_connection_that_does_not_open_ends_the_run_with_the_reason() {
+    let world = World::new();
+    let key = key_file(&world);
+    let output = world.init_yes(&["--client-key", &key], &[("ARIA_FAKE_SSH_HELLO", "fail")]);
+    let (out, err) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(1), "{out}{err}");
+    assert!(err.contains("connection tried: it did not work"), "{err}");
+    assert!(!out.contains("The hub is ready"), "{out}");
+}
+
+#[test]
+fn the_screen_of_a_run_in_a_pipe_has_no_colour_codes_and_ascii_marks() {
+    let world = World::new();
+    let key = key_file(&world);
+    let out = text(&world.init_yes(&["--client-key", &key], &[]).stdout);
+    assert!(!out.contains('\x1b'), "{out}");
+    assert!(out.contains("[3/6] Sending your settings and sign-ins"), "{out}");
+    assert!(out.contains("  ok the hub runs aria 0.0.0-fake"), "{out}");
+}
+
+#[test]
+fn a_release_hub_has_one_step_fewer_and_names_its_key_step_by_that_number() {
+    let world = World::new();
+    let key = key_file(&world);
+    let output = world.init(&["ana@hub.example", "--yes", "--client-key", &key], &[]);
+    let out = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{out}{}", text(&output.stderr));
+    assert!(
+        out.contains("[1/5] Installing Aria on the hub") && out.contains("[5/5] Linking this computer to the hub"),
+        "{out}"
+    );
+    assert!(!out.contains("[6/"), "{out}");
+    // The key's failure names the same number.
+    let seeded = World::new();
+    seed_authorized_keys(&seeded, &format!("{KEY}\n"));
+    let key = key_file(&seeded);
+    let failed = seeded.init(&["ana@hub.example", "--yes", "--client-key", &key], &[]);
+    assert!(text(&failed.stderr).contains("step 5 (key) failed"), "{}", text(&failed.stderr));
+}
+
+#[test]
+fn a_hub_whose_only_sign_in_is_a_claude_plan_is_told_it_will_have_no_model() {
+    let world = World::new();
+    std::fs::write(
+        world.path("home/.aria/auth.json"),
+        r#"{"anthropic":{"type":"oauth","access":"a","refresh":"r","expires":1}}"#,
+    )
+    .unwrap();
+    let out = text(&world.init_yes(&[], &[]).stdout);
+    assert!(
+        out.contains("a hub cannot use a Claude plan") && out.contains("Anthropic API key or an OpenCode Go key"),
+        "{out}"
+    );
+    // An API key is no reason to warn.
+    let other = World::new();
+    let out = text(&other.init_yes(&[], &[]).stdout);
+    assert!(!out.contains("Claude plan"), "{out}");
+}
+
+#[test]
+fn connect_with_no_host_and_no_hub_says_how_to_set_one_up() {
+    let world = World::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_aria"))
+        .arg("connect")
+        .env_clear()
+        .env("HOME", world.path("home"))
+        .env("ARIA_HOME", world.path("home/.aria"))
+        .env("PATH", world.path("bin"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(text(&output.stderr).contains("aria hub init user@host"), "{}", text(&output.stderr));
 }
 
 #[test]
