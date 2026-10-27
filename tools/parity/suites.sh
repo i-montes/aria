@@ -20,6 +20,7 @@ sh install/install.test.sh
 sh install/install-mac.test.sh
 sh tools/parity/scratch-home.test.sh
 sh tools/release.test.sh
+sh tools/release-assets.test.sh
 # The Mac build, type-checked from Linux (offline once the target and mise's zig are installed; a Mac builds it for real).
 if [ "$(uname -s)" = Linux ]; then sh tools/check-macos.sh; fi
 echo "all suites passed"

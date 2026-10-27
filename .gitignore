@@ -3,3 +3,4 @@ spikes/*/target
 node_modules
 .superpowers/
 __pycache__
+/dist

@@ -1,0 +1,259 @@
+# Builds and publishes the binaries of a release when a tag vX.Y.Z is pushed (tools/release.sh makes the tag; nothing
+# here makes a version), or when it is run by hand ("Run workflow", with the tag's name) for a tag that exists already:
+# to publish one pushed before this workflow was on GitHub, or to run a failed run again. It makes the assets that `sh tools/release-assets.sh` makes on one machine, for all three
+# platforms, and publishes them as a GitHub release, which is where install/install.sh downloads from:
+#   aria-x86_64-linux, aria-aarch64-apple-darwin, aria-x86_64-apple-darwin, and the hub's builds (no desktop libraries)
+#   aria-x86_64-linux-headless and aria-aarch64-linux-headless, each with a .sha256 file,
+#   the pin files (pi-version, pi-packages, engram-version, agent-browser-version, node-version) and install.sh.
+#
+# THIS WORKFLOW HAS NEVER RUN. It was written without being able to run it, so the first tag run may fail. What to look
+# at first, in this order:
+#   1. The `linux` job's "Install the build dependencies" step: the package list is derived from docs/development.md and
+#      the Cargo.toml files, not from a build on this image (see the comments there for the names I am unsure of).
+#   2. The macOS x86_64 job: it cross-compiles whisper.cpp (cmake, Metal) for Intel on an Apple silicon runner.
+#   3. That the tag was fetched: tools/release-assets.sh refuses to run unless HEAD is at the tag.
+#   4. The `publish` job's `gh release create` (it needs the tag to exist on GitHub, and a re-run is handled by an upload).
+# A failed run is repeated with "Re-run failed jobs"; a release that was half made is completed by the same run (the
+# publish step uploads to a release that already exists, replacing files of the same name). The macOS jobs may fail
+# without stopping the release: `publish` still publishes the Linux assets, and the installer's message for a missing
+# macOS binary says to build from a clone. Do not rely on that for a release that is meant to have the Mac builds.
+#
+# Where the Linux binary runs: it is built on Ubuntu 24.04, so it needs glibc 2.39 or newer and the libraries of that
+# release (the soname of GTK 3, WebKitGTK 4.1, gtk-layer-shell, ALSA, Vulkan). Omarchy is Arch, whose glibc and libstdc++
+# are newer than Ubuntu's and stay compatible with older builds, so it runs there; an older distribution than Ubuntu
+# 24.04 would not run it. (That the binary starts on Arch is expected from this, and has not been checked.)
+name: release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'An existing tag to build and publish, such as v0.20.2'
+        required: true
+        type: string
+
+env:
+  # The tag this run is for: the pushed one, or the one typed into "Run workflow".
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+# Nothing needs more than reading the repository, except the job that publishes.
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: linux x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+      - name: Install the build dependencies
+        run: |
+          sudo apt-get update
+          # The window: GTK 3, WebKitGTK 4.1 (with JavaScriptCore), gtk-layer-shell; dictation: ALSA for the microphone and
+          # whisper.cpp's Vulkan backend (the headers and a GLSL compiler), cmake to build it and clang/libclang for bindgen.
+          # Derived from docs/development.md ("What you need") and crates/aria/Cargo.toml; crates/aria/build.rs and
+          # crates/aria-core/build.rs need nothing else.
+          # Unsure of: `glslc` (Ubuntu's package of shaderc's compiler; it may be named differently), `spirv-headers` (only
+          # newer whisper.cpp wants it; harmless if not), and whether libvulkan-dev is enough for the Vulkan headers.
+          # `ring` (the TLS library) builds C with the C compiler from build-essential.
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake clang libclang-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libgtk-layer-shell-dev \
+            libasound2-dev libvulkan-dev glslc spirv-headers
+      - name: Install Rust
+        # The runner's own rustup, not a third-party action.
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version
+          cargo --version
+      - name: Build the assets
+        # cargo build --release, default features: the dock (the gui feature). tools/release-assets.sh also checks that the
+        # tag is the workspace's version and that the tree is clean.
+        run: sh tools/release-assets.sh dist
+      - name: Check the binary
+        run: |
+          ./dist/aria-x86_64-linux --version
+          test "$(./dist/aria-x86_64-linux --version)" = "aria ${TAG#v}"
+          ldd dist/aria-x86_64-linux
+      - uses: actions/upload-artifact@v4
+        with:
+          # upload-artifact drops the executable bit; the installer sets it after the download.
+          name: aria-x86_64-linux
+          path: |
+            dist/aria-x86_64-linux
+            dist/aria-x86_64-linux.sha256
+          if-no-files-found: error
+
+  hub:
+    # The hub's binary, for the two CPUs servers have: no desktop libraries, so nothing to install but the toolchain. Each is
+    # built natively on a runner of its own CPU (Ubuntu 24.04, glibc 2.39, which is what `aria hub init` and the one-line
+    # install on a server need). ubuntu-24.04-arm is GitHub's arm64 runner; it is free for public repositories.
+    name: hub ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+      - name: Install the build dependencies
+        # `ring` (the TLS library) builds C with the C compiler from build-essential.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version
+      - name: Build the assets
+        # cargo build --release --no-default-features -p aria: the service and the terminal, without the gui feature.
+        run: ARIA_HEADLESS=1 sh tools/release-assets.sh dist
+      - name: Check the binary
+        run: |
+          artifact=aria-${{ matrix.arch }}-linux-headless
+          ./dist/$artifact --version
+          test "$(./dist/$artifact --version)" = "aria ${TAG#v}"
+          # A hub has no desktop libraries to find: nothing here may link GTK, WebKit or Vulkan.
+          ! ldd dist/$artifact | grep -E 'gtk|webkit|vulkan|asound'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aria-${{ matrix.arch }}-linux-headless
+          path: |
+            dist/aria-${{ matrix.arch }}-linux-headless
+            dist/aria-${{ matrix.arch }}-linux-headless.sha256
+          if-no-files-found: error
+
+  macos-arm64:
+    name: macOS Apple silicon
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+      - name: Install cmake
+        # whisper.cpp needs it; the runner image usually has it already. Xcode's clang is the C and C++ compiler.
+        run: command -v cmake || brew install cmake
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version
+      - name: Build the assets
+        run: sh tools/release-assets.sh dist
+      - name: Check the binary
+        run: |
+          ./dist/aria-aarch64-apple-darwin --version
+          test "$(./dist/aria-aarch64-apple-darwin --version)" = "aria ${TAG#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aria-aarch64-apple-darwin
+          path: |
+            dist/aria-aarch64-apple-darwin
+            dist/aria-aarch64-apple-darwin.sha256
+          if-no-files-found: error
+
+  macos-x86_64:
+    # Cross-compiled on Apple silicon, because the Intel runner is not one to rely on: macos-13, the last free Intel image,
+    # was retired by GitHub (December 2025), and the label of its replacement I am not certain of; a job whose label does
+    # not exist waits in the queue forever, which would hold the whole run, while a cross-compile failure is quick and
+    # clear. If the cross-compile of whisper.cpp (cmake, Metal) fails, the alternative is an Intel runner (macos-15-intel,
+    # if it exists) building natively with `sh tools/release-assets.sh dist`.
+    name: macOS Intel (cross-compiled)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+      - name: Install cmake
+        run: command -v cmake || brew install cmake
+      - name: Install Rust and the Intel target
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup target add x86_64-apple-darwin
+          rustc --version
+      - name: Build the assets
+        # ARIA_TARGET: cargo build --release --target x86_64-apple-darwin, and the artifact is the Intel one. The binary is
+        # not run here: an Apple silicon runner may not have Rosetta.
+        run: ARIA_TARGET=x86_64-apple-darwin sh tools/release-assets.sh dist
+      - name: Check the binary
+        run: |
+          file dist/aria-x86_64-apple-darwin
+          file dist/aria-x86_64-apple-darwin | grep -q x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aria-x86_64-apple-darwin
+          path: |
+            dist/aria-x86_64-apple-darwin
+            dist/aria-x86_64-apple-darwin.sha256
+          if-no-files-found: error
+
+  publish:
+    name: publish the release
+    needs: [linux, hub, macos-arm64, macos-x86_64]
+    # Runs when the Linux build worked even if a macOS build did not (a release without a Mac binary is a release the
+    # installer explains); it does not run when Linux failed or the run was cancelled.
+    # A release without the hub's builds would leave `aria hub init` and a server's one-line install with nothing to download,
+    # so both must have worked.
+    if: ${{ !cancelled() && needs.linux.result == 'success' && needs.hub.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          # The binaries that were built, side by side. A platform whose job failed has no artifact, and is not an error.
+          pattern: aria-*
+          path: assets
+          merge-multiple: true
+      - name: Collect the release files
+        run: |
+          set -eu
+          tag=$TAG
+          case "$tag" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "not a release tag: $tag" >&2; exit 1 ;; esac
+          version=${tag#v}
+          mkdir release
+          cp assets/* release/
+          # The pins and the installer from the tagged commit: the one-line install reads them from beside the binary.
+          for f in pi-version pi-packages engram-version agent-browser-version node-version; do cp "$f" "release/$f"; done
+          cp install/install.sh release/install.sh
+          # The notes: the tag's section of RELEASES.md without its heading (the same extraction as tools/release.sh).
+          awk -v v="$version" '$0 == "## " v || index($0, "## " v " ") == 1 { on = 1; next } /^## / && on { exit } on' RELEASES.md | sed '/./,$!d' > notes.md
+          test -s notes.md || { echo "RELEASES.md has no section for $version" >&2; exit 1; }
+          for artifact in aria-x86_64-linux aria-x86_64-linux-headless aria-aarch64-linux-headless aria-aarch64-apple-darwin aria-x86_64-apple-darwin; do
+            if [ -f "release/$artifact" ] && [ -f "release/$artifact.sha256" ]; then
+              # What the installer will check, checked here too.
+              test "$(cut -d ' ' -f 1 "release/$artifact.sha256")" = "$( (sha256sum "release/$artifact" || shasum -a 256 "release/$artifact") | cut -d ' ' -f 1)"
+            else
+              echo "::warning::no $artifact in this release (its build job did not produce it)"
+            fi
+          done
+          ls -l release
+      - name: Create the release
+        run: |
+          set -eu
+          tag=$TAG
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # A re-run of a half made release: add the files again.
+            gh release upload "$tag" release/* --clobber
+          else
+            gh release create "$tag" release/* --title "Aria ${tag#v}" --notes-file notes.md --verify-tag
+          fi
