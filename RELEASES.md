@@ -5,6 +5,19 @@ the middle number goes up for new features or anything that changes how it behav
 is a git tag `vX.Y.Z` on `main`; `tools/release.sh` makes one (see the end of this file). `aria --version` and the
 settings overview say which one is running.
 
+## 0.23.0 — 2026-10-28
+
+### New
+
+- the roster of machines comes from the hub, so a machine with no sessions still offers a new one
+- this computer links to the hub as a machine, with aria link, a key of its own and commands to see and remove machines
+- the session list says where each session lives and offers a new one on each machine
+- the hub's side of the machine link: machines.sock, a registry, one list of sessions and routing
+
+### Fixed
+
+- a server's update says the service restarts, not the dock; docs and changelog for the release 0.22.0
+
 ## 0.22.0 — 2026-10-26
 
 ### New
